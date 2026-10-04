@@ -14,13 +14,13 @@ mod sse;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::time::Timestamp;
 use anyhow::Result;
 use axum::Router;
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
-use jiff::Timestamp;
 use serde_json::json;
 
 use crate::account::{Account, Provider, Store};
@@ -28,6 +28,7 @@ use crate::auth::{self, RefreshError};
 use crate::config::Config;
 use crate::pool::{Pins, Pool, State as PoolState};
 use crate::report::{self, Report};
+use crate::time::SignedDuration;
 use crate::upstream::Upstream;
 use crate::{fsx, ids, paths};
 
@@ -57,7 +58,7 @@ impl App {
             .expect("TLS backend initializes");
         let pool = Pool::new(
             config.strategy,
-            jiff::SignedDuration::from_mins(config.session_ttl_mins as i64),
+            SignedDuration::from_mins(config.session_ttl_mins as i64),
             state,
         );
         Arc::new(Self {

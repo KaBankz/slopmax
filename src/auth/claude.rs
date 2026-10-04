@@ -1,7 +1,7 @@
 //! Anthropic OAuth for Claude Pro/Max accounts (the Claude Code client).
 
+use crate::time::{SignedDuration, Timestamp};
 use anyhow::{Context, Result};
-use jiff::{SignedDuration, Timestamp};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;

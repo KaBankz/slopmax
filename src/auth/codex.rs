@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 
+use crate::time::Timestamp;
 use anyhow::{Context, Result, bail};
-use jiff::Timestamp;
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use serde_json::{Value, json};

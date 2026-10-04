@@ -9,8 +9,8 @@ pub mod pkce;
 
 use std::time::Duration;
 
+use crate::time::Timestamp;
 use anyhow::{Result, anyhow};
-use jiff::Timestamp;
 use reqwest::{Client, StatusCode};
 
 use crate::account::{Account, Provider, Store, Tokens};

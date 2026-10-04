@@ -7,6 +7,8 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde_json::Value;
 
+use crate::time::Timestamp;
+
 /// Decodes the claims segment of a JWT, or `None` if it is not one.
 pub fn claims(token: &str) -> Option<Value> {
     let payload = token.split('.').nth(1)?;
@@ -15,9 +17,9 @@ pub fn claims(token: &str) -> Option<Value> {
 }
 
 /// The `exp` claim as a timestamp.
-pub fn expiry(token: &str) -> Option<jiff::Timestamp> {
+pub fn expiry(token: &str) -> Option<Timestamp> {
     let exp = claims(token)?.get("exp")?.as_i64()?;
-    jiff::Timestamp::from_second(exp).ok()
+    Timestamp::from_second(exp)
 }
 
 #[cfg(test)]

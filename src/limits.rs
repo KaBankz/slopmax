@@ -5,8 +5,8 @@
 //! model of percentage windows with reset times, which drives routing and the
 //! status display. Refused requests are classified into a [`Refusal`].
 
+use crate::time::{SignedDuration, Timestamp};
 use http::HeaderMap;
-use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -188,7 +188,7 @@ fn header_f64(headers: &HeaderMap, name: &str) -> Option<f64> {
 /// Parses a unix-seconds timestamp header.
 fn header_time(headers: &HeaderMap, name: &str) -> Option<Timestamp> {
     let secs = header_f64(headers, name)?;
-    Timestamp::from_second(secs as i64).ok()
+    Timestamp::from_second(secs as i64)
 }
 
 /// `Retry-After` as seconds or an HTTP date.
@@ -197,9 +197,7 @@ pub fn retry_after(headers: &HeaderMap, now: Timestamp) -> Option<Timestamp> {
     if let Ok(secs) = raw.parse::<f64>() {
         return Some(now + SignedDuration::from_secs_f64(secs.max(0.0)));
     }
-    jiff::fmt::rfc2822::parse(raw)
-        .ok()
-        .map(|zdt| zdt.timestamp())
+    Timestamp::from_http_date(raw)
 }
 
 /// Claude: `anthropic-ratelimit-unified-{5h,7d}-{utilization,reset}`.
@@ -237,7 +235,7 @@ pub fn from_codex_headers(headers: &HeaderMap, now: Timestamp) -> Option<Limits>
 fn parse_time(value: &Value) -> Option<Timestamp> {
     match value {
         Value::String(s) => s.parse().ok(),
-        Value::Number(n) => Timestamp::from_second(n.as_f64()? as i64).ok(),
+        Value::Number(n) => Timestamp::from_second(n.as_f64()? as i64),
         _ => None,
     }
 }

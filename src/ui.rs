@@ -4,7 +4,7 @@ use std::fmt::Display;
 use std::io::IsTerminal;
 use std::sync::OnceLock;
 
-use jiff::{SignedDuration, Timestamp};
+use crate::time::{SignedDuration, Timestamp};
 
 fn color_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();

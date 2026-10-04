@@ -5,9 +5,9 @@ use std::io::Write as _;
 use std::process::Stdio;
 use std::time::Duration;
 
+use crate::time::{SignedDuration, Timestamp};
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
-use jiff::{SignedDuration, Timestamp};
 
 use crate::account::{Provider, Store};
 use crate::auth::import::{self, Source};

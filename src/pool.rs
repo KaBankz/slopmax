@@ -15,7 +15,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 
-use jiff::{SignedDuration, Timestamp};
+use crate::time::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
 use crate::account::{Account, Provider};

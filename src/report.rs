@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use jiff::Timestamp;
+use crate::time::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::account::{Account, Provider};

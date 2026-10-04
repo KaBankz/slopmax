@@ -8,8 +8,8 @@
 use std::fs;
 use std::path::Path;
 
+use crate::time::Timestamp;
 use anyhow::{Context, Result, bail};
-use jiff::Timestamp;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
@@ -102,9 +102,7 @@ async fn from_claude_code(http: &Client, oauth: ClaudeCodeOauth) -> Result<Accou
     let mut tokens = Tokens {
         access_token: oauth.access_token,
         refresh_token: oauth.refresh_token,
-        expires_at: oauth
-            .expires_at
-            .and_then(|ms| Timestamp::from_millisecond(ms).ok()),
+        expires_at: oauth.expires_at.and_then(Timestamp::from_millisecond),
         ..Tokens::default()
     };
     let now = Timestamp::now();

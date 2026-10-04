@@ -9,8 +9,8 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::time::{SignedDuration, Timestamp};
 use anyhow::{Context, Result, bail};
-use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 

@@ -1,7 +1,7 @@
 //! Reads each account's usage windows from its provider's usage endpoint.
 
+use crate::time::Timestamp;
 use anyhow::{Result, anyhow, bail};
-use jiff::Timestamp;
 use reqwest::{Client, StatusCode};
 use serde_json::Value;
 

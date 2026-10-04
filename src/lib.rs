@@ -15,6 +15,7 @@ pub mod paths;
 pub mod pool;
 pub mod proxy;
 pub mod report;
+pub mod time;
 pub mod ui;
 pub mod upstream;
 pub mod usage;
