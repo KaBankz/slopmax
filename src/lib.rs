@@ -1,6 +1,7 @@
 //! slopmax: a lightweight multi-account switcher and proxy for Claude Code
 //! and Codex.
 
+pub mod account;
 pub mod auth;
 pub mod config;
 pub mod fsx;
