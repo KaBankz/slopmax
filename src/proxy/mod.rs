@@ -8,6 +8,7 @@
 mod forward;
 pub mod rawjson;
 mod sse;
+mod start;
 
 use std::sync::Arc;
 use std::time::Duration;

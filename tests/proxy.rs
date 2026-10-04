@@ -153,6 +153,15 @@ fn mock_codex(log: &Log, headers: &HeaderMap) -> Response {
     // `tok-credit` is spent until a reset credit is redeemed.
     let spent = token == "Bearer tok-limited" || (token == "Bearer tok-credit" && !redeemed(log));
     match token {
+        // Spent, but only says so inside a 200 stream.
+        "Bearer tok-quiet" => reply(
+            StatusCode::OK,
+            &[("content-type", "text/event-stream".to_owned())],
+            concat!(
+                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\"}}\n\n",
+                "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"usage_limit_reached\",\"message\":\"limit\"}}}\n\n",
+            ),
+        ),
         _ if spent => reply(
             StatusCode::TOO_MANY_REQUESTS,
             &[],
@@ -648,4 +657,28 @@ async fn fast_mode_refusals_reach_claude_code_without_benching_accounts() {
     let state = h.app.pool.state(&h.ids[0]);
     assert_eq!(state.blocked_until, None);
     assert_eq!(state.throttled_until, None);
+}
+
+#[tokio::test]
+async fn codex_streams_that_open_spent_move_to_the_next_account() {
+    let h = harness(ProviderId::Codex, &["tok-quiet", "tok-ok"]).await;
+    let response = codex_request(&h).send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    let text = response.text().await.unwrap();
+    assert!(
+        text.contains("response.completed"),
+        "served by the next account: {text}"
+    );
+    assert!(
+        !text.contains("usage_limit_reached"),
+        "the agent never saw the refusal"
+    );
+    assert!(h.app.pool.state(&h.ids[0]).blocked_until.is_some());
+
+    // With every account spent that way, Codex gets its own usage-limit error.
+    let h = harness(ProviderId::Codex, &["tok-quiet"]).await;
+    let response = codex_request(&h).send().await.unwrap();
+    assert_eq!(response.status(), 429);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["error"]["type"], "usage_limit_reached");
 }

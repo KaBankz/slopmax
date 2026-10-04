@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 
-use super::Outcome;
+use super::{Opening, Outcome};
 use crate::time::Timestamp;
 
 pub fn error(kind: &str, message: &str) -> Value {
@@ -25,6 +25,35 @@ pub fn limit_reached(
     (body, Vec::new())
 }
 
+/// Lifecycle events say nothing yet; a failure coded as a spent quota or
+/// throttling is the account's, anything else (context length, policy) is
+/// the request's and goes to the agent.
+pub fn opening(event: &Value) -> Opening {
+    match event.get("type").and_then(Value::as_str) {
+        Some("response.created" | "response.in_progress" | "response.queued") => Opening::Wait,
+        Some("response.failed" | "error") => match failure_code(event) {
+            Some("usage_limit_reached" | "usage_limit_exceeded") => {
+                Opening::Refused { exhausted: true }
+            }
+            Some("server_is_overloaded" | "slow_down" | "rate_limit_exceeded") => {
+                Opening::Refused { exhausted: false }
+            }
+            _ => Opening::Content,
+        },
+        _ => Opening::Content,
+    }
+}
+
+fn failure_code(event: &Value) -> Option<&str> {
+    let error = event
+        .pointer("/response/error")
+        .or_else(|| event.get("error"))?;
+    error
+        .get("code")
+        .or_else(|| error.get("type"))
+        .and_then(Value::as_str)
+}
+
 /// The final `response.*` event carries usage; a failure coded
 /// `usage_limit_reached` means the quota ran out mid-stream.
 pub fn observe(event: &Value, outcome: &mut Outcome) {
@@ -42,14 +71,10 @@ pub fn observe(event: &Value, outcome: &mut Outcome) {
             total.output_tokens = number("/output_tokens");
         }
         Some("response.failed" | "error") => {
-            let error = event
-                .pointer("/response/error")
-                .or_else(|| event.get("error"));
-            let code = error
-                .and_then(|e| e.get("code").or_else(|| e.get("type")))
-                .and_then(Value::as_str);
-            outcome.exhausted |=
-                matches!(code, Some("usage_limit_reached" | "usage_limit_exceeded"));
+            outcome.exhausted |= matches!(
+                failure_code(event),
+                Some("usage_limit_reached" | "usage_limit_exceeded")
+            );
         }
         _ => {}
     }

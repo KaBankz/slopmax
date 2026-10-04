@@ -14,12 +14,13 @@ use http_body_util::LengthLimitError;
 
 use super::rawjson::{self, Seg};
 use super::sse::{Tap, Tapped};
+use super::start::{self, Start};
 use super::{App, error, json_reply, returnable};
 use crate::account::Account;
 use crate::agent;
 use crate::auth;
 use crate::log;
-use crate::net::body;
+use crate::net::body::{self, Body};
 use crate::net::client::{self, Response as Upstream};
 use crate::net::server::{Request, Response};
 use crate::pool::{Choice, DEFAULT_BLOCK, DEFAULT_THROTTLE, Pick, Unavailable};
@@ -201,16 +202,40 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice) -> Attempt {
             app.pool.observe(&id, limits, now);
         }
         if response.status().is_success() {
+            let dialect = provider.spec().dialect;
+            let status = response.status();
+            let headers = response.headers().clone();
+            let mut body = response.into_body();
+            if dialect.holds_start() {
+                match start::hold(body, dialect).await {
+                    Start::Streaming(started) => body = started,
+                    Start::Refused { exhausted, held } => {
+                        if exhausted {
+                            app.pool
+                                .block(&id, now + DEFAULT_BLOCK, None, "usage limit reached");
+                            log::info!("{id}: limited inside the stream; switching accounts");
+                        } else {
+                            app.pool.throttle(&id, now + DEFAULT_THROTTLE);
+                        }
+                        let failure = Failure {
+                            status,
+                            headers,
+                            body: held,
+                            exhausted,
+                        };
+                        return Attempt::Failed(Some(failure));
+                    }
+                }
+            }
             app.pool.record_success(&id, now);
             let path = inbound.target.split('?').next().unwrap_or_default();
             let model = inbound.model.as_deref().unwrap_or("-");
             log::info!(
                 "{id} {} {path} {model} → {}",
                 inbound.parts.method,
-                response.status().as_u16()
+                status.as_u16()
             );
-            let dialect = inbound.provider.spec().dialect;
-            return Attempt::Done(stream_back(app, dialect, id, response));
+            return Attempt::Done(stream_back(app, dialect, id, status, &headers, body));
         }
 
         let mut failure = Failure::read(response).await;
@@ -336,9 +361,15 @@ async fn send(
 
 /// Streams a successful response to the agent, recording token usage (and
 /// any quota refusal inside the stream) when it ends.
-fn stream_back(app: &Arc<App>, dialect: Dialect, id: String, response: Upstream) -> Response {
-    let status = response.status();
-    let headers = returnable(response.headers());
+fn stream_back(
+    app: &Arc<App>,
+    dialect: Dialect,
+    id: String,
+    status: StatusCode,
+    headers: &HeaderMap,
+    body: Body,
+) -> Response {
+    let headers = returnable(headers);
     // A compressed stream passes through unread; only the request counts.
     let compressed = headers
         .get("content-encoding")
@@ -349,7 +380,7 @@ fn stream_back(app: &Arc<App>, dialect: Dialect, id: String, response: Upstream)
         Tap::new(dialect)
     };
     let pool_app = Arc::clone(app);
-    let stream = Tapped::new(response.into_body(), tap, move |outcome| {
+    let stream = Tapped::new(body, tap, move |outcome| {
         pool_app.pool.add_usage(&id, &outcome.usage);
         if outcome.exhausted {
             let until = Timestamp::now() + DEFAULT_BLOCK;

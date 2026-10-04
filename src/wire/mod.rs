@@ -23,6 +23,18 @@ pub enum Dialect {
     Responses,
 }
 
+/// How a stream opens, judged one event at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Opening {
+    /// Nothing telling yet (the response was merely created).
+    Wait,
+    /// Content began, or a failure that belongs to the request.
+    Content,
+    /// A refusal another account may not give: a spent quota
+    /// (`exhausted`) or throttling.
+    Refused { exhausted: bool },
+}
+
 /// What a finished (or abandoned) stream said about the account.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Outcome {
@@ -52,6 +64,22 @@ impl Dialect {
         match self {
             Self::Messages => messages::limit_reached(message, until),
             Self::Responses => responses::limit_reached(message, until, now),
+        }
+    }
+
+    /// Whether the proxy holds back the start of streams until they open,
+    /// so a refusal inside a 200 stream can still move to another account.
+    /// Claude refuses with a status code before streaming, so only Codex
+    /// needs it.
+    pub fn holds_start(self) -> bool {
+        self == Self::Responses
+    }
+
+    /// How a stream opening with `event` should be treated.
+    pub fn opening(self, event: &Value) -> Opening {
+        match self {
+            Self::Messages => Opening::Content,
+            Self::Responses => responses::opening(event),
         }
     }
 

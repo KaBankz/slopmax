@@ -46,6 +46,43 @@ where
         .map(|collected| collected.to_bytes())
 }
 
+/// A body that yields `held` chunks first, then the rest of `inner`.
+pub struct Prefixed<B> {
+    held: std::collections::VecDeque<Bytes>,
+    inner: B,
+}
+
+impl<B> Prefixed<B> {
+    pub fn new(held: impl IntoIterator<Item = Bytes>, inner: B) -> Self {
+        Self {
+            held: held.into_iter().collect(),
+            inner,
+        }
+    }
+}
+
+impl<B> HttpBody for Prefixed<B>
+where
+    B: HttpBody<Data = Bytes> + Unpin,
+{
+    type Data = Bytes;
+    type Error = B::Error;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, B::Error>>> {
+        match self.held.pop_front() {
+            Some(chunk) => Poll::Ready(Some(Ok(Frame::data(chunk)))),
+            None => Pin::new(&mut self.inner).poll_frame(cx),
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.held.is_empty() && self.inner.is_end_stream()
+    }
+}
+
 /// Fails a body that sends nothing for `idle`: a stalled upstream stream
 /// should not hold a connection open forever.
 pub struct IdleTimeout<B> {
