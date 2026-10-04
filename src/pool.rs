@@ -222,18 +222,14 @@ impl Pool {
             .filter(|b| now.duration_since(b.last_used) < self.session_ttl)
             .map(|b| b.account.clone());
 
-        let candidates: Vec<&Account> = inner
+        let usable: Vec<&Account> = inner
             .accounts
             .iter()
             .filter(|a| a.provider == req.provider && !a.disabled && a.auth_error.is_none())
-            .filter(|a| !req.exclude.contains(&a.id))
             .collect();
-        if candidates.is_empty() {
+        if usable.is_empty() {
             let reason = if inner.accounts.iter().any(|a| a.provider == req.provider) {
-                format!(
-                    "every {} account is disabled, signed out, or already tried",
-                    req.provider
-                )
+                format!("every {} account is disabled or signed out", req.provider)
             } else {
                 format!(
                     "no {} accounts connected; run `slopmax login {}`",
@@ -246,12 +242,15 @@ impl Pool {
             });
         }
 
+        // Accounts already tried for this request are skipped, but their
+        // blocks still count toward when the pool frees up again.
         let state_of = |id: &str| inner.states.get(id).cloned().unwrap_or_default();
         let mut ready = Vec::new();
         let mut soonest: Option<Timestamp> = None;
-        for account in candidates {
+        for account in usable {
             match state_of(&account.id).blocked(req.model, now) {
-                Ok(()) => ready.push(account),
+                Ok(()) if !req.exclude.contains(&account.id) => ready.push(account),
+                Ok(()) => {}
                 Err(until) => soonest = Some(soonest.map_or(until, |s| s.min(until))),
             }
         }
@@ -268,9 +267,13 @@ impl Pool {
             .or_else(|| self.place(&ready, &inner.states, now));
 
         let Some(account) = chosen.cloned() else {
+            let reason = match soonest {
+                Some(_) => format!("every {} account is rate limited", req.provider),
+                None => format!("every {} account failed this request", req.provider),
+            };
             return Err(Unavailable {
                 until: soonest,
-                reason: format!("every {} account is rate limited", req.provider),
+                reason,
             });
         };
         let moved_from = bound.filter(|id| *id != account.id);
@@ -739,5 +742,20 @@ mod tests {
                 .reason
                 .contains("disabled")
         );
+    }
+
+    #[test]
+    fn blocks_on_tried_accounts_still_report_when_the_pool_frees_up() {
+        let a = account(Provider::Claude, "a", 1);
+        let pool = pool(Strategy::FillFirst, &[&a]);
+        pool.block(&a.id, ts(5000), None, "limit");
+        let exclude = [a.id.clone()];
+        let req = Pick {
+            provider: Provider::Claude,
+            session: None,
+            model: None,
+            exclude: &exclude,
+        };
+        assert_eq!(pool.pick(&req, ts(1000)).unwrap_err().until, Some(ts(5000)));
     }
 }
