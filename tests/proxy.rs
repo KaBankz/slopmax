@@ -12,6 +12,7 @@ use http::{HeaderMap, Method, StatusCode};
 use serde_json::{Value, json};
 use slopmax::account::{Account, Store, Tokens};
 use slopmax::config::{Config, Strategy};
+use slopmax::ledger::{self, Ledger};
 use slopmax::limits::{Limits, Window};
 use slopmax::net::body;
 use slopmax::net::client::RequestBuilder;
@@ -202,6 +203,8 @@ fn mock_credits(headers: &HeaderMap) -> Response {
 
 struct Harness {
     proxy: String,
+    /// The sandbox: accounts, and the usage ledger under `usage/`.
+    dir: std::path::PathBuf,
     app: Arc<App>,
     log: Log,
     ids: Vec<String>,
@@ -277,7 +280,8 @@ async fn harness_with(
         ("https://api.anthropic.com", upstream_url.as_str()),
         ("https://chatgpt.com/backend-api", upstream_url.as_str()),
     ]);
-    let app = App::new(config, store, PoolState::default(), origins);
+    let ledger = Ledger::start(dir.join("usage"));
+    let app = App::new(config, store, PoolState::default(), origins, ledger);
     app.pool.sync(app.store.list().unwrap(), Default::default());
     let proxy = serve({
         let app = app.clone();
@@ -286,6 +290,7 @@ async fn harness_with(
     .await;
     Harness {
         proxy,
+        dir: dir.clone(),
         app,
         log,
         ids,
@@ -405,6 +410,24 @@ async fn claude_fails_over_and_forwards_the_request_unchanged() {
     );
     let served_limits = h.app.pool.state(&h.ids[1]).limits;
     assert_eq!(served_limits.windows[0].used, 25.0);
+
+    // The answered request is in the usage ledger.
+    let since = Timestamp::now() - SignedDuration::from_mins(1);
+    let mut entries = Vec::new();
+    for _ in 0..50 {
+        entries = ledger::read(&h.dir.join("usage"), since);
+        if !entries.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(entries.len(), 1);
+    let entry = &entries[0];
+    assert_eq!(entry.account, h.ids[1]);
+    assert_eq!(entry.model.as_deref(), Some("claude-opus-5-5"));
+    assert_eq!((entry.input, entry.output, entry.cache_read), (10, 25, 90));
+    assert_eq!(entry.attempts, 2);
+    assert!(entry.first_byte_ms.is_some());
 
     // The session is now pinned to the serving account; no retry on the
     // limited one.

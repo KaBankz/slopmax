@@ -6,6 +6,7 @@
 //! once a stream starts it is passed through untouched.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use bytes::Bytes;
 use http::request::Parts;
@@ -19,6 +20,7 @@ use super::{App, error, json_reply, returnable};
 use crate::account::Account;
 use crate::agent;
 use crate::auth;
+use crate::ledger::Entry;
 use crate::log;
 use crate::net::body::{self, Body};
 use crate::net::client::{self, Response as Upstream};
@@ -37,6 +39,8 @@ const ACCOUNT_BLOCK: SignedDuration = SignedDuration::from_mins(30);
 
 /// The agent's request, buffered so it can be replayed on another account.
 struct Inbound {
+    /// When the request arrived, for the usage ledger's timings.
+    started: Instant,
     provider: ProviderId,
     target: String,
     parts: Parts,
@@ -60,6 +64,7 @@ impl Inbound {
             .then(|| rawjson::find_str(&body, &[Seg::Key("model")]))
             .flatten();
         Self {
+            started: Instant::now(),
             provider,
             target,
             parts,
@@ -171,14 +176,14 @@ pub(super) async fn forward(
             }
         };
         tried.push(choice.account.id.clone());
-        match attempt(&app, &inbound, choice).await {
+        match attempt(&app, &inbound, choice, tried.len()).await {
             Attempt::Done(response) => return response,
             Attempt::Failed(failure) => last = failure.or(last),
         }
     }
 }
 
-async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice) -> Attempt {
+async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice, attempts: usize) -> Attempt {
     let id = choice.account.id.clone();
     let moved = choice.moved_from.is_some();
     let Some(mut account) = app.ready(&choice.account).await else {
@@ -235,7 +240,15 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice) -> Attempt {
                 inbound.parts.method,
                 status.as_u16()
             );
-            return Attempt::Done(stream_back(app, dialect, id, status, &headers, body));
+            let served = Served {
+                id,
+                provider: inbound.provider,
+                model: inbound.model.clone(),
+                status,
+                started: inbound.started,
+                attempts: attempts as u32,
+            };
+            return Attempt::Done(stream_back(app, dialect, served, &headers, body));
         }
 
         let mut failure = Failure::read(response).await;
@@ -361,25 +374,52 @@ async fn send(
 
 /// Streams a successful response to the agent, recording token usage (and
 /// any quota refusal inside the stream) when it ends.
+/// A response being streamed back, for the usage ledger.
+struct Served {
+    id: String,
+    provider: ProviderId,
+    model: Option<String>,
+    status: StatusCode,
+    started: Instant,
+    attempts: u32,
+}
+
 fn stream_back(
     app: &Arc<App>,
     dialect: Dialect,
-    id: String,
-    status: StatusCode,
+    served: Served,
     headers: &HeaderMap,
     body: Body,
 ) -> Response {
+    let status = served.status;
     let tap = Tap::for_response(dialect, headers);
     let headers = returnable(headers);
     let pool_app = Arc::clone(app);
-    let stream = Tapped::new(body, tap, move |outcome| {
-        pool_app.pool.add_usage(&id, &outcome.usage);
+    let stream = Tapped::new(body, tap, move |outcome, first_byte| {
+        let id = &served.id;
+        pool_app.pool.add_usage(id, &outcome.usage);
         if outcome.exhausted {
             let until = Timestamp::now() + DEFAULT_BLOCK;
             pool_app
                 .pool
-                .block(&id, until, None, "usage limit reached mid-stream");
+                .block(id, until, None, "usage limit reached mid-stream");
         }
+        let millis = |at: Instant| at.duration_since(served.started).as_millis() as u64;
+        let usage = outcome.usage;
+        pool_app.ledger.record(Entry {
+            at: Timestamp::now(),
+            account: served.id,
+            provider: served.provider,
+            model: served.model,
+            status: served.status.as_u16(),
+            input: usage.input_tokens,
+            output: usage.output_tokens,
+            cache_read: usage.cache_read_tokens,
+            cache_write: usage.cache_write_tokens,
+            ms: millis(Instant::now()),
+            first_byte_ms: first_byte.map(millis),
+            attempts: served.attempts,
+        });
     });
     let mut out = Response::new(body::boxed(stream));
     *out.status_mut() = status;

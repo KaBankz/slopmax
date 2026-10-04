@@ -47,11 +47,7 @@ pub(super) async fn status(config: &Config, store: &Store, args: StatusArgs) -> 
 
 /// Status from disk when no proxy is running, optionally polling the
 /// providers directly.
-async fn offline_report(
-    config: &Config,
-    store: &Store,
-    refresh: bool,
-) -> Result<Report> {
+async fn offline_report(config: &Config, store: &Store, refresh: bool) -> Result<Report> {
     let state: State = fsx::read_json(&paths::state_file())?.unwrap_or_default();
     let pins: Pins = fsx::read_json(&paths::pins_file())?.unwrap_or_default();
     let pool = Pool::new(config.strategy, SignedDuration::from_hours(1), state);

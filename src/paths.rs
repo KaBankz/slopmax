@@ -33,6 +33,11 @@ pub fn state_file() -> PathBuf {
     home().join("state.json")
 }
 
+/// The usage ledger's monthly files.
+pub fn usage_dir() -> PathBuf {
+    home().join("usage")
+}
+
 /// Log destination for a proxy started in the background.
 pub fn log_file() -> PathBuf {
     home().join("slopmax.log")

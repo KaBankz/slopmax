@@ -22,6 +22,7 @@ use crate::account::{Account, Store};
 use crate::agent;
 use crate::auth::{self, RefreshError};
 use crate::config::Config;
+use crate::ledger::Ledger;
 use crate::log;
 use crate::net::body;
 use crate::net::server::{Request, Response};
@@ -47,11 +48,19 @@ pub struct App {
     /// Held while redeeming a reset credit, so concurrent requests that
     /// all find the pool spent redeem one credit, not one each.
     pub redeeming: tokio::sync::Mutex<()>,
+    /// Where answered requests are recorded for `slopmax usage`.
+    pub ledger: Ledger,
 }
 
 impl App {
     /// `origins` reroutes provider URLs; tests point them at a mock.
-    pub fn new(config: Config, store: Store, state: PoolState, origins: Origins) -> Arc<Self> {
+    pub fn new(
+        config: Config,
+        store: Store,
+        state: PoolState,
+        origins: Origins,
+        ledger: Ledger,
+    ) -> Arc<Self> {
         let http = Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .read_timeout(Duration::from_secs(600))
@@ -70,6 +79,7 @@ impl App {
             auth_http: crate::auth::http_client(origins),
             shutdown: tokio::sync::Notify::new(),
             redeeming: tokio::sync::Mutex::new(()),
+            ledger,
         })
     }
 

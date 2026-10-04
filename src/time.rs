@@ -150,6 +150,30 @@ impl Timestamp {
         Millis(self)
     }
 
+    /// The calendar date `(year, month, day)` at this instant, `offset`
+    /// east of UTC.
+    pub fn date(self, offset: SignedDuration) -> (i64, u32, u32) {
+        let (c, _) = (self + offset).civil();
+        (c.year, c.month, c.day)
+    }
+
+    /// This machine's UTC offset at this instant (daylight saving
+    /// included), or zero where it cannot be read.
+    pub fn local_offset(self) -> SignedDuration {
+        #[cfg(unix)]
+        {
+            let secs = self.as_second() as libc::time_t;
+            // SAFETY: `localtime_r` only writes the `tm` it is given, and
+            // both pointers are valid for the call.
+            let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+            let filled = unsafe { libc::localtime_r(&secs, &mut tm) };
+            if !filled.is_null() {
+                return SignedDuration::from_secs(tm.tm_gmtoff);
+            }
+        }
+        SignedDuration::ZERO
+    }
+
     fn civil(self) -> (Civil, u32) {
         let secs = self.as_second();
         let nanos = self.0.rem_euclid(NANOS_PER_SEC) as u32;
@@ -473,6 +497,16 @@ mod tests {
             assert_eq!(civil_from_days(days), date);
             assert_eq!(days_from_civil(date.0, date.1, date.2), days);
         }
+    }
+
+    #[test]
+    fn dates_shift_by_offset() {
+        let t = parse("2026-10-04T23:30:00Z");
+        assert_eq!(t.date(SignedDuration::ZERO), (2026, 10, 4));
+        assert_eq!(t.date(SignedDuration::from_hours(1)), (2026, 10, 5));
+        assert_eq!(t.date(SignedDuration::from_hours(-24)), (2026, 10, 3));
+        // Whatever the machine's zone, the offset is within a day.
+        assert!(t.local_offset().as_secs().abs() <= 14 * 3_600);
     }
 
     #[test]

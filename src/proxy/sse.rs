@@ -6,6 +6,7 @@
 
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
+use std::time::Instant;
 
 use bytes::Bytes;
 use http::HeaderMap;
@@ -128,28 +129,35 @@ impl Tap {
     }
 }
 
-type Done = Box<dyn FnOnce(Outcome) + Send>;
+type Done = Box<dyn FnOnce(Outcome, Option<Instant>) + Send>;
 
 /// A response body that reports its [`Outcome`] once, when it ends or is
-/// dropped early (the agent disconnected).
+/// dropped early (the agent disconnected), with when its first byte went
+/// out.
 pub struct Tapped<B> {
     inner: B,
     tap: Option<Tap>,
+    first_byte: Option<Instant>,
     done: Option<Done>,
 }
 
 impl<B> Tapped<B> {
-    pub fn new(inner: B, tap: Tap, done: impl FnOnce(Outcome) + Send + 'static) -> Self {
+    pub fn new(
+        inner: B,
+        tap: Tap,
+        done: impl FnOnce(Outcome, Option<Instant>) + Send + 'static,
+    ) -> Self {
         Self {
             inner,
             tap: Some(tap),
+            first_byte: None,
             done: Some(Box::new(done)),
         }
     }
 
     fn report(&mut self) {
         if let (Some(tap), Some(done)) = (self.tap.take(), self.done.take()) {
-            done(tap.finish());
+            done(tap.finish(), self.first_byte);
         }
     }
 }
@@ -168,8 +176,11 @@ where
         let frame = ready!(Pin::new(&mut self.inner).poll_frame(cx));
         match &frame {
             Some(Ok(frame)) => {
-                if let (Some(chunk), Some(tap)) = (frame.data_ref(), self.tap.as_mut()) {
-                    tap.feed(chunk);
+                if let Some(chunk) = frame.data_ref() {
+                    self.first_byte.get_or_insert_with(Instant::now);
+                    if let Some(tap) = self.tap.as_mut() {
+                        tap.feed(chunk);
+                    }
                 }
             }
             Some(Err(_)) | None => self.report(),
@@ -313,7 +324,8 @@ mod tests {
             Bytes::from_static(b"data: tail\n"),
         ]));
         let log = seen.clone();
-        let mut body = Tapped::new(chunks, Tap::new(Dialect::Messages), move |o| {
+        let mut body = Tapped::new(chunks, Tap::new(Dialect::Messages), move |o, first| {
+            assert!(first.is_some(), "a chunk went out");
             log.lock().unwrap().push(o)
         });
         let first = std::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await;

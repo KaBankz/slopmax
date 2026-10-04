@@ -10,6 +10,7 @@ use tokio::net::TcpListener;
 use crate::account::{Account, Store};
 use crate::auth;
 use crate::config::Config;
+use crate::ledger::Ledger;
 use crate::log;
 use crate::net::{Origins, server};
 use crate::pool::State;
@@ -29,7 +30,8 @@ pub async fn run(config: Config) -> Result<()> {
         .await
         .with_context(|| format!("cannot listen on {listen} (is slopmax already running?)"))?;
     let state: State = fsx::read_json(&paths::state_file())?.unwrap_or_default();
-    let app = App::new(config, Store::open(), state, Origins::default());
+    let ledger = Ledger::start(paths::usage_dir());
+    let app = App::new(config, Store::open(), state, Origins::default(), ledger);
     app.sync()?;
 
     tokio::spawn(every(
