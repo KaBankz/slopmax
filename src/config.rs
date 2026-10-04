@@ -6,13 +6,14 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use toml_edit::DocumentMut;
 
 use crate::{fsx, ids, paths};
 
 /// Default proxy port: "slop" on a phone keypad.
 pub const DEFAULT_PORT: u16 = 7567;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     /// Address the proxy listens on.
@@ -82,23 +83,31 @@ impl Config {
     }
 
     pub fn load_from(path: &Path) -> Result<Self> {
-        let mut config = match std::fs::read_to_string(path) {
-            Ok(text) => toml::from_str::<Self>(&text)
-                .with_context(|| format!("invalid config {}", path.display()))?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => Some(text),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        };
+        let invalid = || format!("invalid config {}", path.display());
+        let mut config = match &text {
+            Some(text) => toml::from_str::<Self>(text).with_context(invalid)?,
+            None => Self::default(),
         };
         if config.api_key.is_empty() {
             config.api_key = format!("sm-{}", ids::token());
-            config.save_to(path)?;
+            let text = match text {
+                // Add the key without disturbing the user's comments.
+                Some(text) => {
+                    let mut doc: DocumentMut = text.parse().with_context(invalid)?;
+                    doc["api_key"] = toml_edit::value(&config.api_key);
+                    doc.to_string()
+                }
+                None => template(&config.api_key),
+            };
+            fsx::write_private(path, text.as_bytes())
+                .with_context(|| format!("writing {}", path.display()))?;
         }
         Ok(config)
-    }
-
-    pub fn save_to(&self, path: &Path) -> Result<()> {
-        let text = toml::to_string_pretty(self)?;
-        fsx::write_private(path, text.as_bytes())
-            .with_context(|| format!("writing {}", path.display()))
     }
 
     /// Base URL agents use to reach the proxy.
@@ -115,19 +124,106 @@ impl Config {
     }
 }
 
+/// The config written on first run: the generated key, then every other
+/// setting commented out at its default. (Keys are base64url, so they need
+/// no escaping.)
+fn template(api_key: &str) -> String {
+    format!(
+        r#"# slopmax settings. Everything but api_key is optional; the commented
+# values are the defaults.
+
+# Key agents present to the proxy, as a bearer token or x-api-key.
+api_key = "{api_key}"
+
+# Address the proxy listens on.
+# listen = "127.0.0.1:{DEFAULT_PORT}"
+
+# How a new session picks its account:
+#   reset-first  spend the quota that resets soonest, so none is lost
+#   fill-first   drain accounts in priority order
+#   least-used   spread sessions over the least used accounts
+# strategy = "reset-first"
+
+# Minutes a session stays on its account after its last request.
+# session_ttl_mins = 60
+
+# Minutes between usage polls per account (0 turns polling off).
+# poll_mins = 5
+
+# Refresh OAuth tokens before they expire. Turn this off only while another
+# tool uses the same accounts: every refresh rotates the refresh token.
+# refresh_tokens = true
+
+# Redeem a ChatGPT reset credit in its last hours, if the account has usage
+# to reset, rather than let it expire unused.
+# redeem_expiring_credits = true
+
+# When every Codex account is spent, redeem a reset credit instead of
+# failing the request.
+# redeem_when_exhausted = false
+"#
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn temp_config() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("slopmax-config-{}", ids::token()));
+        dir.join("config.toml")
+    }
+
     #[test]
-    fn first_load_generates_and_persists_key() {
-        let dir = std::env::temp_dir().join(format!("slopmax-config-{}", std::process::id()));
-        let path = dir.join("config.toml");
+    fn first_load_writes_the_template_with_a_fresh_key() {
+        let path = temp_config();
         let first = Config::load_from(&path).unwrap();
         assert!(first.api_key.starts_with("sm-"));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text, template(&first.api_key));
         let second = Config::load_from(&path).unwrap();
-        assert_eq!(first.api_key, second.api_key);
-        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(first, second);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_missing_key_is_added_without_rewriting_the_file() {
+        let path = temp_config();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mine = "# my setup\nstrategy = \"fill-first\" # drain in order\n";
+        std::fs::write(&path, mine).unwrap();
+        let config = Config::load_from(&path).unwrap();
+        assert_eq!(config.strategy, Strategy::FillFirst);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text, format!("{mine}api_key = \"{}\"\n", config.api_key));
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn template_lists_every_setting_at_its_default() {
+        let expected = Config {
+            api_key: "sm-key".into(),
+            ..Config::default()
+        };
+        let text = template("sm-key");
+        assert_eq!(toml::from_str::<Config>(&text).unwrap(), expected);
+
+        let uncommented: String = text
+            .lines()
+            .map(|line| match line.strip_prefix("# ") {
+                Some(setting) if setting.contains(" = ") => setting,
+                _ => line,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(toml::from_str::<Config>(&uncommented).unwrap(), expected);
+        let listed: toml::Table = toml::from_str(&uncommented).unwrap();
+        let fields = toml::Value::try_from(&expected).unwrap();
+        let fields = fields.as_table().unwrap();
+        assert_eq!(
+            listed.keys().collect::<std::collections::BTreeSet<_>>(),
+            fields.keys().collect(),
+        );
     }
 
     #[test]
