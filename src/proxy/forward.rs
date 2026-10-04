@@ -21,6 +21,7 @@ use crate::account::{Account, Provider};
 use crate::auth;
 use crate::credits::{self, Outcome};
 use crate::limits::{self, Refusal};
+use crate::log;
 use crate::pool::{Choice, DEFAULT_BLOCK, DEFAULT_THROTTLE, Pick, Unavailable};
 use crate::time::{SignedDuration, Timestamp};
 use crate::ui;
@@ -181,7 +182,7 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice) -> Attempt {
         let response = match send(app, inbound, &account, body.clone(), moved).await {
             Ok(response) => response,
             Err(e) => {
-                tracing::warn!("{id}: upstream unreachable: {e}");
+                log::warn!("{id}: upstream unreachable: {e}");
                 app.pool.record_error(&id, &format!("network error: {e}"));
                 return Attempt::Failed(None);
             }
@@ -199,7 +200,7 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice) -> Attempt {
             app.pool.record_success(&id, now);
             let path = inbound.target.split('?').next().unwrap_or_default();
             let model = inbound.model.as_deref().unwrap_or("-");
-            tracing::info!(
+            log::info!(
                 "{id} {} {path} {model} → {}",
                 inbound.parts.method,
                 response.status().as_u16()
@@ -209,7 +210,7 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice) -> Attempt {
 
         let mut failure = Failure::read(response).await;
         let status = failure.status.as_u16();
-        tracing::info!("{id}: upstream returned {status}");
+        log::info!("{id}: upstream returned {status}");
         match (inbound.provider, status) {
             (_, 401) if !refreshed && app.config.refresh_tokens => {
                 refreshed = true;
@@ -254,7 +255,7 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice) -> Attempt {
                         let until = until.unwrap_or(now + DEFAULT_BLOCK);
                         app.pool
                             .block(&id, until, model.as_deref(), "usage limit reached");
-                        tracing::info!("{id}: limited until {until}; switching accounts");
+                        log::info!("{id}: limited until {until}; switching accounts");
                     }
                     Refusal::Throttled { until } => {
                         app.pool
@@ -309,12 +310,12 @@ async fn rescue(app: &App) -> Option<String> {
         };
         match credits::redeem(&app.auth_http, &app.upstream, &account, None).await {
             Ok(Outcome::Reset) => {
-                tracing::info!("{}: redeemed a reset credit", account.id);
+                log::info!("{}: redeemed a reset credit", account.id);
                 app.pool.record_reset(&account.id, Timestamp::now());
                 return Some(account.id);
             }
-            Ok(outcome) => tracing::info!("{}: reset credit not used ({outcome:?})", account.id),
-            Err(e) => tracing::warn!("{}: redeeming a reset credit: {e:#}", account.id),
+            Ok(outcome) => log::info!("{}: reset credit not used ({outcome:?})", account.id),
+            Err(e) => log::warn!("{}: redeeming a reset credit: {e:#}", account.id),
         }
     }
     None

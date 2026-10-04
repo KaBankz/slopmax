@@ -127,6 +127,29 @@ impl Timestamp {
         civil.to_timestamp(0, 0)
     }
 
+    /// RFC 3339 in UTC with exactly three fractional digits, for aligned
+    /// log lines: `2026-10-04T07:20:00.250Z`.
+    pub fn display_millis(self) -> impl fmt::Display {
+        struct Millis(Timestamp);
+        impl fmt::Display for Millis {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let (c, nanos) = self.0.civil();
+                write!(
+                    f,
+                    "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+                    c.year,
+                    c.month,
+                    c.day,
+                    c.hour,
+                    c.minute,
+                    c.second,
+                    nanos / 1_000_000
+                )
+            }
+        }
+        Millis(self)
+    }
+
     fn civil(self) -> (Civil, u32) {
         let secs = self.as_second();
         let nanos = self.0.rem_euclid(NANOS_PER_SEC) as u32;
@@ -418,6 +441,7 @@ mod tests {
             Timestamp::from_millisecond(-1).unwrap().to_string(),
             "1969-12-31T23:59:59.999Z"
         );
+        assert_eq!(t.display_millis().to_string(), "2026-10-09T21:13:09.000Z");
     }
 
     #[test]

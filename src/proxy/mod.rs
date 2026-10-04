@@ -25,6 +25,7 @@ use serde_json::json;
 use crate::account::{Account, Provider, Store};
 use crate::auth::{self, RefreshError};
 use crate::config::Config;
+use crate::log;
 use crate::pool::{Pins, Pool, State as PoolState};
 use crate::report::{self, Report};
 use crate::time::SignedDuration;
@@ -96,11 +97,11 @@ impl App {
         match auth::ensure_fresh(&self.auth_http, &self.store, &account, false).await {
             Ok(fresh) => Some(fresh),
             Err(RefreshError::Transient(e)) if !account.tokens.is_expired(Timestamp::now()) => {
-                tracing::warn!("{}: refresh failed, using current token: {e:#}", account.id);
+                log::warn!("{}: refresh failed, using current token: {e:#}", account.id);
                 Some(account)
             }
             Err(e) => {
-                tracing::warn!("{}: {e}", account.id);
+                log::warn!("{}: {e}", account.id);
                 self.pool.record_error(&account.id, &e.to_string());
                 None
             }

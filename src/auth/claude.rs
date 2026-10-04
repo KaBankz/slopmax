@@ -7,6 +7,7 @@ use serde_json::json;
 
 use super::{Grant, RefreshError, pkce::Pkce};
 use crate::account::{Account, Provider};
+use crate::log;
 use crate::time::{SignedDuration, Timestamp};
 
 pub const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
@@ -154,7 +155,7 @@ pub async fn exchange(http: &Client, code: &str, state: &str, pkce: &Pkce) -> Re
     }
     match profile(http, &account.tokens.access_token).await {
         Ok(profile) => apply_profile(&mut account, &profile),
-        Err(e) => tracing::warn!("profile lookup failed: {e:#}"),
+        Err(e) => log::warn!("profile lookup failed: {e:#}"),
     }
     account.assign_id();
     Ok(account)

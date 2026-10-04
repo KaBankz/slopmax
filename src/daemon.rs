@@ -11,6 +11,7 @@ use crate::account::{Account, Provider, Store};
 use crate::auth;
 use crate::config::Config;
 use crate::credits::{self, Outcome};
+use crate::log;
 use crate::pool::State;
 use crate::proxy::{App, router};
 use crate::time::{SignedDuration, Timestamp};
@@ -36,7 +37,7 @@ pub async fn run(config: Config) -> Result<()> {
         app.clone(),
         |app| async move {
             if let Err(e) = app.sync() {
-                tracing::warn!("reloading accounts: {e:#}");
+                log::warn!("reloading accounts: {e:#}");
             }
         },
     ));
@@ -75,7 +76,7 @@ pub async fn run(config: Config) -> Result<()> {
         ));
     }
 
-    tracing::info!(
+    log::info!(
         "slopmax {} listening on {}",
         env!("CARGO_PKG_VERSION"),
         app.config.base_url()
@@ -84,7 +85,7 @@ pub async fn run(config: Config) -> Result<()> {
         .with_graceful_shutdown(shutdown(app.clone()))
         .await?;
     save_state(&app);
-    tracing::info!("stopped");
+    log::info!("stopped");
     Ok(())
 }
 
@@ -128,7 +129,7 @@ async fn shutdown(app: Arc<App>) {
 fn save_state(app: &App) {
     let (state, dirty) = app.pool.snapshot(Timestamp::now());
     if dirty && let Err(e) = fsx::write_json(&paths::state_file(), &state) {
-        tracing::warn!("saving state: {e}");
+        log::warn!("saving state: {e}");
     }
 }
 
@@ -140,7 +141,7 @@ async fn refresh_all(app: &App) {
             continue;
         }
         if let Err(e) = auth::ensure_fresh(&app.auth_http, &app.store, &account, false).await {
-            tracing::warn!("{}: {e}", account.id);
+            log::warn!("{}: {e}", account.id);
             app.pool.record_error(&account.id, &e.to_string());
         }
     }
@@ -179,12 +180,12 @@ pub async fn poll_all(app: &App, force: bool) {
                         tokio::task::spawn_blocking(move || store.update(&id, |a| a.plan = plan))
                             .await;
                     if let Ok(Err(e)) = saved {
-                        tracing::warn!("{}: saving plan: {e:#}", fresh.id);
+                        log::warn!("{}: saving plan: {e:#}", fresh.id);
                     }
                 }
             }
             Err(e) => {
-                tracing::warn!("{}: usage poll failed: {e:#}", account.id);
+                log::warn!("{}: usage poll failed: {e:#}", account.id);
                 app.pool
                     .record_error(&account.id, &format!("usage poll: {e:#}"));
             }
@@ -213,17 +214,17 @@ pub async fn redeem_expiring(app: &App) {
         };
         match redeem_if_expiring(app, &account, now).await {
             Ok(Some(Outcome::Reset)) => {
-                tracing::info!("{}: redeemed a reset credit before it expired", account.id);
+                log::info!("{}: redeemed a reset credit before it expired", account.id);
                 app.pool.record_reset(&account.id, Timestamp::now());
             }
             Ok(Some(outcome)) => {
-                tracing::info!(
+                log::info!(
                     "{}: expiring reset credit not used ({outcome:?})",
                     account.id
                 );
             }
             Ok(None) => {}
-            Err(e) => tracing::warn!("{}: checking reset credits: {e:#}", account.id),
+            Err(e) => log::warn!("{}: checking reset credits: {e:#}", account.id),
         }
     }
 }

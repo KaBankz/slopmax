@@ -13,6 +13,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::log;
 use crate::time::{SignedDuration, Timestamp};
 use crate::{fsx, paths};
 
@@ -222,7 +223,7 @@ impl Store {
                 match fsx::read_json::<Account>(&path) {
                     Ok(Some(account)) => accounts.push(account),
                     Ok(None) => {}
-                    Err(e) => tracing::warn!("skipping {}: {e}", path.display()),
+                    Err(e) => log::warn!("skipping {}: {e}", path.display()),
                 }
             }
         }

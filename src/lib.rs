@@ -11,6 +11,7 @@ pub mod daemon;
 pub mod fsx;
 pub mod ids;
 pub mod limits;
+pub mod log;
 pub mod paths;
 pub mod pool;
 pub mod proxy;

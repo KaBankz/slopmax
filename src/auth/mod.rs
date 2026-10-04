@@ -14,6 +14,7 @@ use reqwest::{Client, StatusCode};
 
 use crate::account::{Account, Provider, Store, Tokens};
 use crate::ids;
+use crate::log;
 use crate::time::Timestamp;
 use pkce::Pkce;
 
@@ -226,7 +227,7 @@ async fn refresh_and_save(
     }
     // Persist before anyone uses the new token: the old refresh token is dead.
     if let Err(e) = store.save(&account) {
-        tracing::error!("refreshed {} but could not save it: {e:#}", account.id);
+        log::error!("refreshed {} but could not save it: {e:#}", account.id);
     }
     Ok(account)
 }
