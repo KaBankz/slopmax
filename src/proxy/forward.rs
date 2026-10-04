@@ -389,6 +389,9 @@ async fn attempt(
 ) -> Attempt {
     let id = choice.account.id.clone();
     let moved = choice.moved_from.is_some();
+    if let Some(from) = &choice.moved_from {
+        log::info!("{id}: takes over a session from {from}");
+    }
     let Some(mut account) = app.ready(&choice.account).await else {
         return Attempt::Failed(None);
     };
