@@ -10,7 +10,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use http::{HeaderMap, Method, StatusCode};
 use serde_json::{Value, json};
-use slopmax::account::{Account, Store, Tokens};
+use slopmax::account::{Account, Endpoint, Store, Tokens};
 use slopmax::config::{Config, Strategy};
 use slopmax::ledger::{self, Ledger};
 use slopmax::limits::{Limits, Window};
@@ -22,6 +22,7 @@ use slopmax::pool::State as PoolState;
 use slopmax::provider::ProviderId;
 use slopmax::proxy::{self, App};
 use slopmax::time::{SignedDuration, Timestamp};
+use slopmax::wire::Dialect;
 use tokio::net::TcpListener;
 
 const KEY: &str = "sm-test-key";
@@ -90,8 +91,52 @@ async fn mock(log: Log, request: Request) -> Response {
         (Method::POST, "/wham/rate-limit-reset-credits/consume") => {
             reply(StatusCode::OK, &[], json!({ "code": "reset" }).to_string())
         }
+        (Method::POST, "/xai/v1/chat/completions") => {
+            keyed(headers, "Bearer key-xai", chat_answer())
+        }
+        (Method::POST, "/local/v1/chat/completions") => chat_answer(),
+        (Method::POST, "/openai/v1/responses") => {
+            let answer = reply(
+                StatusCode::OK,
+                &[("content-type", "text/event-stream".to_owned())],
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"usage\":{\"input_tokens\":5,\"output_tokens\":2}}}\n\n",
+            );
+            keyed(headers, "Bearer key-openai", answer)
+        }
+        (Method::POST, "/kimi/v1/messages") => {
+            let answer = reply(
+                StatusCode::OK,
+                &[],
+                r#"{"type":"message","content":[],"usage":{"input_tokens":3,"output_tokens":1}}"#,
+            );
+            match headers.get("x-api-key") {
+                Some(key) if key == "key-kimi" => answer,
+                _ => reply(StatusCode::UNAUTHORIZED, &[], ""),
+            }
+        }
         _ => reply(StatusCode::NOT_FOUND, &[], ""),
     }
+}
+
+/// `answer` for requests carrying `authorization`, else a 401.
+fn keyed(headers: &HeaderMap, authorization: &str, answer: Response) -> Response {
+    match headers.get("authorization") {
+        Some(value) if value == authorization => answer,
+        _ => reply(StatusCode::UNAUTHORIZED, &[], ""),
+    }
+}
+
+fn chat_answer() -> Response {
+    reply(
+        StatusCode::OK,
+        &[("content-type", "application/json".to_owned())],
+        json!({
+            "object": "chat.completion",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}}],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 3}
+        })
+        .to_string(),
+    )
 }
 
 fn mock_claude(headers: &HeaderMap) -> Response {
@@ -247,27 +292,42 @@ async fn harness_with(
     tokens: &[&str],
     configure: impl FnOnce(&mut Config),
 ) -> Harness {
+    let accounts = |_: &str| {
+        tokens
+            .iter()
+            .enumerate()
+            .map(|(i, token)| {
+                let name = format!("{}{i}", provider.as_str());
+                account(provider, &name, token, 1000 + i as i64)
+            })
+            .collect()
+    };
+    harness_of(accounts, configure).await
+}
+
+/// A harness whose accounts `build` makes, given the mock's base URL (for
+/// compatible endpoints).
+async fn harness_of(
+    build: impl FnOnce(&str) -> Vec<Account>,
+    configure: impl FnOnce(&mut Config),
+) -> Harness {
     let dir = std::env::temp_dir().join(format!(
         "slopmax-it-{}-{}",
         std::process::id(),
         slopmax::ids::token()
     ));
-    let store = Store::at(dir.join("accounts"));
-    let mut ids = Vec::new();
-    for (i, token) in tokens.iter().enumerate() {
-        let name = format!("{}{i}", provider.as_str());
-        let (saved, _) = store
-            .upsert(account(provider, &name, token, 1000 + i as i64))
-            .unwrap();
-        ids.push(saved.id);
-    }
-
     let log: Log = Arc::default();
     let upstream_url = serve({
         let log = log.clone();
         move |request| mock(log.clone(), request)
     })
     .await;
+    let store = Store::at(dir.join("accounts"));
+    let mut ids = Vec::new();
+    for account in build(&upstream_url) {
+        let (saved, _) = store.upsert(account).unwrap();
+        ids.push(saved.id);
+    }
 
     let mut config = Config {
         api_key: KEY.into(),
@@ -276,9 +336,15 @@ async fn harness_with(
         ..Config::default()
     };
     configure(&mut config);
+    let (xai, openai) = (
+        format!("{upstream_url}/xai"),
+        format!("{upstream_url}/openai"),
+    );
     let origins = Origins::new([
         ("https://api.anthropic.com", upstream_url.as_str()),
         ("https://chatgpt.com/backend-api", upstream_url.as_str()),
+        ("https://api.x.ai", xai.as_str()),
+        ("https://api.openai.com", openai.as_str()),
     ]);
     let ledger = Ledger::start(dir.join("usage"));
     let app = App::new(config, store, PoolState::default(), origins, ledger);
@@ -727,4 +793,157 @@ async fn claude_accounts_serve_claude_code_only() {
         h.log.lock().unwrap().is_empty(),
         "nothing reached Anthropic"
     );
+}
+
+/// An API-key account.
+fn key(provider: ProviderId, key: &str) -> Account {
+    Account::new(
+        provider,
+        Tokens {
+            access_token: key.into(),
+            ..Tokens::default()
+        },
+    )
+}
+
+/// A compatible endpoint under the mock at `base/<name>`.
+fn endpoint(base: &str, name: &str, dialect: Dialect, models: &[&str], api_key: &str) -> Account {
+    let mut account = key(ProviderId::Compat, api_key);
+    account.endpoint = Some(Endpoint {
+        base_url: match dialect {
+            Dialect::Messages => format!("{base}/{name}"),
+            _ => format!("{base}/{name}/v1"),
+        },
+        dialect,
+        models: models.iter().map(|m| m.to_string()).collect(),
+    });
+    account.assign_id();
+    account
+}
+
+fn chat_request(h: &Harness, model: &str) -> RequestBuilder {
+    client()
+        .post(format!("{}/v1/chat/completions", h.proxy))
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("user-agent", "OpenAI/Python 2.4.0")
+        .header("content-type", "application/json")
+        .body(format!(
+            r#"{{"model":"{model}","messages":[{{"role":"user","content":"hi"}}]}}"#
+        ))
+}
+
+#[tokio::test]
+async fn chat_clients_reach_keys_and_endpoints_by_model() {
+    let h = harness_of(
+        |base| {
+            vec![
+                account(ProviderId::Codex, "chatgpt", "tok-ok", 1000),
+                key(ProviderId::Xai, "key-xai"),
+                endpoint(base, "local", Dialect::Chat, &["qwen3-*"], ""),
+            ]
+        },
+        |_| {},
+    )
+    .await;
+
+    let response = chat_request(&h, "grok-4").send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let seen = h.log.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(seen.path, "/xai/v1/chat/completions");
+    assert_eq!(seen.headers["authorization"], "Bearer key-xai");
+    assert_eq!(seen.headers["user-agent"], "OpenAI/Python 2.4.0");
+    assert!(
+        std::str::from_utf8(&seen.body)
+            .unwrap()
+            .contains(r#""model":"grok-4""#)
+    );
+
+    let response = chat_request(&h, "qwen3-coder").send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let seen = h.log.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(seen.path, "/local/v1/chat/completions");
+    assert!(
+        !seen.headers.contains_key("authorization"),
+        "no key, no credential"
+    );
+
+    // ChatGPT accounts speak Responses only, so a Chat request for a GPT
+    // model has nowhere to go.
+    let response = chat_request(&h, "gpt-6-sol").send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let body: Value = response.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.contains("gpt-6-sol"), "{message}");
+
+    let xai = h.ids[1].clone();
+    eventually(|| {
+        ledger::read(&h.dir.join("usage"), Timestamp::UNIX_EPOCH)
+            .iter()
+            .any(|e| e.account == xai && e.input == 12 && e.output == 3)
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn keys_serve_subscription_models_only_as_paid_overflow() {
+    let accounts = |_: &str| {
+        vec![
+            account(ProviderId::Codex, "chatgpt", "tok-limited", 1000),
+            key(ProviderId::OpenAI, "key-openai"),
+        ]
+    };
+    let h = harness_of(accounts, |_| {}).await;
+    let response = codex_request(&h).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(paths(&h).iter().all(|p| !p.starts_with("/openai/")));
+
+    // Asking for the key by name opts in for one request.
+    let response = client()
+        .post(format!("{}/codex/responses", h.proxy))
+        .header("authorization", format!("Bearer {KEY}"))
+        .body(r#"{"model":"openai/gpt-6-sol","input":[],"stream":true}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let seen = h.log.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(seen.path, "/openai/v1/responses");
+    assert_eq!(seen.headers["authorization"], "Bearer key-openai");
+    assert_eq!(
+        std::str::from_utf8(&seen.body).unwrap(),
+        r#"{"model":"gpt-6-sol","input":[],"stream":true}"#
+    );
+
+    let h = harness_of(accounts, |config| config.paid_overflow = true).await;
+    let response = codex_request(&h).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(paths(&h), ["/codex/responses", "/openai/v1/responses"]);
+}
+
+#[tokio::test]
+async fn claude_code_may_use_other_vendors_messages_endpoints() {
+    let h = harness_of(
+        |base| {
+            vec![
+                account(ProviderId::Claude, "max", "tok-ok", 1000),
+                endpoint(base, "kimi", Dialect::Messages, &["kimi-*"], "key-kimi"),
+            ]
+        },
+        |_| {},
+    )
+    .await;
+    let response = claude_request(&h)
+        .body(CLAUDE_BODY.replace("claude-opus-5-5", "kimi-k2"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let seen = h.log.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(seen.path, "/kimi/v1/messages?beta=true");
+    assert_eq!(seen.headers["x-api-key"], "key-kimi");
+    assert!(!seen.headers.contains_key("authorization"));
+    // Claude models still go to the Claude account.
+    let response = claude_request(&h).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(paths(&h).last().unwrap(), "/v1/messages?beta=true");
 }

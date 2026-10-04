@@ -26,6 +26,7 @@ use crate::config::Config;
 use crate::import::Found;
 use crate::net::Client;
 use crate::provider::{BoxFuture, ProviderId};
+use crate::proxy::rawjson::{self, Seg};
 use crate::{fsx, paths};
 
 pub use claude_code::ClaudeCode;
@@ -39,13 +40,22 @@ pub fn find(id: &str) -> Option<&'static dyn Agent> {
     AGENTS.iter().copied().find(|a| a.id() == id)
 }
 
-/// The agent that uses `provider`'s subscriptions.
-pub fn native(provider: ProviderId) -> &'static dyn Agent {
-    AGENTS
+/// The agent a request comes from, judged from its headers.
+pub fn detect(headers: &HeaderMap) -> Option<&'static dyn Agent> {
+    AGENTS.iter().copied().find(|a| a.detect(headers))
+}
+
+/// The conversation a request belongs to: the agent's own session id, or
+/// one of the ids other clients commonly send.
+pub fn session(agent: Option<&dyn Agent>, headers: &HeaderMap, body: &[u8]) -> Option<String> {
+    if let Some(agent) = agent {
+        return agent.session(headers, body);
+    }
+    ["session-id", "session_id", "x-session-id"]
         .iter()
-        .copied()
-        .find(|a| a.provider() == provider)
-        .expect("every provider has a native agent")
+        .find_map(|name| headers.get(*name)?.to_str().ok())
+        .map(str::to_owned)
+        .or_else(|| rawjson::find_str(body, &[Seg::Key("prompt_cache_key")]))
 }
 
 /// A program slopmax can serve.
@@ -179,15 +189,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_ids_are_unique_and_cover_every_provider() {
+    fn registry_ids_are_unique_and_cover_every_subscription() {
         let mut ids: Vec<&str> = AGENTS.iter().map(|a| a.id()).collect();
         ids.dedup();
         assert_eq!(ids.len(), AGENTS.len());
         for provider in ProviderId::ALL {
-            assert_eq!(native(provider).provider(), provider);
+            let native = AGENTS.iter().any(|a| a.provider() == provider);
+            assert_eq!(native, provider.spec().is_subscription(), "{provider}");
+            if let Some(only) = provider.spec().agent_only {
+                assert!(find(only).is_some(), "{provider} names agent {only}");
+            }
         }
         assert_eq!(find("codex").map(|a| a.title()), Some("Codex"));
         assert!(find("gemini").is_none());
+    }
+
+    #[test]
+    fn sessions_come_from_the_agent_or_common_ids() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-session-id", http::HeaderValue::from_static("s-1"));
+        assert_eq!(session(None, &headers, b"{}").as_deref(), Some("s-1"));
+        let body = br#"{"prompt_cache_key":"pck"}"#;
+        assert_eq!(
+            session(None, &HeaderMap::new(), body).as_deref(),
+            Some("pck")
+        );
+        assert_eq!(session(None, &HeaderMap::new(), b"{}"), None);
     }
 
     #[cfg(unix)]

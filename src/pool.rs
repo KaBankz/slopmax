@@ -153,6 +153,8 @@ pub struct Pick<'a> {
     /// Conversation id from the agent, used to keep a session on one account.
     pub session: Option<&'a str>,
     pub model: Option<&'a str>,
+    /// The accounts that may serve it, when routing narrowed them down.
+    pub candidates: Option<&'a [String]>,
     /// Accounts already tried for this request.
     pub exclude: &'a [String],
 }
@@ -263,6 +265,7 @@ impl Pool {
             .accounts
             .iter()
             .filter(|a| a.provider == req.provider && !a.disabled && a.auth_error.is_none())
+            .filter(|a| req.candidates.is_none_or(|c| c.contains(&a.id)))
             .collect();
         if usable.is_empty() {
             let reason = if inner.accounts.iter().any(|a| a.provider == req.provider) {
@@ -578,6 +581,7 @@ mod tests {
             provider: ProviderId::Claude,
             session,
             model: None,
+            candidates: None,
             exclude: &[],
         };
         pool.pick(&req, ts(now)).map(|c| c.account.id)
@@ -674,6 +678,7 @@ mod tests {
             provider: ProviderId::Claude,
             session: Some("s1"),
             model: None,
+            candidates: None,
             exclude: &[],
         };
         let choice = pool.pick(&req, ts(1003)).unwrap();
@@ -730,6 +735,7 @@ mod tests {
             provider: ProviderId::Claude,
             session: Some("s"),
             model: None,
+            candidates: None,
             exclude: &exclude,
         };
         let choice = pool.pick(&req, ts(1001)).unwrap();
@@ -798,6 +804,7 @@ mod tests {
             provider: ProviderId::Claude,
             session: None,
             model: Some(model),
+            candidates: None,
             exclude: &[],
         };
         assert!(pool.pick(&req("claude-fable"), ts(1000)).is_err());
@@ -843,6 +850,7 @@ mod tests {
             provider: ProviderId::Claude,
             session: None,
             model: None,
+            candidates: None,
             exclude: &exclude,
         };
         assert_eq!(pool.pick(&req, ts(1000)).unwrap_err().until, Some(ts(5000)));

@@ -6,21 +6,27 @@
 //! "every account is spent" so the agent shows its usual limit message, and
 //! where a stream reports token usage and in-stream refusals.
 
+mod chat;
 mod messages;
 mod responses;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::pool::Usage;
 use crate::time::Timestamp;
 
 /// A request and response format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Dialect {
     /// Anthropic Messages (`/v1/messages`), spoken by Claude Code.
     Messages,
     /// OpenAI Responses (`/v1/responses`), spoken by Codex.
     Responses,
+    /// OpenAI Chat Completions (`/v1/chat/completions`), spoken by most
+    /// other tools.
+    Chat,
 }
 
 /// How a stream opens, judged one event at a time.
@@ -48,7 +54,7 @@ impl Dialect {
     pub fn error(self, kind: &str, message: &str) -> Value {
         match self {
             Self::Messages => messages::error(kind, message),
-            Self::Responses => responses::error(kind, message),
+            Self::Responses | Self::Chat => responses::error(kind, message),
         }
     }
 
@@ -64,6 +70,7 @@ impl Dialect {
         match self {
             Self::Messages => messages::limit_reached(message, until),
             Self::Responses => responses::limit_reached(message, until, now),
+            Self::Chat => (chat::limit_reached(message), Vec::new()),
         }
     }
 
@@ -78,7 +85,7 @@ impl Dialect {
     /// How a stream opening with `event` should be treated.
     pub fn opening(self, event: &Value) -> Opening {
         match self {
-            Self::Messages => Opening::Content,
+            Self::Messages | Self::Chat => Opening::Content,
             Self::Responses => responses::opening(event),
         }
     }
@@ -88,6 +95,15 @@ impl Dialect {
         match self {
             Self::Messages => messages::observe(event, outcome),
             Self::Responses => responses::observe(event, outcome),
+            Self::Chat => chat::observe(event, outcome),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Messages => "messages",
+            Self::Responses => "responses",
+            Self::Chat => "chat",
         }
     }
 }

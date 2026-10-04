@@ -84,12 +84,14 @@ pub fn http_client(origins: Origins) -> Client {
         .build()
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub struct LoginOptions {
     /// Use the device-code flow (Codex only).
     pub device: bool,
     /// Print the authorize URL instead of opening a browser.
     pub no_browser: bool,
+    /// For a compatible endpoint: where it is and what it serves.
+    pub endpoint: Option<crate::account::Endpoint>,
 }
 
 /// The browser half of an authorization-code login: opens (or prints)

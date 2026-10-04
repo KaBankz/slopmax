@@ -182,7 +182,7 @@ pub async fn poll_all(app: &Arc<App>, force: bool) {
         .pool
         .accounts()
         .into_iter()
-        .filter(|a| a.auth_error.is_none())
+        .filter(|a| a.auth_error.is_none() && a.provider.spec().is_subscription())
         .filter(|a| force || is_due(app, a, now, interval))
         .collect();
     let mut polls = tokio::task::JoinSet::new();

@@ -1,7 +1,8 @@
-//! Terminal output helpers: colors, usage bars, and compact durations.
+//! Terminal helpers: colors, usage bars, compact durations, and reading
+//! secrets.
 
 use std::fmt::Display;
-use std::io::IsTerminal;
+use std::io::{BufRead, IsTerminal, Read};
 use std::sync::OnceLock;
 
 use crate::time::{SignedDuration, Timestamp};
@@ -107,6 +108,68 @@ pub fn ago(at: Timestamp, now: Timestamp) -> String {
 pub fn pad(text: &str, width: usize) -> String {
     let visible = visible_width(text);
     format!("{text}{}", " ".repeat(width.saturating_sub(visible)))
+}
+
+/// Reads a secret such as an API key: typed without echo at a terminal, or
+/// read whole from stdin when it is piped in, so it never sits in argv or
+/// shell history.
+pub fn read_secret(prompt: &str) -> std::io::Result<String> {
+    let stdin = std::io::stdin();
+    if !stdin.is_terminal() {
+        let mut text = String::new();
+        stdin.lock().read_to_string(&mut text)?;
+        return Ok(text.trim().to_owned());
+    }
+    eprint!("{prompt}: ");
+    let quiet = EchoOff::new();
+    let mut line = String::new();
+    stdin.lock().read_line(&mut line)?;
+    drop(quiet);
+    eprintln!();
+    Ok(line.trim().to_owned())
+}
+
+/// Turns off terminal echo until dropped.
+struct EchoOff {
+    #[cfg(unix)]
+    saved: Option<libc::termios>,
+}
+
+impl EchoOff {
+    #[cfg(unix)]
+    fn new() -> Self {
+        // SAFETY: tcgetattr and tcsetattr only read and write the termios
+        // they are given, which lives on this stack frame.
+        unsafe {
+            let mut term: libc::termios = std::mem::zeroed();
+            if libc::tcgetattr(libc::STDIN_FILENO, &mut term) != 0 {
+                return Self { saved: None };
+            }
+            let saved = term;
+            term.c_lflag &= !libc::ECHO;
+            if libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &term) != 0 {
+                return Self { saved: None };
+            }
+            Self { saved: Some(saved) }
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn new() -> Self {
+        Self {}
+    }
+}
+
+impl Drop for EchoOff {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(saved) = &self.saved {
+            // SAFETY: as in `new`.
+            unsafe {
+                libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, saved);
+            }
+        }
+    }
 }
 
 /// Display width of `text` with ANSI color escapes stripped.

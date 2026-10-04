@@ -37,6 +37,20 @@ pub struct Config {
     /// When every Codex account is spent, redeem a banked reset credit
     /// instead of failing the request.
     pub redeem_when_exhausted: bool,
+    /// Let API keys serve a subscription's models once every subscription
+    /// account is limited. Off, they serve those models only when asked
+    /// for by name (`openai/gpt-6-sol`) or when no subscription exists.
+    pub paid_overflow: bool,
+    /// Proxy for requests to providers (`http://…`, `socks5://…`), in place
+    /// of HTTPS_PROXY.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<String>,
+    /// Model names that stand for others: `fast = "gpt-6-sol-mini"`.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub aliases: BTreeMap<String, String>,
+    /// Models to try, in order, once a model is limited on every account.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub fallbacks: BTreeMap<String, Vec<String>>,
     /// Per-model API prices for `slopmax usage`, beyond the built-in ones.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub prices: BTreeMap<String, Custom>,
@@ -56,6 +70,10 @@ impl Default for Config {
             refresh_tokens: true,
             redeem_expiring_credits: true,
             redeem_when_exhausted: false,
+            paid_overflow: false,
+            proxy: None,
+            aliases: BTreeMap::new(),
+            fallbacks: BTreeMap::new(),
             prices: BTreeMap::new(),
             notify: notify::Settings::default(),
         }
@@ -171,6 +189,22 @@ api_key = "{api_key}"
 # When every Codex account is spent, redeem a reset credit instead of
 # failing the request.
 # redeem_when_exhausted = false
+
+# Let API keys (`slopmax login openai`, `slopmax login anthropic`) serve a
+# subscription's models once every subscription account is limited. Off,
+# they serve those models only when asked for by name (`openai/gpt-6-sol`)
+# or when you have no such subscription.
+# paid_overflow = false
+
+# Proxy for requests to providers, instead of HTTPS_PROXY:
+#   proxy = "socks5h://127.0.0.1:1080"
+
+# Model names that stand for others, and models to try once one is limited
+# on every account. A name may pick a provider or account: "openai/gpt-6-sol".
+#   [aliases]
+#   fast = "gpt-6-sol-mini"
+#   [fallbacks]
+#   "gpt-6-sol" = ["openai/gpt-6-sol"]
 
 # Notifications, sent when every account of a kind is limited (so requests
 # fail), when it recovers, and when an account needs `slopmax login` again.

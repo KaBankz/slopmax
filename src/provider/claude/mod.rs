@@ -7,7 +7,7 @@ pub mod wire;
 use anyhow::Result;
 use http::{HeaderMap, StatusCode};
 
-use super::{BoxFuture, Provider, Reading, Spec, UsageError, Verdict};
+use super::{Billing, BoxFuture, Provider, Reading, Spec, UsageError, Verdict};
 use crate::account::Account;
 use crate::auth::{Grant, LoginOptions, RefreshError};
 use crate::limits::Limits;
@@ -24,12 +24,14 @@ static SPEC: Spec = Spec {
     id: "claude",
     title: "Claude",
     api: API,
-    dialect: Dialect::Messages,
+    dialects: &[Dialect::Messages],
+    models: &["claude-*"],
+    billing: Billing::Subscription,
+    // Anthropic allows subscription logins in Claude Code alone.
+    agent_only: Some("claude"),
     // Access tokens live 8 hours.
     refresh_lead: SignedDuration::from_hours(1),
     device_login: false,
-    // Anthropic allows subscription logins in Claude Code alone.
-    native_only: true,
 };
 
 impl Provider for Claude {
@@ -37,8 +39,11 @@ impl Provider for Claude {
         &SPEC
     }
 
-    fn identity<'a>(&self, account: &'a Account) -> Option<&'a str> {
-        account.org_id.as_deref().or(account.account_id.as_deref())
+    fn identity(&self, account: &Account) -> Option<String> {
+        account
+            .org_id
+            .clone()
+            .or_else(|| account.account_id.clone())
     }
 
     fn login<'a>(

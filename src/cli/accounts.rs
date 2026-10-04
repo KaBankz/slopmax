@@ -14,8 +14,8 @@ use crate::config::Config;
 use crate::import::{self, Source};
 use crate::net::Origins;
 use crate::pool::{Pins, Pool, State};
-use crate::provider::ProviderId;
 use crate::provider::credits::Outcome;
+use crate::provider::{Billing, ProviderId};
 use crate::report::{self, Report};
 use crate::time::{SignedDuration, Timestamp};
 use crate::{fsx, paths, ui, usage};
@@ -54,8 +54,12 @@ async fn offline_report(config: &Config, store: &Store, refresh: bool) -> Result
     pool.sync(store.list()?, pins.clone());
     if refresh {
         let http = auth::http_client(Origins::default());
-        for account in pool.accounts().iter().filter(|a| a.auth_error.is_none()) {
-            match usage::poll(&http, store, account, config.refresh_tokens).await {
+        let polled = pool
+            .accounts()
+            .into_iter()
+            .filter(|a| a.auth_error.is_none() && a.provider.spec().is_subscription());
+        for account in polled {
+            match usage::poll(&http, store, &account, config.refresh_tokens).await {
                 Ok((_, reading)) => pool.observe(&account.id, reading.limits, Timestamp::now()),
                 Err(e) => eprintln!("{} {}: {e:#}", ui::yellow("warning:"), account.name()),
             }
@@ -103,12 +107,32 @@ pub(super) async fn login(
         ui::bold(account.name()),
         ui::dim(&account.id)
     );
-    if created {
-        println!(
-            "{}",
-            ui::dim("Check limits with `slopmax status --refresh`.")
-        );
+    if !created {
+        return Ok(());
     }
+    let note = match spec.billing {
+        Billing::Subscription => "Check limits with `slopmax status --refresh`.".to_owned(),
+        Billing::Metered { backs } => {
+            let models = match &account.endpoint {
+                Some(endpoint) => endpoint.models.join(", "),
+                None => spec.models.join(", "),
+            };
+            let backed = backs.filter(|sub| {
+                store
+                    .list()
+                    .is_ok_and(|all| all.iter().any(|a| a.provider == *sub))
+            });
+            match backed {
+                Some(sub) => format!(
+                    "It serves {models} when asked for by name ({provider}/<model>), or once \
+                     every {} account is limited if `paid_overflow = true` in config.toml.",
+                    sub.spec().title
+                ),
+                None => format!("It serves {models}."),
+            }
+        }
+    };
+    println!("{}", ui::dim(note));
     Ok(())
 }
 

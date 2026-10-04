@@ -187,6 +187,8 @@ async fn from_cliproxy_file(
             account.plan = file.plan_type;
             codex::apply_claims(&mut account);
         }
+        // Only subscription logins are imported.
+        _ => {}
     }
     account.assign_id();
     Ok(account)

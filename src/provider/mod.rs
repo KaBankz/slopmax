@@ -5,10 +5,17 @@
 //! how to read the answer. The proxy, background tasks, and CLI only go
 //! through this trait; [`ProviderId::get`] is the one place that lists the
 //! implementations.
+//!
+//! Subscriptions (Claude, ChatGPT) sign in with OAuth and have usage
+//! windows. Metered providers (API keys, compatible endpoints) take a key
+//! and bill per token, so by default they never quietly absorb traffic a
+//! subscription would serve.
 
 pub mod claude;
 pub mod codex;
+pub mod compat;
 pub mod credits;
+pub mod keys;
 
 use std::fmt;
 use std::future::Future;
@@ -40,15 +47,35 @@ pub enum ProviderId {
     Claude,
     /// ChatGPT Plus/Pro/Team, used by Codex.
     Codex,
+    /// Anthropic API keys.
+    Anthropic,
+    /// OpenAI API keys.
+    OpenAI,
+    /// xAI API keys.
+    Xai,
+    /// Any OpenAI- or Anthropic-compatible endpoint.
+    Compat,
 }
 
 impl ProviderId {
-    pub const ALL: [Self; 2] = [Self::Claude, Self::Codex];
+    /// Every provider, subscriptions first: the order requests try them in.
+    pub const ALL: [Self; 6] = [
+        Self::Claude,
+        Self::Codex,
+        Self::Anthropic,
+        Self::OpenAI,
+        Self::Xai,
+        Self::Compat,
+    ];
 
     pub fn get(self) -> &'static dyn Provider {
         match self {
             Self::Claude => &claude::Claude,
             Self::Codex => &codex::Codex,
+            Self::Anthropic => &keys::ANTHROPIC,
+            Self::OpenAI => &keys::OPENAI,
+            Self::Xai => &keys::XAI,
+            Self::Compat => &compat::Compat,
         }
     }
 
@@ -70,7 +97,7 @@ impl std::str::FromStr for ProviderId {
             .find(|p| p.as_str() == s)
             .ok_or_else(|| {
                 let ids: Vec<&str> = Self::ALL.iter().map(|p| p.as_str()).collect();
-                format!("expected {}, got {s:?}", ids.join(" or "))
+                format!("expected one of {}, got {s:?}", ids.join(", "))
             })
     }
 }
@@ -90,14 +117,58 @@ pub struct Spec {
     pub title: &'static str,
     /// Base URL of the API agents talk to; their request path is appended.
     pub api: &'static str,
-    /// The format that API speaks.
-    pub dialect: Dialect,
+    /// The formats that API speaks, preferred first.
+    pub dialects: &'static [Dialect],
+    /// The models it serves, as patterns where `*` matches anything.
+    pub models: &'static [&'static str],
+    /// How its accounts are paid for.
+    pub billing: Billing,
+    /// The one agent that may use these accounts, by id.
+    pub agent_only: Option<&'static str>,
     /// How long before expiry an access token is refreshed.
     pub refresh_lead: SignedDuration,
     /// Whether `slopmax login --device` is supported.
     pub device_login: bool,
-    /// Whether only the provider's own agent may use these accounts.
-    pub native_only: bool,
+}
+
+impl Spec {
+    /// Whether the provider has usage windows to poll.
+    pub fn is_subscription(&self) -> bool {
+        self.billing == Billing::Subscription
+    }
+}
+
+/// How a provider's accounts are paid for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Billing {
+    /// A plan with usage windows that reset.
+    Subscription,
+    /// Pay per token. `backs` is the subscription whose models these
+    /// accounts also serve: they take that traffic only as paid overflow,
+    /// or when there is no such subscription at all.
+    Metered { backs: Option<ProviderId> },
+}
+
+/// Whether `model` matches `pattern`, where `*` matches any run of
+/// characters.
+pub fn matches(pattern: &str, model: &str) -> bool {
+    let mut parts = pattern.split('*');
+    let first = parts.next().unwrap_or_default();
+    let Some(mut rest) = model.strip_prefix(first) else {
+        return false;
+    };
+    let mut parts = parts.peekable();
+    while let Some(part) = parts.next() {
+        if parts.peek().is_none() {
+            // The last part anchors at the end.
+            return rest.len() >= part.len() && rest.ends_with(part);
+        }
+        match rest.find(part) {
+            Some(at) => rest = &rest[at + part.len()..],
+            None => return false,
+        }
+    }
+    rest.is_empty()
 }
 
 /// A usage reading, plus the plan when the endpoint reports one.
@@ -182,7 +253,7 @@ pub trait Provider: Send + Sync {
 
     /// The provider-side identity accounts are keyed by (an organization or
     /// workspace), so one email in two of them stays two accounts.
-    fn identity<'a>(&self, account: &'a Account) -> Option<&'a str>;
+    fn identity(&self, account: &Account) -> Option<String>;
 
     /// Connects an account interactively.
     fn login<'a>(
@@ -194,19 +265,46 @@ pub trait Provider: Send + Sync {
     /// Redeems a refresh token for new tokens.
     fn refresh<'a>(
         &'a self,
-        http: &'a Client,
-        refresh_token: &'a str,
-    ) -> BoxFuture<'a, Result<Grant, RefreshError>>;
+        _http: &'a Client,
+        _refresh_token: &'a str,
+    ) -> BoxFuture<'a, Result<Grant, RefreshError>> {
+        let title = self.spec().title;
+        Box::pin(std::future::ready(Err(RefreshError::Revoked(format!(
+            "{title} keys cannot be refreshed"
+        )))))
+    }
 
     /// Updates email, plan, and organization once new tokens arrive.
-    fn identify<'a>(&'a self, http: &'a Client, account: &'a mut Account) -> BoxFuture<'a, ()>;
+    fn identify<'a>(&'a self, _http: &'a Client, _account: &'a mut Account) -> BoxFuture<'a, ()> {
+        Box::pin(std::future::ready(()))
+    }
 
-    /// Reads the account's usage windows.
+    /// Reads the account's usage windows (subscriptions only).
     fn usage<'a>(
         &'a self,
-        http: &'a Client,
-        account: &'a Account,
-    ) -> BoxFuture<'a, Result<Reading, UsageError>>;
+        _http: &'a Client,
+        _account: &'a Account,
+    ) -> BoxFuture<'a, Result<Reading, UsageError>> {
+        let title = self.spec().title;
+        Box::pin(std::future::ready(Err(UsageError::Other(anyhow!(
+            "{title} has no usage windows"
+        )))))
+    }
+
+    /// Where the account's requests go; the request path is appended.
+    fn api<'a>(&self, _account: &'a Account) -> &'a str {
+        self.spec().api
+    }
+
+    /// The formats the account's API speaks, preferred first.
+    fn dialects<'a>(&self, _account: &'a Account) -> &'a [Dialect] {
+        self.spec().dialects
+    }
+
+    /// Whether the account serves `model`.
+    fn serves(&self, _account: &Account, model: &str) -> bool {
+        self.spec().models.iter().any(|p| matches(p, model))
+    }
 
     /// The agent's request headers with the account's credentials in place
     /// of the slopmax key. `moved` says the session just left another
@@ -220,7 +318,9 @@ pub trait Provider: Send + Sync {
     }
 
     /// Usage windows reported in response headers.
-    fn limits(&self, headers: &HeaderMap, now: Timestamp) -> Option<Limits>;
+    fn limits(&self, _headers: &HeaderMap, _now: Timestamp) -> Option<Limits> {
+        None
+    }
 
     /// Classifies a response that was not a success.
     fn verdict(
@@ -235,5 +335,39 @@ pub trait Provider: Send + Sync {
     /// Banked reset credits, for providers that grant them.
     fn credits(&self) -> Option<&dyn ResetCredits> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn patterns_match_with_wildcards() {
+        assert!(matches("claude-*", "claude-opus-5-5"));
+        assert!(!matches("claude-*", "gpt-6-sol"));
+        assert!(matches("gpt-*", "gpt-6-sol"));
+        assert!(matches("o3*", "o3"));
+        assert!(matches("*-coder", "qwen3-coder"));
+        assert!(matches("a*b*c", "a-x-b-y-c"));
+        assert!(!matches("a*b*c", "a-x-c"));
+        assert!(matches("exact", "exact"));
+        assert!(!matches("exact", "exactly"));
+        assert!(matches("*", "anything"));
+    }
+
+    #[test]
+    fn registry_ids_are_unique_and_round_trip() {
+        for provider in ProviderId::ALL {
+            assert_eq!(provider.as_str().parse::<ProviderId>(), Ok(provider));
+            let json = serde_json::to_string(&provider).unwrap();
+            assert_eq!(json, format!("\"{provider}\""));
+        }
+        // Metered providers back up a subscription, never another key.
+        for provider in ProviderId::ALL {
+            if let Billing::Metered { backs: Some(sub) } = provider.spec().billing {
+                assert!(sub.spec().is_subscription(), "{provider} backs {sub}");
+            }
+        }
     }
 }

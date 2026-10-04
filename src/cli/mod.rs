@@ -12,12 +12,15 @@ use anyhow::{Context, Result, bail};
 use self::accounts::{import, login, own, redeem, remove, set_disabled, status, use_account};
 use self::args::{App, Arg, Choice, Command, Kind, Parsed};
 use self::background::{ensure_running, service, start, stop};
-use crate::account::Store;
+use crate::account::{Endpoint, Store};
 use crate::agent::{self, Agent};
 use crate::auth::{self, LoginOptions};
 use crate::config::Config;
 use crate::net::Origins;
+use crate::net::client::Proxy;
+use crate::provider::ProviderId;
 use crate::time::Timestamp;
+use crate::wire::Dialect;
 use crate::{daemon, notify, paths, ui};
 
 const ACCOUNT: &str = "Number from `slopmax status`, or the account's id, email, or label";
@@ -30,6 +33,22 @@ const PROVIDERS: &[Choice] = &[
     Choice {
         value: "codex",
         help: "ChatGPT Plus/Pro/Team, used by Codex",
+    },
+    Choice {
+        value: "anthropic",
+        help: "An Anthropic API key (for Claude Code)",
+    },
+    Choice {
+        value: "openai",
+        help: "An OpenAI API key",
+    },
+    Choice {
+        value: "xai",
+        help: "An xAI API key, for Grok models",
+    },
+    Choice {
+        value: "compat",
+        help: "Any OpenAI- or Anthropic-compatible endpoint (needs --url)",
     },
 ];
 
@@ -158,7 +177,7 @@ pub static APP: App = App {
         },
         command(
             "login",
-            "Connect an account through the provider's sign-in page",
+            "Connect an account: sign in, or enter an API key",
             &[
                 arg(
                     "provider",
@@ -179,6 +198,21 @@ pub static APP: App = App {
                     "no-browser",
                     "Print the sign-in URL instead of opening a browser",
                     Kind::Flag(None),
+                ),
+                arg(
+                    "url",
+                    "Compatible endpoint's base URL, e.g. http://localhost:11434/v1",
+                    Kind::Value(None, "URL"),
+                ),
+                arg(
+                    "dialect",
+                    "Its format: chat (the default), responses, or messages",
+                    Kind::Value(None, "DIALECT"),
+                ),
+                arg(
+                    "models",
+                    "Models the endpoint serves, comma-separated (default: what it lists)",
+                    Kind::Value(None, "MODELS"),
                 ),
             ],
         ),
@@ -324,6 +358,10 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
     };
     let m = &matches;
     let config = Config::load()?;
+    if let Some(proxy) = &config.proxy {
+        let proxy = Proxy::parse(proxy).map_err(|e| anyhow::anyhow!("config `proxy`: {e}"))?;
+        Proxy::set_default(proxy);
+    }
     let store = Store::open();
     // A first run at a terminal starts the guided setup instead.
     if bare && init::wanted(&store) {
@@ -351,12 +389,24 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
             status(&config, &store, args).await?;
         }
         "login" => {
+            let provider: ProviderId = m.get("provider")?;
+            let endpoint = match m.value("url") {
+                Some(url) => Some(endpoint(url, m.value("dialect"), m.value("models"))?),
+                None if provider == ProviderId::Compat => {
+                    bail!("a compatible endpoint needs its address: --url <base url>")
+                }
+                None => None,
+            };
+            if endpoint.is_some() && provider != ProviderId::Compat {
+                bail!("--url, --dialect, and --models are for `slopmax login compat`");
+            }
             let options = LoginOptions {
                 device: m.flag("device"),
                 no_browser: m.flag("no-browser"),
+                endpoint,
             };
             let label = m.value("label").map(str::to_owned);
-            login(&store, m.get("provider")?, label, options).await?;
+            login(&store, provider, label, options).await?;
         }
         "import" => import(&store, m.get("source")?, m.flag("own")).await?,
         "own" => own(&store, &m.get::<String>("account")?)?,
@@ -423,6 +473,31 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
 }
 
 /// The agent named by the `agent` argument.
+/// A compatible endpoint from `login compat` arguments.
+fn endpoint(url: &str, dialect: Option<&str>, models: Option<&str>) -> Result<Endpoint> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        bail!("--url takes an http:// or https:// base URL, got {url:?}");
+    }
+    let dialect = match dialect.unwrap_or("chat") {
+        "chat" => Dialect::Chat,
+        "responses" => Dialect::Responses,
+        "messages" => Dialect::Messages,
+        other => bail!("--dialect takes chat, responses, or messages, got {other:?}"),
+    };
+    let models = models
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(str::to_owned)
+        .collect();
+    Ok(Endpoint {
+        base_url: url.trim_end_matches('/').to_owned(),
+        dialect,
+        models,
+    })
+}
+
 fn agent_named(m: &args::Matches) -> Result<&'static dyn Agent> {
     let name: String = m.get("agent")?;
     agent::find(&name).with_context(|| format!("unknown agent {name:?}"))
@@ -477,6 +552,7 @@ mod tests {
             "ls -w",
             "login claude --label work",
             "login codex --device --no-browser",
+            "login compat --url http://localhost:11434/v1 --models qwen3-coder,llama4",
             "import cliproxyapi --own",
             "own all",
             "use auto",

@@ -19,7 +19,6 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::account::{Account, Store};
-use crate::agent;
 use crate::auth::{self, RefreshError};
 use crate::config::Config;
 use crate::ledger::Ledger;
@@ -170,31 +169,16 @@ async fn proxy(app: Arc<App>, request: Request) -> Response {
         .path_and_query()
         .map_or("/", |pq| pq.as_str())
         .to_owned();
-    let Some((provider, target)) = route(&path_and_query, request.headers()) else {
+    let Some(target) = route(&path_and_query, request.headers()) else {
         return error(
             None,
             StatusCode::NOT_FOUND,
             "unknown path; slopmax serves /v1/*, /claude/*, and /codex/*",
         );
     };
-    let spec = provider.spec();
-    let dialect = spec.dialect;
+    let dialect = target.dialect;
     if !authorized(&app.config, request.headers()) {
         return unauthorized(Some(dialect));
-    }
-    let agent = agent::native(provider);
-    if spec.native_only && !agent.detect(request.headers()) {
-        let client = request
-            .headers()
-            .get(header::USER_AGENT)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("an unidentified client");
-        let message = format!(
-            "slopmax serves {} accounts to {} only; this request came from {client}",
-            spec.title,
-            agent.title()
-        );
-        return error(Some(dialect), StatusCode::FORBIDDEN, &message);
     }
     // Upgrades cannot be relayed. Refusing the handshake with 426 makes
     // Codex switch to HTTP streaming at once instead of retrying.
@@ -205,7 +189,21 @@ async fn proxy(app: Arc<App>, request: Request) -> Response {
             "slopmax streams over HTTP; WebSockets are not supported",
         );
     }
-    forward::forward(app, provider, target, request).await
+    forward::forward(app, target, request).await
+}
+
+/// Where a request goes, judged from its path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Target {
+    /// The provider whose API the path belongs to, if any. It serves the
+    /// request unless the model routes it elsewhere.
+    pub provider: Option<ProviderId>,
+    /// The path to forward, relative to the API's base URL.
+    pub path: String,
+    /// The format the client speaks.
+    pub dialect: Dialect,
+    /// Whether the model in the body picks the provider.
+    pub by_model: bool,
 }
 
 fn is_websocket(headers: &HeaderMap) -> bool {
@@ -232,31 +230,58 @@ fn empty_reply(status: StatusCode) -> Response {
     response
 }
 
-/// Maps a request path to a provider and the upstream path.
-fn route(path_and_query: &str, headers: &HeaderMap) -> Option<(ProviderId, String)> {
+/// Maps a request path to its target.
+fn route(path_and_query: &str, headers: &HeaderMap) -> Option<Target> {
     let strip = |prefix: &str| {
         path_and_query
             .strip_prefix(prefix)
             .filter(|rest| rest.is_empty() || rest.starts_with(['/', '?']))
             .map(str::to_owned)
     };
+    let starts = |path: &str, prefix: &str| {
+        path.split('?')
+            .next()
+            .unwrap_or_default()
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    };
+    let claude = |path: String| Target {
+        provider: Some(ProviderId::Claude),
+        by_model: starts(&path, "/v1/messages"),
+        dialect: Dialect::Messages,
+        path,
+    };
+    let codex = |path: String| Target {
+        provider: Some(ProviderId::Codex),
+        by_model: starts(&path, "/responses"),
+        dialect: Dialect::Responses,
+        path,
+    };
     if let Some(rest) = strip("/claude") {
-        return Some((ProviderId::Claude, rest));
+        return Some(claude(rest));
     }
     if let Some(rest) = strip("/codex") {
-        return Some((ProviderId::Codex, rest));
+        return Some(codex(rest));
     }
     // Unprefixed /v1 paths, as an OpenAI- or Anthropic-style base URL sends.
     let rest = strip("/v1")?;
+    if starts(&rest, "/chat/completions") {
+        return Some(Target {
+            provider: None,
+            path: rest,
+            dialect: Dialect::Chat,
+            by_model: true,
+        });
+    }
     let path = rest.split('?').next().unwrap_or_default();
-    let codex = path.starts_with("/responses")
+    let is_codex = path.starts_with("/responses")
         || (path == "/models"
             && rest.contains("client_version=")
             && !headers.contains_key("anthropic-version"));
-    Some(if codex {
-        (ProviderId::Codex, rest)
+    Some(if is_codex {
+        codex(rest)
     } else {
-        (ProviderId::Claude, format!("/v1{rest}"))
+        claude(format!("/v1{rest}"))
     })
 }
 
@@ -350,32 +375,84 @@ mod tests {
     #[test]
     fn routes_prefixed_and_v1_paths() {
         let none = HeaderMap::new();
+        let at = |path: &str| {
+            let t = route(path, &none)?;
+            Some((t.provider, t.path, t.dialect, t.by_model))
+        };
+        use Dialect::{Chat, Messages, Responses};
+        use ProviderId::{Claude, Codex};
         assert_eq!(
-            route("/claude/v1/messages?beta=true", &none),
-            Some((ProviderId::Claude, "/v1/messages?beta=true".into()))
+            at("/claude/v1/messages?beta=true"),
+            Some((
+                Some(Claude),
+                "/v1/messages?beta=true".into(),
+                Messages,
+                true
+            ))
         );
         assert_eq!(
-            route("/codex/responses", &none),
-            Some((ProviderId::Codex, "/responses".into()))
+            at("/claude/v1/messages/count_tokens"),
+            Some((
+                Some(Claude),
+                "/v1/messages/count_tokens".into(),
+                Messages,
+                true
+            ))
         );
         assert_eq!(
-            route("/v1/messages?beta=true", &none),
-            Some((ProviderId::Claude, "/v1/messages?beta=true".into()))
+            at("/codex/responses"),
+            Some((Some(Codex), "/responses".into(), Responses, true))
         );
         assert_eq!(
-            route("/v1/responses", &none),
-            Some((ProviderId::Codex, "/responses".into()))
+            at("/codex/models?client_version=1"),
+            Some((
+                Some(Codex),
+                "/models?client_version=1".into(),
+                Responses,
+                false
+            ))
         );
         assert_eq!(
-            route("/v1/models?client_version=0.159.3", &none),
-            Some((ProviderId::Codex, "/models?client_version=0.159.3".into()))
+            at("/v1/messages?beta=true"),
+            Some((
+                Some(Claude),
+                "/v1/messages?beta=true".into(),
+                Messages,
+                true
+            ))
         );
         assert_eq!(
-            route("/v1/models?limit=1000", &none),
-            Some((ProviderId::Claude, "/v1/models?limit=1000".into()))
+            at("/v1/responses"),
+            Some((Some(Codex), "/responses".into(), Responses, true))
         );
-        assert_eq!(route("/codexx/responses", &none), None);
-        assert_eq!(route("/other", &none), None);
+        assert_eq!(
+            at("/v1/chat/completions"),
+            Some((None, "/chat/completions".into(), Chat, true))
+        );
+        assert_eq!(
+            at("/v1/models?client_version=0.159.3"),
+            Some((
+                Some(Codex),
+                "/models?client_version=0.159.3".into(),
+                Responses,
+                false
+            ))
+        );
+        assert_eq!(
+            at("/v1/models?limit=1000"),
+            Some((
+                Some(Claude),
+                "/v1/models?limit=1000".into(),
+                Messages,
+                false
+            ))
+        );
+        assert_eq!(
+            at("/v1/messagesx"),
+            Some((Some(Claude), "/v1/messagesx".into(), Messages, false))
+        );
+        assert_eq!(at("/codexx/responses"), None);
+        assert_eq!(at("/other"), None);
     }
 
     #[test]

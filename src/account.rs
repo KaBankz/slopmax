@@ -14,9 +14,11 @@ use serde::{Deserialize, Serialize};
 use crate::log;
 use crate::provider::ProviderId;
 use crate::time::{SignedDuration, Timestamp};
+use crate::wire::Dialect;
 use crate::{fsx, ids, paths};
 
-/// OAuth tokens for one account.
+/// OAuth tokens for one account, or its API key as a token that never
+/// expires.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Tokens {
     pub access_token: String,
@@ -78,7 +80,23 @@ pub struct Account {
     /// instead of refreshing (see `slopmax own`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<Link>,
+    /// A compatible endpoint's address and models.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<Endpoint>,
     pub added_at: Timestamp,
+}
+
+/// An OpenAI- or Anthropic-compatible API.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Endpoint {
+    /// Base URL; the request path is appended: `/chat/completions` and
+    /// `/responses` for OpenAI-style APIs (so it usually ends in `/v1`),
+    /// `/v1/messages` for Anthropic-style ones.
+    pub base_url: String,
+    pub dialect: Dialect,
+    /// The models it serves, as patterns where `*` matches anything.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<String>,
 }
 
 /// Where a linked account's tokens come from.
@@ -107,6 +125,7 @@ impl Account {
             auth_error: None,
             tokens,
             link: None,
+            endpoint: None,
             added_at: Timestamp::now(),
         };
         account.assign_id();
@@ -118,8 +137,7 @@ impl Account {
         self.provider
             .get()
             .identity(self)
-            .or(self.email.as_deref())
-            .map(str::to_owned)
+            .or_else(|| self.email.clone())
             .unwrap_or_else(|| self.tokens.refresh_token.clone().unwrap_or_default())
     }
 
@@ -130,10 +148,20 @@ impl Account {
         self.id = format!("{}-{hex}", self.provider);
     }
 
-    /// Human-friendly name: the label, else email plus organization.
+    /// Human-friendly name: the label, else email plus organization (or
+    /// for keys, the endpoint's host or the key's last characters).
     pub fn name(&self) -> String {
         if let Some(label) = &self.label {
             return label.clone();
+        }
+        if let Some(endpoint) = &self.endpoint {
+            let host = endpoint.base_url.split("://").last().unwrap_or_default();
+            return host.split('/').next().unwrap_or(host).to_owned();
+        }
+        if !self.provider.spec().is_subscription() {
+            let key = &self.tokens.access_token;
+            let tail = key.get(key.len().saturating_sub(4)..).unwrap_or_default();
+            return format!("{} key …{tail}", self.provider.spec().title);
         }
         let email = self.email.as_deref().unwrap_or(&self.id);
         match &self.org_name {

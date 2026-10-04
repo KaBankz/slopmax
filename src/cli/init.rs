@@ -133,7 +133,10 @@ async fn accounts(store: &Store, answers: Answers) -> Result<()> {
     if answers == Answers::Defaults {
         return Ok(());
     }
-    for provider in ProviderId::ALL {
+    let subscriptions = ProviderId::ALL
+        .into_iter()
+        .filter(|p| p.spec().is_subscription());
+    for provider in subscriptions {
         let title = provider.spec().title;
         loop {
             let count = store
@@ -155,6 +158,7 @@ async fn accounts(store: &Store, answers: Answers) -> Result<()> {
             let options = LoginOptions {
                 device: headless && provider.spec().device_login,
                 no_browser: headless,
+                endpoint: None,
             };
             if let Err(e) = login(store, provider, None, options).await {
                 println!("    {} {e:#}", ui::yellow("sign-in failed:"));

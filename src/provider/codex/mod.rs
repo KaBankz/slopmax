@@ -8,7 +8,7 @@ pub mod wire;
 use anyhow::Result;
 use http::{HeaderMap, StatusCode};
 
-use super::{BoxFuture, Provider, Reading, ResetCredits, Spec, UsageError, Verdict};
+use super::{Billing, BoxFuture, Provider, Reading, ResetCredits, Spec, UsageError, Verdict};
 use crate::account::Account;
 use crate::auth::{Grant, LoginOptions, RefreshError};
 use crate::limits::Limits;
@@ -21,16 +21,21 @@ pub const BACKEND: &str = "https://chatgpt.com/backend-api";
 
 pub struct Codex;
 
+/// The models ChatGPT plans serve through Codex.
+pub const MODELS: &[&str] = &["gpt-*", "codex-*", "o1*", "o3*", "o4*"];
+
 static SPEC: Spec = Spec {
     id: "codex",
     title: "ChatGPT",
     api: "https://chatgpt.com/backend-api/codex",
-    dialect: Dialect::Responses,
+    dialects: &[Dialect::Responses],
+    models: MODELS,
+    billing: Billing::Subscription,
+    // OpenAI allows ChatGPT plans in third-party apps.
+    agent_only: None,
     // Access tokens live about ten days.
     refresh_lead: SignedDuration::from_hours(24),
     device_login: true,
-    // OpenAI allows ChatGPT plans in third-party apps.
-    native_only: false,
 };
 
 impl Provider for Codex {
@@ -38,8 +43,8 @@ impl Provider for Codex {
         &SPEC
     }
 
-    fn identity<'a>(&self, account: &'a Account) -> Option<&'a str> {
-        account.account_id.as_deref()
+    fn identity(&self, account: &Account) -> Option<String> {
+        account.account_id.clone()
     }
 
     fn login<'a>(

@@ -1,10 +1,13 @@
 //! Forwarding with failover.
 //!
-//! Every account gets at most one attempt per request (plus one retry after
-//! a forced token refresh, and for Codex one retry without account-bound
-//! state). Failover only happens before any response byte reaches the agent;
-//! once a stream starts it is passed through untouched.
+//! Routing turns the request's model into steps: providers and the accounts
+//! that may serve it, in order. Every account gets at most one attempt per
+//! request (plus one retry after a forced token refresh, and for Codex one
+//! retry without account-bound state). Failover only happens before any
+//! response byte reaches the agent; once a stream starts it is passed
+//! through untouched.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -16,9 +19,9 @@ use http_body_util::LengthLimitError;
 use super::rawjson::{self, Seg};
 use super::sse::{Tap, Tapped};
 use super::start::{self, Start};
-use super::{App, error, json_reply, returnable};
+use super::{App, Target, error, json_reply, returnable};
 use crate::account::Account;
-use crate::agent;
+use crate::agent::{self, Agent};
 use crate::auth;
 use crate::ledger::Entry;
 use crate::log;
@@ -28,6 +31,7 @@ use crate::net::server::{Request, Response};
 use crate::pool::{Choice, DEFAULT_BLOCK, DEFAULT_THROTTLE, Pick, Unavailable};
 use crate::provider::credits::Outcome;
 use crate::provider::{ProviderId, Verdict};
+use crate::route::{self, NoRoute, Step};
 use crate::time::{SignedDuration, Timestamp};
 use crate::ui;
 use crate::wire::Dialect;
@@ -41,50 +45,145 @@ const ACCOUNT_BLOCK: SignedDuration = SignedDuration::from_mins(30);
 struct Inbound {
     /// When the request arrived, for the usage ledger's timings.
     started: Instant,
-    provider: ProviderId,
-    target: String,
+    target: Target,
     parts: Parts,
     body: Bytes,
     /// Whether the body is plain JSON slopmax may inspect and edit.
     json: bool,
+    agent: Option<&'static dyn Agent>,
     session: Option<String>,
     model: Option<String>,
 }
 
 impl Inbound {
-    fn new(provider: ProviderId, target: String, parts: Parts, body: Bytes) -> Self {
+    fn new(target: Target, parts: Parts, body: Bytes) -> Self {
         let encoded = parts
             .headers
             .get("content-encoding")
             .is_some_and(|v| v.as_bytes() != b"identity");
         let json = !encoded && rawjson::is_valid(&body);
         let inspectable: &[u8] = if json { &body } else { b"" };
-        let session = agent::native(provider).session(&parts.headers, inspectable);
+        let agent = agent::detect(&parts.headers);
+        let session = agent::session(agent, &parts.headers, inspectable);
         let model = json
             .then(|| rawjson::find_str(&body, &[Seg::Key("model")]))
             .flatten();
         Self {
             started: Instant::now(),
-            provider,
             target,
             parts,
             body,
             json,
+            agent,
             session,
             model,
         }
     }
 
-    /// The body to send upstream: as the agent sent it, unless the session
-    /// moved accounts and the body holds state bound to the old one.
-    fn body(&self, strip_state: bool) -> Bytes {
-        if strip_state
-            && self.json
-            && let Some(rebound) = self.provider.get().rebind(&self.body)
-        {
-            return rebound.into();
+    /// The body to send for `step`: as the agent sent it, except for asking
+    /// for the step's model when routing renamed it, and dropping state
+    /// bound to another account when the session moved.
+    fn body(&self, step: &Step, strip_state: bool) -> Bytes {
+        if !self.json {
+            return self.body.clone();
         }
-        self.body.clone()
+        let mut body = Cow::Borrowed(&self.body[..]);
+        if self.model.as_deref().is_some_and(|m| m != step.model)
+            && let Some(range) = rawjson::find(&body, &[Seg::Key("model")])
+        {
+            let model = serde_json::to_vec(&step.model).expect("strings serialize");
+            body = Cow::Owned(rawjson::splice(&body, range, &model));
+        }
+        if strip_state && let Some(rebound) = step.provider.get().rebind(&body) {
+            body = Cow::Owned(rebound);
+        }
+        match body {
+            Cow::Borrowed(_) => self.body.clone(),
+            Cow::Owned(edited) => edited.into(),
+        }
+    }
+
+    /// The steps that may serve this request.
+    fn plan(&self, app: &App) -> Result<Vec<Step>, NoRoute> {
+        let accounts = app.pool.accounts();
+        let config = &app.config;
+        let table = route::Table {
+            accounts: &accounts,
+            aliases: &config.aliases,
+            fallbacks: &config.fallbacks,
+            paid_overflow: config.paid_overflow,
+        };
+        match (&self.model, self.target.by_model, self.target.provider) {
+            (Some(model), true, _) => route::plan(
+                &table,
+                &route::Request {
+                    model,
+                    dialect: self.target.dialect,
+                    agent: self.agent.map(|a| a.id()),
+                    default: self.target.provider,
+                },
+            ),
+            // Anything else goes to the API its path belongs to.
+            (_, _, Some(provider)) => {
+                native_step(&table, provider, self.model.as_deref(), self.agent)
+            }
+            (_, _, None) => Err(NoRoute::NoModel),
+        }
+    }
+}
+
+/// The one step for a request routed by its path.
+fn native_step(
+    table: &route::Table,
+    provider: ProviderId,
+    model: Option<&str>,
+    agent: Option<&dyn Agent>,
+) -> Result<Vec<Step>, NoRoute> {
+    if let Some(only) = provider.spec().agent_only
+        && agent.map(|a| a.id()) != Some(only)
+    {
+        let agent = agent::find(only).map_or(only, |a| a.title());
+        return Err(NoRoute::Refused { provider, agent });
+    }
+    let accounts = table
+        .accounts
+        .iter()
+        .filter(|a| a.provider == provider)
+        .map(|a| a.id.clone())
+        .collect();
+    Ok(vec![Step {
+        provider,
+        model: model.unwrap_or_default().to_owned(),
+        accounts,
+    }])
+}
+
+/// The reply when routing finds no way to serve a request.
+fn refusal(dialect: Dialect, headers: &HeaderMap, no: NoRoute) -> Response {
+    match no {
+        NoRoute::Refused { provider, agent } => {
+            let client = headers
+                .get(http::header::USER_AGENT)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("an unidentified client");
+            let message = format!(
+                "slopmax serves {} accounts to {agent} only; this request came from {client}",
+                provider.spec().title
+            );
+            error(Some(dialect), StatusCode::FORBIDDEN, &message)
+        }
+        NoRoute::NoModel => error(
+            Some(dialect),
+            StatusCode::BAD_REQUEST,
+            "the request names no model",
+        ),
+        NoRoute::Unserved { model } => {
+            let message = format!(
+                "no connected account serves {model:?} in the {} format (`slopmax status` lists accounts)",
+                dialect.as_str()
+            );
+            error(Some(dialect), StatusCode::NOT_FOUND, &message)
+        }
     }
 }
 
@@ -125,75 +224,103 @@ enum Attempt {
     Failed(Option<Failure>),
 }
 
-pub(super) async fn forward(
-    app: Arc<App>,
-    provider: ProviderId,
-    target: String,
-    request: Request,
-) -> Response {
+pub(super) async fn forward(app: Arc<App>, target: Target, request: Request) -> Response {
+    let dialect = target.dialect;
     let (parts, body) = request.into_parts();
     let body = match body::read(body, MAX_BODY).await {
         Ok(body) => body,
         Err(e) if e.is::<LengthLimitError>() => {
             return error(
-                Some(provider.spec().dialect),
+                Some(dialect),
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "request body is too large",
             );
         }
         Err(e) => {
             let message = format!("could not read the request body: {e}");
-            return error(
-                Some(provider.spec().dialect),
-                StatusCode::BAD_REQUEST,
-                &message,
-            );
+            return error(Some(dialect), StatusCode::BAD_REQUEST, &message);
         }
     };
-    let inbound = Inbound::new(provider, target, parts, body);
+    let inbound = Inbound::new(target, parts, body);
+    let steps = match inbound.plan(&app) {
+        Ok(steps) => steps,
+        Err(no) => return refusal(dialect, &inbound.parts.headers, no),
+    };
     let mut tried: Vec<String> = Vec::new();
     let mut last: Option<Failure> = None;
-    let mut rescued = false;
-    loop {
-        let pick = Pick {
-            provider,
-            session: inbound.session.as_deref(),
-            model: inbound.model.as_deref(),
-            exclude: &tried,
-        };
-        let choice = match app.pool.pick(&pick, Timestamp::now()) {
-            Ok(choice) => choice,
-            Err(unavailable) => {
-                let spent = unavailable.until.is_some();
-                if spent && app.config.redeem_when_exhausted && !rescued {
-                    rescued = true;
-                    if let Some(id) = rescue(&app, provider).await {
-                        tried.retain(|t| *t != id);
-                        continue;
+    let mut unavailable: Option<Unavailable> = None;
+    for step in &steps {
+        let mut rescued = false;
+        loop {
+            let pick = Pick {
+                provider: step.provider,
+                session: inbound.session.as_deref(),
+                model: Some(step.model.as_str()).filter(|m| !m.is_empty()),
+                candidates: Some(&step.accounts),
+                exclude: &tried,
+            };
+            let choice = match app.pool.pick(&pick, Timestamp::now()) {
+                Ok(choice) => choice,
+                Err(none) => {
+                    let spent = none.until.is_some();
+                    if spent && app.config.redeem_when_exhausted && !rescued {
+                        rescued = true;
+                        if let Some(id) = rescue(&app, step.provider).await {
+                            tried.retain(|t| *t != id);
+                            continue;
+                        }
                     }
+                    unavailable = Some(sooner(unavailable, none));
+                    break;
                 }
-                return give_up(provider, unavailable, last);
+            };
+            tried.push(choice.account.id.clone());
+            match attempt(&app, &inbound, step, choice, tried.len()).await {
+                Attempt::Done(response) => return response,
+                Attempt::Failed(failure) => last = failure.or(last),
             }
-        };
-        tried.push(choice.account.id.clone());
-        match attempt(&app, &inbound, choice, tried.len()).await {
-            Attempt::Done(response) => return response,
-            Attempt::Failed(failure) => last = failure.or(last),
         }
+    }
+    give_up(dialect, steps[0].provider, unavailable, last)
+}
+
+/// Combines why two steps could not serve: the earliest return wins.
+fn sooner(earlier: Option<Unavailable>, next: Unavailable) -> Unavailable {
+    let Some(earlier) = earlier else {
+        return next;
+    };
+    let until = match (earlier.until, next.until) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    };
+    Unavailable {
+        until,
+        reason: earlier.reason,
     }
 }
 
-async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice, attempts: usize) -> Attempt {
+async fn attempt(
+    app: &Arc<App>,
+    inbound: &Inbound,
+    step: &Step,
+    choice: Choice,
+    attempts: usize,
+) -> Attempt {
     let id = choice.account.id.clone();
     let moved = choice.moved_from.is_some();
     let Some(mut account) = app.ready(&choice.account).await else {
         return Attempt::Failed(None);
     };
+    let provider = step.provider.get();
+    let dialect = inbound.target.dialect;
+    let model = Some(step.model.as_str()).filter(|m| !m.is_empty());
+    // Keys cannot be refreshed; a rejected one is simply set aside.
+    let refreshable = account.tokens.refresh_token.is_some() || account.link.is_some();
     let mut stripped = moved;
     let mut refreshed = false;
-    let mut body = inbound.body(stripped);
+    let mut body = inbound.body(step, stripped);
     loop {
-        let response = match send(app, inbound, &account, body.clone(), moved).await {
+        let response = match send(app, inbound, step, &account, body.clone(), moved).await {
             Ok(response) => response,
             Err(e) => {
                 log::warn!("{id}: upstream unreachable: {e}");
@@ -202,12 +329,10 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice, attempts: us
             }
         };
         let now = Timestamp::now();
-        let provider = inbound.provider.get();
         if let Some(limits) = provider.limits(response.headers(), now) {
             app.pool.observe(&id, limits, now);
         }
         if response.status().is_success() {
-            let dialect = provider.spec().dialect;
             let status = response.status();
             let headers = response.headers().clone();
             let mut body = response.into_body();
@@ -233,17 +358,17 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice, attempts: us
                 }
             }
             app.pool.record_success(&id, now);
-            let path = inbound.target.split('?').next().unwrap_or_default();
-            let model = inbound.model.as_deref().unwrap_or("-");
+            let path = inbound.target.path.split('?').next().unwrap_or_default();
             log::info!(
-                "{id} {} {path} {model} → {}",
+                "{id} {} {path} {} → {}",
                 inbound.parts.method,
+                model.unwrap_or("-"),
                 status.as_u16()
             );
             let served = Served {
                 id,
-                provider: inbound.provider,
-                model: inbound.model.clone(),
+                provider: step.provider,
+                model: model.map(str::to_owned).or_else(|| inbound.model.clone()),
                 status,
                 started: inbound.started,
                 attempts: attempts as u32,
@@ -253,20 +378,14 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice, attempts: us
 
         let mut failure = Failure::read(response).await;
         log::info!("{id}: upstream returned {}", failure.status.as_u16());
-        let verdict = provider.verdict(
-            failure.status,
-            &failure.headers,
-            &failure.body,
-            inbound.model.as_deref(),
-            now,
-        );
+        let verdict = provider.verdict(failure.status, &failure.headers, &failure.body, model, now);
         match verdict {
-            Verdict::Unauthorized if !refreshed && app.config.refresh_tokens => {
+            Verdict::Unauthorized if !refreshed && refreshable && app.config.refresh_tokens => {
                 refreshed = true;
                 match auth::ensure_fresh(&app.auth_http, &app.store, &account, true).await {
                     Ok(fresh) => {
                         account = fresh;
-                        body = inbound.body(stripped);
+                        body = inbound.body(step, stripped);
                         continue;
                     }
                     Err(e) => {
@@ -277,7 +396,7 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice, attempts: us
             }
             Verdict::StaleState if !stripped => {
                 stripped = true;
-                body = inbound.body(stripped);
+                body = inbound.body(step, stripped);
                 continue;
             }
             Verdict::Unauthorized | Verdict::Forbidden => {
@@ -357,12 +476,14 @@ async fn rescue(app: &App, provider: ProviderId) -> Option<String> {
 async fn send(
     app: &App,
     inbound: &Inbound,
+    step: &Step,
     account: &Account,
     body: Bytes,
     moved: bool,
 ) -> Result<Upstream, client::Error> {
-    let provider = inbound.provider.get();
-    let url = format!("{}{}", provider.spec().api, inbound.target);
+    let provider = step.provider.get();
+    let base = provider.api(account).trim_end_matches('/');
+    let url = format!("{base}{}", inbound.target.path);
     let headers = provider.headers(&inbound.parts.headers, account, moved);
     app.http
         .request(inbound.parts.method.clone(), url)
@@ -428,30 +549,39 @@ fn stream_back(
 }
 
 /// The response when no account can take the request.
-fn give_up(provider: ProviderId, unavailable: Unavailable, last: Option<Failure>) -> Response {
-    let dialect = provider.spec().dialect;
-    match (last, unavailable.until) {
+fn give_up(
+    dialect: Dialect,
+    provider: ProviderId,
+    unavailable: Option<Unavailable>,
+    last: Option<Failure>,
+) -> Response {
+    let until = unavailable.as_ref().and_then(|u| u.until);
+    match (last, until) {
         // Every account is spent: report the earliest reset, in the shape the
         // agent shows as its own usage-limit message.
-        (Some(failure), Some(until)) if failure.exhausted => limit_reached(provider, until),
+        (Some(failure), Some(until)) if failure.exhausted => {
+            limit_reached(dialect, provider, until)
+        }
         (Some(failure), _) => failure.into_response(),
-        (None, Some(until)) => limit_reached(provider, until),
+        (None, Some(until)) => limit_reached(dialect, provider, until),
         (None, None) => error(
             Some(dialect),
             StatusCode::SERVICE_UNAVAILABLE,
-            &unavailable.reason,
+            unavailable
+                .as_ref()
+                .map_or("no account could take the request", |u| u.reason.as_str()),
         ),
     }
 }
 
-fn limit_reached(provider: ProviderId, until: Timestamp) -> Response {
+fn limit_reached(dialect: Dialect, provider: ProviderId, until: Timestamp) -> Response {
     let now = Timestamp::now();
     let message = format!(
         "slopmax: every {} account is rate limited; the next one frees up in {} (`slopmax status` for details)",
         provider.spec().title,
         ui::duration(until.duration_since(now))
     );
-    let (body, extra) = provider.spec().dialect.limit_reached(&message, until, now);
+    let (body, extra) = dialect.limit_reached(&message, until, now);
     let mut response = json_reply(StatusCode::TOO_MANY_REQUESTS, &body);
     let headers = response.headers_mut();
     let wait = until.duration_since(now).as_secs().max(1);

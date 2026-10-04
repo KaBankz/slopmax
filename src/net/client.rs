@@ -161,7 +161,15 @@ impl Proxy {
             .find(|value| !value.trim().is_empty())
             .and_then(|value| Self::parse(&value).ok())
     }
+
+    /// Makes `proxy` the default for every client built from now on, ahead
+    /// of the environment. Set once, from the config.
+    pub fn set_default(proxy: Self) {
+        let _ = DEFAULT_PROXY.set(proxy);
+    }
 }
+
+static DEFAULT_PROXY: std::sync::OnceLock<Proxy> = std::sync::OnceLock::new();
 
 impl fmt::Display for Proxy {
     /// The proxy without its credentials.
@@ -374,6 +382,7 @@ impl Builder {
 
         let through = self
             .proxy
+            .or_else(|| DEFAULT_PROXY.get().cloned())
             .or_else(Proxy::from_env)
             .map(|proxy| match proxy.kind {
                 ProxyKind::Http => {

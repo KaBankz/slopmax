@@ -42,6 +42,11 @@ pub struct AccountReport {
     pub follows: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_expires_at: Option<Timestamp>,
+    /// For keys and endpoints: where requests go and the models served.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<String>,
     pub sessions: usize,
     pub state: AccountState,
 }
@@ -57,6 +62,19 @@ pub fn build(
     let accounts = accounts
         .into_iter()
         .map(|a| AccountReport {
+            endpoint: (!a.provider.spec().is_subscription())
+                .then(|| a.provider.get().api(&a).to_owned()),
+            models: match &a.endpoint {
+                Some(endpoint) => endpoint.models.clone(),
+                None if !a.provider.spec().is_subscription() => a
+                    .provider
+                    .spec()
+                    .models
+                    .iter()
+                    .map(|m| m.to_string())
+                    .collect(),
+                None => Vec::new(),
+            },
             name: a.name(),
             pinned: pins.get(&a.provider) == Some(&a.id),
             sessions: sessions.get(&a.id).copied().unwrap_or(0),
@@ -111,6 +129,10 @@ pub fn render(report: &Report, now: Timestamp) -> String {
             .filter(|a| a.provider == provider)
             .collect();
         if accounts.is_empty() {
+            continue;
+        }
+        if !provider.spec().is_subscription() {
+            index = metered(&mut out, provider, &accounts, index, name_width, now);
             continue;
         }
         let _ = writeln!(
@@ -182,6 +204,45 @@ pub fn render(report: &Report, now: Timestamp) -> String {
         ))
     );
     out
+}
+
+/// Rows for pay-per-token accounts, which have models instead of windows.
+/// Returns the last row number used.
+fn metered(
+    out: &mut String,
+    provider: ProviderId,
+    accounts: &[&AccountReport],
+    mut index: usize,
+    name_width: usize,
+    now: Timestamp,
+) -> usize {
+    let width = CELL * 2 + 2;
+    let _ = writeln!(
+        out,
+        "\n{}  {}  {}  {}",
+        ui::bold(ui::pad(&provider.as_str().to_uppercase(), name_width + 4)),
+        ui::dim(ui::pad("BILLING", PLAN)),
+        ui::dim(ui::pad("MODELS", width)),
+        ui::dim("STATUS"),
+    );
+    for account in accounts {
+        index += 1;
+        let name: String = account.name.chars().take(name_width).collect();
+        let mut models = account.models.join(", ");
+        if models.chars().count() > width {
+            models = models.chars().take(width - 1).collect::<String>() + "…";
+        }
+        let _ = writeln!(
+            out,
+            "{} {}  {}  {}  {}",
+            ui::dim(format!("{index:>2}")),
+            ui::pad(&name, name_width + 1),
+            ui::pad("per token", PLAN),
+            ui::pad(&models, width),
+            status_cell(account, now),
+        );
+    }
+    index
 }
 
 fn window_cell(window: Option<&Window>, now: Timestamp) -> String {
