@@ -5,6 +5,7 @@ pub mod account;
 pub mod auth;
 pub mod config;
 pub mod fsx;
+pub mod limits;
 pub mod paths;
 pub mod ui;
 
