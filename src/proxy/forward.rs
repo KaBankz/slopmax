@@ -265,9 +265,17 @@ async fn ready(app: &App, picked: &Account) -> Option<Account> {
         .flatten()
         .unwrap_or_else(|| picked.clone());
     if account.provider == Provider::Claude && account.device_id.is_none() {
-        account.device_id = Some(ids::hex64());
-        if let Err(e) = app.store.save(&account) {
-            tracing::warn!("{}: could not save device id: {e:#}", account.id);
+        let (store, id) = (app.store.clone(), account.id.clone());
+        let assigned = tokio::task::spawn_blocking(move || {
+            store.update(&id, |a| {
+                a.device_id.get_or_insert_with(ids::hex64);
+            })
+        })
+        .await;
+        match assigned {
+            Ok(Ok(updated)) => account = updated,
+            Ok(Err(e)) => tracing::warn!("{}: could not save device id: {e:#}", account.id),
+            Err(e) => tracing::warn!("{}: could not save device id: {e}", account.id),
         }
     }
     if !app.config.refresh_tokens {

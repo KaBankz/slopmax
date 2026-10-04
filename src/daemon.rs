@@ -157,12 +157,15 @@ pub async fn poll_all(app: &App, force: bool) {
     });
     for (account, result) in futures_util::future::join_all(polls).await {
         match result {
-            Ok((mut fresh, reading)) => {
+            Ok((fresh, reading)) => {
                 app.pool
                     .observe(&account.id, reading.limits, Timestamp::now());
                 if reading.plan.is_some() && reading.plan != fresh.plan {
-                    fresh.plan = reading.plan;
-                    if let Err(e) = app.store.save(&fresh) {
+                    let (store, id, plan) = (app.store.clone(), fresh.id.clone(), reading.plan);
+                    let saved =
+                        tokio::task::spawn_blocking(move || store.update(&id, |a| a.plan = plan))
+                            .await;
+                    if let Ok(Err(e)) = saved {
                         tracing::warn!("{}: saving plan: {e:#}", fresh.id);
                     }
                 }

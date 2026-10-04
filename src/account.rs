@@ -242,15 +242,32 @@ impl Store {
         fsx::read_json(&self.path(id)).with_context(|| format!("reading account {id}"))
     }
 
+    /// Writes `account` without locking. Callers that are not refreshing a
+    /// token should use [`Store::update`] instead, so they cannot overwrite a
+    /// token another process just rotated.
     pub fn save(&self, account: &Account) -> Result<()> {
         fsx::write_json(&self.path(&account.id), account)
             .with_context(|| format!("saving account {}", account.id))
+    }
+
+    /// Read-modify-write under the account's lock. This blocks while a
+    /// refresh holds the lock, so async callers should run it on a blocking
+    /// thread.
+    pub fn update(&self, id: &str, change: impl FnOnce(&mut Account)) -> Result<Account> {
+        let _lock = self.lock(id)?;
+        let mut account = self
+            .get(id)?
+            .with_context(|| format!("account {id} no longer exists"))?;
+        change(&mut account);
+        self.save(&account)?;
+        Ok(account)
     }
 
     /// Saves a freshly connected account, merging into an existing record of
     /// the same identity. Returns whether the account is new.
     pub fn upsert(&self, mut account: Account) -> Result<(Account, bool)> {
         account.assign_id();
+        let _lock = self.lock(&account.id)?;
         let existing = self.get(&account.id)?;
         if let Some(old) = &existing {
             account.inherit_settings(old);
@@ -260,7 +277,9 @@ impl Store {
     }
 
     pub fn remove(&self, id: &str) -> Result<()> {
+        let lock = self.lock(id)?;
         fs::remove_file(self.path(id)).with_context(|| format!("removing account {id}"))?;
+        drop(lock);
         let _ = fs::remove_file(self.lock_path(id));
         Ok(())
     }
