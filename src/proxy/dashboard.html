@@ -33,6 +33,7 @@
   td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
   tr:last-child td { border-bottom: none; }
   .num { font-family: var(--mono); font-size: 12.5px; text-align: right; white-space: nowrap; }
+  .pool td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
   .group td { padding-top: 16px; color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: .8px; border-bottom: none; }
   .name { font-weight: 550; }
   .sub { color: var(--dim); font-size: 12px; }
@@ -194,6 +195,31 @@ function status(a, now) {
   return ["ok", "ready"];
 }
 
+// The provider's working accounts read as one, as the agents see them:
+// each window's average usage, and the soonest reset that frees capacity.
+// A blocked account counts as full in its shortest window.
+function pooled(accounts, now) {
+  const rank = { "5h": 0, "7d": 1, "30d": 2 };
+  const windows = {};
+  for (const span of ["5h", "7d", "30d"]) {
+    const readings = [];
+    for (const a of accounts) {
+      const shared = (a.state.limits?.windows || []).filter((w) => !w.model);
+      const w = shared.find((w) => w.span === span);
+      if (!w) continue;
+      const shortest = Math.min(...shared.map((x) => rank[x.span] ?? 1));
+      const blocked = limitedUntil(a.state, now) > 0;
+      const used = blocked && shortest === rank[span] ? 100 : usedAt(w, now);
+      readings.push({ used, reset: time(w.resets_at) > now ? w.resets_at : null });
+    }
+    if (!readings.length) continue;
+    const used = readings.reduce((sum, r) => sum + r.used, 0) / readings.length;
+    const resets = readings.filter((r) => r.used > 0 && r.reset).map((r) => r.reset).sort((a, b) => time(a) - time(b));
+    windows[span] = { span, used, resets_at: resets[0] || null };
+  }
+  return windows;
+}
+
 function renderAccounts() {
   if (!report) return;
   const now = Date.now();
@@ -239,6 +265,15 @@ function renderAccounts() {
           <button data-act="priority" data-id="${a.id}" data-value="${a.priority - 1}" title="Lower priority">▼</button>
           ${credits ? `<button data-act="redeem" data-id="${a.id}" title="Redeem a reset credit now">Redeem</button>` : ""}
         </div></td></tr>`;
+    }
+    const working = accounts.filter((a) => !a.disabled && !a.auth_error);
+    if (subscription && working.length > 1) {
+      const pool = pooled(working, now);
+      html += `<tr class="pool">
+        <td></td>
+        <td><div class="name">pool</div><div class="sub">${working.length} accounts as one</div></td>
+        ${windowCell(pool["5h"], now)}${windowCell(pool["7d"] || pool["30d"], now)}
+        <td><span class="sub">what the agents see</span></td><td></td></tr>`;
     }
   }
   $("accounts").innerHTML = html;
