@@ -86,6 +86,15 @@ impl Agent for Codex {
         ProviderId::Codex
     }
 
+    /// Codex's clients name themselves `codex_exec/…`, `codex_cli_rs/…`,
+    /// and so on.
+    fn detect(&self, headers: &HeaderMap) -> bool {
+        headers
+            .get(http::header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|ua| ua.starts_with("codex"))
+    }
+
     /// Codex sends the same `session-id` for a whole tree of subagents,
     /// matching its `prompt_cache_key`, so the tree stays on one account.
     fn session(&self, headers: &HeaderMap, body: &[u8]) -> Option<String> {

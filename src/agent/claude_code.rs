@@ -56,6 +56,16 @@ impl Agent for ClaudeCode {
         ProviderId::Claude
     }
 
+    /// Every Claude Code entrypoint (CLI, Agent SDK, IDE, desktop) sends
+    /// `claude-cli/<version> (external, <entrypoint>)` on API calls and
+    /// `claude-code/<version>` on its others.
+    fn detect(&self, headers: &HeaderMap) -> bool {
+        headers
+            .get(http::header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|ua| ua.starts_with("claude-cli/") || ua.starts_with("claude-code/"))
+    }
+
     fn session(&self, headers: &HeaderMap, body: &[u8]) -> Option<String> {
         if let Some(id) = headers
             .get("x-claude-code-session-id")
@@ -253,6 +263,22 @@ mod tests {
             ClaudeCode.session(&HeaderMap::new(), legacy).as_deref(),
             Some("s-1")
         );
+    }
+
+    #[test]
+    fn detects_every_claude_code_entrypoint() {
+        let ua = |value: &'static str| {
+            let mut headers = HeaderMap::new();
+            headers.insert("user-agent", HeaderValue::from_static(value));
+            headers
+        };
+        assert!(ClaudeCode.detect(&ua("claude-cli/2.1.287 (external, cli)")));
+        assert!(ClaudeCode.detect(&ua(
+            "claude-cli/2.1.287 (external, sdk-ts, agent-sdk/0.3.1)"
+        )));
+        assert!(ClaudeCode.detect(&ua("claude-code/2.1.287")));
+        assert!(!ClaudeCode.detect(&ua("OpenAI/Python 2.4.0")));
+        assert!(!ClaudeCode.detect(&HeaderMap::new()));
     }
 
     #[test]

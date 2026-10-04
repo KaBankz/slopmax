@@ -682,3 +682,26 @@ async fn codex_streams_that_open_spent_move_to_the_next_account() {
     let body: Value = response.json().await.unwrap();
     assert_eq!(body["error"]["type"], "usage_limit_reached");
 }
+
+#[tokio::test]
+async fn claude_accounts_serve_claude_code_only() {
+    let h = harness(ProviderId::Claude, &["tok-ok"]).await;
+    let response = client()
+        .post(format!("{}/v1/messages", h.proxy))
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("user-agent", "OpenAI/Python 2.4.0")
+        .header("content-type", "application/json")
+        .body(CLAUDE_BODY)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 403);
+    let body: Value = response.json().await.unwrap();
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(message.contains("Claude Code only"), "{message}");
+    assert!(message.contains("OpenAI/Python"), "{message}");
+    assert!(
+        h.log.lock().unwrap().is_empty(),
+        "nothing reached Anthropic"
+    );
+}

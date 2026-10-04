@@ -29,6 +29,8 @@ static SPEC: Spec = Spec {
     // Access tokens live about ten days.
     refresh_lead: SignedDuration::from_hours(24),
     device_login: true,
+    // OpenAI allows ChatGPT plans in third-party apps.
+    native_only: false,
 };
 
 impl Provider for Codex {

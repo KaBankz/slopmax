@@ -96,6 +96,8 @@ pub struct Spec {
     pub refresh_lead: SignedDuration,
     /// Whether `slopmax login --device` is supported.
     pub device_login: bool,
+    /// Whether only the provider's own agent may use these accounts.
+    pub native_only: bool,
 }
 
 /// A usage reading, plus the plan when the endpoint reports one.

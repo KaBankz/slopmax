@@ -28,6 +28,8 @@ static SPEC: Spec = Spec {
     // Access tokens live 8 hours.
     refresh_lead: SignedDuration::from_hours(1),
     device_login: false,
+    // Anthropic allows subscription logins in Claude Code alone.
+    native_only: true,
 };
 
 impl Provider for Claude {

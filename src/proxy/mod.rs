@@ -19,6 +19,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::account::{Account, Store};
+use crate::agent;
 use crate::auth::{self, RefreshError};
 use crate::config::Config;
 use crate::log;
@@ -164,9 +165,24 @@ async fn proxy(app: Arc<App>, request: Request) -> Response {
             "unknown path; slopmax serves /v1/*, /claude/*, and /codex/*",
         );
     };
-    let dialect = provider.spec().dialect;
+    let spec = provider.spec();
+    let dialect = spec.dialect;
     if !authorized(&app.config, request.headers()) {
         return unauthorized(Some(dialect));
+    }
+    let agent = agent::native(provider);
+    if spec.native_only && !agent.detect(request.headers()) {
+        let client = request
+            .headers()
+            .get(header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("an unidentified client");
+        let message = format!(
+            "slopmax serves {} accounts to {} only; this request came from {client}",
+            spec.title,
+            agent.title()
+        );
+        return error(Some(dialect), StatusCode::FORBIDDEN, &message);
     }
     // Upgrades cannot be relayed. Refusing the handshake with 426 makes
     // Codex switch to HTTP streaming at once instead of retrying.
@@ -261,6 +277,7 @@ fn unauthorized(dialect: Option<Dialect>) -> Response {
 fn error(dialect: Option<Dialect>, status: StatusCode, message: &str) -> Response {
     let kind = match status.as_u16() {
         401 => "authentication_error",
+        403 => "permission_error",
         404 => "not_found_error",
         413 => "request_too_large",
         429 => "rate_limit_error",

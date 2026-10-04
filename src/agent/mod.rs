@@ -59,6 +59,10 @@ pub trait Agent: Send + Sync {
     /// The provider whose subscriptions it uses.
     fn provider(&self) -> ProviderId;
 
+    /// Whether a request comes from this agent, judged from the headers it
+    /// always sends.
+    fn detect(&self, headers: &HeaderMap) -> bool;
+
     /// The conversation id its requests carry, which keeps a session on one
     /// account (and its prompt cache warm).
     fn session(&self, headers: &HeaderMap, body: &[u8]) -> Option<String>;
