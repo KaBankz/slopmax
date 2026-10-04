@@ -8,23 +8,6 @@
 use http::{HeaderMap, HeaderName, HeaderValue};
 
 use super::oauth::OAUTH_BETA;
-use crate::proxy::rawjson::{self, Seg};
-
-/// The conversation id Claude Code sends, used for session affinity.
-pub fn session_id(headers: &HeaderMap, body: &[u8]) -> Option<String> {
-    if let Some(id) = headers
-        .get("x-claude-code-session-id")
-        .and_then(|v| v.to_str().ok())
-    {
-        return Some(id.to_owned());
-    }
-    let user_id = rawjson::find_str(body, &[Seg::Key("metadata"), Seg::Key("user_id")])?;
-    let inner = user_id.as_bytes();
-    rawjson::find_str(inner, &[Seg::Key("session_id")]).or_else(|| {
-        // Legacy form: user_<hash>_account_<uuid>_session_<uuid>.
-        user_id.rsplit_once("_session_").map(|(_, s)| s.to_owned())
-    })
-}
 
 /// The agent's beta list with the OAuth flag appended if missing.
 fn with_oauth_beta(existing: Option<&str>) -> String {
@@ -63,23 +46,6 @@ fn insert(headers: &mut HeaderMap, name: &'static str, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn session_id_comes_from_header_then_metadata() {
-        let mut headers = HeaderMap::new();
-        let body = br#"{"metadata":{"user_id":"{\"session_id\":\"from-body\"}"}}"#;
-        assert_eq!(session_id(&headers, body).as_deref(), Some("from-body"));
-        headers.insert(
-            "x-claude-code-session-id",
-            HeaderValue::from_static("from-header"),
-        );
-        assert_eq!(session_id(&headers, body).as_deref(), Some("from-header"));
-        let legacy = br#"{"metadata":{"user_id":"user_abc_account_def_session_s-1"}}"#;
-        assert_eq!(
-            session_id(&HeaderMap::new(), legacy).as_deref(),
-            Some("s-1")
-        );
-    }
 
     #[test]
     fn oauth_beta_is_added_once() {

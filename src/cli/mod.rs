@@ -11,16 +11,17 @@ use anyhow::{Context, Result, bail};
 
 use self::args::{App, Arg, Choice, Command, Kind, Parsed};
 use crate::account::Store;
-use crate::auth::import::{self, Source};
+use crate::agent::{self, Agent};
 use crate::auth::{self, LoginOptions};
 use crate::config::Config;
+use crate::import::{self, Source};
 use crate::net::Origins;
 use crate::pool::{Pins, Pool, State};
 use crate::provider::ProviderId;
 use crate::provider::credits::Outcome;
 use crate::report::{self, Report};
 use crate::time::{SignedDuration, Timestamp};
-use crate::{agents, daemon, fsx, net, paths, ui, usage};
+use crate::{daemon, fsx, net, paths, ui, usage};
 
 const ACCOUNT: &str = "Number from `slopmax status`, or the account's id, email, or label";
 
@@ -289,13 +290,13 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
         "stop" => stop(&config).await?,
         "run" => {
             ensure_running(&config).await?;
-            return agents::run(m.get("agent")?, &config, &m.rest);
+            return agent::run(agent_named(m)?, &config, &m.rest);
         }
         "env" => {
             let exe = std::env::current_exe().context("locating the slopmax binary")?;
-            print!("{}", agents::env_script(m.get("agent")?, &config, &exe));
+            print!("{}", agent_named(m)?.env(&config, &exe));
         }
-        "setup" => setup(&config, m.get("agent")?, m.flag("undo"))?,
+        "setup" => setup(&config, agent_named(m)?, m.flag("undo"))?,
         "completions" => print!("{}", args::completions(&APP, m.get("shell")?)),
         name => unreachable!("`{name}` is in the command table but not dispatched"),
     }
@@ -662,13 +663,16 @@ async fn spawn_background(config: &Config) -> Result<()> {
     )
 }
 
-fn setup(config: &Config, agent: ProviderId, undo: bool) -> Result<()> {
-    let app = match agent {
-        ProviderId::Claude => "Claude Code",
-        ProviderId::Codex => "Codex",
-    };
+/// The agent named by the `agent` argument.
+fn agent_named(m: &args::Matches) -> Result<&'static dyn Agent> {
+    let name: String = m.get("agent")?;
+    agent::find(&name).with_context(|| format!("unknown agent {name:?}"))
+}
+
+fn setup(config: &Config, agent: &dyn Agent, undo: bool) -> Result<()> {
+    let app = agent.title();
     if undo {
-        let path = agents::undo(agent)?;
+        let path = agent::undo(agent)?;
         println!(
             "Restored {} {}",
             app,
@@ -676,7 +680,7 @@ fn setup(config: &Config, agent: ProviderId, undo: bool) -> Result<()> {
         );
         return Ok(());
     }
-    let path = agents::setup(agent, config)?;
+    let path = agent::setup(agent, config)?;
     println!(
         "{app} now uses slopmax {}",
         ui::dim(format!("({})", path.display()))
@@ -691,6 +695,16 @@ fn setup(config: &Config, agent: ProviderId, undo: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_choices_match_the_registry() {
+        let choices: Vec<&str> = AGENTS.iter().map(|c| c.value).collect();
+        let registered: Vec<&str> = agent::AGENTS.iter().map(|a| a.id()).collect();
+        assert_eq!(choices, registered);
+        let providers: Vec<&str> = PROVIDERS.iter().map(|c| c.value).collect();
+        let ids: Vec<&str> = ProviderId::ALL.iter().map(|p| p.as_str()).collect();
+        assert_eq!(providers, ids);
+    }
 
     #[test]
     fn every_command_parses_a_typical_invocation() {

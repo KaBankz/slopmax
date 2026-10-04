@@ -2,13 +2,14 @@
 //! and Codex.
 
 pub mod account;
-pub mod agents;
+pub mod agent;
 pub mod auth;
 pub mod cli;
 pub mod config;
 pub mod daemon;
 pub mod fsx;
 pub mod ids;
+pub mod import;
 pub mod limits;
 pub mod log;
 pub mod net;

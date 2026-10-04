@@ -16,6 +16,7 @@ use super::rawjson::{self, Seg};
 use super::sse::{Tap, Tapped};
 use super::{App, error, json_reply, returnable};
 use crate::account::Account;
+use crate::agent;
 use crate::auth;
 use crate::log;
 use crate::net::body;
@@ -23,7 +24,7 @@ use crate::net::client::{self, Response as Upstream};
 use crate::net::server::{Request, Response};
 use crate::pool::{Choice, DEFAULT_BLOCK, DEFAULT_THROTTLE, Pick, Unavailable};
 use crate::provider::credits::Outcome;
-use crate::provider::{ProviderId, Verdict, claude, codex};
+use crate::provider::{ProviderId, Verdict};
 use crate::time::{SignedDuration, Timestamp};
 use crate::ui;
 use crate::wire::Dialect;
@@ -53,10 +54,7 @@ impl Inbound {
             .is_some_and(|v| v.as_bytes() != b"identity");
         let json = !encoded && rawjson::is_valid(&body);
         let inspectable: &[u8] = if json { &body } else { b"" };
-        let session = match provider {
-            ProviderId::Claude => claude::wire::session_id(&parts.headers, inspectable),
-            ProviderId::Codex => codex::wire::session_id(&parts.headers, inspectable),
-        };
+        let session = agent::native(provider).session(&parts.headers, inspectable);
         let model = json
             .then(|| rawjson::find_str(&body, &[Seg::Key("model")]))
             .flatten();

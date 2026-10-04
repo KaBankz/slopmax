@@ -1,0 +1,210 @@
+//! Agents: the programs slopmax serves.
+//!
+//! Each agent implements [`Agent`]: how to launch it through the proxy, the
+//! shell setup that wires it, how `setup` edits its own config (and undoes
+//! it), how its requests name their session, and where its own login lives.
+//! [`AGENTS`] is the one place that lists them.
+//!
+//! Three ways to connect an agent, from least to most invasive:
+//! - `slopmax run <agent>` launches the agent wired up for that session;
+//! - `slopmax env <agent>` prints shell setup to `eval`;
+//! - `slopmax setup <agent>` writes the wiring into the agent's own config,
+//!   keeping a backup for `--undo`.
+
+mod claude_code;
+mod codex;
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use anyhow::{Context, Result, bail};
+use http::HeaderMap;
+use serde_json::Value;
+
+use crate::config::Config;
+use crate::import::Found;
+use crate::net::Client;
+use crate::provider::{BoxFuture, ProviderId};
+use crate::{fsx, paths};
+
+pub use claude_code::ClaudeCode;
+pub use codex::Codex;
+
+/// Every agent slopmax knows.
+pub static AGENTS: [&dyn Agent; 2] = [&ClaudeCode, &Codex];
+
+/// The agent with this CLI name.
+pub fn find(id: &str) -> Option<&'static dyn Agent> {
+    AGENTS.iter().copied().find(|a| a.id() == id)
+}
+
+/// The agent that uses `provider`'s subscriptions.
+pub fn native(provider: ProviderId) -> &'static dyn Agent {
+    AGENTS
+        .iter()
+        .copied()
+        .find(|a| a.provider() == provider)
+        .expect("every provider has a native agent")
+}
+
+/// A program slopmax can serve.
+pub trait Agent: Send + Sync {
+    /// Its name on the command line: `claude`, `codex`.
+    fn id(&self) -> &'static str;
+
+    /// For people: "Claude Code".
+    fn title(&self) -> &'static str;
+
+    /// The provider whose subscriptions it uses.
+    fn provider(&self) -> ProviderId;
+
+    /// The conversation id its requests carry, which keeps a session on one
+    /// account (and its prompt cache warm).
+    fn session(&self, headers: &HeaderMap, body: &[u8]) -> Option<String>;
+
+    /// The agent launched through the proxy, with `args` passed along.
+    fn command(&self, config: &Config, args: &[String]) -> Command;
+
+    /// Shell commands that wire the current shell to the proxy. `exe` is
+    /// this slopmax binary.
+    fn env(&self, config: &Config, exe: &Path) -> String;
+
+    /// The config file `setup` edits.
+    fn config_file(&self) -> PathBuf;
+
+    /// Points the config file at the proxy. When `saved` is empty, it first
+    /// records what it replaces there, for [`Agent::undo`].
+    fn setup(&self, config: &Config, file: &Path, saved: &mut Option<Value>) -> Result<()>;
+
+    /// Restores what [`Agent::setup`] replaced.
+    fn undo(&self, file: &Path, saved: Value) -> Result<()>;
+
+    /// The agent's own saved login, if it has one.
+    fn import<'a>(&'a self, http: &'a Client) -> BoxFuture<'a, Option<Found>>;
+}
+
+/// Launches the agent through the proxy and returns its exit status.
+pub fn run(agent: &dyn Agent, config: &Config, args: &[String]) -> Result<i32> {
+    let mut command = agent.command(config, args);
+    let program = command.get_program().to_string_lossy().into_owned();
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = command.exec();
+        bail!("could not start {program}: {err}");
+    }
+    #[cfg(not(unix))]
+    {
+        let status = command
+            .status()
+            .with_context(|| format!("could not start {program}"))?;
+        Ok(status.code().unwrap_or(1))
+    }
+}
+
+/// Where `setup` keeps what it replaced, per agent.
+fn backup_file() -> PathBuf {
+    paths::home().join("setup-backup.json")
+}
+
+/// The agent's config file. A symlink (say, into a dotfiles repository) is
+/// followed, so the file it points to is edited in place rather than the
+/// link being replaced.
+fn config_file(agent: &dyn Agent) -> PathBuf {
+    resolve(agent.config_file())
+}
+
+fn resolve(path: PathBuf) -> PathBuf {
+    std::fs::canonicalize(&path).unwrap_or(path)
+}
+
+/// Writes the wiring into the agent's config. Returns the file changed.
+pub fn setup(agent: &dyn Agent, config: &Config) -> Result<PathBuf> {
+    let file = config_file(agent);
+    let backup = backup_file();
+    let mut saved: BTreeMap<String, Value> = fsx::read_json(&backup)?.unwrap_or_default();
+    let mut slot = saved.remove(agent.id());
+    let fresh = slot.is_none();
+    agent.setup(config, &file, &mut slot)?;
+    if fresh && let Some(previous) = slot {
+        saved.insert(agent.id().to_owned(), previous);
+        fsx::write_json(&backup, &saved)?;
+    }
+    Ok(file)
+}
+
+/// Reverts `setup`. Returns the file changed.
+pub fn undo(agent: &dyn Agent) -> Result<PathBuf> {
+    let file = config_file(agent);
+    let backup = backup_file();
+    let mut saved: BTreeMap<String, Value> = fsx::read_json(&backup)?.unwrap_or_default();
+    let previous = saved
+        .remove(agent.id())
+        .with_context(|| format!("no {} setup to undo", agent.title()))?;
+    agent.undo(&file, previous)?;
+    fsx::write_json(&backup, &saved)?;
+    Ok(file)
+}
+
+/// Quotes `s` for a POSIX shell when it needs quoting.
+fn shell_quote(s: &str) -> String {
+    if !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./:=@".contains(c))
+    {
+        s.to_owned()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn registry_ids_are_unique_and_cover_every_provider() {
+        let mut ids: Vec<&str> = AGENTS.iter().map(|a| a.id()).collect();
+        ids.dedup();
+        assert_eq!(ids.len(), AGENTS.len());
+        for provider in ProviderId::ALL {
+            assert_eq!(native(provider).provider(), provider);
+        }
+        assert_eq!(find("codex").map(|a| a.title()), Some("Codex"));
+        assert!(find("gemini").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn setup_edits_a_symlinked_config_in_place() {
+        let dir = std::env::temp_dir().join(format!("slopmax-symlink-{}", crate::ids::token()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (real, link) = (dir.join("dotfiles.json"), dir.join("settings.json"));
+        std::fs::write(&real, "{}").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let config = Config {
+            api_key: "sm-test".into(),
+            ..Config::default()
+        };
+        ClaudeCode
+            .setup(&config, &resolve(link.clone()), &mut None)
+            .unwrap();
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(
+            std::fs::read_to_string(&real)
+                .unwrap()
+                .contains("ANTHROPIC_BASE_URL")
+        );
+        let missing = dir.join("absent.json");
+        assert_eq!(resolve(missing.clone()), missing);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn shell_quoting() {
+        assert_eq!(shell_quote("plain-value"), "plain-value");
+        assert_eq!(shell_quote("it's"), r#"'it'\''s'"#);
+        assert_eq!(shell_quote(""), "''");
+    }
+}

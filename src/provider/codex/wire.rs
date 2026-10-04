@@ -8,27 +8,6 @@
 use http::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
 
-use crate::proxy::rawjson::{self, Seg};
-
-/// The session id for affinity. Codex sends the same `session-id` for a
-/// whole tree of subagents, matching its `prompt_cache_key`, so the tree
-/// stays on one account and keeps its prompt cache warm.
-pub fn session_id(headers: &HeaderMap, body: &[u8]) -> Option<String> {
-    let header = |name: &str| {
-        headers
-            .get(name)
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_owned)
-    };
-    header("session-id")
-        .or_else(|| header("session_id"))
-        .or_else(|| {
-            let metadata = header("x-codex-turn-metadata")?;
-            rawjson::find_str(metadata.as_bytes(), &[Seg::Key("session_id")])
-        })
-        .or_else(|| rawjson::find_str(body, &[Seg::Key("prompt_cache_key")]))
-}
-
 /// Headers for the upstream request. `moved` drops the per-turn routing
 /// token, which belongs to the previous account's backend session.
 pub fn upstream_headers(
@@ -127,19 +106,6 @@ mod tests {
             map.insert(*k, HeaderValue::from_static(v));
         }
         map
-    }
-
-    #[test]
-    fn session_prefers_header_then_metadata_then_cache_key() {
-        let body = br#"{"prompt_cache_key":"pck"}"#;
-        assert_eq!(session_id(&HeaderMap::new(), body).as_deref(), Some("pck"));
-        let meta = headers(&[(
-            "x-codex-turn-metadata",
-            r#"{"session_id":"meta","thread_id":"t"}"#,
-        )]);
-        assert_eq!(session_id(&meta, body).as_deref(), Some("meta"));
-        let hyphen = headers(&[("session-id", "sid")]);
-        assert_eq!(session_id(&hyphen, body).as_deref(), Some("sid"));
     }
 
     #[test]

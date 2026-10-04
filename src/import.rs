@@ -8,11 +8,13 @@
 use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::account::{Account, Tokens};
+use crate::agent::{Agent, ClaudeCode, Codex};
+use crate::auth::jwt;
 use crate::net::Client;
 use crate::paths;
 use crate::provider::ProviderId;
@@ -56,123 +58,20 @@ pub struct Found {
 pub async fn discover(http: &Client, source: Source) -> Vec<Found> {
     let mut found = Vec::new();
     let wants = |s: Source| source == Source::All || source == s;
-    if wants(Source::ClaudeCode)
-        && let Some(oauth) = claude_code_credentials()
-    {
-        found.push(Found {
-            origin: "claude code".into(),
-            account: from_claude_code(http, oauth).await,
-        });
-    }
-    let codex_auth = paths::codex_dir().join("auth.json");
-    if wants(Source::Codex) && codex_auth.exists() {
-        found.push(Found {
-            origin: codex_auth.display().to_string(),
-            account: from_codex_auth(&codex_auth),
-        });
+    for (agent, wanted) in [
+        (&ClaudeCode as &dyn Agent, Source::ClaudeCode),
+        (&Codex, Source::Codex),
+    ] {
+        if wants(wanted)
+            && let Some(login) = agent.import(http).await
+        {
+            found.push(login);
+        }
     }
     if wants(Source::Cliproxyapi) {
         found.extend(from_cliproxyapi(http, &paths::cliproxyapi_dir()).await);
     }
     found
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ClaudeCodeOauth {
-    access_token: String,
-    refresh_token: Option<String>,
-    /// Milliseconds since the epoch.
-    expires_at: Option<i64>,
-}
-
-fn claude_code_credentials() -> Option<ClaudeCodeOauth> {
-    let text = fs::read_to_string(paths::claude_dir().join(".credentials.json"))
-        .ok()
-        .or_else(keychain_credentials)?;
-    let value: Value = serde_json::from_str(&text).ok()?;
-    serde_json::from_value(value.get("claudeAiOauth")?.clone()).ok()
-}
-
-/// Claude Code keeps credentials in the keychain on macOS.
-fn keychain_credentials() -> Option<String> {
-    if !cfg!(target_os = "macos") {
-        return None;
-    }
-    let output = std::process::Command::new("security")
-        .args([
-            "find-generic-password",
-            "-s",
-            "Claude Code-credentials",
-            "-w",
-        ])
-        .output()
-        .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-async fn from_claude_code(http: &Client, oauth: ClaudeCodeOauth) -> Result<Account> {
-    let mut tokens = Tokens {
-        access_token: oauth.access_token,
-        refresh_token: oauth.refresh_token,
-        expires_at: oauth.expires_at.and_then(Timestamp::from_millisecond),
-        ..Tokens::default()
-    };
-    let now = Timestamp::now();
-    if tokens.is_expired(now) {
-        // The profile lookup needs a live token. Refreshing rotates Claude
-        // Code's own copy, which is fine once Claude Code uses slopmax.
-        let refresh = tokens
-            .refresh_token
-            .clone()
-            .context("login expired; log in again")?;
-        let grant = claude::refresh(http, &refresh).await?;
-        tokens = grant.into_tokens(now);
-        tokens.refresh_token = tokens.refresh_token.or(Some(refresh));
-    }
-    let mut account = Account::new(ProviderId::Claude, tokens);
-    let profile = claude::profile(http, &account.tokens.access_token)
-        .await
-        .context("could not read the Claude profile")?;
-    claude::apply_profile(&mut account, &profile);
-    account.assign_id();
-    Ok(account)
-}
-
-#[derive(Debug, Deserialize)]
-struct CodexAuthFile {
-    tokens: Option<CodexTokens>,
-    last_refresh: Option<Timestamp>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CodexTokens {
-    id_token: Option<String>,
-    access_token: String,
-    refresh_token: Option<String>,
-}
-
-fn from_codex_auth(path: &Path) -> Result<Account> {
-    let file: CodexAuthFile = serde_json::from_str(&fs::read_to_string(path)?)
-        .with_context(|| format!("reading {}", path.display()))?;
-    let Some(tokens) = file.tokens else {
-        bail!("not a ChatGPT login (API key or proxy auth)");
-    };
-    let mut account = Account::new(
-        ProviderId::Codex,
-        Tokens {
-            expires_at: super::jwt::expiry(&tokens.access_token),
-            access_token: tokens.access_token,
-            refresh_token: tokens.refresh_token,
-            id_token: tokens.id_token,
-            refreshed_at: file.last_refresh,
-        },
-    );
-    codex::apply_claims(&mut account);
-    Ok(account)
 }
 
 /// A CLIProxyAPI credential file. Only the fields slopmax uses are read.
@@ -234,7 +133,7 @@ async fn from_cliproxy_file(
     let parse_time = |s: &Option<String>| s.as_deref().and_then(|t| t.parse::<Timestamp>().ok());
     let access_token = file.access_token.context("no access token")?;
     let tokens = Tokens {
-        expires_at: super::jwt::expiry(&access_token).or_else(|| parse_time(&file.expired)),
+        expires_at: jwt::expiry(&access_token).or_else(|| parse_time(&file.expired)),
         refreshed_at: parse_time(&file.last_refresh),
         access_token,
         refresh_token: file.refresh_token.filter(|t| !t.is_empty()),
@@ -272,7 +171,6 @@ async fn from_cliproxy_file(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::jwt;
     use serde_json::json;
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
@@ -281,42 +179,6 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
-    }
-
-    #[test]
-    fn reads_codex_auth_json() {
-        let dir = temp_dir("codex");
-        let id_token = jwt::encode_unsigned(&json!({
-            "email": "me@x.dev",
-            "https://api.openai.com/auth": { "chatgpt_account_id": "ws-1", "chatgpt_plan_type": "plus" }
-        }));
-        let access = jwt::encode_unsigned(&json!({ "exp": 1_900_000_000 }));
-        let path = dir.join("auth.json");
-        let body = json!({
-            "auth_mode": "chatgpt",
-            "OPENAI_API_KEY": null,
-            "tokens": { "id_token": id_token, "access_token": access, "refresh_token": "rt", "account_id": "ws-1" },
-            "last_refresh": "2026-10-01T00:00:00Z"
-        });
-        fs::write(&path, body.to_string()).unwrap();
-
-        let account = from_codex_auth(&path).unwrap();
-        assert_eq!(account.email.as_deref(), Some("me@x.dev"));
-        assert_eq!(account.plan.as_deref(), Some("plus"));
-        assert_eq!(
-            account.tokens.expires_at.unwrap().as_second(),
-            1_900_000_000
-        );
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn api_key_codex_auth_is_rejected() {
-        let dir = temp_dir("codex-key");
-        let path = dir.join("auth.json");
-        fs::write(&path, r#"{"OPENAI_API_KEY":"sk-local"}"#).unwrap();
-        assert!(from_codex_auth(&path).is_err());
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
