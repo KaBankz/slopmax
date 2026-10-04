@@ -133,8 +133,17 @@ impl fmt::Display for Strategy {
 
 impl Config {
     /// Loads the config, creating it (with a fresh API key) on first use.
+    /// `SLOPMAX_LISTEN` overrides `listen`, for containers.
     pub fn load() -> Result<Self> {
-        Self::load_from(&paths::config_file())
+        let mut config = Self::load_from(&paths::config_file())?;
+        if let Ok(listen) = std::env::var("SLOPMAX_LISTEN")
+            && !listen.is_empty()
+        {
+            config.listen = listen
+                .parse()
+                .with_context(|| format!("SLOPMAX_LISTEN={listen:?} is not an address"))?;
+        }
+        Ok(config)
     }
 
     pub fn load_from(path: &Path) -> Result<Self> {

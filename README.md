@@ -16,15 +16,26 @@ slopmax pools your Claude and ChatGPT subscriptions behind one local proxy, so C
 
 ## Install
 
+On Linux and macOS, the install script fetches the latest release, checks its checksum, and puts `slopmax` in `~/.local/bin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/KaBankz/slopmax/main/install.sh | sh
+```
+
+Or build it with Cargo (Rust 1.89 or newer):
+
 ```sh
 cargo install --locked --git https://github.com/KaBankz/slopmax
 ```
 
-From a checkout, [mise](https://mise.jdx.dev) provides the toolchain (Rust 1.89 or newer):
+From a checkout, [mise](https://mise.jdx.dev) provides the toolchain: `mise install`, then `mise run install`.
+
+In a container, accounts and settings live in the `/data` volume:
 
 ```sh
-mise install
-mise run install    # cargo install --path . --locked
+docker build -t slopmax .
+docker run -d --name slopmax -p 127.0.0.1:7567:7567 -v slopmax:/data slopmax
+docker exec -it slopmax slopmax login codex --device
 ```
 
 ## Quick start
