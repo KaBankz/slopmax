@@ -198,7 +198,23 @@ async fn proxy(State(app): State<Arc<App>>, request: Request) -> Response {
     if !authorized(&app.config, request.headers()) {
         return unauthorized(Some(provider));
     }
+    // Upgrades cannot be relayed. Refusing the handshake with 426 makes
+    // Codex switch to HTTP streaming at once instead of retrying.
+    if is_websocket(request.headers()) {
+        return error(
+            Some(provider),
+            StatusCode::UPGRADE_REQUIRED,
+            "slopmax streams over HTTP; WebSockets are not supported",
+        );
+    }
     forward::forward(app, provider, target, request).await
+}
+
+fn is_websocket(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
 }
 
 /// Maps a request path to a provider and the upstream path.

@@ -590,3 +590,18 @@ async fn credits_about_to_expire_are_redeemed_on_used_accounts() {
     assert_eq!(reset.windows[0].used, 0.0);
     assert_eq!(h.app.pool.state(&h.ids[1]).limits.reset_credits, Some(2));
 }
+
+#[tokio::test]
+async fn websocket_handshakes_are_refused_so_codex_uses_http() {
+    let h = harness(Provider::Codex, &["tok-ok"]).await;
+    let response = reqwest::Client::new()
+        .get(format!("{}/v1/responses", h.proxy))
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("upgrade", "websocket")
+        .header("sec-websocket-version", "13")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 426);
+    assert!(h.log.lock().unwrap().is_empty());
+}
