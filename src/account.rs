@@ -16,19 +16,7 @@ use crate::log;
 use crate::time::{SignedDuration, Timestamp};
 use crate::{fsx, ids, paths};
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Hash,
-    PartialOrd,
-    Ord,
-    Serialize,
-    Deserialize,
-    clap::ValueEnum,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Provider {
     /// Anthropic Claude Pro/Max, used by Claude Code.
@@ -54,6 +42,17 @@ impl Provider {
             Self::Claude => SignedDuration::from_hours(1),
             Self::Codex => SignedDuration::from_hours(24),
         }
+    }
+}
+
+impl std::str::FromStr for Provider {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        Self::ALL
+            .into_iter()
+            .find(|p| p.as_str() == s)
+            .ok_or_else(|| format!("expected claude or codex, got {s:?}"))
     }
 }
 

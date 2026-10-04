@@ -53,7 +53,7 @@ impl Default for Config {
 }
 
 /// Account selection strategy for sessions without an existing pin.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Strategy {
     /// Spend the quota that expires first: prefer the account whose usage

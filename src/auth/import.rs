@@ -18,7 +18,7 @@ use crate::net::Client;
 use crate::paths;
 use crate::time::Timestamp;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
     /// Every source below.
     All,
@@ -28,6 +28,20 @@ pub enum Source {
     Codex,
     /// CLIProxyAPI credential files (~/.cli-proxy-api/*.json).
     Cliproxyapi,
+}
+
+impl std::str::FromStr for Source {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        Ok(match s {
+            "all" => Self::All,
+            "claude-code" => Self::ClaudeCode,
+            "codex" => Self::Codex,
+            "cliproxyapi" => Self::Cliproxyapi,
+            _ => return Err(format!("unknown source {s:?}")),
+        })
+    }
 }
 
 /// One importable login and where it came from.
