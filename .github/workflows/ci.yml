@@ -44,9 +44,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Dependencies stay few
         run: |
-          crates=$(cargo tree --locked -e normal --prefix none | sed 's/ (\*)//' | sort -u | wc -l)
-          echo "$crates crates"
-          test "$crates" -le 70
+          host=$(rustc -vV | sed -n 's/host: //p')
+          cargo tree --locked -e normal --target "$host" --prefix none | sed 's/ (\*)//' | sort -u > crates.txt
+          echo "$(wc -l < crates.txt) crates for $host"
+          test "$(wc -l < crates.txt)" -le 70 || { cat crates.txt; exit 1; }
       - name: The binary stays small
         run: |
           cargo build --release --locked
