@@ -2,6 +2,7 @@
 //! and Codex.
 
 pub mod auth;
+pub mod config;
 pub mod fsx;
 pub mod paths;
 pub mod ui;
