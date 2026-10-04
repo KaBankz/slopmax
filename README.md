@@ -16,7 +16,7 @@ slopmax pools your Claude and ChatGPT subscriptions behind one local proxy, so C
 On Linux and macOS, the install script fetches the latest release, checks its checksum, and puts `slopmax` in `~/.local/bin`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/KaBankz/slopmax/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/KaBankz/slopmax/master/install.sh | sh
 ```
 
 Or build it with Cargo (Rust 1.89 or newer):

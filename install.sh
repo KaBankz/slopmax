@@ -1,7 +1,7 @@
 #!/bin/sh
 # Installs the latest slopmax release for this machine.
 #
-#   curl -fsSL https://raw.githubusercontent.com/KaBankz/slopmax/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/KaBankz/slopmax/master/install.sh | sh
 #
 # SLOPMAX_VERSION picks a release (default: the latest); SLOPMAX_INSTALL_DIR
 # picks where the binary goes (default: ~/.local/bin).
