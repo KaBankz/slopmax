@@ -261,6 +261,8 @@ The hot path keeps to a few rules:
 - Sockets set `TCP_NODELAY`, so each streamed event leaves as it arrives.
 - Commands that only talk to the local proxy skip loading the system's trusted roots.
 
+The allocator is the platform's own. mimalloc and jemalloc were 4 to 30% faster at 32 streams at once, but held 2 to 5 times the memory, and one person's agents rarely run that many. The `mimalloc` feature is there for a proxy shared by many clients, and the Docker image builds with it.
+
 ## Testing
 
 - Unit tests sit next to the code: parsers and codecs against recorded shapes, the planner over tables of accounts, the pool's placement and failover.

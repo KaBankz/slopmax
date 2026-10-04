@@ -4,6 +4,12 @@ use slopmax::cli;
 use slopmax::log::{self, Level};
 use slopmax::ui;
 
+// See the `mimalloc` feature in Cargo.toml; the platform allocator is the
+// leaner default.
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[tokio::main]
 async fn main() -> ExitCode {
     // The proxy reports each request; other commands only warn.

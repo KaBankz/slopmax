@@ -198,6 +198,8 @@ slopmax key remove laptop
 
 Client keys can use the proxy but not slopmax's own API, and `slopmax doctor` notes when the proxy listens beyond this machine.
 
+A proxy that many clients share can trade memory for throughput by building with mimalloc (`cargo install --locked --git https://github.com/KaBankz/slopmax --features mimalloc`); the Docker image does.
+
 ## Extras
 
 slopmax is built to make several accounts of one provider feel like one. It can also do a few things beyond that.

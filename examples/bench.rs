@@ -23,6 +23,11 @@ use slopmax::provider::ProviderId;
 use slopmax::time::{SignedDuration, Timestamp};
 use tokio::net::TcpListener;
 
+// As in the binary: `--features mimalloc` measures that allocator.
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// Text deltas per streamed answer.
 const DELTAS: usize = 60;
 const DELTA: &str = "The quick brown fox jumps over the lazy dog, then naps for a while. ";

@@ -10,6 +10,12 @@ readme = "README.md"
 keywords = ["claude", "codex", "proxy", "oauth", "cli"]
 categories = ["command-line-utilities"]
 
+[features]
+# mimalloc instead of the platform allocator: more throughput under many
+# concurrent streams, for a proxy shared by many clients, at a few times
+# the memory. The Docker image uses it.
+mimalloc = ["dep:mimalloc"]
+
 [dependencies]
 anyhow = "1.0.104"
 base64 = "0.23.1"
@@ -20,6 +26,7 @@ hyper = { version = "1.11.1", features = ["http1", "client", "server"] }
 hyper-rustls = { version = "0.27.10", default-features = false, features = ["http1", "ring", "tls12"] }
 hyper-util = { version = "0.1.21", features = ["client-legacy", "http1", "tokio"] }
 memchr = "2.8.3"
+mimalloc = { version = "0.1.52", default-features = false, optional = true }
 ring = "0.17.14"
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8.4"
