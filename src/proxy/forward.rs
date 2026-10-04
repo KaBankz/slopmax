@@ -7,21 +7,23 @@
 
 use std::sync::Arc;
 
-use axum::body::{Body, Bytes, to_bytes};
-use axum::extract::Request;
-use axum::http::request::Parts;
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
-use axum::response::{IntoResponse, Response};
+use bytes::Bytes;
+use http::request::Parts;
+use http::{HeaderMap, HeaderValue, StatusCode};
+use http_body_util::LengthLimitError;
 use serde_json::json;
 
 use super::rawjson::{self, Seg};
 use super::sse::{Tap, Tapped};
-use super::{App, claude, codex, error, returnable};
+use super::{App, claude, codex, error, json_reply, returnable};
 use crate::account::{Account, Provider};
 use crate::auth;
 use crate::credits::{self, Outcome};
 use crate::limits::{self, Refusal};
 use crate::log;
+use crate::net::body;
+use crate::net::client::{self, Response as Upstream};
+use crate::net::server::{Request, Response};
 use crate::pool::{Choice, DEFAULT_BLOCK, DEFAULT_THROTTLE, Pick, Unavailable};
 use crate::time::{SignedDuration, Timestamp};
 use crate::ui;
@@ -91,7 +93,7 @@ struct Failure {
 }
 
 impl Failure {
-    async fn read(response: reqwest::Response) -> Self {
+    async fn read(response: Upstream) -> Self {
         let status = response.status();
         let headers = response.headers().clone();
         let body = response.bytes().await.unwrap_or_default();
@@ -104,7 +106,7 @@ impl Failure {
     }
 
     fn into_response(self) -> Response {
-        let mut response = Response::new(Body::from(self.body));
+        let mut response = Response::new(body::full(self.body));
         *response.status_mut() = self.status;
         *response.headers_mut() = returnable(&self.headers);
         response
@@ -125,12 +127,19 @@ pub(super) async fn forward(
     request: Request,
 ) -> Response {
     let (parts, body) = request.into_parts();
-    let Ok(body) = to_bytes(body, MAX_BODY).await else {
-        return error(
-            Some(provider),
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "request body is too large",
-        );
+    let body = match body::read(body, MAX_BODY).await {
+        Ok(body) => body,
+        Err(e) if e.is::<LengthLimitError>() => {
+            return error(
+                Some(provider),
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "request body is too large",
+            );
+        }
+        Err(e) => {
+            let message = format!("could not read the request body: {e}");
+            return error(Some(provider), StatusCode::BAD_REQUEST, &message);
+        }
     };
     let inbound = Inbound::new(provider, target, parts, body);
     let mut tried: Vec<String> = Vec::new();
@@ -327,7 +336,7 @@ async fn send(
     account: &Account,
     body: Bytes,
     moved: bool,
-) -> reqwest::Result<reqwest::Response> {
+) -> Result<Upstream, client::Error> {
     let token = &account.tokens.access_token;
     let (url, headers) = match inbound.provider {
         Provider::Claude => (
@@ -354,12 +363,7 @@ async fn send(
 
 /// Streams a successful response to the agent, recording token usage (and
 /// any quota refusal inside the stream) when it ends.
-fn stream_back(
-    app: &Arc<App>,
-    provider: Provider,
-    id: String,
-    response: reqwest::Response,
-) -> Response {
+fn stream_back(app: &Arc<App>, provider: Provider, id: String, response: Upstream) -> Response {
     let status = response.status();
     let headers = returnable(response.headers());
     // A compressed stream passes through unread; only the request counts.
@@ -372,7 +376,7 @@ fn stream_back(
         Tap::new(provider)
     };
     let pool_app = Arc::clone(app);
-    let stream = Tapped::new(response.bytes_stream(), tap, move |outcome| {
+    let stream = Tapped::new(response.into_body(), tap, move |outcome| {
         pool_app.pool.add_usage(&id, &outcome.usage);
         if outcome.exhausted {
             let until = Timestamp::now() + DEFAULT_BLOCK;
@@ -381,7 +385,7 @@ fn stream_back(
                 .block(&id, until, None, "usage limit reached mid-stream");
         }
     });
-    let mut out = Response::new(Body::from_stream(stream));
+    let mut out = Response::new(body::boxed(stream));
     *out.status_mut() = status;
     *out.headers_mut() = headers;
     out
@@ -431,7 +435,7 @@ fn exhausted(provider: Provider, until: Timestamp) -> Response {
             Vec::new(),
         ),
     };
-    let mut response = (StatusCode::TOO_MANY_REQUESTS, axum::Json(body)).into_response();
+    let mut response = json_reply(StatusCode::TOO_MANY_REQUESTS, &body);
     let headers = response.headers_mut();
     headers.insert("retry-after", HeaderValue::from(wait));
     for (name, value) in extra {

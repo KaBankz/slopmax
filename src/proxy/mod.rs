@@ -15,21 +15,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use axum::Router;
-use axum::extract::{Request, State};
-use axum::http::{HeaderMap, Method, StatusCode, header};
-use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get, post};
+use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use serde::Serialize;
 use serde_json::json;
 
 use crate::account::{Account, Provider, Store};
 use crate::auth::{self, RefreshError};
 use crate::config::Config;
 use crate::log;
+use crate::net::Client;
+use crate::net::body;
+use crate::net::server::{Request, Response};
 use crate::pool::{Pins, Pool, State as PoolState};
 use crate::report::{self, Report};
-use crate::time::SignedDuration;
-use crate::time::Timestamp;
+use crate::time::{SignedDuration, Timestamp};
 use crate::upstream::Upstream;
 use crate::{fsx, paths};
 
@@ -39,10 +38,10 @@ pub struct App {
     pub store: Store,
     pub pool: Pool,
     pub upstream: Upstream,
-    /// Inference traffic: long-lived streams, so no overall timeout.
-    http: reqwest::Client,
+    /// Inference traffic: long-lived streams, so only a stall timeout.
+    http: Client,
     /// OAuth and usage calls, with bounded timeouts.
-    pub auth_http: reqwest::Client,
+    pub auth_http: Client,
     /// Signaled by `POST /slopmax/shutdown`.
     pub shutdown: tokio::sync::Notify,
     /// Held while redeeming a reset credit, so concurrent requests that
@@ -52,11 +51,10 @@ pub struct App {
 
 impl App {
     pub fn new(config: Config, store: Store, upstream: Upstream, state: PoolState) -> Arc<Self> {
-        let http = reqwest::Client::builder()
+        let http = Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .read_timeout(Duration::from_secs(600))
-            .build()
-            .expect("TLS backend initializes");
+            .build();
         let pool = Pool::new(
             config.strategy,
             SignedDuration::from_mins(config.session_ttl_mins as i64),
@@ -121,56 +119,39 @@ impl App {
     }
 }
 
-pub fn router(app: Arc<App>) -> Router {
-    Router::new()
-        .route("/healthz", get(health))
-        .route("/api/hello", any(hello))
-        .route("/slopmax/status", get(status))
-        .route("/slopmax/refresh", post(refresh))
-        .route("/slopmax/shutdown", post(shutdown))
-        .fallback(proxy)
-        .with_state(app)
-}
-
-async fn health() -> impl IntoResponse {
-    axum::Json(
-        json!({ "status": "ok", "service": "slopmax", "version": env!("CARGO_PKG_VERSION") }),
-    )
-}
-
-/// Claude Code's unauthenticated connectivity check.
-async fn hello() -> StatusCode {
-    StatusCode::OK
-}
-
-async fn status(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
-    if !authorized(&app.config, &headers) {
-        return unauthorized(None);
+/// Answers one request: slopmax's own endpoints, else the proxy.
+pub async fn handle(app: Arc<App>, request: Request) -> Response {
+    match (request.method(), request.uri().path()) {
+        (&Method::GET, "/healthz") => json_reply(
+            StatusCode::OK,
+            &json!({ "status": "ok", "service": "slopmax", "version": env!("CARGO_PKG_VERSION") }),
+        ),
+        // Claude Code's unauthenticated connectivity check; HEAD probes alike.
+        (_, "/api/hello") | (&Method::HEAD, _) => empty_reply(StatusCode::OK),
+        (&Method::GET, "/slopmax/status") => match authorized(&app.config, request.headers()) {
+            true => json_reply(StatusCode::OK, &app.report()),
+            false => unauthorized(None),
+        },
+        // Polls every account's usage now, then reports.
+        (&Method::POST, "/slopmax/refresh") => match authorized(&app.config, request.headers()) {
+            true => {
+                crate::daemon::poll_all(&app, true).await;
+                json_reply(StatusCode::OK, &app.report())
+            }
+            false => unauthorized(None),
+        },
+        (&Method::POST, "/slopmax/shutdown") => match authorized(&app.config, request.headers()) {
+            true => {
+                app.shutdown.notify_one();
+                json_reply(StatusCode::OK, &json!({ "status": "stopping" }))
+            }
+            false => unauthorized(None),
+        },
+        _ => proxy(app, request).await,
     }
-    axum::Json(app.report()).into_response()
 }
 
-/// Polls every account's usage now, then reports.
-async fn refresh(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
-    if !authorized(&app.config, &headers) {
-        return unauthorized(None);
-    }
-    crate::daemon::poll_all(&app, true).await;
-    axum::Json(app.report()).into_response()
-}
-
-async fn shutdown(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
-    if !authorized(&app.config, &headers) {
-        return unauthorized(None);
-    }
-    app.shutdown.notify_one();
-    axum::Json(json!({ "status": "stopping" })).into_response()
-}
-
-async fn proxy(State(app): State<Arc<App>>, request: Request) -> Response {
-    if request.method() == Method::HEAD {
-        return StatusCode::OK.into_response();
-    }
+async fn proxy(app: Arc<App>, request: Request) -> Response {
     let path_and_query = request
         .uri()
         .path_and_query()
@@ -203,6 +184,23 @@ fn is_websocket(headers: &HeaderMap) -> bool {
         .get(header::UPGRADE)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.eq_ignore_ascii_case("websocket"))
+}
+
+fn json_reply(status: StatusCode, value: &impl Serialize) -> Response {
+    let body = serde_json::to_vec(value).expect("replies serialize");
+    let mut response = Response::new(body::full(body));
+    *response.status_mut() = status;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    response
+}
+
+fn empty_reply(status: StatusCode) -> Response {
+    let mut response = Response::new(body::empty());
+    *response.status_mut() = status;
+    response
 }
 
 /// Maps a request path to a provider and the upstream path.
@@ -273,7 +271,7 @@ fn error(provider: Option<Provider>, status: StatusCode, message: &str) -> Respo
         Some(Provider::Codex) => json!({ "error": { "type": kind, "message": message } }),
         _ => json!({ "type": "error", "error": { "type": kind, "message": message } }),
     };
-    (status, axum::Json(body)).into_response()
+    json_reply(status, &body)
 }
 
 const HOP_BY_HOP: [&str; 9] = [
@@ -321,7 +319,6 @@ fn returnable(upstream: &HeaderMap) -> HeaderMap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::http::HeaderValue;
 
     #[test]
     fn routes_prefixed_and_v1_paths() {

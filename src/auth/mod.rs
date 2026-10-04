@@ -10,11 +10,12 @@ pub mod pkce;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use reqwest::{Client, StatusCode};
+use http::StatusCode;
 
 use crate::account::{Account, Provider, Store, Tokens};
 use crate::ids;
 use crate::log;
+use crate::net::Client;
 use crate::time::Timestamp;
 use pkce::Pkce;
 
@@ -85,7 +86,6 @@ pub fn http_client() -> Client {
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30))
         .build()
-        .expect("TLS backend initializes")
 }
 
 #[derive(Debug, Default, Clone, Copy)]

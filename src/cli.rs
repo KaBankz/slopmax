@@ -17,7 +17,7 @@ use crate::pool::{Pins, Pool, State};
 use crate::report::{self, Report};
 use crate::time::{SignedDuration, Timestamp};
 use crate::upstream::Upstream;
-use crate::{agents, daemon, fsx, paths, ui, usage};
+use crate::{agents, daemon, fsx, net, paths, ui, usage};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -186,16 +186,15 @@ pub async fn run(cli: Cli) -> Result<i32> {
 struct Daemon {
     base: String,
     key: String,
-    http: reqwest::Client,
+    http: net::Client,
 }
 
 impl Daemon {
     fn new(config: &Config) -> Self {
-        let http = reqwest::Client::builder()
+        let http = net::Client::builder()
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(1))
-            .build()
-            .expect("TLS backend initializes");
+            .build();
         Self {
             base: config.base_url(),
             key: config.api_key.clone(),

@@ -7,18 +7,18 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use axum::Router;
-use axum::body::Bytes;
-use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode, Uri};
-use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use bytes::Bytes;
+use http::{HeaderMap, Method, StatusCode};
 use serde_json::{Value, json};
 use slopmax::account::{Account, Provider, Store, Tokens};
 use slopmax::config::{Config, Strategy};
 use slopmax::limits::{Limits, Window};
+use slopmax::net::Client;
+use slopmax::net::body;
+use slopmax::net::client::RequestBuilder;
+use slopmax::net::server::{self, Request, Response};
 use slopmax::pool::State as PoolState;
-use slopmax::proxy::{App, router};
+use slopmax::proxy::{self, App};
 use slopmax::time::{SignedDuration, Timestamp};
 use slopmax::upstream::Upstream;
 use tokio::net::TcpListener;
@@ -34,23 +34,33 @@ struct Seen {
 
 type Log = Arc<Mutex<Vec<Seen>>>;
 
-async fn serve(app: Router) -> String {
+/// Serves `handler` on a free local port and returns its base URL.
+async fn serve<H, F>(handler: H) -> String
+where
+    H: Fn(Request) -> F + Clone + Send + Sync + 'static,
+    F: Future<Output = Response> + Send + 'static,
+{
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    tokio::spawn(server::serve(listener, handler, std::future::pending()));
     format!("http://{addr}")
+}
+
+fn reply(
+    status: StatusCode,
+    headers: &[(&'static str, String)],
+    body: impl Into<Bytes>,
+) -> Response {
+    let mut response = Response::new(body::full(body));
+    *response.status_mut() = status;
+    for (name, value) in headers {
+        response.headers_mut().insert(*name, value.parse().unwrap());
+    }
+    response
 }
 
 fn reset_in(secs: i64) -> i64 {
     (Timestamp::now() + SignedDuration::from_secs(secs)).as_second()
-}
-
-fn record(log: &Log, uri: &Uri, headers: &HeaderMap, body: Bytes) {
-    log.lock().unwrap().push(Seen {
-        path: uri.to_string(),
-        headers: headers.clone(),
-        body,
-    });
 }
 
 /// Whether a reset credit has been redeemed so far.
@@ -61,17 +71,33 @@ fn redeemed(log: &Log) -> bool {
         .any(|s| s.path.ends_with("/consume"))
 }
 
-async fn mock_claude(
-    State(log): State<Log>,
-    uri: Uri,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    record(&log, &uri, &headers, body);
+/// The provider stand-in: records each request, then answers by route and
+/// bearer token.
+async fn mock(log: Log, request: Request) -> Response {
+    let (parts, incoming) = request.into_parts();
+    let body = body::read(incoming, usize::MAX).await.unwrap();
+    log.lock().unwrap().push(Seen {
+        path: parts.uri.to_string(),
+        headers: parts.headers.clone(),
+        body,
+    });
+    let headers = &parts.headers;
+    match (parts.method, parts.uri.path()) {
+        (Method::POST, "/v1/messages") => mock_claude(headers),
+        (Method::POST, "/codex/responses") => mock_codex(&log, headers),
+        (Method::GET, "/wham/rate-limit-reset-credits") => mock_credits(headers),
+        (Method::POST, "/wham/rate-limit-reset-credits/consume") => {
+            reply(StatusCode::OK, &[], json!({ "code": "reset" }).to_string())
+        }
+        _ => reply(StatusCode::NOT_FOUND, &[], ""),
+    }
+}
+
+fn mock_claude(headers: &HeaderMap) -> Response {
     match headers["authorization"].to_str().unwrap() {
-        "Bearer tok-limited" => (
+        "Bearer tok-limited" => reply(
             StatusCode::TOO_MANY_REQUESTS,
-            [
+            &[
                 ("anthropic-ratelimit-unified-status", "rejected".to_owned()),
                 (
                     "anthropic-ratelimit-unified-5h-status",
@@ -87,71 +113,63 @@ async fn mock_claude(
                 ),
             ],
             r#"{"type":"error","error":{"type":"rate_limit_error","message":"limit"}}"#,
-        )
-            .into_response(),
-        "Bearer tok-ok" => {
-            let stream = concat!(
+        ),
+        "Bearer tok-ok" => reply(
+            StatusCode::OK,
+            &[
+                ("content-type", "text/event-stream".to_owned()),
+                (
+                    "anthropic-ratelimit-unified-5h-utilization",
+                    "0.25".to_owned(),
+                ),
+                (
+                    "anthropic-ratelimit-unified-5h-reset",
+                    reset_in(7200).to_string(),
+                ),
+            ],
+            concat!(
                 "event: message_start\n",
                 r#"data: {"type":"message_start","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":90,"output_tokens":1}}}"#,
                 "\n\nevent: message_delta\n",
                 r#"data: {"type":"message_delta","usage":{"output_tokens":25}}"#,
                 "\n\n",
-            );
-            (
-                StatusCode::OK,
-                [
-                    ("content-type", "text/event-stream".to_owned()),
-                    (
-                        "anthropic-ratelimit-unified-5h-utilization",
-                        "0.25".to_owned(),
-                    ),
-                    (
-                        "anthropic-ratelimit-unified-5h-reset",
-                        reset_in(7200).to_string(),
-                    ),
-                ],
-                stream,
-            )
-                .into_response()
-        }
-        _ => (
+            ),
+        ),
+        _ => reply(
             StatusCode::UNAUTHORIZED,
+            &[],
             r#"{"type":"error","error":{"type":"authentication_error"}}"#,
-        )
-            .into_response(),
+        ),
     }
 }
 
-async fn mock_codex(State(log): State<Log>, uri: Uri, headers: HeaderMap, body: Bytes) -> Response {
-    record(&log, &uri, &headers, body);
+fn mock_codex(log: &Log, headers: &HeaderMap) -> Response {
     let token = headers["authorization"].to_str().unwrap();
     // `tok-credit` is spent until a reset credit is redeemed.
-    let spent = token == "Bearer tok-limited" || (token == "Bearer tok-credit" && !redeemed(&log));
+    let spent = token == "Bearer tok-limited" || (token == "Bearer tok-credit" && !redeemed(log));
     match token {
-        _ if spent => (
+        _ if spent => reply(
             StatusCode::TOO_MANY_REQUESTS,
+            &[],
             json!({ "error": { "type": "usage_limit_reached", "message": "limit", "resets_at": reset_in(5400) } }).to_string(),
-        )
-            .into_response(),
-        "Bearer tok-ok" | "Bearer tok-credit" => (
+        ),
+        "Bearer tok-ok" | "Bearer tok-credit" => reply(
             StatusCode::OK,
-            [
+            &[
                 ("content-type", "text/event-stream".to_owned()),
                 ("x-codex-primary-used-percent", "40".to_owned()),
                 ("x-codex-primary-window-minutes", "10080".to_owned()),
                 ("x-codex-primary-reset-at", reset_in(86_400).to_string()),
             ],
             "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"usage\":{\"input_tokens\":100,\"input_tokens_details\":{\"cached_tokens\":60},\"output_tokens\":7}}}\n\n",
-        )
-            .into_response(),
-        _ => StatusCode::UNAUTHORIZED.into_response(),
+        ),
+        _ => reply(StatusCode::UNAUTHORIZED, &[], ""),
     }
 }
 
 /// `tok-expiring` holds a credit that lapses within the hour; every other
 /// account's credits last for days.
-async fn mock_credits(State(log): State<Log>, uri: Uri, headers: HeaderMap) -> Response {
-    record(&log, &uri, &headers, Bytes::new());
+fn mock_credits(headers: &HeaderMap) -> Response {
     let expires = |hours| (Timestamp::now() + SignedDuration::from_hours(hours)).to_string();
     let mut credits =
         vec![json!({ "id": "credit-later", "status": "available", "expires_at": expires(48) })];
@@ -161,17 +179,11 @@ async fn mock_credits(State(log): State<Log>, uri: Uri, headers: HeaderMap) -> R
         credits
             .push(json!({ "id": "credit-spent", "status": "redeemed", "expires_at": expires(0) }));
     }
-    axum::Json(json!({ "credits": credits })).into_response()
-}
-
-async fn mock_consume(
-    State(log): State<Log>,
-    uri: Uri,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    record(&log, &uri, &headers, body);
-    axum::Json(json!({ "code": "reset" })).into_response()
+    reply(
+        StatusCode::OK,
+        &[],
+        json!({ "credits": credits }).to_string(),
+    )
 }
 
 struct Harness {
@@ -218,7 +230,6 @@ async fn harness_with(
     tokens: &[&str],
     configure: impl FnOnce(&mut Config),
 ) -> Harness {
-    slopmax::init();
     let dir = std::env::temp_dir().join(format!(
         "slopmax-it-{}-{}",
         std::process::id(),
@@ -235,13 +246,11 @@ async fn harness_with(
     }
 
     let log: Log = Arc::default();
-    let mock = Router::new()
-        .route("/v1/messages", post(mock_claude))
-        .route("/codex/responses", post(mock_codex))
-        .route("/wham/rate-limit-reset-credits", get(mock_credits))
-        .route("/wham/rate-limit-reset-credits/consume", post(mock_consume))
-        .with_state(log.clone());
-    let upstream_url = serve(mock).await;
+    let upstream_url = serve({
+        let log = log.clone();
+        move |request| mock(log.clone(), request)
+    })
+    .await;
 
     let mut config = Config {
         api_key: KEY.into(),
@@ -256,7 +265,11 @@ async fn harness_with(
     };
     let app = App::new(config, store, upstream, PoolState::default());
     app.pool.sync(app.store.list().unwrap(), Default::default());
-    let proxy = serve(router(app.clone())).await;
+    let proxy = serve({
+        let app = app.clone();
+        move |request| proxy::handle(app.clone(), request)
+    })
+    .await;
     Harness {
         proxy,
         app,
@@ -266,10 +279,14 @@ async fn harness_with(
     }
 }
 
+fn client() -> Client {
+    Client::builder().build()
+}
+
 const CLAUDE_BODY: &str = r#"{"model":"claude-opus-5-5","metadata":{"user_id":"{\"device_id\":\"client-device\",\"account_uuid\":\"\",\"session_id\":\"sess-1\"}"},"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.287.95e; cc_entrypoint=cli;"},{"type":"text","text":"You are Claude Code."}],"messages":[{"role":"user","content":"hi"}],"max_tokens":100,"stream":true}"#;
 
-fn claude_request(h: &Harness) -> reqwest::RequestBuilder {
-    reqwest::Client::new()
+fn claude_request(h: &Harness) -> RequestBuilder {
+    client()
         .post(format!("{}/v1/messages?beta=true", h.proxy))
         .header("authorization", format!("Bearer {KEY}"))
         .header(
@@ -283,8 +300,8 @@ fn claude_request(h: &Harness) -> reqwest::RequestBuilder {
         .body(CLAUDE_BODY)
 }
 
-fn codex_request(h: &Harness) -> reqwest::RequestBuilder {
-    reqwest::Client::new()
+fn codex_request(h: &Harness) -> RequestBuilder {
+    client()
         .post(format!("{}/codex/responses", h.proxy))
         .header("authorization", format!("Bearer {KEY}"))
         .header("content-type", "application/json")
@@ -417,7 +434,7 @@ async fn every_account_spent_returns_the_agents_own_limit_error() {
 #[tokio::test]
 async fn codex_fails_over_with_workspace_and_version_headers() {
     let h = harness(Provider::Codex, &["tok-limited", "tok-ok"]).await;
-    let response = reqwest::Client::new()
+    let response = client()
         .post(format!("{}/codex/responses", h.proxy))
         .header("authorization", format!("Bearer {KEY}"))
         .header("session-id", "codex-session")
@@ -456,7 +473,7 @@ async fn codex_fails_over_with_workspace_and_version_headers() {
 #[tokio::test]
 async fn codex_exhaustion_uses_usage_limit_shape() {
     let h = harness(Provider::Codex, &["tok-limited"]).await;
-    let response = reqwest::Client::new()
+    let response = client()
         .post(format!("{}/v1/responses", h.proxy))
         .header("authorization", format!("Bearer {KEY}"))
         .body(r#"{"model":"gpt-6-sol","input":[]}"#)
@@ -472,7 +489,7 @@ async fn codex_exhaustion_uses_usage_limit_shape() {
 #[tokio::test]
 async fn rejects_requests_without_the_slopmax_key() {
     let h = harness(Provider::Claude, &["tok-ok"]).await;
-    let response = reqwest::Client::new()
+    let response = client()
         .post(format!("{}/v1/messages", h.proxy))
         .header("x-api-key", "wrong")
         .body("{}")
@@ -483,7 +500,7 @@ async fn rejects_requests_without_the_slopmax_key() {
     assert!(h.log.lock().unwrap().is_empty());
 
     // Health and Claude Code's connectivity check need no key.
-    let client = reqwest::Client::new();
+    let client = client();
     assert_eq!(
         client
             .get(format!("{}/healthz", h.proxy))
@@ -495,7 +512,7 @@ async fn rejects_requests_without_the_slopmax_key() {
     );
     assert_eq!(
         client
-            .head(format!("{}/api/hello", h.proxy))
+            .request(Method::HEAD, format!("{}/api/hello", h.proxy))
             .send()
             .await
             .unwrap()
@@ -594,7 +611,7 @@ async fn credits_about_to_expire_are_redeemed_on_used_accounts() {
 #[tokio::test]
 async fn websocket_handshakes_are_refused_so_codex_uses_http() {
     let h = harness(Provider::Codex, &["tok-ok"]).await;
-    let response = reqwest::Client::new()
+    let response = client()
         .get(format!("{}/v1/responses", h.proxy))
         .header("authorization", format!("Bearer {KEY}"))
         .header("upgrade", "websocket")

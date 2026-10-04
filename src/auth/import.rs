@@ -9,12 +9,12 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
 
 use super::{claude, codex};
 use crate::account::{Account, Provider, Tokens};
+use crate::net::Client;
 use crate::paths;
 use crate::time::Timestamp;
 
@@ -305,7 +305,6 @@ mod tests {
 
     #[tokio::test]
     async fn reads_cliproxyapi_files() {
-        crate::init();
         let dir = temp_dir("cpa");
         let claude = json!({
             "type": "claude", "access_token": "sk-ant-oat01-x", "refresh_token": "sk-ant-ort01-y",

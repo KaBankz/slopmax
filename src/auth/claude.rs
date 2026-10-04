@@ -1,13 +1,13 @@
 //! Anthropic OAuth for Claude Pro/Max accounts (the Claude Code client).
 
 use anyhow::{Context, Result};
-use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
 
 use super::{Grant, RefreshError, pkce::Pkce};
 use crate::account::{Account, Provider};
 use crate::log;
+use crate::net::Client;
 use crate::net::form;
 use crate::time::{SignedDuration, Timestamp};
 

@@ -9,16 +9,14 @@ use std::net::SocketAddr;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use crate::net::form;
 use anyhow::{Result, anyhow, bail};
-use axum::Router;
-use axum::extract::{Query, State};
-use axum::response::Html;
-use axum::routing::get;
-use serde::Deserialize;
+use http::{HeaderValue, StatusCode, header};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
+
+use crate::net::server::{self, Request, Response};
+use crate::net::{body, form};
 
 /// How long to wait for the user to finish authorizing.
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
@@ -30,7 +28,7 @@ pub struct Callback {
     pub state: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct Params {
     code: Option<String>,
     state: Option<String>,
@@ -136,21 +134,30 @@ pub async fn receive(port: u16, path: &'static str, expected_state: &str) -> Res
 }
 
 async fn serve(listener: TcpListener, path: &'static str, tx: mpsc::Sender<Result<Callback>>) {
-    async fn handle(
-        State(tx): State<mpsc::Sender<Result<Callback>>>,
-        Query(params): Query<Params>,
-    ) -> Html<&'static str> {
-        let result = params.into_callback();
-        let page = if result.is_ok() {
-            SUCCESS_PAGE
-        } else {
-            FAILURE_PAGE
-        };
-        let _ = tx.send(result).await;
-        Html(page)
-    }
-    let app = Router::new().route(path, get(handle)).with_state(tx);
-    let _ = axum::serve(listener, app).await;
+    let handler = move |request: Request| {
+        let tx = tx.clone();
+        async move {
+            if request.uri().path() != path {
+                let mut response = Response::new(body::empty());
+                *response.status_mut() = StatusCode::NOT_FOUND;
+                return response;
+            }
+            let result = parse_query(request.uri().query().unwrap_or_default()).into_callback();
+            let page = if result.is_ok() {
+                SUCCESS_PAGE
+            } else {
+                FAILURE_PAGE
+            };
+            let _ = tx.send(result).await;
+            let mut response = Response::new(body::full(page));
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/html; charset=utf-8"),
+            );
+            response
+        }
+    };
+    server::serve(listener, handler, std::future::pending()).await;
 }
 
 async fn read_pasted(tx: mpsc::Sender<Result<Callback>>) {

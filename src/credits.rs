@@ -7,12 +7,13 @@
 //! keeps serving instead of waiting.
 
 use anyhow::{Context, Result, bail};
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::account::Account;
 use crate::ids;
+use crate::net::Client;
+use crate::net::client::RequestBuilder;
 use crate::time::Timestamp;
 use crate::upstream::Upstream;
 
@@ -56,7 +57,7 @@ struct Consumed {
     code: Outcome,
 }
 
-fn authorized(request: reqwest::RequestBuilder, account: &Account) -> reqwest::RequestBuilder {
+fn authorized(request: RequestBuilder, account: &Account) -> RequestBuilder {
     let request = request.bearer_auth(&account.tokens.access_token);
     match &account.account_id {
         Some(id) => request.header("chatgpt-account-id", id),

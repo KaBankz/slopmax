@@ -1,12 +1,13 @@
 //! Reads each account's usage windows from its provider's usage endpoint.
 
 use anyhow::{Result, anyhow, bail};
-use reqwest::{Client, StatusCode};
+use http::StatusCode;
 use serde_json::Value;
 
 use crate::account::{Account, Provider, Store};
 use crate::auth::{self, RefreshError, claude};
 use crate::limits::{self, Limits};
+use crate::net::Client;
 use crate::time::Timestamp;
 use crate::upstream::Upstream;
 

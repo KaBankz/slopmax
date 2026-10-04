@@ -3,12 +3,13 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use reqwest::{Client, StatusCode};
+use http::StatusCode;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{Grant, RefreshError, jwt, pkce::Pkce};
 use crate::account::{Account, Provider};
+use crate::net::Client;
 use crate::net::form;
 use crate::time::Timestamp;
 
@@ -83,11 +84,9 @@ pub async fn exchange(
         ("client_id", CLIENT_ID),
         ("code_verifier", verifier),
     ];
-    let body = form::encode(form);
     let response = http
         .post(format!("{ISSUER}/oauth/token"))
-        .header("content-type", "application/x-www-form-urlencoded")
-        .body(body)
+        .form(form)
         .send()
         .await?;
     let status = response.status();

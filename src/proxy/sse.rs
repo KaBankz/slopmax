@@ -8,7 +8,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll, ready};
 
 use bytes::Bytes;
-use futures_util::Stream;
+use hyper::body::{Body, Frame, SizeHint};
 use serde_json::Value;
 
 use crate::account::Provider;
@@ -163,16 +163,16 @@ impl Tap {
 
 type Done = Box<dyn FnOnce(Outcome) + Send>;
 
-/// A byte stream that reports its [`Outcome`] once, when it ends or is
+/// A response body that reports its [`Outcome`] once, when it ends or is
 /// dropped early (the agent disconnected).
-pub struct Tapped<S> {
-    inner: S,
+pub struct Tapped<B> {
+    inner: B,
     tap: Option<Tap>,
     done: Option<Done>,
 }
 
-impl<S> Tapped<S> {
-    pub fn new(inner: S, tap: Tap, done: impl FnOnce(Outcome) + Send + 'static) -> Self {
+impl<B> Tapped<B> {
+    pub fn new(inner: B, tap: Tap, done: impl FnOnce(Outcome) + Send + 'static) -> Self {
         Self {
             inner,
             tap: Some(tap),
@@ -187,27 +187,39 @@ impl<S> Tapped<S> {
     }
 }
 
-impl<S, E> Stream for Tapped<S>
+impl<B> Body for Tapped<B>
 where
-    S: Stream<Item = Result<Bytes, E>> + Unpin,
+    B: Body<Data = Bytes> + Unpin,
 {
-    type Item = Result<Bytes, E>;
+    type Data = Bytes;
+    type Error = B::Error;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let item = ready!(Pin::new(&mut self.inner).poll_next(cx));
-        match &item {
-            Some(Ok(chunk)) => {
-                if let Some(tap) = self.tap.as_mut() {
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, B::Error>>> {
+        let frame = ready!(Pin::new(&mut self.inner).poll_frame(cx));
+        match &frame {
+            Some(Ok(frame)) => {
+                if let (Some(chunk), Some(tap)) = (frame.data_ref(), self.tap.as_mut()) {
                     tap.feed(chunk);
                 }
             }
             Some(Err(_)) | None => self.report(),
         }
-        Poll::Ready(item)
+        Poll::Ready(frame)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        self.inner.size_hint()
     }
 }
 
-impl<S> Drop for Tapped<S> {
+impl<B> Drop for Tapped<B> {
     fn drop(&mut self) {
         self.report();
     }
@@ -216,8 +228,24 @@ impl<S> Drop for Tapped<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures_util::StreamExt;
+    use crate::net::body::BoxError;
+    use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
+
+    /// A body yielding fixed chunks.
+    struct Chunks(VecDeque<Bytes>);
+
+    impl Body for Chunks {
+        type Data = Bytes;
+        type Error = BoxError;
+
+        fn poll_frame(
+            mut self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+        ) -> Poll<Option<Result<Frame<Bytes>, BoxError>>> {
+            Poll::Ready(self.0.pop_front().map(|chunk| Ok(Frame::data(chunk))))
+        }
+    }
 
     #[test]
     fn claude_usage_merges_start_and_delta() {
@@ -275,20 +303,19 @@ mod tests {
     #[tokio::test]
     async fn tapped_stream_reports_once_even_when_dropped() {
         let seen = Arc::new(Mutex::new(Vec::new()));
-        let chunks: Vec<Result<Bytes, std::io::Error>> = vec![
-            Ok(Bytes::from_static(
+        let chunks = Chunks(VecDeque::from([
+            Bytes::from_static(
                 b"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":3}}\n",
-            )),
-            Ok(Bytes::from_static(b"data: tail\n")),
-        ];
+            ),
+            Bytes::from_static(b"data: tail\n"),
+        ]));
         let log = seen.clone();
-        let mut stream = Tapped::new(
-            futures_util::stream::iter(chunks),
-            Tap::new(Provider::Claude),
-            move |o| log.lock().unwrap().push(o),
-        );
-        assert!(stream.next().await.is_some());
-        drop(stream);
+        let mut body = Tapped::new(chunks, Tap::new(Provider::Claude), move |o| {
+            log.lock().unwrap().push(o)
+        });
+        let first = std::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await;
+        assert!(first.is_some());
+        drop(body);
         let reports = seen.lock().unwrap();
         assert_eq!(reports.len(), 1);
         assert_eq!(reports[0].usage.output_tokens, 3);

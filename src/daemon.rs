@@ -12,8 +12,9 @@ use crate::auth;
 use crate::config::Config;
 use crate::credits::{self, Outcome};
 use crate::log;
+use crate::net::server;
 use crate::pool::State;
-use crate::proxy::{App, router};
+use crate::proxy::{self, App};
 use crate::time::{SignedDuration, Timestamp};
 use crate::upstream::Upstream;
 use crate::{fsx, paths, usage};
@@ -81,9 +82,11 @@ pub async fn run(config: Config) -> Result<()> {
         env!("CARGO_PKG_VERSION"),
         app.config.base_url()
     );
-    axum::serve(listener, router(app.clone()))
-        .with_graceful_shutdown(shutdown(app.clone()))
-        .await?;
+    let handler = {
+        let app = Arc::clone(&app);
+        move |request| proxy::handle(Arc::clone(&app), request)
+    };
+    server::serve(listener, handler, shutdown(app.clone())).await;
     save_state(&app);
     log::info!("stopped");
     Ok(())
@@ -148,7 +151,7 @@ async fn refresh_all(app: &App) {
 }
 
 /// Polls usage for accounts whose reading is due (or all, with `force`).
-pub async fn poll_all(app: &App, force: bool) {
+pub async fn poll_all(app: &Arc<App>, force: bool) {
     let now = Timestamp::now();
     let interval = SignedDuration::from_mins(app.config.poll_mins.max(1) as i64);
     let due: Vec<Account> = app
@@ -158,18 +161,25 @@ pub async fn poll_all(app: &App, force: bool) {
         .filter(|a| a.auth_error.is_none())
         .filter(|a| force || is_due(app, a, now, interval))
         .collect();
-    let polls = due.iter().map(|account| async move {
-        let result = usage::poll(
-            &app.auth_http,
-            &app.store,
-            &app.upstream,
-            account,
-            app.config.refresh_tokens,
-        )
-        .await;
-        (account, result)
-    });
-    for (account, result) in futures_util::future::join_all(polls).await {
+    let mut polls = tokio::task::JoinSet::new();
+    for account in due {
+        let app = Arc::clone(app);
+        polls.spawn(async move {
+            let result = usage::poll(
+                &app.auth_http,
+                &app.store,
+                &app.upstream,
+                &account,
+                app.config.refresh_tokens,
+            )
+            .await;
+            (account, result)
+        });
+    }
+    while let Some(joined) = polls.join_next().await {
+        let Ok((account, result)) = joined else {
+            continue;
+        };
         match result {
             Ok((fresh, reading)) => {
                 app.pool

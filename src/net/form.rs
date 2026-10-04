@@ -46,13 +46,22 @@ pub fn decode(query: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Decodes `%XX` escapes (but not `+`), as in a URL's userinfo.
+pub fn percent_decode(text: &str) -> String {
+    unescape(text, false)
+}
+
 fn decode_part(text: &str) -> String {
+    unescape(text, true)
+}
+
+fn unescape(text: &str, plus_is_space: bool) -> String {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
-            b'+' => out.push(b' '),
+            b'+' if plus_is_space => out.push(b' '),
             b'%' => match (
                 bytes.get(i + 1).and_then(hex),
                 bytes.get(i + 2).and_then(hex),

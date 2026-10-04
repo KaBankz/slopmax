@@ -7,7 +7,6 @@ use slopmax::ui;
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    slopmax::init();
     let cli = Cli::parse();
     // The proxy reports each request; other commands only warn.
     log::init(if std::env::args().nth(1).as_deref() == Some("serve") {
