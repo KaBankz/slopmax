@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use toml_edit::DocumentMut;
 
 use crate::pricing::Custom;
-use crate::{fsx, ids, paths};
+use crate::{fsx, ids, notify, paths};
 
 /// Default proxy port: "slop" on a phone keypad.
 pub const DEFAULT_PORT: u16 = 7567;
@@ -40,6 +40,9 @@ pub struct Config {
     /// Per-model API prices for `slopmax usage`, beyond the built-in ones.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub prices: BTreeMap<String, Custom>,
+    /// Where to send notifications, and which.
+    #[serde(skip_serializing_if = "notify::Settings::is_empty")]
+    pub notify: notify::Settings,
 }
 
 impl Default for Config {
@@ -54,6 +57,7 @@ impl Default for Config {
             redeem_expiring_credits: true,
             redeem_when_exhausted: false,
             prices: BTreeMap::new(),
+            notify: notify::Settings::default(),
         }
     }
 }
@@ -167,6 +171,18 @@ api_key = "{api_key}"
 # When every Codex account is spent, redeem a reset credit instead of
 # failing the request.
 # redeem_when_exhausted = false
+
+# Notifications, sent when every account of a kind is limited (so requests
+# fail), when it recovers, and when an account needs `slopmax login` again.
+# A webhook gets a JSON POST (with "text" and "content", so Slack and
+# Discord show it); a command runs in the shell with SLOPMAX_EVENT,
+# SLOPMAX_PROVIDER, SLOPMAX_ACCOUNT, SLOPMAX_UNTIL, and SLOPMAX_MESSAGE set.
+# Add "limited" and "available" to events to hear about each account too.
+# Check the setup with `slopmax notify`.
+#   [notify]
+#   webhook = "https://hooks.slack.com/services/..."
+#   command = 'notify-send slopmax "$SLOPMAX_MESSAGE"'
+#   events = ["exhausted", "recovered", "signed-out"]
 
 # API prices for `slopmax usage`, in dollars per million tokens. Anthropic's
 # list prices are built in; add models it can't price. Cache reads default

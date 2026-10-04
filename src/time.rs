@@ -157,6 +157,12 @@ impl Timestamp {
         (c.year, c.month, c.day)
     }
 
+    /// The wall-clock `(hour, minute)` at this instant, `offset` east of UTC.
+    pub fn time_of_day(self, offset: SignedDuration) -> (u32, u32) {
+        let (c, _) = (self + offset).civil();
+        (c.hour, c.minute)
+    }
+
     /// Midnight starting `(year, month, day)`, `offset` east of UTC.
     pub fn midnight(year: i64, month: u32, day: u32, offset: SignedDuration) -> Option<Self> {
         let civil = Civil {

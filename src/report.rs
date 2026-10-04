@@ -210,7 +210,7 @@ fn status_cell(account: &AccountReport, now: Timestamp) -> String {
         parts.push(ui::red(format!("re-login needed ({error})")));
     } else if account.disabled {
         parts.push(ui::dim("disabled"));
-    } else if let Some(until) = blocked_until(state, now) {
+    } else if let Some(until) = state.limited_until(now) {
         parts.push(ui::yellow(format!(
             "limited · back in {}",
             ui::until(until, now)
@@ -251,21 +251,11 @@ fn status_cell(account: &AccountReport, now: Timestamp) -> String {
     if let Some(error) = state
         .last_error
         .as_ref()
-        .filter(|_| account.auth_error.is_none() && blocked_until(state, now).is_none())
+        .filter(|_| account.auth_error.is_none() && state.limited_until(now).is_none())
     {
         parts.push(ui::dim(format!("last error: {error}")));
     }
     parts.join(ui::dim(" · ").as_str())
-}
-
-fn blocked_until(state: &AccountState, now: Timestamp) -> Option<Timestamp> {
-    let block = state.blocked_until.filter(|at| *at > now);
-    let quota = state
-        .limits
-        .is_exhausted(now)
-        .then(|| state.limits.exhausted_until(now))
-        .flatten();
-    block.max(quota)
 }
 
 #[cfg(test)]

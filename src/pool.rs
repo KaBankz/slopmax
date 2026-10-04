@@ -106,6 +106,17 @@ impl AccountState {
     pub fn is_blocked(&self, now: Timestamp) -> bool {
         self.blocked_until.is_some_and(|at| at > now) || self.limits.is_exhausted(now)
     }
+
+    /// When an account sitting out for quota reasons is expected back.
+    pub fn limited_until(&self, now: Timestamp) -> Option<Timestamp> {
+        let block = self.blocked_until.filter(|at| *at > now);
+        let quota = self.limits.is_exhausted(now).then(|| {
+            self.limits
+                .exhausted_until(now)
+                .unwrap_or(now + DEFAULT_BLOCK)
+        });
+        block.max(quota)
+    }
 }
 
 /// Persisted runtime state: per-account health and live sessions.

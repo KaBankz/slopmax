@@ -95,11 +95,9 @@ impl fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.source.as_deref().map(|e| e as _)
-    }
-}
+// The root cause is already part of the message, so it is not also
+// exposed as a source: `{:#}` would print it twice.
+impl std::error::Error for Error {}
 
 /// An upstream proxy: `http://[user:pass@]host:port` (CONNECT tunnel),
 /// `socks5://…` (local DNS), or `socks5h://…` (DNS at the proxy).

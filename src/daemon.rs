@@ -17,12 +17,14 @@ use crate::pool::State;
 use crate::provider::credits::Outcome;
 use crate::proxy::{self, App};
 use crate::time::{SignedDuration, Timestamp};
-use crate::{fsx, paths, usage};
+use crate::{fsx, notify, paths, usage};
 
 /// How often blocked accounts are re-checked, in case quota frees up early.
 const RECHECK_BLOCKED: SignedDuration = SignedDuration::from_mins(10);
 /// How close to expiry a reset credit is redeemed rather than lost.
 const CREDIT_EXPIRY_LEAD: SignedDuration = SignedDuration::from_hours(3);
+/// How often account conditions are compared for notifications.
+const WATCH_EVERY: Duration = Duration::from_secs(15);
 
 pub async fn run(config: Config) -> Result<()> {
     let listen = config.listen;
@@ -67,6 +69,9 @@ pub async fn run(config: Config) -> Result<()> {
                 redeem_expiring(&app).await;
             },
         ));
+    }
+    if app.config.notify.is_enabled() {
+        tokio::spawn(watch(app.clone()));
     }
     if app.config.poll_mins > 0 {
         tokio::spawn(every(
@@ -127,6 +132,24 @@ async fn shutdown(app: Arc<App>) {
         () = ctrl_c => {},
         () = terminate => {},
         () = app.shutdown.notified() => {},
+    }
+}
+
+/// Sends a notification for each change in the accounts' conditions.
+async fn watch(app: Arc<App>) {
+    let mut watcher = notify::Watcher::default();
+    let mut ticker = tokio::time::interval(WATCH_EVERY);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        ticker.tick().await;
+        let accounts = app.pool.accounts();
+        let events = watcher.changes(&accounts, |id| app.pool.state(id), Timestamp::now());
+        for event in events {
+            log::info!("{}", event.message);
+            if let Err(e) = app.config.notify.send(&app.auth_http, &event).await {
+                log::warn!("sending a notification: {e:#}");
+            }
+        }
     }
 }
 

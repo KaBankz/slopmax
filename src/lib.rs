@@ -14,6 +14,7 @@ pub mod ledger;
 pub mod limits;
 pub mod log;
 pub mod net;
+pub mod notify;
 pub mod paths;
 pub mod pool;
 pub mod pricing;

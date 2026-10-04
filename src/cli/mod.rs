@@ -14,9 +14,11 @@ use self::args::{App, Arg, Choice, Command, Kind, Parsed};
 use self::background::{ensure_running, service, start, stop};
 use crate::account::Store;
 use crate::agent::{self, Agent};
-use crate::auth::LoginOptions;
+use crate::auth::{self, LoginOptions};
 use crate::config::Config;
-use crate::{daemon, ui};
+use crate::net::Origins;
+use crate::time::Timestamp;
+use crate::{daemon, notify, paths, ui};
 
 const ACCOUNT: &str = "Number from `slopmax status`, or the account's id, email, or label";
 
@@ -287,6 +289,7 @@ pub static APP: App = App {
                 arg("json", "Print machine-readable JSON", Kind::Flag(None)),
             ],
         ),
+        command("notify", "Send a test notification", &[]),
         command("doctor", "Check the setup and say how to fix problems", &[]),
         command(
             "completions",
@@ -400,6 +403,18 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
                 m.flag("json"),
             )?;
         }
+        "notify" => {
+            if !config.notify.is_enabled() {
+                bail!(
+                    "notifications are off; set a webhook or command under [notify] in {}",
+                    paths::config_file().display()
+                );
+            }
+            let http = auth::http_client(Origins::default());
+            let event = notify::Event::test(Timestamp::now());
+            config.notify.send(&http, &event).await?;
+            println!("Sent a test notification.");
+        }
         "doctor" => return doctor::run(&config, &store).await,
         "completions" => print!("{}", args::completions(&APP, m.get("shell")?)),
         name => unreachable!("`{name}` is in the command table but not dispatched"),
@@ -479,6 +494,7 @@ mod tests {
             "env claude",
             "setup codex --undo",
             "usage 30d --by model",
+            "notify",
             "doctor",
             "completions fish",
         ];
