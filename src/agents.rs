@@ -163,12 +163,19 @@ impl Backup {
     }
 }
 
-/// The agent config file `setup` edits.
+/// The agent config file `setup` edits. A symlink (say, into a dotfiles
+/// repository) is followed, so the file it points to is edited in place
+/// rather than the link being replaced.
 pub fn config_path(agent: Provider) -> PathBuf {
-    match agent {
+    let path = match agent {
         Provider::Claude => paths::claude_dir().join("settings.json"),
         Provider::Codex => paths::codex_dir().join("config.toml"),
-    }
+    };
+    resolve(path)
+}
+
+fn resolve(path: PathBuf) -> PathBuf {
+    std::fs::canonicalize(&path).unwrap_or(path)
 }
 
 fn backup_path() -> PathBuf {
@@ -442,6 +449,26 @@ mod tests {
             "{restored}"
         );
         assert!(!restored.contains("slopmax"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn setup_edits_a_symlinked_config_in_place() {
+        let dir = temp("symlink");
+        let (real, link) = (dir.join("dotfiles.json"), dir.join("settings.json"));
+        std::fs::write(&real, "{}").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let path = resolve(link.clone());
+        setup_claude(&config(), &path, &dir.join("backup.json")).unwrap();
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert!(
+            std::fs::read_to_string(&real)
+                .unwrap()
+                .contains("ANTHROPIC_BASE_URL")
+        );
+        let missing = dir.join("absent.json");
+        assert_eq!(resolve(missing.clone()), missing);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
