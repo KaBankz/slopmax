@@ -4,12 +4,17 @@
 pub mod account;
 pub mod auth;
 pub mod config;
+pub mod daemon;
 pub mod fsx;
 pub mod ids;
 pub mod limits;
 pub mod paths;
 pub mod pool;
+pub mod proxy;
+pub mod report;
 pub mod ui;
+pub mod upstream;
+pub mod usage;
 
 /// Installs process-wide defaults. Call once before making HTTP requests.
 pub fn init() {
