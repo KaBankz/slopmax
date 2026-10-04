@@ -7,17 +7,17 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use tokio::net::TcpListener;
 
-use crate::account::{Account, Store};
+use crate::account::Account;
 use crate::auth;
 use crate::config::Config;
-use crate::ledger::Ledger;
 use crate::log;
 use crate::net::{Origins, server};
+use crate::paths::Home;
 use crate::pool::State;
 use crate::provider::credits::Outcome;
 use crate::proxy::{self, App};
 use crate::time::{SignedDuration, Timestamp};
-use crate::{fsx, notify, paths, usage};
+use crate::{fsx, notify, usage};
 
 /// How often blocked accounts are re-checked, in case quota frees up early.
 const RECHECK_BLOCKED: SignedDuration = SignedDuration::from_mins(10);
@@ -31,9 +31,9 @@ pub async fn run(config: Config) -> Result<()> {
     let listener = TcpListener::bind(listen)
         .await
         .with_context(|| format!("cannot listen on {listen} (is slopmax already running?)"))?;
-    let state: State = fsx::read_json(&paths::state_file())?.unwrap_or_default();
-    let ledger = Ledger::start(paths::usage_dir());
-    let app = App::new(config, Store::open(), state, Origins::default(), ledger);
+    let home = Home::current();
+    let state: State = fsx::read_json(&home.state())?.unwrap_or_default();
+    let app = App::new(config, home, state, Origins::default());
     app.sync()?;
 
     tokio::spawn(every(
@@ -155,7 +155,7 @@ async fn watch(app: Arc<App>) {
 
 fn save_state(app: &App) {
     let (state, dirty) = app.pool.snapshot(Timestamp::now());
-    if dirty && let Err(e) = fsx::write_json(&paths::state_file(), &state) {
+    if dirty && let Err(e) = fsx::write_json(&app.home.state(), &state) {
         log::warn!("saving state: {e}");
     }
 }

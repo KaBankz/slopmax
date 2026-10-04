@@ -5,6 +5,7 @@
 //! key, assigned an account by the [`Pool`], and forwarded upstream with
 //! that account's credentials.
 
+mod admin;
 mod forward;
 mod models;
 pub mod rawjson;
@@ -12,32 +13,38 @@ mod sse;
 mod start;
 mod transcode;
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use serde::Serialize;
 use serde_json::json;
+use tokio::sync::broadcast;
 
 use crate::account::{Account, Store};
 use crate::auth::{self, RefreshError};
 use crate::config::Config;
+use crate::fsx;
 use crate::ledger::Ledger;
 use crate::log;
 use crate::net::body;
 use crate::net::server::{Request, Response};
 use crate::net::{Client, Origins};
+use crate::paths::Home;
 use crate::pool::{Pins, Pool, State as PoolState};
 use crate::provider::ProviderId;
 use crate::report::{self, Report};
 use crate::time::{SignedDuration, Timestamp};
 use crate::wire::Dialect;
-use crate::{fsx, paths};
 
 /// Shared state for request handlers and background tasks.
 pub struct App {
     pub config: Config,
+    /// The slopmax directory this proxy reads and writes.
+    pub home: Home,
     pub store: Store,
     pub pool: Pool,
     /// Inference traffic: long-lived streams, so only a stall timeout.
@@ -52,23 +59,20 @@ pub struct App {
     /// Where answered requests are recorded for `slopmax usage`.
     pub ledger: Ledger,
     /// Reasoning state kept between turns of translated conversations.
-    replay: std::sync::Mutex<transcode::Replay>,
+    replay: Mutex<transcode::Replay>,
     /// Each account's model list, and when it was read.
-    catalogs:
-        std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, Vec<String>)>>,
+    catalogs: Mutex<HashMap<String, (Instant, Vec<String>)>>,
     /// The newest Codex release seen in requests.
-    codex_version: std::sync::Mutex<Option<String>>,
+    codex_version: Mutex<Option<String>>,
+    /// Each answered request, as JSON, for the dashboard's live feed.
+    events: broadcast::Sender<Bytes>,
 }
 
 impl App {
     /// `origins` reroutes provider URLs; tests point them at a mock.
-    pub fn new(
-        config: Config,
-        store: Store,
-        state: PoolState,
-        origins: Origins,
-        ledger: Ledger,
-    ) -> Arc<Self> {
+    pub fn new(config: Config, home: Home, state: PoolState, origins: Origins) -> Arc<Self> {
+        let store = Store::at(home.accounts());
+        let ledger = Ledger::start(home.usage());
         let http = Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .read_timeout(Duration::from_secs(600))
@@ -81,6 +85,7 @@ impl App {
         );
         Arc::new(Self {
             config,
+            home,
             store,
             pool,
             http,
@@ -91,6 +96,7 @@ impl App {
             replay: Default::default(),
             catalogs: Default::default(),
             codex_version: Default::default(),
+            events: broadcast::channel(256).0,
         })
     }
 
@@ -98,7 +104,7 @@ impl App {
     /// refreshed tokens, and `slopmax use` from other processes.
     pub fn sync(&self) -> Result<()> {
         let accounts = self.store.list()?;
-        let pins: Pins = fsx::read_json(&paths::pins_file())?.unwrap_or_default();
+        let pins: Pins = fsx::read_json(&self.home.pins())?.unwrap_or_default();
         self.pool.sync(accounts, pins);
         Ok(())
     }
@@ -152,18 +158,7 @@ pub async fn handle(app: Arc<App>, request: Request) -> Response {
         ),
         // Claude Code's unauthenticated connectivity check; HEAD probes alike.
         (_, "/api/hello") | (&Method::HEAD, _) => empty_reply(StatusCode::OK),
-        (&Method::GET, "/slopmax/status") => match authorized(&app.config, request.headers()) {
-            true => json_reply(StatusCode::OK, &app.report()),
-            false => unauthorized(None),
-        },
-        // Polls every account's usage now, then reports.
-        (&Method::POST, "/slopmax/refresh") => match authorized(&app.config, request.headers()) {
-            true => {
-                crate::daemon::poll_all(&app, true).await;
-                json_reply(StatusCode::OK, &app.report())
-            }
-            false => unauthorized(None),
-        },
+        (_, path) if path.starts_with("/slopmax/") => admin::handle(app, request).await,
         (&Method::GET, "/v1/models")
             if models::wants_list(request.headers(), request.uri().query().unwrap_or("")) =>
         {
@@ -172,13 +167,6 @@ pub async fn handle(app: Arc<App>, request: Request) -> Response {
                 false => unauthorized(Some(Dialect::Chat)),
             }
         }
-        (&Method::POST, "/slopmax/shutdown") => match authorized(&app.config, request.headers()) {
-            true => {
-                app.shutdown.notify_one();
-                json_reply(StatusCode::OK, &json!({ "status": "stopping" }))
-            }
-            false => unauthorized(None),
-        },
         _ => proxy(app, request).await,
     }
 }

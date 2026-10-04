@@ -12,12 +12,13 @@ use http::{HeaderMap, Method, StatusCode};
 use serde_json::{Value, json};
 use slopmax::account::{Account, Endpoint, Store, Tokens};
 use slopmax::config::{Config, Strategy};
-use slopmax::ledger::{self, Ledger};
+use slopmax::ledger;
 use slopmax::limits::{Limits, Window};
 use slopmax::net::body;
 use slopmax::net::client::RequestBuilder;
 use slopmax::net::server::{self, Request, Response};
 use slopmax::net::{Client, Origins};
+use slopmax::paths::Home;
 use slopmax::pool::State as PoolState;
 use slopmax::provider::ProviderId;
 use slopmax::proxy::{self, App};
@@ -379,8 +380,7 @@ async fn harness_of(
         ("https://api.x.ai", xai.as_str()),
         ("https://api.openai.com", openai.as_str()),
     ]);
-    let ledger = Ledger::start(dir.join("usage"));
-    let app = App::new(config, store, PoolState::default(), origins, ledger);
+    let app = App::new(config, Home::at(&dir), PoolState::default(), origins);
     app.pool.sync(app.store.list().unwrap(), Default::default());
     let proxy = serve({
         let app = app.clone();
@@ -1180,4 +1180,126 @@ async fn openai_clients_list_every_model_they_can_use() {
         .await
         .unwrap();
     assert_eq!(paths(&h).last().unwrap(), "/v1/models?limit=1000");
+}
+
+#[tokio::test]
+async fn the_dashboard_api_reports_acts_and_streams() {
+    use http_body_util::BodyExt;
+
+    let h = harness(ProviderId::Codex, &["tok-ok", "tok-ok"]).await;
+    let admin = |method: Method, path: &str| {
+        client()
+            .request(method, format!("{}{path}", h.proxy))
+            .header("authorization", format!("Bearer {KEY}"))
+    };
+
+    // The page itself is public and inert; the data behind it is not.
+    let page = client()
+        .get(format!("{}/slopmax/dashboard", h.proxy))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    assert!(
+        page.headers()["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .starts_with("default-src 'none'")
+    );
+    let anonymous = client()
+        .get(format!("{}/slopmax/status", h.proxy))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+
+    let account = |report: &Value, id: &str| {
+        report["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == id)
+            .cloned()
+            .unwrap()
+    };
+    let (first, second) = (h.ids[0].clone(), h.ids[1].clone());
+    let act =
+        |id: &str, action: &str| admin(Method::POST, &format!("/slopmax/accounts/{id}/{action}"));
+    let report: Value = act(&first, "disable")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(account(&report, &first)["disabled"], true);
+    let report: Value = act(&first, "enable")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(account(&report, &first)["disabled"], false);
+    let report: Value = act(&first, "priority?value=3")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(account(&report, &first)["priority"], 3);
+    let report: Value = act(&second, "use")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(account(&report, &second)["pinned"], true);
+    // Pins live in this proxy's own home, not the user's.
+    assert!(h.dir.join("pins.json").exists());
+    let report: Value = admin(Method::POST, "/slopmax/use/auto")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(account(&report, &second)["pinned"], false);
+    let missing = act("codex-nope", "disable").send().await.unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    // The live feed sees each answered request.
+    let feed = admin(Method::GET, "/slopmax/events").send().await.unwrap();
+    assert_eq!(feed.headers()["content-type"], "text/event-stream");
+    let mut feed = feed.into_body();
+    let first_frame = feed.frame().await.unwrap().unwrap().into_data().unwrap();
+    assert!(first_frame.starts_with(b": connected"));
+    let response = codex_request(&h).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response.bytes().await.unwrap();
+    let event = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let chunk = feed.frame().await.unwrap().unwrap().into_data().unwrap();
+            if let Some(data) = chunk.strip_prefix(b"data: ") {
+                break serde_json::from_slice::<Value>(data.trim_ascii()).unwrap();
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(event["model"], "gpt-6-sol");
+    assert_eq!(event["input"], 40);
+
+    eventually(|| ledger::read(&h.dir.join("usage"), Timestamp::UNIX_EPOCH).len() == 1).await;
+    let usage: Value = admin(Method::GET, "/slopmax/usage?range=today&by=model")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(usage["rows"]["gpt-6-sol"]["requests"], 1);
+    assert_eq!(usage["total"]["output"], 7);
 }

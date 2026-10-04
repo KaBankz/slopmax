@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>slopmax</title>
+<style>
+  :root {
+    --bg: #0d1016; --panel: #151a22; --line: #232a35; --text: #dfe5ee; --dim: #8592a5;
+    --ok: #4cc38a; --warn: #e5b445; --bad: #ef6b6b; --accent: #7aa7ff; --track: #222a36;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f6f7f9; --panel: #fff; --line: #e3e7ee; --text: #1b2230; --dim: #6a7586; --track: #e8ecf2; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 14px; padding: 14px 24px;
+    border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 1; }
+  header h1 { font-size: 17px; margin: 0; letter-spacing: .2px; }
+  header .meta { color: var(--dim); font-size: 13px; }
+  header .spacer { flex: 1; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); display: inline-block; margin-right: 6px; }
+  .dot.live { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
+  main { max-width: 1180px; margin: 0 auto; padding: 20px 24px 60px; display: grid; gap: 20px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+  section > h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .8px; color: var(--dim); margin: 0 0 12px;
+    display: flex; align-items: center; gap: 10px; }
+  section > h2 .spacer { flex: 1; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; color: var(--dim); font-weight: 500; font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  .num { font-family: var(--mono); font-size: 12.5px; text-align: right; white-space: nowrap; }
+  .group td { padding-top: 16px; color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: .8px; border-bottom: none; }
+  .name { font-weight: 550; }
+  .sub { color: var(--dim); font-size: 12px; }
+  .bar { display: flex; align-items: center; gap: 8px; min-width: 190px; }
+  .track { flex: 1; height: 7px; background: var(--track); border-radius: 4px; overflow: hidden; }
+  .fill { height: 100%; border-radius: 4px; }
+  .pct { font-family: var(--mono); font-size: 12px; width: 38px; text-align: right; }
+  .reset { font-family: var(--mono); font-size: 11.5px; color: var(--dim); width: 54px; }
+  .chip { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; white-space: nowrap;
+    background: color-mix(in srgb, currentColor 14%, transparent); }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); } .off { color: var(--dim); }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .tag { font-size: 11.5px; color: var(--dim); border: 1px solid var(--line); border-radius: 4px; padding: 0 6px; }
+  .tag.pin { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+  button, select, input { font: inherit; color: var(--text); background: transparent; border: 1px solid var(--line);
+    border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  .actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+  .actions button { font-size: 12px; padding: 2px 8px; }
+  .chart .row { display: grid; grid-template-columns: 170px 1fr 230px; gap: 12px; align-items: center; padding: 4px 0; }
+  .chart .label { font-family: var(--mono); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chart .vals { font-family: var(--mono); font-size: 12px; color: var(--dim); text-align: right; white-space: nowrap; }
+  .chart .total { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 8px; font-weight: 600; }
+  .chart .total .vals { color: var(--text); }
+  .empty { color: var(--dim); padding: 10px 0; }
+  .log { max-height: 420px; overflow: auto; }
+  .log td { padding: 5px 8px; font-size: 12.5px; }
+  .gate { max-width: 460px; margin: 15vh auto; text-align: center; }
+  .gate input { width: 100%; padding: 8px 10px; margin: 14px 0; font-family: var(--mono); }
+  .toast { position: fixed; bottom: 18px; right: 18px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 10px 14px; max-width: 420px; display: none; }
+</style>
+</head>
+<body>
+<div id="gate" class="gate" hidden>
+  <h1>slopmax</h1>
+  <p class="sub">Open the dashboard with <code>slopmax dashboard</code>, or enter the <code>api_key</code> from <code>~/.slopmax/config.toml</code>.</p>
+  <input id="key" type="password" placeholder="sm-…" autocomplete="off">
+  <button id="enter">Open</button>
+</div>
+<div id="app" hidden>
+  <header>
+    <h1>slopmax</h1>
+    <span class="meta" id="meta"></span>
+    <span class="spacer"></span>
+    <span class="meta"><span class="dot" id="live"></span><span id="livetext">connecting</span></span>
+    <button id="refresh" title="Poll every account's usage now">Refresh usage</button>
+  </header>
+  <main>
+    <section>
+      <h2>Accounts <span class="spacer"></span><button id="auto" title="Let slopmax choose accounts again">Clear pins</button></h2>
+      <table id="accounts"></table>
+    </section>
+    <section>
+      <h2>Usage
+        <span class="spacer"></span>
+        <select id="range"><option value="today">Today</option><option value="7d" selected>7 days</option><option value="30d">30 days</option><option value="all">All time</option></select>
+        <select id="by"><option value="day">by day</option><option value="model">by model</option><option value="account">by account</option></select>
+      </h2>
+      <div id="usage" class="chart"></div>
+      <p class="sub">API cost is what these requests would cost at pay-as-you-go prices. A trailing + leaves out models without a price.</p>
+    </section>
+    <section>
+      <h2>Live requests</h2>
+      <div class="log"><table>
+        <thead><tr><th>Time</th><th>Account</th><th>Model</th><th>Status</th><th class="num">In</th><th class="num">Cached</th><th class="num">Out</th><th class="num">First byte</th><th class="num">Total</th></tr></thead>
+        <tbody id="log"><tr><td colspan="9" class="empty">Requests appear here as they are answered.</td></tr></tbody>
+      </table></div>
+    </section>
+  </main>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const SUBSCRIPTIONS = ["claude", "codex"];
+const ORDER = ["claude", "codex", "anthropic", "openai", "xai", "compat"];
+let key = sessionStorage.getItem("slopmax-key") || "";
+let report = null;
+let names = {};
+
+// The key arrives in the URL fragment, which browsers never send anywhere.
+const fragment = new URLSearchParams(location.hash.slice(1));
+if (fragment.get("key")) {
+  key = fragment.get("key");
+  sessionStorage.setItem("slopmax-key", key);
+  history.replaceState(null, "", location.pathname);
+}
+
+async function api(method, path) {
+  const res = await fetch(path, { method, headers: { authorization: "Bearer " + key } });
+  if (res.status === 401) { lock(); throw new Error("the key was not accepted"); }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body?.error?.message || res.statusText);
+  return body;
+}
+
+function lock() {
+  sessionStorage.removeItem("slopmax-key");
+  $("app").hidden = true; $("gate").hidden = false;
+}
+
+function toast(text) {
+  const t = $("toast"); t.textContent = text; t.style.display = "block";
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => (t.style.display = "none"), 5000);
+}
+
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function compact(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
+  return String(n);
+}
+
+function duration(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  if (d) return `${d}d${h}h`;
+  if (h) return `${h}h${String(m).padStart(2, "0")}m`;
+  if (m) return `${m}m${String(s % 60).padStart(2, "0")}s`;
+  return `${s}s`;
+}
+
+const level = (pct) => (pct >= 90 ? "var(--bad)" : pct >= 70 ? "var(--warn)" : "var(--ok)");
+const time = (t) => (t ? Date.parse(t) : 0);
+
+function usedAt(w, now) {
+  const reset = time(w.resets_at);
+  return reset && reset <= now ? 0 : w.used;
+}
+
+function windowCell(w, now) {
+  if (!w) return `<td><span class="sub">—</span></td>`;
+  const used = usedAt(w, now), reset = time(w.resets_at);
+  const left = used > 0 && reset > now ? duration(reset - now) : "";
+  return `<td><div class="bar"><div class="track"><div class="fill" style="width:${Math.min(100, used)}%;background:${level(used)}"></div></div>
+    <span class="pct">${Math.round(used)}%</span><span class="reset">${left}</span></div></td>`;
+}
+
+function limitedUntil(state, now) {
+  let until = time(state.blocked_until) > now ? time(state.blocked_until) : 0;
+  for (const w of state.limits?.windows || []) {
+    if (!w.model && usedAt(w, now) >= 100 && time(w.resets_at) > now) until = Math.max(until, time(w.resets_at));
+  }
+  return until;
+}
+
+function status(a, now) {
+  const s = a.state;
+  if (a.auth_error) return ["bad", "sign in again"];
+  if (a.disabled) return ["off", "disabled"];
+  const until = limitedUntil(s, now);
+  if (until) return ["warn", `limited · back in ${duration(until - now)}`];
+  if (time(s.throttled_until) > now) return ["warn", "throttled"];
+  if (a.sessions > 0) return ["ok", `● active · ${a.sessions} session${a.sessions === 1 ? "" : "s"}`];
+  return ["ok", "ready"];
+}
+
+function renderAccounts() {
+  if (!report) return;
+  const now = Date.now();
+  $("meta").textContent = `v${report.version} · ${report.strategy}`;
+  if (!report.accounts.length) {
+    $("accounts").innerHTML = `<tr><td class="empty">No accounts yet. Add one with <code>slopmax login claude</code> or <code>slopmax login codex</code>.</td></tr>`;
+    return;
+  }
+  let html = "", index = 0;
+  for (const provider of ORDER) {
+    const accounts = report.accounts.filter((a) => a.provider === provider);
+    if (!accounts.length) continue;
+    const subscription = SUBSCRIPTIONS.includes(provider);
+    html += `<tr class="group"><td colspan="2">${provider}</td>` +
+      (subscription ? `<td>5 hours</td><td>Week</td>` : `<td colspan="2">Models</td>`) + `<td>Status</td><td></td></tr>`;
+    for (const a of accounts) {
+      index++;
+      const shared = (a.state.limits?.windows || []).filter((w) => !w.model);
+      const span = (name) => shared.find((w) => w.span === name);
+      const [tone, text] = status(a, now);
+      const tags = [];
+      if (a.pinned) tags.push(`<span class="tag pin">pinned</span>`);
+      if (a.priority) tags.push(`<span class="tag">priority ${a.priority}</span>`);
+      if (a.follows) tags.push(`<span class="tag">follows ${esc(a.follows)}</span>`);
+      if (a.state.limits?.reset_credits) tags.push(`<span class="tag">${a.state.limits.reset_credits} reset credit${a.state.limits.reset_credits === 1 ? "" : "s"}</span>`);
+      if (a.state.usage?.requests) tags.push(`<span class="tag">${a.state.usage.requests} req · ${compact(a.state.usage.input_tokens + a.state.usage.output_tokens + a.state.usage.cache_read_tokens + a.state.usage.cache_write_tokens)} tok</span>`);
+      for (const w of (a.state.limits?.windows || []).filter((w) => w.model)) {
+        tags.push(`<span class="tag">${esc(w.span)} ${esc(w.model)} ${Math.round(usedAt(w, now))}%</span>`);
+      }
+      const middle = subscription
+        ? windowCell(span("5h"), now) + windowCell(span("7d") || span("30d"), now)
+        : `<td colspan="2" class="sub">${esc((a.models || []).join(", ") || "—")}</td>`;
+      const credits = a.provider === "codex" && a.state.limits?.reset_credits;
+      html += `<tr>
+        <td class="sub num">${index}</td>
+        <td><div class="name">${esc(a.name)}</div><div class="sub">${esc(a.plan || (subscription ? "" : "per token"))}</div>${tags.length ? `<div class="tags">${tags.join("")}</div>` : ""}</td>
+        ${middle}
+        <td><span class="chip ${tone}" title="${esc(a.auth_error || a.state.last_error || "")}">${esc(text)}</span></td>
+        <td><div class="actions">
+          <button data-act="use" data-id="${a.id}" title="Prefer this account for new sessions">Use</button>
+          <button data-act="${a.disabled ? "enable" : "disable"}" data-id="${a.id}">${a.disabled ? "Enable" : "Disable"}</button>
+          <button data-act="priority" data-id="${a.id}" data-value="${a.priority + 1}" title="Raise priority">▲</button>
+          <button data-act="priority" data-id="${a.id}" data-value="${a.priority - 1}" title="Lower priority">▼</button>
+          ${credits ? `<button data-act="redeem" data-id="${a.id}" title="Redeem a reset credit now">Redeem</button>` : ""}
+        </div></td></tr>`;
+    }
+  }
+  $("accounts").innerHTML = html;
+}
+
+function costLabel(t) {
+  if (!t.unpriced) return "$" + t.cost.toFixed(2);
+  if (t.unpriced === t.requests) return "—";
+  return "$" + t.cost.toFixed(2) + "+";
+}
+
+async function loadUsage() {
+  const range = $("range").value, by = $("by").value;
+  let summary;
+  try { summary = await api("GET", `/slopmax/usage?range=${range}&by=${by}`); }
+  catch (e) { $("usage").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  let rows = Object.entries(summary.rows);
+  if (!rows.length) { $("usage").innerHTML = `<div class="empty">No requests recorded for this period.</div>`; return; }
+  const priced = rows.some(([, t]) => t.cost > 0);
+  const measure = (t) => (priced ? t.cost : t.requests);
+  if (by !== "day") rows.sort((a, b) => measure(b[1]) - measure(a[1]));
+  const top = Math.max(...rows.map(([, t]) => measure(t)), 1e-9);
+  const values = (t) => `${t.requests} req · ${compact(t.input + t.cache_read + t.cache_write)} in · ${compact(t.output)} out · ${costLabel(t)}`;
+  $("usage").innerHTML = rows.map(([label, t]) => `<div class="row">
+      <span class="label" title="${esc(label)}">${esc(label)}</span>
+      <div class="track"><div class="fill" style="width:${(measure(t) / top) * 100}%;background:var(--accent)"></div></div>
+      <span class="vals">${values(t)}</span></div>`).join("") +
+    `<div class="row total"><span class="label">total</span><span></span><span class="vals">${values(summary.total)}</span></div>`;
+}
+
+function logRow(e) {
+  const at = new Date(e.at);
+  const tone = e.status < 400 ? "ok" : e.status === 429 ? "warn" : "bad";
+  const seconds = (ms) => (ms == null ? "—" : (ms / 1000).toFixed(1) + "s");
+  return `<tr><td class="num">${at.toLocaleTimeString()}</td><td>${esc(names[e.account] || e.account)}</td>
+    <td>${esc(e.model || "—")}</td><td><span class="${tone}">${e.status}</span>${e.attempts > 1 ? ` <span class="sub">(${e.attempts} tries)</span>` : ""}</td>
+    <td class="num">${compact(e.input || 0)}</td><td class="num">${compact(e.cache_read || 0)}</td><td class="num">${compact(e.output || 0)}</td>
+    <td class="num">${seconds(e.first_byte_ms)}</td><td class="num">${seconds(e.ms)}</td></tr>`;
+}
+
+async function follow() {
+  const log = $("log");
+  let backoff = 1000;
+  for (;;) {
+    try {
+      const res = await fetch("/slopmax/events", { headers: { authorization: "Bearer " + key } });
+      if (!res.ok || !res.body) throw new Error(res.statusText);
+      $("live").className = "dot live"; $("livetext").textContent = "live";
+      backoff = 1000;
+      const reader = res.body.getReader(), decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let cut;
+        while ((cut = buffer.indexOf("\n\n")) >= 0) {
+          const frame = buffer.slice(0, cut); buffer = buffer.slice(cut + 2);
+          const data = frame.split("\n").filter((l) => l.startsWith("data: ")).map((l) => l.slice(6)).join("");
+          if (!data) continue;
+          if (log.querySelector(".empty")) log.innerHTML = "";
+          log.insertAdjacentHTML("afterbegin", logRow(JSON.parse(data)));
+          while (log.children.length > 200) log.lastElementChild.remove();
+        }
+      }
+    } catch (e) { /* reconnect below */ }
+    $("live").className = "dot"; $("livetext").textContent = "reconnecting";
+    await new Promise((r) => setTimeout(r, backoff));
+    backoff = Math.min(backoff * 2, 15000);
+  }
+}
+
+async function loadStatus() {
+  try {
+    report = await api("GET", "/slopmax/status");
+    names = Object.fromEntries(report.accounts.map((a) => [a.id, a.name]));
+    renderAccounts();
+  } catch (e) { toast(e.message); }
+}
+
+$("accounts").addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-act]");
+  if (!button) return;
+  const { act, id, value } = button.dataset;
+  if (act === "redeem" && !confirm("Redeem a reset credit now? It resets this account's usage windows.")) return;
+  button.disabled = true;
+  try {
+    const path = `/slopmax/accounts/${encodeURIComponent(id)}/${act}` + (act === "priority" ? `?value=${value}` : "");
+    const result = await api("POST", path);
+    report = result.report || result;
+    if (result.outcome) toast(`Redeem: ${result.outcome.replace(/_/g, " ")}`);
+    renderAccounts();
+  } catch (e) { toast(e.message); button.disabled = false; }
+});
+
+$("auto").onclick = async () => { try { report = await api("POST", "/slopmax/use/auto"); renderAccounts(); } catch (e) { toast(e.message); } };
+$("refresh").onclick = async () => {
+  const b = $("refresh"); b.disabled = true; b.textContent = "Refreshing…";
+  try { report = await api("POST", "/slopmax/refresh"); renderAccounts(); } catch (e) { toast(e.message); }
+  b.disabled = false; b.textContent = "Refresh usage";
+};
+$("range").onchange = loadUsage;
+$("by").onchange = loadUsage;
+$("enter").onclick = () => { key = $("key").value.trim(); sessionStorage.setItem("slopmax-key", key); start(); };
+$("key").onkeydown = (e) => { if (e.key === "Enter") $("enter").click(); };
+
+let started = false;
+function start() {
+  if (!key) { lock(); return; }
+  $("gate").hidden = true; $("app").hidden = false;
+  loadStatus(); loadUsage();
+  if (started) return;
+  started = true;
+  follow();
+  setInterval(loadStatus, 5000);
+  setInterval(renderAccounts, 1000);
+  setInterval(loadUsage, 60000);
+}
+start();
+</script>
+</body>
+</html>

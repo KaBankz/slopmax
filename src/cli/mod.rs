@@ -324,6 +324,15 @@ pub static APP: App = App {
             ],
         ),
         command("notify", "Send a test notification", &[]),
+        command(
+            "dashboard",
+            "Open the dashboard in a browser, starting the proxy if needed",
+            &[arg(
+                "print",
+                "Print its address instead of opening a browser",
+                Kind::Flag(None),
+            )],
+        ),
         command("doctor", "Check the setup and say how to fix problems", &[]),
         command(
             "completions",
@@ -465,6 +474,27 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
             config.notify.send(&http, &event).await?;
             println!("Sent a test notification.");
         }
+        "dashboard" => {
+            ensure_running(&config).await?;
+            // The key travels in the fragment, which browsers do not send.
+            let url = format!(
+                "{}/slopmax/dashboard#key={}",
+                config.base_url(),
+                config.api_key
+            );
+            if !m.flag("print") && auth::callback::open_browser(&url) {
+                println!("Opened the dashboard in your browser.");
+            } else {
+                println!("Open the dashboard at:\n\n  {url}\n");
+                println!(
+                    "{}",
+                    ui::dim(format!(
+                        "On another machine, forward the port first: ssh -L {port}:127.0.0.1:{port} <this host>",
+                        port = config.listen.port()
+                    ))
+                );
+            }
+        }
         "doctor" => return doctor::run(&config, &store).await,
         "completions" => print!("{}", args::completions(&APP, m.get("shell")?)),
         name => unreachable!("`{name}` is in the command table but not dispatched"),
@@ -571,6 +601,7 @@ mod tests {
             "setup codex --undo",
             "usage 30d --by model",
             "notify",
+            "dashboard --print",
             "doctor",
             "completions fish",
         ];

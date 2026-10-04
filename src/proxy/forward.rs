@@ -801,7 +801,7 @@ fn recorded(
         }
         let millis = |at: Instant| at.duration_since(served.started).as_millis() as u64;
         let usage = outcome.usage;
-        pool_app.ledger.record(Entry {
+        let entry = Entry {
             at: Timestamp::now(),
             account: served.id,
             provider: served.provider,
@@ -814,7 +814,13 @@ fn recorded(
             ms: millis(Instant::now()),
             first_byte_ms: first_byte.map(millis),
             attempts: served.attempts,
-        });
+        };
+        if pool_app.events.receiver_count() > 0
+            && let Ok(line) = serde_json::to_vec(&entry)
+        {
+            let _ = pool_app.events.send(line.into());
+        }
+        pool_app.ledger.record(entry);
     });
     body::boxed(stream)
 }

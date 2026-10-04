@@ -23,6 +23,7 @@ pub mod proxy;
 pub mod report;
 pub mod route;
 pub mod service;
+pub mod summary;
 pub mod time;
 pub mod ui;
 pub mod usage;
