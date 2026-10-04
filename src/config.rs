@@ -28,6 +28,12 @@ pub struct Config {
     /// Whether the proxy refreshes OAuth tokens. Disable only while another
     /// tool owns the same refresh tokens.
     pub refresh_tokens: bool,
+    /// Redeem a ChatGPT reset credit shortly before it expires, if the
+    /// account has usage to reset; otherwise the credit lapses unused.
+    pub redeem_expiring_credits: bool,
+    /// When every Codex account is spent, redeem a banked reset credit
+    /// instead of failing the request.
+    pub redeem_when_exhausted: bool,
 }
 
 impl Default for Config {
@@ -39,6 +45,8 @@ impl Default for Config {
             session_ttl_mins: 60,
             poll_mins: 5,
             refresh_tokens: true,
+            redeem_expiring_credits: true,
+            redeem_when_exhausted: false,
         }
     }
 }

@@ -388,15 +388,24 @@ impl Pool {
         inner.dirty = true;
     }
 
-    /// Lifts every block on an account, e.g. after a manual reset.
-    pub fn clear_blocks(&self, id: &str) {
+    /// Records that an account's windows were just reset by a redeemed
+    /// credit: lifts every block and zeroes its usage until the next reading.
+    pub fn record_reset(&self, id: &str, now: Timestamp) {
         let mut inner = self.lock();
-        if let Some(state) = inner.states.get_mut(id) {
-            state.blocked_until = None;
-            state.model_blocks.clear();
-            state.throttled_until = None;
-            inner.dirty = true;
+        let state = inner.states.entry(id.to_owned()).or_default();
+        state.blocked_until = None;
+        state.model_blocks.clear();
+        state.throttled_until = None;
+        state.last_error = None;
+        for window in &mut state.limits.windows {
+            window.used = 0.0;
+            window.resets_at = None;
         }
+        state.limits.observed_at = Some(now);
+        if let Some(credits) = &mut state.limits.reset_credits {
+            *credits = credits.saturating_sub(1);
+        }
+        inner.dirty = true;
     }
 
     pub fn add_usage(&self, id: &str, usage: &Usage) {

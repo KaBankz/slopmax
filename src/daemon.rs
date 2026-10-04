@@ -8,9 +8,10 @@ use anyhow::{Context, Result};
 use jiff::{SignedDuration, Timestamp};
 use tokio::net::TcpListener;
 
-use crate::account::{Account, Store};
+use crate::account::{Account, Provider, Store};
 use crate::auth;
 use crate::config::Config;
+use crate::credits::{self, Outcome};
 use crate::pool::State;
 use crate::proxy::{App, router};
 use crate::upstream::Upstream;
@@ -18,6 +19,8 @@ use crate::{fsx, paths, usage};
 
 /// How often blocked accounts are re-checked, in case quota frees up early.
 const RECHECK_BLOCKED: SignedDuration = SignedDuration::from_mins(10);
+/// How close to expiry a reset credit is redeemed rather than lost.
+const CREDIT_EXPIRY_LEAD: SignedDuration = SignedDuration::from_hours(3);
 
 pub async fn run(config: Config) -> Result<()> {
     let listen = config.listen;
@@ -50,6 +53,15 @@ pub async fn run(config: Config) -> Result<()> {
             app.clone(),
             |app| async move {
                 refresh_all(&app).await;
+            },
+        ));
+    }
+    if app.config.redeem_expiring_credits {
+        tokio::spawn(every(
+            Duration::from_secs(1800),
+            app.clone(),
+            |app| async move {
+                redeem_expiring(&app).await;
             },
         ));
     }
@@ -178,6 +190,61 @@ pub async fn poll_all(app: &App, force: bool) {
             }
         }
     }
+}
+
+/// Redeems reset credits about to expire on accounts with usage to reset.
+/// A lapsed credit is simply lost, so spending it first is free quota.
+pub async fn redeem_expiring(app: &App) {
+    let now = Timestamp::now();
+    for account in app.pool.accounts() {
+        let state = app.pool.state(&account.id);
+        let used = state.limits.windows.iter().any(|w| w.used_at(now) > 0.0);
+        if account.provider != Provider::Codex
+            || account.disabled
+            || account.auth_error.is_some()
+            || state.limits.reset_credits.unwrap_or(0) == 0
+            || !used
+        {
+            continue;
+        }
+        let _redeeming = app.redeeming.lock().await;
+        let Some(account) = app.ready(&account).await else {
+            continue;
+        };
+        match redeem_if_expiring(app, &account, now).await {
+            Ok(Some(Outcome::Reset)) => {
+                tracing::info!("{}: redeemed a reset credit before it expired", account.id);
+                app.pool.record_reset(&account.id, Timestamp::now());
+            }
+            Ok(Some(outcome)) => {
+                tracing::info!(
+                    "{}: expiring reset credit not used ({outcome:?})",
+                    account.id
+                );
+            }
+            Ok(None) => {}
+            Err(e) => tracing::warn!("{}: checking reset credits: {e:#}", account.id),
+        }
+    }
+}
+
+/// Redeems the account's soonest-expiring credit if it lapses within
+/// [`CREDIT_EXPIRY_LEAD`].
+async fn redeem_if_expiring(
+    app: &App,
+    account: &Account,
+    now: Timestamp,
+) -> Result<Option<Outcome>> {
+    let credits = credits::list(&app.auth_http, &app.upstream, account).await?;
+    let expiring = credits.first().filter(|c| {
+        c.expires()
+            .is_some_and(|at| at.duration_since(now) <= CREDIT_EXPIRY_LEAD)
+    });
+    let Some(credit) = expiring else {
+        return Ok(None);
+    };
+    let outcome = credits::redeem(&app.auth_http, &app.upstream, account, Some(&credit.id)).await?;
+    Ok(Some(outcome))
 }
 
 /// A reading is due when it is stale, when a window has reset since it was

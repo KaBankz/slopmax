@@ -13,6 +13,7 @@ use crate::account::{Provider, Store};
 use crate::auth::import::{self, Source};
 use crate::auth::{self, LoginOptions};
 use crate::config::Config;
+use crate::credits::{self, Outcome};
 use crate::pool::{Pins, Pool, State};
 use crate::report::{self, Report};
 use crate::upstream::Upstream;
@@ -69,6 +70,13 @@ enum Command {
     Disable { account: String },
     /// Forget an account
     Remove { account: String },
+    /// Redeem a banked reset credit, resetting a ChatGPT account's limits
+    Redeem {
+        account: String,
+        /// Skip the confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
+    },
     /// Run the proxy in the foreground
     Serve,
     /// Start the proxy in the background
@@ -136,6 +144,7 @@ pub async fn run(cli: Cli) -> Result<i32> {
         Command::Enable { account } => set_disabled(&store, &account, false)?,
         Command::Disable { account } => set_disabled(&store, &account, true)?,
         Command::Remove { account } => remove(&store, &account)?,
+        Command::Redeem { account, yes } => redeem(&config, &store, &account, yes).await?,
         Command::Serve => daemon::run(config).await?,
         Command::Start => start(&config).await?,
         Command::Stop => stop(&config).await?,
@@ -376,6 +385,65 @@ fn remove(store: &Store, query: &str) -> Result<()> {
     }
     println!("Removed {}", ui::bold(account.name()));
     Ok(())
+}
+
+async fn redeem(config: &Config, store: &Store, query: &str, yes: bool) -> Result<()> {
+    let account = store.find(query)?;
+    if account.provider != Provider::Codex {
+        bail!(
+            "reset credits are a ChatGPT feature; {} is a {} account",
+            account.name(),
+            account.provider
+        );
+    }
+    let http = auth::http_client();
+    let account = if config.refresh_tokens {
+        auth::ensure_fresh(&http, store, &account, false).await?
+    } else {
+        account
+    };
+    let upstream = Upstream::default();
+    let credits = credits::list(&http, &upstream, &account).await?;
+    let Some(next) = credits.first() else {
+        println!("{} has no reset credits.", ui::bold(account.name()));
+        return Ok(());
+    };
+    let now = Timestamp::now();
+    let expiry = next
+        .expires()
+        .map(|at| format!("; the next expires in {}", ui::until(at, now)))
+        .unwrap_or_default();
+    let s = if credits.len() == 1 { "" } else { "s" };
+    println!(
+        "{} has {} reset credit{s}{expiry}.",
+        ui::bold(account.name()),
+        credits.len()
+    );
+    if !yes && !confirm("Reset its usage windows now?")? {
+        return Ok(());
+    }
+    match credits::redeem(&http, &upstream, &account, Some(&next.id)).await? {
+        Outcome::Reset => {
+            println!("Reset the usage windows on {}.", ui::bold(account.name()));
+            // Let a running proxy pick up the fresh windows right away.
+            Daemon::new(config).report(true).await;
+        }
+        Outcome::NothingToReset => println!("Nothing to reset right now; the credit was kept."),
+        Outcome::NoCredit => println!("No credit was available."),
+        Outcome::AlreadyRedeemed => println!("That credit was already redeemed."),
+    }
+    Ok(())
+}
+
+fn confirm(question: &str) -> Result<bool> {
+    print!("{question} [y/N] ");
+    std::io::stdout().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 async fn start(config: &Config) -> Result<()> {

@@ -19,10 +19,11 @@ use super::rawjson::{self, Seg};
 use super::sse::{Tap, Tapped};
 use super::{App, claude, codex, error, returnable};
 use crate::account::{Account, Provider};
-use crate::auth::{self, RefreshError};
+use crate::auth;
+use crate::credits::{self, Outcome};
 use crate::limits::{self, Refusal};
 use crate::pool::{Choice, DEFAULT_BLOCK, DEFAULT_THROTTLE, Pick, Unavailable};
-use crate::{ids, ui};
+use crate::ui;
 
 /// Largest request body accepted (images make Messages bodies big).
 const MAX_BODY: usize = 256 * 1024 * 1024;
@@ -138,6 +139,7 @@ pub(super) async fn forward(
     let inbound = Inbound::new(provider, target, parts, body);
     let mut tried: Vec<String> = Vec::new();
     let mut last: Option<Failure> = None;
+    let mut rescued = false;
     loop {
         let pick = Pick {
             provider,
@@ -147,7 +149,21 @@ pub(super) async fn forward(
         };
         let choice = match app.pool.pick(&pick, Timestamp::now()) {
             Ok(choice) => choice,
-            Err(unavailable) => return give_up(provider, unavailable, last),
+            Err(unavailable) => {
+                let spent = unavailable.until.is_some();
+                if spent
+                    && provider == Provider::Codex
+                    && app.config.redeem_when_exhausted
+                    && !rescued
+                {
+                    rescued = true;
+                    if let Some(id) = rescue(&app).await {
+                        tried.retain(|t| *t != id);
+                        continue;
+                    }
+                }
+                return give_up(provider, unavailable, last);
+            }
         };
         tried.push(choice.account.id.clone());
         match attempt(&app, &inbound, choice).await {
@@ -160,7 +176,7 @@ pub(super) async fn forward(
 async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice) -> Attempt {
     let id = choice.account.id.clone();
     let moved = choice.moved_from.is_some();
-    let Some(mut account) = ready(app, &choice.account).await else {
+    let Some(mut account) = app.ready(&choice.account).await else {
         return Attempt::Failed(None);
     };
     let mut stripped = moved;
@@ -263,43 +279,50 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice) -> Attempt {
     }
 }
 
-/// The account with current credentials, or `None` if it cannot be used.
-async fn ready(app: &App, picked: &Account) -> Option<Account> {
-    let mut account = app
-        .store
-        .get(&picked.id)
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| picked.clone());
-    if account.provider == Provider::Claude && account.device_id.is_none() {
-        let (store, id) = (app.store.clone(), account.id.clone());
-        let assigned = tokio::task::spawn_blocking(move || {
-            store.update(&id, |a| {
-                a.device_id.get_or_insert_with(ids::hex64);
-            })
+/// Redeems a banked reset credit on a spent Codex account. Returns the
+/// account that can serve again, if any.
+async fn rescue(app: &App) -> Option<String> {
+    let _redeeming = app.redeeming.lock().await;
+    let now = Timestamp::now();
+    let accounts: Vec<Account> = app
+        .pool
+        .accounts()
+        .into_iter()
+        .filter(|a| a.provider == Provider::Codex && !a.disabled && a.auth_error.is_none())
+        .collect();
+    // Another request may have redeemed while this one waited for the lock.
+    if let Some(free) = accounts
+        .iter()
+        .find(|a| !app.pool.state(&a.id).is_blocked(now))
+    {
+        return Some(free.id.clone());
+    }
+    let mut spent: Vec<(Account, Timestamp)> = accounts
+        .into_iter()
+        .filter_map(|a| {
+            let state = app.pool.state(&a.id);
+            let credits = state.limits.reset_credits.unwrap_or(0);
+            let until = state.blocked_until.max(state.limits.exhausted_until(now))?;
+            (credits > 0).then_some((a, until))
         })
-        .await;
-        match assigned {
-            Ok(Ok(updated)) => account = updated,
-            Ok(Err(e)) => tracing::warn!("{}: could not save device id: {e:#}", account.id),
-            Err(e) => tracing::warn!("{}: could not save device id: {e}", account.id),
+        .collect();
+    // Free the account that would otherwise stay blocked the longest.
+    spent.sort_by_key(|(_, until)| std::cmp::Reverse(*until));
+    for (picked, _) in spent {
+        let Some(account) = app.ready(&picked).await else {
+            continue;
+        };
+        match credits::redeem(&app.auth_http, &app.upstream, &account, None).await {
+            Ok(Outcome::Reset) => {
+                tracing::info!("{}: redeemed a reset credit", account.id);
+                app.pool.record_reset(&account.id, Timestamp::now());
+                return Some(account.id);
+            }
+            Ok(outcome) => tracing::info!("{}: reset credit not used ({outcome:?})", account.id),
+            Err(e) => tracing::warn!("{}: redeeming a reset credit: {e:#}", account.id),
         }
     }
-    if !app.config.refresh_tokens {
-        return Some(account);
-    }
-    match auth::ensure_fresh(&app.auth_http, &app.store, &account, false).await {
-        Ok(fresh) => Some(fresh),
-        Err(RefreshError::Transient(e)) if !account.tokens.is_expired(Timestamp::now()) => {
-            tracing::warn!("{}: refresh failed, using current token: {e:#}", account.id);
-            Some(account)
-        }
-        Err(e) => {
-            tracing::warn!("{}: {e}", account.id);
-            app.pool.record_error(&account.id, &e.to_string());
-            None
-        }
-    }
+    None
 }
 
 async fn send(

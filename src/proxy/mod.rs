@@ -23,12 +23,13 @@ use axum::routing::{any, get, post};
 use jiff::Timestamp;
 use serde_json::json;
 
-use crate::account::{Provider, Store};
+use crate::account::{Account, Provider, Store};
+use crate::auth::{self, RefreshError};
 use crate::config::Config;
 use crate::pool::{Pins, Pool, State as PoolState};
 use crate::report::{self, Report};
 use crate::upstream::Upstream;
-use crate::{fsx, paths};
+use crate::{fsx, ids, paths};
 
 /// Shared state for request handlers and background tasks.
 pub struct App {
@@ -42,6 +43,9 @@ pub struct App {
     pub auth_http: reqwest::Client,
     /// Signaled by `POST /slopmax/shutdown`.
     pub shutdown: tokio::sync::Notify,
+    /// Held while redeeming a reset credit, so concurrent requests that
+    /// all find the pool spent redeem one credit, not one each.
+    pub redeeming: tokio::sync::Mutex<()>,
 }
 
 impl App {
@@ -64,6 +68,7 @@ impl App {
             http,
             auth_http: crate::auth::http_client(),
             shutdown: tokio::sync::Notify::new(),
+            redeeming: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -74,6 +79,45 @@ impl App {
         let pins: Pins = fsx::read_json(&paths::pins_file())?.unwrap_or_default();
         self.pool.sync(accounts, pins);
         Ok(())
+    }
+
+    /// The account with current credentials, or `None` if it cannot be used.
+    pub async fn ready(&self, picked: &Account) -> Option<Account> {
+        let mut account = self
+            .store
+            .get(&picked.id)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| picked.clone());
+        if account.provider == Provider::Claude && account.device_id.is_none() {
+            let (store, id) = (self.store.clone(), account.id.clone());
+            let assigned = tokio::task::spawn_blocking(move || {
+                store.update(&id, |a| {
+                    a.device_id.get_or_insert_with(ids::hex64);
+                })
+            })
+            .await;
+            match assigned {
+                Ok(Ok(updated)) => account = updated,
+                Ok(Err(e)) => tracing::warn!("{}: could not save device id: {e:#}", account.id),
+                Err(e) => tracing::warn!("{}: could not save device id: {e}", account.id),
+            }
+        }
+        if !self.config.refresh_tokens {
+            return Some(account);
+        }
+        match auth::ensure_fresh(&self.auth_http, &self.store, &account, false).await {
+            Ok(fresh) => Some(fresh),
+            Err(RefreshError::Transient(e)) if !account.tokens.is_expired(Timestamp::now()) => {
+                tracing::warn!("{}: refresh failed, using current token: {e:#}", account.id);
+                Some(account)
+            }
+            Err(e) => {
+                tracing::warn!("{}: {e}", account.id);
+                self.pool.record_error(&account.id, &e.to_string());
+                None
+            }
+        }
     }
 
     pub fn report(&self) -> Report {

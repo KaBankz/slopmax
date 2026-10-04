@@ -1,7 +1,8 @@
 //! End-to-end tests: agent → slopmax → mock provider.
 //!
 //! The mock decides how to answer from the bearer token, so each account in
-//! the store can be made to succeed, hit its limit, or reject its token.
+//! the store can be made to succeed, hit its limit, or reject its token. It
+//! also serves ChatGPT's reset-credit endpoints.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -11,11 +12,12 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use jiff::{SignedDuration, Timestamp};
 use serde_json::{Value, json};
 use slopmax::account::{Account, Provider, Store, Tokens};
 use slopmax::config::{Config, Strategy};
+use slopmax::limits::{Limits, Window};
 use slopmax::pool::State as PoolState;
 use slopmax::proxy::{App, router};
 use slopmax::upstream::Upstream;
@@ -43,17 +45,29 @@ fn reset_in(secs: i64) -> i64 {
     (Timestamp::now() + SignedDuration::from_secs(secs)).as_second()
 }
 
+fn record(log: &Log, uri: &Uri, headers: &HeaderMap, body: Bytes) {
+    log.lock().unwrap().push(Seen {
+        path: uri.to_string(),
+        headers: headers.clone(),
+        body,
+    });
+}
+
+/// Whether a reset credit has been redeemed so far.
+fn redeemed(log: &Log) -> bool {
+    log.lock()
+        .unwrap()
+        .iter()
+        .any(|s| s.path.ends_with("/consume"))
+}
+
 async fn mock_claude(
     State(log): State<Log>,
     uri: Uri,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    log.lock().unwrap().push(Seen {
-        path: uri.to_string(),
-        headers: headers.clone(),
-        body,
-    });
+    record(&log, &uri, &headers, body);
     match headers["authorization"].to_str().unwrap() {
         "Bearer tok-limited" => (
             StatusCode::TOO_MANY_REQUESTS,
@@ -109,18 +123,17 @@ async fn mock_claude(
 }
 
 async fn mock_codex(State(log): State<Log>, uri: Uri, headers: HeaderMap, body: Bytes) -> Response {
-    log.lock().unwrap().push(Seen {
-        path: uri.to_string(),
-        headers: headers.clone(),
-        body,
-    });
-    match headers["authorization"].to_str().unwrap() {
-        "Bearer tok-limited" => (
+    record(&log, &uri, &headers, body);
+    let token = headers["authorization"].to_str().unwrap();
+    // `tok-credit` is spent until a reset credit is redeemed.
+    let spent = token == "Bearer tok-limited" || (token == "Bearer tok-credit" && !redeemed(&log));
+    match token {
+        _ if spent => (
             StatusCode::TOO_MANY_REQUESTS,
             json!({ "error": { "type": "usage_limit_reached", "message": "limit", "resets_at": reset_in(5400) } }).to_string(),
         )
             .into_response(),
-        "Bearer tok-ok" => (
+        "Bearer tok-ok" | "Bearer tok-credit" => (
             StatusCode::OK,
             [
                 ("content-type", "text/event-stream".to_owned()),
@@ -133,6 +146,32 @@ async fn mock_codex(State(log): State<Log>, uri: Uri, headers: HeaderMap, body: 
             .into_response(),
         _ => StatusCode::UNAUTHORIZED.into_response(),
     }
+}
+
+/// `tok-expiring` holds a credit that lapses within the hour; every other
+/// account's credits last for days.
+async fn mock_credits(State(log): State<Log>, uri: Uri, headers: HeaderMap) -> Response {
+    record(&log, &uri, &headers, Bytes::new());
+    let expires = |hours| (Timestamp::now() + SignedDuration::from_hours(hours)).to_string();
+    let mut credits =
+        vec![json!({ "id": "credit-later", "status": "available", "expires_at": expires(48) })];
+    if headers["authorization"] == "Bearer tok-expiring" {
+        credits
+            .push(json!({ "id": "credit-soon", "status": "available", "expires_at": expires(1) }));
+        credits
+            .push(json!({ "id": "credit-spent", "status": "redeemed", "expires_at": expires(0) }));
+    }
+    axum::Json(json!({ "credits": credits })).into_response()
+}
+
+async fn mock_consume(
+    State(log): State<Log>,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    record(&log, &uri, &headers, body);
+    axum::Json(json!({ "code": "reset" })).into_response()
 }
 
 struct Harness {
@@ -172,6 +211,14 @@ fn account(provider: Provider, name: &str, token: &str, added: i64) -> Account {
 
 /// Accounts are tried in the order given (fill-first by age).
 async fn harness(provider: Provider, tokens: &[&str]) -> Harness {
+    harness_with(provider, tokens, |_| {}).await
+}
+
+async fn harness_with(
+    provider: Provider,
+    tokens: &[&str],
+    configure: impl FnOnce(&mut Config),
+) -> Harness {
     slopmax::init();
     let dir = std::env::temp_dir().join(format!(
         "slopmax-it-{}-{}",
@@ -192,15 +239,18 @@ async fn harness(provider: Provider, tokens: &[&str]) -> Harness {
     let mock = Router::new()
         .route("/v1/messages", post(mock_claude))
         .route("/codex/responses", post(mock_codex))
+        .route("/wham/rate-limit-reset-credits", get(mock_credits))
+        .route("/wham/rate-limit-reset-credits/consume", post(mock_consume))
         .with_state(log.clone());
     let upstream_url = serve(mock).await;
 
-    let config = Config {
+    let mut config = Config {
         api_key: KEY.into(),
         strategy: Strategy::FillFirst,
         refresh_tokens: false,
         ..Config::default()
     };
+    configure(&mut config);
     let upstream = Upstream {
         anthropic: upstream_url.clone(),
         chatgpt: upstream_url,
@@ -230,6 +280,40 @@ fn claude_request(h: &Harness) -> reqwest::RequestBuilder {
         .header("x-claude-code-session-id", "sess-1")
         .header("content-type", "application/json")
         .body(CLAUDE_BODY)
+}
+
+fn codex_request(h: &Harness) -> reqwest::RequestBuilder {
+    reqwest::Client::new()
+        .post(format!("{}/codex/responses", h.proxy))
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("content-type", "application/json")
+        .body(r#"{"model":"gpt-6-sol","input":[],"stream":true}"#)
+}
+
+/// Records a weekly window at `used` percent and two banked reset credits.
+fn observe_usage(h: &Harness, id: &str, used: f64) {
+    let now = Timestamp::now();
+    let window = Window {
+        span: "7d".into(),
+        model: None,
+        used,
+        resets_at: Some(now + SignedDuration::from_hours(72)),
+    };
+    let limits = Limits {
+        windows: vec![window],
+        observed_at: Some(now),
+        reset_credits: Some(2),
+    };
+    h.app.pool.observe(id, limits, now);
+}
+
+fn paths(h: &Harness) -> Vec<String> {
+    h.log
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|s| s.path.clone())
+        .collect()
 }
 
 async fn eventually(check: impl Fn() -> bool) {
@@ -429,4 +513,80 @@ async fn revoked_tokens_move_to_the_next_account() {
     assert_eq!(seen.len(), 2);
     assert_eq!(seen[1].headers["authorization"], "Bearer tok-ok");
     assert!(h.app.pool.state(&h.ids[0]).blocked_until.is_some());
+}
+
+#[tokio::test]
+async fn spent_codex_pool_redeems_a_credit_when_allowed() {
+    let h = harness_with(Provider::Codex, &["tok-credit"], |config| {
+        config.redeem_when_exhausted = true;
+    })
+    .await;
+    observe_usage(&h, &h.ids[0], 90.0);
+    let response = codex_request(&h).send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    response.text().await.unwrap();
+
+    assert_eq!(
+        paths(&h),
+        [
+            "/codex/responses",
+            "/wham/rate-limit-reset-credits/consume",
+            "/codex/responses"
+        ]
+    );
+    let consume = h.log.lock().unwrap()[1].clone();
+    assert_eq!(consume.headers["authorization"], "Bearer tok-credit");
+    assert_eq!(consume.headers["chatgpt-account-id"], "acct-codex0");
+    let body: Value = serde_json::from_slice(&consume.body).unwrap();
+    assert!(body["redeem_request_id"].is_string());
+
+    let state = h.app.pool.state(&h.ids[0]);
+    assert_eq!(state.blocked_until, None);
+    assert_eq!(state.limits.reset_credits, Some(1));
+}
+
+#[tokio::test]
+async fn spent_codex_pool_keeps_its_credits_by_default() {
+    let h = harness(Provider::Codex, &["tok-credit"]).await;
+    observe_usage(&h, &h.ids[0], 90.0);
+    let response = codex_request(&h).send().await.unwrap();
+    assert_eq!(response.status(), 429);
+    assert_eq!(paths(&h), ["/codex/responses"]);
+    assert_eq!(h.app.pool.state(&h.ids[0]).limits.reset_credits, Some(2));
+}
+
+#[tokio::test]
+async fn credits_about_to_expire_are_redeemed_on_used_accounts() {
+    let h = harness(Provider::Codex, &["tok-expiring", "tok-later", "tok-idle"]).await;
+    for (id, used) in h.ids.iter().zip([30.0, 30.0, 0.0]) {
+        observe_usage(&h, id, used);
+    }
+    slopmax::daemon::redeem_expiring(&h.app).await;
+
+    let seen = h.log.lock().unwrap().clone();
+    let token = |s: &Seen| s.headers["authorization"].to_str().unwrap().to_owned();
+    let mut listed: Vec<String> = seen
+        .iter()
+        .filter(|s| s.path == "/wham/rate-limit-reset-credits")
+        .map(token)
+        .collect();
+    listed.sort();
+    assert_eq!(
+        listed,
+        ["Bearer tok-expiring", "Bearer tok-later"],
+        "an account with nothing to reset is left alone"
+    );
+    let consumed: Vec<&Seen> = seen
+        .iter()
+        .filter(|s| s.path.ends_with("/consume"))
+        .collect();
+    assert_eq!(consumed.len(), 1);
+    assert_eq!(token(consumed[0]), "Bearer tok-expiring");
+    let body: Value = serde_json::from_slice(&consumed[0].body).unwrap();
+    assert_eq!(body["credit_id"], "credit-soon");
+
+    let reset = h.app.pool.state(&h.ids[0]).limits;
+    assert_eq!(reset.reset_credits, Some(1));
+    assert_eq!(reset.windows[0].used, 0.0);
+    assert_eq!(h.app.pool.state(&h.ids[1]).limits.reset_credits, Some(2));
 }
