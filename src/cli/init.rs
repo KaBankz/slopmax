@@ -6,7 +6,8 @@ use std::io::{IsTerminal, Write};
 
 use anyhow::{Context, Result};
 
-use super::{Daemon, launch, login};
+use super::accounts::login;
+use super::background::{Daemon, launch};
 use crate::account::Store;
 use crate::agent::{self, AGENTS, Agent};
 use crate::auth::{LoginOptions, callback};

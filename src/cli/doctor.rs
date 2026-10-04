@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::Result;
 use serde_json::Value;
 
-use super::Daemon;
+use super::background::Daemon;
 use crate::account::{Account, Store};
 use crate::config::Config;
 use crate::net::Origins;
