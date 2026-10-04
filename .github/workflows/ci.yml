@@ -45,7 +45,7 @@ jobs:
       - name: Dependencies stay few
         run: |
           host=$(rustc -vV | sed -n 's/host: //p')
-          cargo tree --locked -e normal --target "$host" --prefix none | sed 's/ (\*)//' | sort -u > crates.txt
+          cargo tree --locked --color never -e normal --target "$host" --prefix none | sed 's/ (\*)//' | sort -u > crates.txt
           echo "$(wc -l < crates.txt) crates for $host"
           test "$(wc -l < crates.txt)" -le 70 || { cat crates.txt; exit 1; }
       - name: The binary stays small
