@@ -73,7 +73,7 @@ Other clients can use the proxy directly. `/claude/*` and `/codex/*` map to the 
 
 ### Accounts
 
-`slopmax login` runs the same OAuth flow as the official client: PKCE with a localhost callback, or a device code for Codex. Each account is a private JSON file in `~/.slopmax/accounts/`, named after a hash of the account's identity, so signing in again or re-importing updates the account instead of adding a copy. `slopmax import` reads Claude Code's `~/.claude/.credentials.json` (or the macOS keychain), Codex's `~/.codex/auth.json`, and CLIProxyAPI's `~/.cli-proxy-api/*.json`, keeping CLIProxyAPI's priorities and device ids.
+`slopmax login` runs the same OAuth flow as the official client: PKCE with a localhost callback, or a device code for Codex. Each account is a private JSON file in `~/.slopmax/accounts/`, named after a hash of the account's identity, so signing in again or re-importing updates the account instead of adding a copy. `slopmax import` reads Claude Code's `~/.claude/.credentials.json` (or the macOS keychain), Codex's `~/.codex/auth.json`, and CLIProxyAPI's `~/.cli-proxy-api/*.json`, keeping CLIProxyAPI's priorities.
 
 The proxy refreshes tokens ahead of expiry: an hour early for Claude, a day for Codex. Refreshes happen under a file lock, so the proxy and a CLI command never spend the same refresh token twice. When a provider rejects a refresh, the account is flagged for re-login and leaves the rotation.
 
@@ -89,7 +89,7 @@ When the provider refuses a request (a rejected 5-hour or weekly window, `usage_
 
 Each request is adapted to the account serving it:
 
-- **Claude.** The account's token replaces the slopmax key and the OAuth beta flag is added. The body's `metadata.user_id` gets the account's device and account ids, and the billing header checksum is recomputed. Everything else stays byte for byte as Claude Code sent it.
+- **Claude.** The account's token replaces the slopmax key, and the OAuth beta flag that subscription tokens require is added. Nothing else changes: the body, including Claude Code's billing header and `metadata.user_id`, reaches Anthropic byte for byte as Claude Code sent it.
 - **Codex.** The account's token and workspace id are set. Encrypted reasoning items and `previous_response_id` only work on the account that created them, so they are dropped when a session moves, along with Codex's sticky routing header.
 
 ### Resets

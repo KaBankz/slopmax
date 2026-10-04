@@ -3,13 +3,13 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use crate::time::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::account::{Account, Provider};
 use crate::config::Strategy;
 use crate::limits::Window;
 use crate::pool::{AccountState, Pins};
+use crate::time::Timestamp;
 use crate::ui;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,6 +1,5 @@
 //! Anthropic OAuth for Claude Pro/Max accounts (the Claude Code client).
 
-use crate::time::{SignedDuration, Timestamp};
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::Deserialize;
@@ -8,7 +7,7 @@ use serde_json::json;
 
 use super::{Grant, RefreshError, pkce::Pkce};
 use crate::account::{Account, Provider};
-use crate::ids;
+use crate::time::{SignedDuration, Timestamp};
 
 pub const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const AUTHORIZE_URL: &str = "https://claude.ai/oauth/authorize";
@@ -153,7 +152,6 @@ pub async fn exchange(http: &Client, code: &str, state: &str, pkce: &Pkce) -> Re
         account.org_id = o.uuid.clone();
         account.org_name = o.name.clone();
     }
-    account.device_id = Some(ids::hex64());
     match profile(http, &account.tokens.access_token).await {
         Ok(profile) => apply_profile(&mut account, &profile),
         Err(e) => tracing::warn!("profile lookup failed: {e:#}"),

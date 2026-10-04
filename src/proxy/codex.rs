@@ -49,6 +49,8 @@ pub fn upstream_headers(
     if moved {
         headers.remove("x-codex-turn-state");
     }
+    // Uncompressed streams can be read for usage and in-stream refusals.
+    insert(&mut headers, "accept-encoding", "identity");
     // Custom providers omit the `version` header the built-in one sends; the
     // backend gates some models on client version.
     if !headers.contains_key("version")

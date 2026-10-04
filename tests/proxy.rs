@@ -203,7 +203,6 @@ fn account(provider: Provider, name: &str, token: &str, added: i64) -> Account {
     account.email = Some(format!("{name}@example.com"));
     account.org_id = Some(format!("org-{name}"));
     account.account_id = Some(format!("acct-{name}"));
-    account.device_id = Some(format!("{name:0>64}"));
     account.added_at = Timestamp::from_second(added).unwrap();
     account.assign_id();
     account
@@ -278,6 +277,8 @@ fn claude_request(h: &Harness) -> reqwest::RequestBuilder {
             "claude-code-20250219,interleaved-thinking-2025-05-14",
         )
         .header("x-claude-code-session-id", "sess-1")
+        .header("user-agent", "claude-cli/2.1.287 (external, cli)")
+        .header("accept-encoding", "gzip, br")
         .header("content-type", "application/json")
         .body(CLAUDE_BODY)
 }
@@ -327,7 +328,7 @@ async fn eventually(check: impl Fn() -> bool) {
 }
 
 #[tokio::test]
-async fn claude_fails_over_and_rewrites_for_the_serving_account() {
+async fn claude_fails_over_and_forwards_the_request_unchanged() {
     let h = harness(Provider::Claude, &["tok-limited", "tok-ok"]).await;
     let response = claude_request(&h).send().await.unwrap();
     assert_eq!(response.status(), 200);
@@ -341,22 +342,21 @@ async fn claude_fails_over_and_rewrites_for_the_serving_account() {
     assert_eq!(seen.len(), 2, "limited account, then the next one");
     let served = &seen[1];
     assert_eq!(served.path, "/v1/messages?beta=true");
+    // Only the credential changes: the account's token and the OAuth beta
+    // flag it requires. Everything else arrives as Claude Code sent it.
     assert_eq!(served.headers["authorization"], "Bearer tok-ok");
     assert_eq!(
         served.headers["anthropic-beta"],
-        "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14"
+        "claude-code-20250219,interleaved-thinking-2025-05-14,oauth-2025-04-20"
     );
-    assert!(served.headers.contains_key("x-client-request-id"));
-    assert_eq!(served.headers["accept-encoding"], "identity");
-
-    let body: Value = serde_json::from_slice(&served.body).unwrap();
-    let user_id: Value =
-        serde_json::from_str(body["metadata"]["user_id"].as_str().unwrap()).unwrap();
-    assert_eq!(user_id["device_id"], format!("{:0>64}", "claude1"));
-    assert_eq!(user_id["account_uuid"], "acct-claude1");
-    assert_eq!(user_id["session_id"], "sess-1");
-    let billing = body["system"][0]["text"].as_str().unwrap();
-    assert!(billing.contains("cc_entrypoint=cli; cch="), "{billing}");
+    assert_eq!(
+        served.headers["user-agent"],
+        "claude-cli/2.1.287 (external, cli)"
+    );
+    assert_eq!(served.headers["accept-encoding"], "gzip, br");
+    assert_eq!(served.headers["x-claude-code-session-id"], "sess-1");
+    assert!(!served.headers.contains_key("x-client-request-id"));
+    assert_eq!(served.body, CLAUDE_BODY.as_bytes(), "body is byte-for-byte");
 
     // The limited account is blocked until its reset; the other is in use.
     let limited = h.app.pool.state(&h.ids[0]);

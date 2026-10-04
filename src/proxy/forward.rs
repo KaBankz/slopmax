@@ -7,7 +7,6 @@
 
 use std::sync::Arc;
 
-use crate::time::{SignedDuration, Timestamp};
 use axum::body::{Body, Bytes, to_bytes};
 use axum::extract::Request;
 use axum::http::request::Parts;
@@ -23,6 +22,7 @@ use crate::auth;
 use crate::credits::{self, Outcome};
 use crate::limits::{self, Refusal};
 use crate::pool::{Choice, DEFAULT_BLOCK, DEFAULT_THROTTLE, Pick, Unavailable};
+use crate::time::{SignedDuration, Timestamp};
 use crate::ui;
 
 /// Largest request body accepted (images make Messages bodies big).
@@ -68,19 +68,14 @@ impl Inbound {
         }
     }
 
-    /// The body to send with `account`.
-    fn body_for(&self, account: &Account, strip_state: bool) -> Bytes {
-        if !self.json {
-            return self.body.clone();
-        }
+    /// The body to send upstream. Only a Codex session that moved accounts
+    /// is edited, to drop state the new account cannot read.
+    fn body(&self, strip_state: bool) -> Bytes {
         match self.provider {
-            Provider::Claude => {
-                claude::prepare_body(&self.body, account, self.session.as_deref()).into()
-            }
-            Provider::Codex if strip_state => codex::strip_account_state(&self.body)
+            Provider::Codex if strip_state && self.json => codex::strip_account_state(&self.body)
                 .map(Bytes::from)
                 .unwrap_or_else(|| self.body.clone()),
-            Provider::Codex => self.body.clone(),
+            _ => self.body.clone(),
         }
     }
 }
@@ -181,7 +176,7 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice) -> Attempt {
     };
     let mut stripped = moved;
     let mut refreshed = false;
-    let mut body = inbound.body_for(&account, stripped);
+    let mut body = inbound.body(stripped);
     loop {
         let response = match send(app, inbound, &account, body.clone(), moved).await {
             Ok(response) => response,
@@ -221,7 +216,7 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice) -> Attempt {
                 match auth::ensure_fresh(&app.auth_http, &app.store, &account, true).await {
                     Ok(fresh) => {
                         account = fresh;
-                        body = inbound.body_for(&account, stripped);
+                        body = inbound.body(stripped);
                         continue;
                     }
                     Err(e) => {
@@ -232,7 +227,7 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice) -> Attempt {
             }
             (Provider::Codex, 400) if !stripped && codex::rejects_account_state(&failure.body) => {
                 stripped = true;
-                body = inbound.body_for(&account, stripped);
+                body = inbound.body(stripped);
                 continue;
             }
             (_, 401 | 403) => {
@@ -366,20 +361,25 @@ fn stream_back(
 ) -> Response {
     let status = response.status();
     let headers = returnable(response.headers());
+    // A compressed stream passes through unread; only the request counts.
+    let compressed = headers
+        .get("content-encoding")
+        .is_some_and(|v| v.as_bytes() != b"identity");
+    let tap = if compressed {
+        Tap::blind(provider)
+    } else {
+        Tap::new(provider)
+    };
     let pool_app = Arc::clone(app);
-    let stream = Tapped::new(
-        response.bytes_stream(),
-        Tap::new(provider),
-        move |outcome| {
-            pool_app.pool.add_usage(&id, &outcome.usage);
-            if outcome.exhausted {
-                let until = Timestamp::now() + DEFAULT_BLOCK;
-                pool_app
-                    .pool
-                    .block(&id, until, None, "usage limit reached mid-stream");
-            }
-        },
-    );
+    let stream = Tapped::new(response.bytes_stream(), tap, move |outcome| {
+        pool_app.pool.add_usage(&id, &outcome.usage);
+        if outcome.exhausted {
+            let until = Timestamp::now() + DEFAULT_BLOCK;
+            pool_app
+                .pool
+                .block(&id, until, None, "usage limit reached mid-stream");
+        }
+    });
     let mut out = Response::new(Body::from_stream(stream));
     *out.status_mut() = status;
     *out.headers_mut() = headers;

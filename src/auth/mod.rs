@@ -9,12 +9,12 @@ pub mod pkce;
 
 use std::time::Duration;
 
-use crate::time::Timestamp;
 use anyhow::{Result, anyhow};
 use reqwest::{Client, StatusCode};
 
 use crate::account::{Account, Provider, Store, Tokens};
 use crate::ids;
+use crate::time::Timestamp;
 use pkce::Pkce;
 
 /// Tokens returned by a code exchange or refresh.

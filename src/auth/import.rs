@@ -8,7 +8,6 @@
 use std::fs;
 use std::path::Path;
 
-use crate::time::Timestamp;
 use anyhow::{Context, Result, bail};
 use reqwest::Client;
 use serde::Deserialize;
@@ -16,7 +15,8 @@ use serde_json::Value;
 
 use super::{claude, codex};
 use crate::account::{Account, Provider, Tokens};
-use crate::{ids, paths};
+use crate::paths;
+use crate::time::Timestamp;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Source {
@@ -122,7 +122,6 @@ async fn from_claude_code(http: &Client, oauth: ClaudeCodeOauth) -> Result<Accou
         .await
         .context("could not read the Claude profile")?;
     claude::apply_profile(&mut account, &profile);
-    account.device_id = Some(ids::hex64());
     account.assign_id();
     Ok(account)
 }
@@ -174,8 +173,6 @@ struct CliProxyFile {
     account_uuid: Option<String>,
     organization_uuid: Option<String>,
     organization_name: Option<String>,
-    #[serde(default)]
-    claude_device_ids: Vec<String>,
     account_id: Option<String>,
     plan_type: Option<String>,
     label: Option<String>,
@@ -240,13 +237,11 @@ async fn from_cliproxy_file(
             account.account_id = file.account_uuid;
             account.org_id = file.organization_uuid;
             account.org_name = file.organization_name;
-            account.device_id = file.claude_device_ids.into_iter().next();
             if !account.tokens.is_expired(Timestamp::now())
                 && let Ok(profile) = claude::profile(http, &account.tokens.access_token).await
             {
                 claude::apply_profile(&mut account, &profile);
             }
-            account.device_id.get_or_insert_with(ids::hex64);
         }
         Provider::Codex => {
             account.account_id = file.account_id;
@@ -332,7 +327,6 @@ mod tests {
         assert_eq!(accounts.len(), 2);
         let claude = &accounts[0];
         assert_eq!(claude.org_id.as_deref(), Some("org-1"));
-        assert_eq!(claude.device_id.as_deref(), Some("abc"));
         assert_eq!(claude.priority, 3);
         let codex = &accounts[1];
         assert_eq!(codex.account_id.as_deref(), Some("ws-9"));

@@ -9,11 +9,11 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::time::{SignedDuration, Timestamp};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::time::{SignedDuration, Timestamp};
 use crate::{fsx, paths};
 
 #[derive(
@@ -111,10 +111,6 @@ pub struct Account {
     pub org_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub org_name: Option<String>,
-    /// Claude only: stable device id presented in `metadata.user_id`, so each
-    /// account looks like one consistent installation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub device_id: Option<String>,
     /// Excluded from routing, but its tokens are still kept fresh.
     #[serde(default)]
     pub disabled: bool,
@@ -140,7 +136,6 @@ impl Account {
             account_id: None,
             org_id: None,
             org_name: None,
-            device_id: None,
             disabled: false,
             priority: 0,
             auth_error: None,
@@ -184,7 +179,6 @@ impl Account {
     /// Keeps user settings from an older record of the same account.
     pub fn inherit_settings(&mut self, old: &Account) {
         self.label = self.label.take().or_else(|| old.label.clone());
-        self.device_id = self.device_id.take().or_else(|| old.device_id.clone());
         self.disabled = old.disabled;
         self.priority = old.priority;
         self.added_at = old.added_at;

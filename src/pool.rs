@@ -15,12 +15,12 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 
-use crate::time::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
 use crate::account::{Account, Provider};
 use crate::config::Strategy;
 use crate::limits::{Limits, UNKNOWN_SCORE};
+use crate::time::{SignedDuration, Timestamp};
 
 /// How long to sit out an account after a quota refusal without a reset time.
 pub const DEFAULT_BLOCK: SignedDuration = SignedDuration::from_mins(5);

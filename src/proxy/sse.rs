@@ -28,6 +28,8 @@ pub struct Outcome {
 #[derive(Debug)]
 pub struct Tap {
     provider: Provider,
+    /// Whether the bytes can be parsed (they are not compressed).
+    readable: bool,
     line: Vec<u8>,
     overflow: bool,
     outcome: Outcome,
@@ -37,13 +39,25 @@ impl Tap {
     pub fn new(provider: Provider) -> Self {
         Self {
             provider,
+            readable: true,
             line: Vec::new(),
             overflow: false,
             outcome: Outcome::default(),
         }
     }
 
+    /// A tap for a compressed stream: it only counts the request.
+    pub fn blind(provider: Provider) -> Self {
+        Self {
+            readable: false,
+            ..Self::new(provider)
+        }
+    }
+
     pub fn feed(&mut self, mut chunk: &[u8]) {
+        if !self.readable {
+            return;
+        }
         while let Some(newline) = chunk.iter().position(|b| *b == b'\n') {
             if !self.overflow {
                 self.line.extend_from_slice(&chunk[..newline]);
@@ -63,7 +77,9 @@ impl Tap {
 
     pub fn finish(mut self) -> Outcome {
         let line = std::mem::take(&mut self.line);
-        self.line(&line);
+        if self.readable {
+            self.line(&line);
+        }
         self.outcome.usage.requests = 1;
         self.outcome
     }

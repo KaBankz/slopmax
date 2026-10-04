@@ -4,7 +4,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::time::{SignedDuration, Timestamp};
 use anyhow::{Context, Result};
 use tokio::net::TcpListener;
 
@@ -14,6 +13,7 @@ use crate::config::Config;
 use crate::credits::{self, Outcome};
 use crate::pool::State;
 use crate::proxy::{App, router};
+use crate::time::{SignedDuration, Timestamp};
 use crate::upstream::Upstream;
 use crate::{fsx, paths, usage};
 

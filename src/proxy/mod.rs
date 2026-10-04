@@ -14,11 +14,10 @@ mod sse;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::time::Timestamp;
 use anyhow::Result;
 use axum::Router;
 use axum::extract::{Request, State};
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::http::{HeaderMap, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use serde_json::json;
@@ -29,8 +28,9 @@ use crate::config::Config;
 use crate::pool::{Pins, Pool, State as PoolState};
 use crate::report::{self, Report};
 use crate::time::SignedDuration;
+use crate::time::Timestamp;
 use crate::upstream::Upstream;
-use crate::{fsx, ids, paths};
+use crate::{fsx, paths};
 
 /// Shared state for request handlers and background tasks.
 pub struct App {
@@ -84,26 +84,12 @@ impl App {
 
     /// The account with current credentials, or `None` if it cannot be used.
     pub async fn ready(&self, picked: &Account) -> Option<Account> {
-        let mut account = self
+        let account = self
             .store
             .get(&picked.id)
             .ok()
             .flatten()
             .unwrap_or_else(|| picked.clone());
-        if account.provider == Provider::Claude && account.device_id.is_none() {
-            let (store, id) = (self.store.clone(), account.id.clone());
-            let assigned = tokio::task::spawn_blocking(move || {
-                store.update(&id, |a| {
-                    a.device_id.get_or_insert_with(ids::hex64);
-                })
-            })
-            .await;
-            match assigned {
-                Ok(Ok(updated)) => account = updated,
-                Ok(Err(e)) => tracing::warn!("{}: could not save device id: {e:#}", account.id),
-                Err(e) => tracing::warn!("{}: could not save device id: {e}", account.id),
-            }
-        }
         if !self.config.refresh_tokens {
             return Some(account);
         }
@@ -301,9 +287,8 @@ const HOP_BY_HOP: [&str; 9] = [
     "upgrade",
 ];
 
-/// Client headers safe to forward upstream: no hop-by-hop headers, no
-/// local credentials or cookies, and identity encoding so streams can be
-/// read as they pass through.
+/// Client headers safe to forward upstream: everything but hop-by-hop
+/// headers and the agent's local credentials and cookies.
 fn forwardable(client: &HeaderMap) -> HeaderMap {
     let mut headers = HeaderMap::with_capacity(client.len());
     for (name, value) in client {
@@ -311,21 +296,12 @@ fn forwardable(client: &HeaderMap) -> HeaderMap {
         let skip = HOP_BY_HOP.contains(&name_str)
             || matches!(
                 name_str,
-                "host"
-                    | "content-length"
-                    | "authorization"
-                    | "x-api-key"
-                    | "cookie"
-                    | "accept-encoding"
+                "host" | "content-length" | "authorization" | "x-api-key" | "cookie"
             );
         if !skip {
             headers.append(name.clone(), value.clone());
         }
     }
-    headers.insert(
-        header::ACCEPT_ENCODING,
-        HeaderValue::from_static("identity"),
-    );
     headers
 }
 
@@ -344,6 +320,7 @@ fn returnable(upstream: &HeaderMap) -> HeaderMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::HeaderValue;
 
     #[test]
     fn routes_prefixed_and_v1_paths() {
@@ -394,7 +371,7 @@ mod tests {
     }
 
     #[test]
-    fn forwardable_drops_credentials_and_hop_by_hop() {
+    fn forwardable_drops_only_credentials_and_hop_by_hop() {
         let mut client = HeaderMap::new();
         client.insert("authorization", HeaderValue::from_static("Bearer sm-key"));
         client.insert("connection", HeaderValue::from_static("keep-alive"));
@@ -403,7 +380,7 @@ mod tests {
         let out = forwardable(&client);
         assert!(!out.contains_key("authorization"));
         assert!(!out.contains_key("connection"));
-        assert_eq!(out["accept-encoding"], "identity");
+        assert_eq!(out["accept-encoding"], "gzip, br");
         assert_eq!(out["x-app"], "cli");
     }
 }

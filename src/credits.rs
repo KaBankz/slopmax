@@ -6,7 +6,6 @@
 //! `redeem_when_exhausted`, once every Codex account is spent, so the pool
 //! keeps serving instead of waiting.
 
-use crate::time::Timestamp;
 use anyhow::{Context, Result, bail};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -14,6 +13,7 @@ use serde_json::json;
 
 use crate::account::Account;
 use crate::ids;
+use crate::time::Timestamp;
 use crate::upstream::Upstream;
 
 #[derive(Debug, Clone, Deserialize)]

@@ -2,7 +2,6 @@
 
 use std::time::Duration;
 
-use crate::time::Timestamp;
 use anyhow::{Context, Result, bail};
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
@@ -10,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::{Grant, RefreshError, jwt, pkce::Pkce};
 use crate::account::{Account, Provider};
+use crate::time::Timestamp;
 
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const ISSUER: &str = "https://auth.openai.com";

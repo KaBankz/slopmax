@@ -5,10 +5,11 @@
 //! model of percentage windows with reset times, which drives routing and the
 //! status display. Refused requests are classified into a [`Refusal`].
 
-use crate::time::{SignedDuration, Timestamp};
 use http::HeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::time::{SignedDuration, Timestamp};
 
 /// A usage window, e.g. Claude's 5-hour session or ChatGPT's weekly limit.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

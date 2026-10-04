@@ -5,7 +5,6 @@ use std::io::Write as _;
 use std::process::Stdio;
 use std::time::Duration;
 
-use crate::time::{SignedDuration, Timestamp};
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 
@@ -16,6 +15,7 @@ use crate::config::Config;
 use crate::credits::{self, Outcome};
 use crate::pool::{Pins, Pool, State};
 use crate::report::{self, Report};
+use crate::time::{SignedDuration, Timestamp};
 use crate::upstream::Upstream;
 use crate::{agents, daemon, fsx, paths, ui, usage};
 

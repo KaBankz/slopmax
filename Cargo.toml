@@ -30,7 +30,6 @@ toml_edit = "0.25.15"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 url = "2.5.8"
-xxhash-rust = { version = "0.8.19", features = ["xxh64"] }
 
 [profile.release]
 lto = "fat"
