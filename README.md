@@ -6,7 +6,7 @@ Created in [T3 Code](https://t3.codes).
 
 slopmax pools your Claude and ChatGPT subscriptions behind one local proxy, so Claude Code and Codex keep working when an account runs out. Each session stays on one account until that account is spent, then moves to the next. New sessions go to the quota that resets soonest, so less of it goes unused.
 
-- One Rust binary of about 5 MB. No runtime, database, or browser extension.
+- One Rust binary under 6 MB. No runtime, database, or browser extension.
 - Signs in with each provider's own OAuth flow, or takes over logins from Claude Code, Codex, and CLIProxyAPI. A guided `slopmax init` does it all, and `slopmax doctor` says what to fix.
 - Tracks every account's 5-hour and weekly windows, from the usage APIs and from the headers on every response.
 - Fails over before the agent sees an error, and streams every response back as it arrives.

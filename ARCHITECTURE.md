@@ -34,14 +34,18 @@ src/
   route.rs      model → steps: providers, accounts, and model names to try, in order
   pool.rs       account health, session affinity, and placement strategies
   limits.rs     usage windows and refusals, shared by the provider parsers
-  proxy/        the HTTP handler, the forward loop, stream taps, translation streaming, model lists
+  proxy/        mod.rs (App, the handler, keys), forward.rs (the failover loop), sse.rs and
+                start.rs (stream taps and holds), transcode.rs (translated streams), socket.rs
+                (Codex's WebSockets), models.rs (/v1/models), admin.rs and dashboard.html
+                (/slopmax/*), warm.rs (window warmups), rawjson.rs (in-place JSON edits)
   wire/         formats: errors and usage per Dialect; ir.rs and one codec per format
   daemon.rs     the long-running proxy and its background tasks
-  ledger.rs     the usage ledger; pricing.rs prices it
+  ledger.rs     the usage ledger; summary.rs totals it; pricing.rs prices it
   notify.rs     webhook and command notifications from account changes
   report.rs     `slopmax status`; service.rs systemd and launchd; ui.rs terminal output
-  net/          hyper client (pooling, TLS, CONNECT and SOCKS5 proxies) and server
-  time.rs, log.rs, ids.rs, fsx.rs, paths.rs   small in-house replacements for crates
+  net/          hyper client (pooling, TLS, CONNECT and SOCKS5 proxies), server, ws.rs (RFC 6455)
+  paths.rs      Home: a slopmax directory and its files (the proxy carries its own)
+  time.rs, log.rs, ids.rs, fsx.rs   small in-house replacements for crates
 ```
 
 ## A request's path
@@ -234,7 +238,7 @@ State a format cannot carry back is kept by slopmax: the encrypted reasoning an 
 
 ## Dependencies
 
-The binary is about 5 MB, from about 60 crates. The async stack is tokio, hyper, and rustls (with ring). serde_json, toml_edit, base64, and anyhow round it out. Time, logging, the CLI parser, form encoding, and the HTTP client conveniences are small in-house modules, because the crates for them each pull in far more than slopmax uses. New dependencies need a reason that outweighs their size.
+The binary is under 6 MB, from about 60 crates. The async stack is tokio, hyper, and rustls (with ring). serde_json, toml_edit, base64, and anyhow round it out. Time, logging, the CLI parser, form encoding, and the HTTP client conveniences are small in-house modules, because the crates for them each pull in far more than slopmax uses. New dependencies need a reason that outweighs their size.
 
 ## Testing
 
