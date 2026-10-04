@@ -58,6 +58,25 @@ fn toml_string(s: &str) -> String {
     value(s).to_string().trim().to_owned()
 }
 
+/// Codex subcommands that run a model session. Each parses its own `-c`
+/// flags, and those replace (rather than merge with) root-level ones.
+const CODEX_SESSION_COMMANDS: [&str; 5] = ["exec", "e", "review", "resume", "fork"];
+
+/// The full Codex argument list: slopmax's overrides at the same level as
+/// any the user passes, so neither set drops the other.
+pub fn codex_argv(config: &Config, args: &[String]) -> Vec<String> {
+    let overrides = codex_args(config);
+    match args.split_first() {
+        Some((command, rest)) if CODEX_SESSION_COMMANDS.contains(&command.as_str()) => {
+            std::iter::once(command.clone())
+                .chain(overrides)
+                .chain(rest.iter().cloned())
+                .collect()
+        }
+        _ => overrides.into_iter().chain(args.iter().cloned()).collect(),
+    }
+}
+
 /// Launches the agent through the proxy and returns its exit status.
 pub fn run(agent: Provider, config: &Config, args: &[String]) -> Result<i32> {
     let mut command = match agent {
@@ -65,18 +84,18 @@ pub fn run(agent: Provider, config: &Config, args: &[String]) -> Result<i32> {
             let mut command = Command::new("claude");
             command
                 .envs(claude_env(config))
-                .env_remove("ANTHROPIC_API_KEY");
+                .env_remove("ANTHROPIC_API_KEY")
+                .args(args);
             command
         }
         Provider::Codex => {
             let mut command = Command::new("codex");
             command
                 .env(CODEX_KEY_ENV, &config.api_key)
-                .args(codex_args(config));
+                .args(codex_argv(config, args));
             command
         }
     };
-    command.args(args);
     let program = command.get_program().to_string_lossy().into_owned();
     #[cfg(unix)]
     {
@@ -325,6 +344,22 @@ mod tests {
         assert!(args.contains(r#"model_providers.slopmax.base_url="http://127.0.0.1:7567/codex""#));
         assert!(args.contains(r#"model_providers.slopmax.env_key="SLOPMAX_API_KEY""#));
         assert!(args.contains(r#"model_providers.slopmax.name="OpenAI""#));
+    }
+
+    #[test]
+    fn codex_overrides_sit_at_the_users_level() {
+        let strings = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // Session subcommands take the overrides after the subcommand, next
+        // to the user's own `-c` flags.
+        let argv = codex_argv(&config(), &strings(&["exec", "-c", "model=\"m\"", "hi"]));
+        assert_eq!(argv[0], "exec");
+        assert_eq!(argv[1], "-c");
+        assert!(argv[2].starts_with("model_provider="));
+        assert_eq!(&argv[argv.len() - 3..], ["-c", "model=\"m\"", "hi"]);
+        // The interactive TUI (optionally with a prompt) takes them at the root.
+        let argv = codex_argv(&config(), &strings(&["fix the bug"]));
+        assert_eq!(argv[0], "-c");
+        assert_eq!(argv.last().unwrap(), "fix the bug");
     }
 
     #[test]
