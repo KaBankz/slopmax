@@ -125,6 +125,37 @@ impl Provider for Codex {
     fn credits(&self) -> Option<&dyn ResetCredits> {
         Some(&credits::Credits)
     }
+
+    fn catalog<'a>(
+        &'a self,
+        http: &'a Client,
+        account: &'a Account,
+        version: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<String>>> {
+        Box::pin(catalog(http, account, version))
+    }
+}
+
+/// `GET /codex/models`: the models the account's plan offers Codex.
+async fn catalog(http: &Client, account: &Account, version: &str) -> Result<Vec<String>> {
+    let request = http
+        .get(format!("{BACKEND}/codex/models?client_version={version}"))
+        .bearer_auth(&account.tokens.access_token);
+    let request = match &account.account_id {
+        Some(id) => request.header("chatgpt-account-id", id),
+        None => request,
+    };
+    let body: serde_json::Value = request.send().await?.error_for_status()?.json().await?;
+    let models = body
+        .get("models")
+        .and_then(|m| m.as_array())
+        .into_iter()
+        .flatten()
+        .filter(|m| m.get("visibility").and_then(|v| v.as_str()) != Some("hide"))
+        .filter_map(|m| m.get("slug").and_then(|s| s.as_str()))
+        .map(str::to_owned)
+        .collect();
+    Ok(models)
 }
 
 /// `GET /wham/usage`, which also reports the plan and banked reset credits.

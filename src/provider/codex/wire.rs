@@ -41,7 +41,7 @@ pub fn upstream_headers(
 }
 
 /// `0.159.3` from a user agent like `codex_exec/0.159.3 (Linux; x86_64) …`.
-fn client_version(headers: &HeaderMap) -> Option<String> {
+pub fn client_version(headers: &HeaderMap) -> Option<String> {
     let agent = headers.get("user-agent")?.to_str().ok()?;
     let (product, rest) = agent.split_once('/')?;
     if !product.starts_with("codex") {

@@ -95,6 +95,26 @@ async fn mock(log: Log, request: Request) -> Response {
             keyed(headers, "Bearer key-xai", chat_answer())
         }
         (Method::POST, "/local/v1/chat/completions") => chat_answer(),
+        (Method::GET, "/xai/v1/models") => {
+            let list =
+                json!({"object": "list", "data": [{"id": "grok-4"}, {"id": "grok-code-fast-1"}]});
+            keyed(
+                headers,
+                "Bearer key-xai",
+                reply(StatusCode::OK, &[], list.to_string()),
+            )
+        }
+        (Method::GET, "/codex/models") => {
+            let catalog = json!({"models": [
+                {"slug": "gpt-6-sol", "visibility": "list"},
+                {"slug": "gpt-internal", "visibility": "hide"}
+            ]});
+            keyed(
+                headers,
+                "Bearer tok-ok",
+                reply(StatusCode::OK, &[], catalog.to_string()),
+            )
+        }
         (Method::POST, "/openai/v1/responses") => {
             let answer = reply(
                 StatusCode::OK,
@@ -1100,4 +1120,64 @@ async fn translated_failures_reach_the_client_in_its_format() {
     assert_eq!(response.status(), StatusCode::OK);
     let count: Value = response.json().await.unwrap();
     assert!(count["input_tokens"].as_u64().unwrap() > 0);
+}
+
+#[tokio::test]
+async fn openai_clients_list_every_model_they_can_use() {
+    let h = harness_of(
+        |base| {
+            vec![
+                account(ProviderId::Claude, "max", "tok-ok", 1000),
+                account(ProviderId::Codex, "chatgpt", "tok-ok", 1001),
+                key(ProviderId::Xai, "key-xai"),
+                endpoint(base, "local", Dialect::Chat, &["qwen3-*", "llama4"], ""),
+            ]
+        },
+        |config| {
+            config
+                .aliases
+                .insert("fast".into(), "gpt-6-sol-mini".into());
+        },
+    )
+    .await;
+    let list = || {
+        client()
+            .get(format!("{}/v1/models", h.proxy))
+            .header("authorization", format!("Bearer {KEY}"))
+    };
+    let response = list().send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = response.json().await.unwrap();
+    let ids: Vec<&str> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        ["fast", "gpt-6-sol", "grok-4", "grok-code-fast-1", "llama4"]
+    );
+    assert_eq!(body["data"][1]["owned_by"], "codex");
+    assert!(
+        paths(&h)
+            .iter()
+            .any(|p| p.starts_with("/codex/models?client_version="))
+    );
+
+    // Lists are reused for a while.
+    let before = paths(&h).len();
+    list().send().await.unwrap();
+    assert_eq!(paths(&h).len(), before);
+
+    // Claude Code still gets Anthropic's own list.
+    client()
+        .get(format!("{}/v1/models?limit=1000", h.proxy))
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("anthropic-version", "2023-06-01")
+        .header("user-agent", "claude-cli/2.1.287 (external, cli)")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(paths(&h).last().unwrap(), "/v1/models?limit=1000");
 }

@@ -89,6 +89,23 @@ impl Provider for Compat {
             .map_or(&[], |e| std::slice::from_ref(&e.dialect))
     }
 
+    fn catalog<'a>(
+        &'a self,
+        _http: &'a Client,
+        account: &'a Account,
+        _version: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<String>>> {
+        // Named models; patterns cannot be listed.
+        let models = account
+            .endpoint
+            .iter()
+            .flat_map(|e| &e.models)
+            .filter(|m| !m.contains('*'))
+            .cloned()
+            .collect();
+        Box::pin(std::future::ready(Ok(models)))
+    }
+
     fn serves(&self, account: &Account, model: &str) -> bool {
         account
             .endpoint

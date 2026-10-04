@@ -6,6 +6,7 @@
 //! that account's credentials.
 
 mod forward;
+mod models;
 pub mod rawjson;
 mod sse;
 mod start;
@@ -52,6 +53,11 @@ pub struct App {
     pub ledger: Ledger,
     /// Reasoning state kept between turns of translated conversations.
     replay: std::sync::Mutex<transcode::Replay>,
+    /// Each account's model list, and when it was read.
+    catalogs:
+        std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, Vec<String>)>>,
+    /// The newest Codex release seen in requests.
+    codex_version: std::sync::Mutex<Option<String>>,
 }
 
 impl App {
@@ -83,6 +89,8 @@ impl App {
             redeeming: tokio::sync::Mutex::new(()),
             ledger,
             replay: Default::default(),
+            catalogs: Default::default(),
+            codex_version: Default::default(),
         })
     }
 
@@ -156,6 +164,14 @@ pub async fn handle(app: Arc<App>, request: Request) -> Response {
             }
             false => unauthorized(None),
         },
+        (&Method::GET, "/v1/models")
+            if models::wants_list(request.headers(), request.uri().query().unwrap_or("")) =>
+        {
+            match authorized(&app.config, request.headers()) {
+                true => models::list(&app).await,
+                false => unauthorized(Some(Dialect::Chat)),
+            }
+        }
         (&Method::POST, "/slopmax/shutdown") => match authorized(&app.config, request.headers()) {
             true => {
                 app.shutdown.notify_one();
@@ -183,6 +199,9 @@ async fn proxy(app: Arc<App>, request: Request) -> Response {
     let dialect = target.dialect;
     if !authorized(&app.config, request.headers()) {
         return unauthorized(Some(dialect));
+    }
+    if let Some(version) = crate::provider::codex::wire::client_version(request.headers()) {
+        *app.codex_version.lock().unwrap_or_else(|p| p.into_inner()) = Some(version);
     }
     // Upgrades cannot be relayed. Refusing the handshake with 426 makes
     // Codex switch to HTTP streaming at once instead of retrying.

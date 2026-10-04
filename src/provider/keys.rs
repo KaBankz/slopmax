@@ -135,6 +135,19 @@ impl Provider for KeyProvider {
         with_key(client, header, &account.tokens.access_token)
     }
 
+    fn catalog<'a>(
+        &'a self,
+        http: &'a Client,
+        account: &'a Account,
+        _version: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<String>>> {
+        Box::pin(async move {
+            let header = KeyHeader::for_dialect(self.spec.dialects[0]);
+            let listed = check(http, self.models_url, header, &account.tokens.access_token).await?;
+            Ok(listed.unwrap_or_default())
+        })
+    }
+
     fn verdict(
         &self,
         status: StatusCode,

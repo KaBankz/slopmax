@@ -339,6 +339,17 @@ pub trait Provider: Send + Sync {
     fn credits(&self) -> Option<&dyn ResetCredits> {
         None
     }
+
+    /// The models the account offers, for model lists. `version` is the
+    /// newest Codex release slopmax has seen, which ChatGPT's catalog wants.
+    fn catalog<'a>(
+        &'a self,
+        _http: &'a Client,
+        _account: &'a Account,
+        _version: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<String>>> {
+        Box::pin(std::future::ready(Ok(Vec::new())))
+    }
 }
 
 #[cfg(test)]
