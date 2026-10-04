@@ -22,10 +22,12 @@ pub fn limit_reached(message: &str, until: Timestamp) -> (Value, Vec<(&'static s
     (error("rate_limit_error", message), headers)
 }
 
-/// `message_start` and `message_delta` carry usage; an `error` event of
-/// type `rate_limit_error` means the quota ran out mid-stream.
+/// `message_start` and `message_delta` carry usage (as does a whole
+/// `message` from a non-streaming request); an `error` event of type
+/// `rate_limit_error` means the quota ran out mid-stream.
 pub fn observe(event: &Value, outcome: &mut Outcome) {
     let usage = match event.get("type").and_then(Value::as_str) {
+        Some("message") => event.get("usage"),
         Some("message_start") => event.pointer("/message/usage"),
         Some("message_delta") => event.get("usage"),
         Some("error") => {

@@ -8,6 +8,7 @@ use std::pin::Pin;
 use std::task::{Context, Poll, ready};
 
 use bytes::Bytes;
+use http::HeaderMap;
 use hyper::body::{Body, Frame, SizeHint};
 use serde_json::Value;
 
@@ -16,38 +17,67 @@ use crate::wire::{Dialect, Outcome};
 /// Longest line the tap will buffer; longer lines pass through unparsed.
 const MAX_LINE: usize = 16 * 1024 * 1024;
 
+/// How a response body is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shape {
+    /// Server-sent events, read line by line.
+    Events,
+    /// One JSON document, read whole at the end.
+    Json,
+    /// Compressed: passed through unread; only the request counts.
+    Opaque,
+}
+
 #[derive(Debug)]
 pub struct Tap {
     dialect: Dialect,
-    /// Whether the bytes can be parsed (they are not compressed).
-    readable: bool,
+    shape: Shape,
     line: Vec<u8>,
     overflow: bool,
     outcome: Outcome,
 }
 
 impl Tap {
+    /// A tap for an event stream.
     pub fn new(dialect: Dialect) -> Self {
         Self {
             dialect,
-            readable: true,
+            shape: Shape::Events,
             line: Vec::new(),
             overflow: false,
             outcome: Outcome::default(),
         }
     }
 
-    /// A tap for a compressed stream: it only counts the request.
-    pub fn blind(dialect: Dialect) -> Self {
+    /// A tap shaped by the response headers: compressed bodies pass through
+    /// unread, JSON bodies are read whole, anything else as events.
+    pub fn for_response(dialect: Dialect, headers: &HeaderMap) -> Self {
+        let header = |name| headers.get(name).and_then(|v| v.to_str().ok());
+        let shape = if header("content-encoding").is_some_and(|v| v != "identity") {
+            Shape::Opaque
+        } else if header("content-type").is_some_and(|v| v.contains("json")) {
+            Shape::Json
+        } else {
+            Shape::Events
+        };
         Self {
-            readable: false,
+            shape,
             ..Self::new(dialect)
         }
     }
 
     pub fn feed(&mut self, mut chunk: &[u8]) {
-        if !self.readable {
-            return;
+        match self.shape {
+            Shape::Opaque => return,
+            Shape::Json => {
+                if self.line.len() + chunk.len() > MAX_LINE {
+                    self.overflow = true;
+                } else if !self.overflow {
+                    self.line.extend_from_slice(chunk);
+                }
+                return;
+            }
+            Shape::Events => {}
         }
         while let Some(newline) = chunk.iter().position(|b| *b == b'\n') {
             if !self.overflow {
@@ -68,8 +98,14 @@ impl Tap {
 
     pub fn finish(mut self) -> Outcome {
         let line = std::mem::take(&mut self.line);
-        if self.readable {
-            self.line(&line);
+        match self.shape {
+            Shape::Events => self.line(&line),
+            Shape::Json if !self.overflow => {
+                if let Ok(body) = serde_json::from_slice::<Value>(&line) {
+                    self.dialect.observe(&body, &mut self.outcome);
+                }
+            }
+            Shape::Json | Shape::Opaque => {}
         }
         self.outcome.usage.requests = 1;
         self.outcome
@@ -223,6 +259,41 @@ mod tests {
             ),
             (75, 25, 40)
         );
+    }
+
+    #[test]
+    fn whole_json_responses_report_usage() {
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", "application/json".parse().unwrap());
+        let mut tap = Tap::for_response(Dialect::Messages, &headers);
+        tap.feed(br#"{"type":"message","content":[],"usage":{"input_tokens":12,"#);
+        tap.feed(br#""output_tokens":3,"cache_read_input_tokens":40}}"#);
+        let usage = tap.finish().usage;
+        assert_eq!(
+            (
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cache_read_tokens
+            ),
+            (12, 3, 40)
+        );
+
+        let mut tap = Tap::for_response(Dialect::Responses, &headers);
+        tap.feed(br#"{"object":"response","usage":{"input_tokens":50,"input_tokens_details":{"cached_tokens":20},"output_tokens":5}}"#);
+        let usage = tap.finish().usage;
+        assert_eq!(
+            (
+                usage.input_tokens,
+                usage.cache_read_tokens,
+                usage.output_tokens
+            ),
+            (30, 20, 5)
+        );
+
+        headers.insert("content-encoding", "gzip".parse().unwrap());
+        let mut tap = Tap::for_response(Dialect::Messages, &headers);
+        tap.feed(b"\x1f\x8b");
+        assert_eq!(tap.finish().usage.requests, 1);
     }
 
     #[test]

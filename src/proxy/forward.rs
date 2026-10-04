@@ -369,16 +369,8 @@ fn stream_back(
     headers: &HeaderMap,
     body: Body,
 ) -> Response {
+    let tap = Tap::for_response(dialect, headers);
     let headers = returnable(headers);
-    // A compressed stream passes through unread; only the request counts.
-    let compressed = headers
-        .get("content-encoding")
-        .is_some_and(|v| v.as_bytes() != b"identity");
-    let tap = if compressed {
-        Tap::blind(dialect)
-    } else {
-        Tap::new(dialect)
-    };
     let pool_app = Arc::clone(app);
     let stream = Tapped::new(body, tap, move |outcome| {
         pool_app.pool.add_usage(&id, &outcome.usage);

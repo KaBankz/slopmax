@@ -44,6 +44,16 @@ pub fn opening(event: &Value) -> Opening {
     }
 }
 
+fn count(usage: &Value, outcome: &mut Outcome) {
+    let number = |path: &str| usage.pointer(path).and_then(Value::as_u64).unwrap_or(0);
+    let cached = number("/input_tokens_details/cached_tokens");
+    let total = &mut outcome.usage;
+    // Cached tokens are counted inside input_tokens.
+    total.input_tokens = number("/input_tokens").saturating_sub(cached);
+    total.cache_read_tokens = cached;
+    total.output_tokens = number("/output_tokens");
+}
+
 fn failure_code(event: &Value) -> Option<&str> {
     let error = event
         .pointer("/response/error")
@@ -54,21 +64,21 @@ fn failure_code(event: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-/// The final `response.*` event carries usage; a failure coded
+/// The final `response.*` event carries usage (as does a whole `response`
+/// object from a non-streaming request); a failure coded
 /// `usage_limit_reached` means the quota ran out mid-stream.
 pub fn observe(event: &Value, outcome: &mut Outcome) {
+    if event.get("object").and_then(Value::as_str) == Some("response") {
+        if let Some(usage) = event.get("usage") {
+            count(usage, outcome);
+        }
+        return;
+    }
     match event.get("type").and_then(Value::as_str) {
         Some("response.completed" | "response.incomplete" | "response.done") => {
-            let Some(usage) = event.pointer("/response/usage") else {
-                return;
-            };
-            let number = |path: &str| usage.pointer(path).and_then(Value::as_u64).unwrap_or(0);
-            let cached = number("/input_tokens_details/cached_tokens");
-            let total = &mut outcome.usage;
-            // Cached tokens are counted inside input_tokens.
-            total.input_tokens = number("/input_tokens").saturating_sub(cached);
-            total.cache_read_tokens = cached;
-            total.output_tokens = number("/output_tokens");
+            if let Some(usage) = event.pointer("/response/usage") {
+                count(usage, outcome);
+            }
         }
         Some("response.failed" | "error") => {
             outcome.exhausted |= matches!(
