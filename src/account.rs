@@ -121,6 +121,9 @@ pub struct Account {
     /// Higher priorities are preferred; ties fall back to the strategy.
     #[serde(default)]
     pub priority: i32,
+    /// Set when the refresh token is rejected; cleared by a new login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_error: Option<String>,
     pub tokens: Tokens,
     pub added_at: Timestamp,
 }
@@ -140,6 +143,7 @@ impl Account {
             device_id: None,
             disabled: false,
             priority: 0,
+            auth_error: None,
             tokens,
             added_at: Timestamp::now(),
         };
