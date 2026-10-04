@@ -10,8 +10,7 @@ slopmax pools your Claude and ChatGPT subscriptions behind one local proxy, so C
 - Signs in with each provider's own OAuth flow, or takes over logins from Claude Code, Codex, and CLIProxyAPI. A guided `slopmax init` does it all, and `slopmax doctor` says what to fix.
 - Tracks every account's 5-hour and weekly windows, from the usage APIs and from the headers on every response.
 - Fails over before the agent sees an error, and streams every response back as it arrives.
-- Routes by model to API keys (Anthropic, OpenAI, xAI) and to any OpenAI- or Anthropic-compatible endpoint, with aliases and fallbacks.
-- Translates between API formats, so Claude Code can run GPT models on your ChatGPT accounts and any OpenAI client can use them.
+- Forwards Claude Code's requests unchanged except for the credential.
 - Records every request, with `slopmax usage` totals and what they would have cost on the API, and notifies you when accounts need attention.
 
 ## Install
@@ -97,66 +96,7 @@ Each window shows how much is used and when it resets. Limits scoped to one mode
 
 Any other client can use the proxy as an OpenAI- or Anthropic-style API at `http://127.0.0.1:7567/v1`, authenticating with `api_key` from the config as a bearer token or `x-api-key`: `/v1/chat/completions`, `/v1/responses`, `/v1/messages`, and `/v1/models`.
 
-## Accounts
-
-Each account is a private JSON file in `~/.slopmax/accounts/`, named after a hash of the account's identity, so signing in again or re-importing updates the account instead of adding a copy.
-
-- **Subscriptions.** `slopmax login claude` and `slopmax login codex` run the same OAuth flow as the official clients: PKCE with a localhost callback, a pasted redirect URL on a machine without a browser, or a device code for Codex. The proxy refreshes tokens ahead of expiry (an hour early for Claude, a day for Codex) under a file lock, so no two processes spend the same refresh token. When a provider rejects a refresh, the account is flagged for re-login and leaves the rotation.
-- **API keys.** `slopmax login anthropic`, `openai`, or `xai` asks for the key at a hidden prompt, or reads it from stdin (`slopmax login xai < key.txt`), so it never lands in your shell history. It is checked against the provider's model list before it is saved.
-- **Compatible endpoints.** `slopmax login compat --url http://localhost:11434/v1` adds any API that speaks OpenAI Chat Completions (the default), Responses (`--dialect responses`), or Anthropic Messages (`--dialect messages`). Its models are read from the endpoint, or named with `--models 'qwen3-*,llama4'`.
-- **Imports.** `slopmax import` reads Claude Code's `~/.claude/.credentials.json` (or the macOS keychain), Codex's `~/.codex/auth.json`, and CLIProxyAPI's `~/.cli-proxy-api/*.json`. An imported login shares its refresh token with the tool it came from, and refresh tokens rotate on use, so whichever refreshes first signs the other out. Logins from CLIProxyAPI are therefore *linked*: slopmax follows the file CLIProxyAPI keeps refreshing and never refreshes them itself, so both can run while you switch over. Once CLIProxyAPI is stopped, `slopmax own all` hands refreshing to slopmax.
-
-## Routing
-
-A request's model picks who serves it: every provider with an account that serves the model, subscriptions first. Claude models go to Claude accounts, GPT models to ChatGPT accounts, `grok-*` to xAI keys, and a compatible endpoint's models to it.
-
-- **Paid overflow.** API keys that cover a subscription's models (an OpenAI key behind ChatGPT, an Anthropic key behind Claude) serve those models only when asked for by name, or when you have no such subscription. With `paid_overflow = true` they also take over once every subscription account is limited.
-- **Selectors.** A model name can pick a provider or one account: `openai/gpt-6-sol`, `work/gpt-6-sol`.
-- **Aliases and fallbacks.** In the config, `[aliases]` renames models and `[fallbacks]` lists models to try once one is limited everywhere:
-
-  ```toml
-  [aliases]
-  fast = "gpt-6-sol-mini"
-
-  [fallbacks]
-  "claude-opus-5-5" = ["gpt-6-sol"]     # Claude Code carries on with GPT
-  "gpt-6-sol" = ["openai/gpt-6-sol"]    # then on the API key
-  ```
-
-Claude subscriptions and Anthropic keys serve Claude Code only: Anthropic allows subscription logins in Claude Code alone, and slopmax applies the same rule to keys. A Claude model requested by any other client is refused with an explanation.
-
-## Translation
-
-When the account a request is routed to speaks another API format, slopmax translates the request and translates the answer back as it streams. Requests in a format the account speaks are forwarded as the client sent them.
-
-| Client                                 | Upstream                                    | For example                                                 |
-| -------------------------------------- | ------------------------------------------- | ----------------------------------------------------------- |
-| Claude Code (Messages)                 | ChatGPT, OpenAI, xAI, compatible endpoints  | `slopmax run claude --model gpt-6-sol`                      |
-| OpenAI clients (Chat Completions)      | ChatGPT accounts                            | Cursor, Open WebUI, scripts using the OpenAI SDK            |
-| Codex (Responses)                      | xAI and Chat-only endpoints                 | `slopmax run codex -m grok-4`                               |
-
-Nothing is ever translated into Anthropic's format: Claude models only ever see requests Claude Code wrote.
-
-Running Claude Code on GPT:
-
-```sh
-slopmax run claude --model gpt-6-sol
-```
-
-or `/model gpt-6-sol` in a running session. Claude Code does not know GPT's context window and assumes 200k tokens; set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to the model's real window to use all of it. Background tasks still use your Claude accounts' small model unless you set `ANTHROPIC_DEFAULT_HAIKU_MODEL` too.
-
-What crosses: text, images, documents, tool definitions and calls, tool results, the requested reasoning effort, structured output schemas, and token usage. What does not:
-
-- The model's reasoning is not shown in Claude Code. Claude Code would send it back to Anthropic, which rejects thinking it did not sign. slopmax keeps the upstream's encrypted reasoning itself and restores it on the next turn, for the same account only.
-- Anthropic's server tools (web search, code execution) run only on Anthropic and are left out.
-- Token counts for translated models are estimates.
-- Codex compacts long conversations remotely. A model reached by translation cannot, so slopmax asks it for a summary instead and hands that to Codex as the compacted history.
-
 ## How it works
-
-### Usage
-
-Every response carries rate-limit headers (`anthropic-ratelimit-unified-*`, `x-codex-*`), and slopmax updates the serving account's windows from them as requests flow. The proxy also polls each subscription's usage endpoint every `poll_mins` minutes and right after a window resets. While an account is blocked it polls every 10 minutes, because quota often comes back before the stated reset.
 
 ### Switching
 
@@ -184,6 +124,19 @@ ChatGPT accounts can hold reset credits, which reset an account's windows on the
 - in the last three hours before one would expire unused, if the account has usage to reset (`redeem_expiring_credits`, on by default);
 - when every Codex account is spent, then retries the request on the reset account (`redeem_when_exhausted`, off by default).
 
+### Usage
+
+Every response carries rate-limit headers (`anthropic-ratelimit-unified-*`, `x-codex-*`), and slopmax updates the serving account's windows from them as requests flow. The proxy also polls each subscription's usage endpoint every `poll_mins` minutes and right after a window resets. While an account is blocked it polls every 10 minutes, because quota often comes back before the stated reset.
+
+## Accounts
+
+Each account is a private JSON file in `~/.slopmax/accounts/`, named after a hash of the account's identity, so signing in again or re-importing updates the account instead of adding a copy.
+
+- **Subscriptions.** `slopmax login claude` and `slopmax login codex` run the same OAuth flow as the official clients: PKCE with a localhost callback, a pasted redirect URL on a machine without a browser, or a device code for Codex. The proxy refreshes tokens ahead of expiry (an hour early for Claude, a day for Codex) under a file lock, so no two processes spend the same refresh token. When a provider rejects a refresh, the account is flagged for re-login and leaves the rotation.
+- **API keys.** `slopmax login anthropic`, `openai`, or `xai` asks for the key at a hidden prompt, or reads it from stdin (`slopmax login xai < key.txt`), so it never lands in your shell history. It is checked against the provider's model list before it is saved.
+- **Compatible endpoints.** `slopmax login compat --url http://localhost:11434/v1` adds any API that speaks OpenAI Chat Completions (the default), Responses (`--dialect responses`), or Anthropic Messages (`--dialect messages`). Its models are read from the endpoint, or named with `--models 'qwen3-*,llama4'`.
+- **Imports.** `slopmax import` reads Claude Code's `~/.claude/.credentials.json` (or the macOS keychain), Codex's `~/.codex/auth.json`, and CLIProxyAPI's `~/.cli-proxy-api/*.json`. An imported login shares its refresh token with the tool it came from, and refresh tokens rotate on use, so whichever refreshes first signs the other out. Logins from CLIProxyAPI are therefore *linked*: slopmax follows the file CLIProxyAPI keeps refreshing and never refreshes them itself, so both can run while you switch over. Once CLIProxyAPI is stopped, `slopmax own all` hands refreshing to slopmax.
+
 ## Usage and cost
 
 Every answered request is recorded in `~/.slopmax/usage/`, one JSON line each in monthly files: the account, model, tokens, latency, and time to first token.
@@ -204,6 +157,18 @@ total                 508    398.3k    229.7k      114.4M         2.9M    $39.98
 
 The same data is available as JSON under `/slopmax/` (`status`, `usage`, `events`, `accounts/<id>/<action>`), with the slopmax key.
 
+## Notifications
+
+A webhook or a command hears when every account of a kind is limited (so requests fail), when it recovers, and when an account needs signing in again. Add `limited` and `available` to `events` to hear about each account too.
+
+```toml
+[notify]
+webhook = "https://hooks.slack.com/services/…"     # JSON with "text" and "content" for Slack and Discord
+command = 'notify-send slopmax "$SLOPMAX_MESSAGE"'  # also gets SLOPMAX_EVENT, _PROVIDER, _ACCOUNT, _UNTIL
+```
+
+`slopmax notify` sends a test.
+
 ## Other machines
 
 Set `listen = "0.0.0.0:7567"` to serve your network, and give each machine or tool its own key, so you can revoke them one at a time:
@@ -216,17 +181,55 @@ slopmax key remove laptop
 
 Client keys can use the proxy but not slopmax's own API, and `slopmax doctor` notes when the proxy listens beyond this machine.
 
-## Notifications
+## Extras
 
-A webhook or a command hears when every account of a kind is limited (so requests fail), when it recovers, and when an account needs signing in again. Add `limited` and `available` to `events` to hear about each account too.
+slopmax is built to make several accounts of one provider feel like one. It can also do a few things beyond that.
 
-```toml
-[notify]
-webhook = "https://hooks.slack.com/services/…"     # JSON with "text" and "content" for Slack and Discord
-command = 'notify-send slopmax "$SLOPMAX_MESSAGE"'  # also gets SLOPMAX_EVENT, _PROVIDER, _ACCOUNT, _UNTIL
+### API keys and other endpoints
+
+A request's model picks who serves it: every provider with an account that serves the model, subscriptions first. Claude models go to Claude accounts, GPT models to ChatGPT accounts, `grok-*` to xAI keys, and a compatible endpoint's models to it.
+
+- **Paid overflow.** API keys that cover a subscription's models (an OpenAI key behind ChatGPT, an Anthropic key behind Claude) serve those models only when asked for by name, or when you have no such subscription. With `paid_overflow = true` they also take over once every subscription account is limited.
+- **Selectors.** A model name can pick a provider or one account: `openai/gpt-6-sol`, `work/gpt-6-sol`.
+- **Aliases and fallbacks.** In the config, `[aliases]` renames models and `[fallbacks]` lists models to try once one is limited everywhere:
+
+  ```toml
+  [aliases]
+  fast = "gpt-6-sol-mini"
+
+  [fallbacks]
+  "claude-opus-5-5" = ["gpt-6-sol"]     # Claude Code carries on with GPT
+  "gpt-6-sol" = ["openai/gpt-6-sol"]    # then on the API key
+  ```
+
+Claude subscriptions and Anthropic keys serve Claude Code only: Anthropic allows subscription logins in Claude Code alone, and slopmax applies the same rule to keys. A Claude model requested by any other client is refused with an explanation.
+
+### Other models in Claude Code and Codex
+
+When the account a request is routed to speaks another API format, slopmax translates the request and translates the answer back as it streams. Requests in a format the account speaks are forwarded as the client sent them.
+
+| Client                                 | Upstream                                    | For example                                                 |
+| -------------------------------------- | ------------------------------------------- | ----------------------------------------------------------- |
+| Claude Code (Messages)                 | ChatGPT, OpenAI, xAI, compatible endpoints  | `slopmax run claude --model gpt-6-sol`                      |
+| OpenAI clients (Chat Completions)      | ChatGPT accounts                            | Cursor, Open WebUI, scripts using the OpenAI SDK            |
+| Codex (Responses)                      | xAI and Chat-only endpoints                 | `slopmax run codex -m grok-4`                               |
+
+Nothing is ever translated into Anthropic's format: Claude models only ever see requests Claude Code wrote.
+
+Running Claude Code on GPT:
+
+```sh
+slopmax run claude --model gpt-6-sol
 ```
 
-`slopmax notify` sends a test.
+or `/model gpt-6-sol` in a running session. Claude Code does not know GPT's context window and assumes 200k tokens; set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to the model's real window to use all of it. Background tasks still use your Claude accounts' small model unless you set `ANTHROPIC_DEFAULT_HAIKU_MODEL` too.
+
+What crosses: text, images, documents, tool definitions and calls, tool results, the requested reasoning effort, structured output schemas, and token usage. What does not:
+
+- The model's reasoning is not shown in Claude Code. Claude Code would send it back to Anthropic, which rejects thinking it did not sign. slopmax keeps the upstream's encrypted reasoning itself and restores it on the next turn, for the same account only.
+- Anthropic's server tools (web search, code execution) run only on Anthropic and are left out.
+- Token counts for translated models are estimates.
+- Codex compacts long conversations remotely. A model reached by translation cannot, so slopmax asks it for a summary instead and hands that to Codex as the compacted history.
 
 ## Commands
 
