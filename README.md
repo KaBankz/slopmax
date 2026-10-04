@@ -306,20 +306,21 @@ What crosses: text, images, documents, tool definitions and calls, tool results,
 
 The background proxy logs to `~/.slopmax/slopmax.log`. `SLOPMAX_LOG` sets the log level, for example `SLOPMAX_LOG=debug`.
 
-## Compared with CLIProxyAPI and opencodex
+## How slopmax compares
 
-slopmax was designed after a close read of [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) and [opencodex](https://github.com/lidge-jun/opencodex). Both pool accounts and translate between APIs, and both do a great deal more. slopmax aims for the same everyday features in one small binary, with a guided setup and a scheduler built around reset times.
+[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) and [opencodex](https://github.com/lidge-jun/opencodex) also pool accounts behind a local proxy, and both reach many more providers and clients. slopmax does one job: making several subscriptions of one provider feel like a single account to Claude Code and Codex. It spends quota before it resets, leaves Claude Code's requests as they were sent, and fits in one small binary.
 
-|                        | slopmax                                                        | CLIProxyAPI                                    | opencodex                                              |
-| ---------------------- | -------------------------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------ |
-| Built with             | Rust, one binary                                               | Go                                             | TypeScript on Bun                                      |
-| Setup                  | `slopmax init`, `slopmax doctor`                               | Config file                                    | Desktop app and CLI                                    |
-| Default account choice | The quota that resets soonest                                  | Round-robin within priority tiers              | One active account, switching at 80% used              |
-| Usage data             | Usage endpoints and response headers                           | Response headers, for display                  | Usage endpoint and response headers                    |
-| Session stickiness     | Built in                                                       | Opt-in                                         | Built in                                               |
-| Translation            | Through one common form: Messages, Responses, and Chat clients | Pairwise translators between many formats      | Responses-centered, with Claude Code inbound           |
-| Claude requests        | From Claude Code only, unchanged but for the credential        | From any client, rewritten to pass as Claude Code | From any client, with Claude Code's identity added   |
-| Reset credits          | On request, before expiry, and when spent (opt-in)             | —                                              | Before expiry (opt-in), plus Claude reset grants       |
+|                        | slopmax                                                                          | CLIProxyAPI                                                                 | opencodex                                          |
+| ---------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------- |
+| Built with             | Rust: one binary of about 6 MB, about 7 MB of memory when idle                   | Go: a 69 MB binary                                                          | TypeScript on Bun, with a desktop app              |
+| Setup                  | `slopmax init` walks through it; `slopmax doctor` checks it                      | A config file and login flags                                               | Desktop app and CLI                                |
+| Default account choice | The used quota that resets soonest, so less of it goes to waste                  | Round-robin within priority tiers                                           | One active account, switching at 80% used          |
+| Usage data             | Usage endpoints and response headers; agents are shown the pool's combined usage | Response headers, kept for display                                          | Usage endpoint and response headers                |
+| Session stickiness     | Built in                                                                         | Opt-in                                                                      | Built in                                           |
+| Translation            | Through one common form: Messages, Responses, and Chat clients                   | Pairwise translators between many formats                                   | Responses-centered, with Claude Code inbound       |
+| Claude requests        | From Claude Code only, unchanged but for the credential                          | From any client, rewritten to pass as Claude Code                           | From any client, with Claude Code's identity added |
+| Reset credits          | On request, before expiry, and when spent (opt-in)                               | —                                                                           | Before expiry (opt-in), plus Claude reset grants   |
+| Quota for other tools  | CLIProxyAPI's quota calls, for T3 Code and others, without relaying tokens       | A management API whose `api-call` sends any request with an account's token | Its own API, for its apps                          |
 
 ## Caveats
 
