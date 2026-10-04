@@ -1,5 +1,11 @@
 //! OpenAI Responses.
 
+pub mod events;
+pub mod reply;
+pub mod request;
+
+pub use request::freeform_schema;
+
 use serde_json::{Value, json};
 
 use super::{Opening, Outcome};

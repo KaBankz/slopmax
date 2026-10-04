@@ -89,6 +89,13 @@ impl Provider for Codex {
         wire::strip_account_state(body)
     }
 
+    fn shape(&self, _dialect: Dialect, body: &mut serde_json::Value) {
+        // The ChatGPT backend sets output limits itself and rejects them.
+        if let Some(fields) = body.as_object_mut() {
+            fields.remove("max_output_tokens");
+        }
+    }
+
     fn limits(&self, headers: &HeaderMap, now: Timestamp) -> Option<Limits> {
         limits::from_headers(headers, now)
     }

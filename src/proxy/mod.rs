@@ -9,6 +9,7 @@ mod forward;
 pub mod rawjson;
 mod sse;
 mod start;
+mod transcode;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -49,6 +50,8 @@ pub struct App {
     pub redeeming: tokio::sync::Mutex<()>,
     /// Where answered requests are recorded for `slopmax usage`.
     pub ledger: Ledger,
+    /// Reasoning state kept between turns of translated conversations.
+    replay: std::sync::Mutex<transcode::Replay>,
 }
 
 impl App {
@@ -79,6 +82,7 @@ impl App {
             shutdown: tokio::sync::Notify::new(),
             redeeming: tokio::sync::Mutex::new(()),
             ledger,
+            replay: Default::default(),
         })
     }
 

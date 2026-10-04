@@ -1,5 +1,9 @@
 //! OpenAI Chat Completions.
 
+pub mod events;
+pub mod reply;
+pub mod request;
+
 use serde_json::{Value, json};
 
 use super::Outcome;

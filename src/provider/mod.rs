@@ -317,6 +317,9 @@ pub trait Provider: Send + Sync {
         None
     }
 
+    /// Adjusts a request slopmax translated into `dialect` for this API.
+    fn shape(&self, _dialect: Dialect, _body: &mut Value) {}
+
     /// Usage windows reported in response headers.
     fn limits(&self, _headers: &HeaderMap, _now: Timestamp) -> Option<Limits> {
         None

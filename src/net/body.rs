@@ -46,6 +46,22 @@ where
         .map(|collected| collected.to_bytes())
 }
 
+/// Reads a whole [`Body`], failing once it exceeds `limit` bytes. Unlike
+/// [`read`] it is not generic, which keeps the futures awaiting it `Send`
+/// (rustc cannot prove that for `read` over boxed errors).
+pub async fn read_all(mut body: Body, limit: usize) -> Result<Bytes, BoxError> {
+    let mut out = Vec::new();
+    while let Some(frame) = body.frame().await {
+        if let Ok(chunk) = frame?.into_data() {
+            if out.len() + chunk.len() > limit {
+                return Err(format!("body exceeds {limit} bytes").into());
+            }
+            out.extend_from_slice(&chunk);
+        }
+    }
+    Ok(out.into())
+}
+
 /// A body that yields `held` chunks first, then the rest of `inner`.
 pub struct Prefixed<B> {
     held: std::collections::VecDeque<Bytes>,

@@ -17,6 +17,7 @@ use crate::account::Account;
 use crate::agent;
 use crate::provider::{Billing, ProviderId};
 use crate::wire::Dialect;
+use crate::wire::translate;
 
 /// One way to serve a request: a provider, the model to ask it for, and
 /// the accounts that may.
@@ -182,7 +183,7 @@ fn steps_for(table: &Table, model: &str, default: Option<ProviderId>) -> Vec<Ste
 }
 
 /// The step as far as policy and format allow: accounts that may serve
-/// this client in its own format.
+/// this client, in its own format or by translation.
 fn permitted(table: &Table, step: &Step, request: &Request) -> Result<Step, NoRoute> {
     let provider = step.provider.get();
     if let Some(only) = provider.spec().agent_only
@@ -202,7 +203,11 @@ fn permitted(table: &Table, step: &Step, request: &Request) -> Result<Step, NoRo
                 .accounts
                 .iter()
                 .find(|a| &a.id == *id)
-                .is_some_and(|a| provider.dialects(a).contains(&request.dialect))
+                .is_some_and(|a| {
+                    provider.dialects(a).iter().any(|d| {
+                        *d == request.dialect || translate::can_translate(request.dialect, *d)
+                    })
+                })
         })
         .cloned()
         .collect();
@@ -369,6 +374,21 @@ mod tests {
         assert_eq!(
             f.plan("o5-mini", Responses, Some("codex")),
             Ok(vec![step(Codex, "o5-mini")])
+        );
+        // Other formats reach ChatGPT by translation, never Messages APIs.
+        assert_eq!(
+            f.plan("gpt-6-sol", Messages, Some("claude")),
+            Ok(vec![step(Codex, "gpt-6-sol")])
+        );
+        assert_eq!(
+            f.plan("gpt-6-sol", Chat, None),
+            Ok(vec![step(Codex, "gpt-6-sol")])
+        );
+        assert_eq!(
+            f.plan("kimi-k2", Chat, None),
+            Err(NoRoute::Unserved {
+                model: "kimi-k2".into()
+            })
         );
         assert_eq!(
             f.plan("nope", Chat, None),

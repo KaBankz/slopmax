@@ -4,11 +4,15 @@
 //! slopmax forwards each agent's requests in the dialect it speaks. What it
 //! needs to know about a dialect lives here: how errors look, how to say
 //! "every account is spent" so the agent shows its usual limit message, and
-//! where a stream reports token usage and in-stream refusals.
+//! where a stream reports token usage and in-stream refusals. When the
+//! model a request asks for speaks another format, [`translate`] carries it
+//! across through [`ir`].
 
-mod chat;
-mod messages;
-mod responses;
+pub mod chat;
+pub mod ir;
+pub mod messages;
+pub mod responses;
+pub mod translate;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -106,4 +110,16 @@ impl Dialect {
             Self::Chat => "chat",
         }
     }
+}
+
+/// Writes one server-sent event: an optional `event:` line, then the data.
+pub(crate) fn frame(out: &mut Vec<u8>, event: Option<&str>, data: &Value) {
+    if let Some(event) = event {
+        out.extend_from_slice(b"event: ");
+        out.extend_from_slice(event.as_bytes());
+        out.push(b'\n');
+    }
+    out.extend_from_slice(b"data: ");
+    serde_json::to_writer(&mut *out, data).expect("values serialize");
+    out.extend_from_slice(b"\n\n");
 }

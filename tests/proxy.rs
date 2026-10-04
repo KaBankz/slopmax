@@ -199,6 +199,19 @@ fn mock_codex(log: &Log, headers: &HeaderMap) -> Response {
     // `tok-credit` is spent until a reset credit is redeemed.
     let spent = token == "Bearer tok-limited" || (token == "Bearer tok-credit" && !redeemed(log));
     match token {
+        // Answers with reasoning, text, and a tool call.
+        "Bearer tok-talk" => reply(
+            StatusCode::OK,
+            &[("content-type", "text/event-stream".to_owned())],
+            concat!(
+                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\"}}\n\n",
+                "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"reasoning\",\"summary\":[],\"encrypted_content\":\"enc-1\"}}\n\n",
+                "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"m1\",\"delta\":\"Hello\"}\n\n",
+                "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"m1\",\"content\":[{\"type\":\"output_text\",\"text\":\"Hello\"}]}}\n\n",
+                "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":\"Bash\",\"arguments\":\"{\\\"command\\\":\\\"ls\\\"}\"}}\n\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"usage\":{\"input_tokens\":30,\"input_tokens_details\":{\"cached_tokens\":10},\"output_tokens\":5,\"total_tokens\":35}}}\n\n",
+            ),
+        ),
         // Spent, but only says so inside a 200 stream.
         "Bearer tok-quiet" => reply(
             StatusCode::OK,
@@ -867,13 +880,28 @@ async fn chat_clients_reach_keys_and_endpoints_by_model() {
         "no key, no credential"
     );
 
-    // ChatGPT accounts speak Responses only, so a Chat request for a GPT
-    // model has nowhere to go.
+    // ChatGPT accounts speak Responses, so a Chat request for a GPT model
+    // is translated for them, and the answer back.
     let response = chat_request(&h, "gpt-6-sol").send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let seen = h.log.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(seen.path, "/codex/responses");
+    let sent: Value = serde_json::from_slice(&seen.body).unwrap();
+    assert_eq!(sent["input"][0]["content"][0]["text"], "hi");
+    assert_eq!(sent["store"], false);
+    let agent = seen.headers["user-agent"].to_str().unwrap();
+    assert!(agent.starts_with("slopmax/"), "{agent}");
+    assert_eq!(seen.headers["authorization"], "Bearer tok-ok");
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["object"], "chat.completion");
+    assert_eq!(body["model"], "gpt-6-sol");
+    assert_eq!(body["usage"]["prompt_tokens"], 100);
+
+    let response = chat_request(&h, "nope").send().await.unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     let body: Value = response.json().await.unwrap();
     let message = body["error"]["message"].as_str().unwrap();
-    assert!(message.contains("gpt-6-sol"), "{message}");
+    assert!(message.contains("nope"), "{message}");
 
     let xai = h.ids[1].clone();
     eventually(|| {
@@ -946,4 +974,130 @@ async fn claude_code_may_use_other_vendors_messages_endpoints() {
     let response = claude_request(&h).send().await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(paths(&h).last().unwrap(), "/v1/messages?beta=true");
+}
+
+#[tokio::test]
+async fn claude_code_runs_gpt_models_on_chatgpt_accounts() {
+    let h = harness_of(
+        |_| {
+            vec![
+                account(ProviderId::Claude, "max", "tok-ok", 1000),
+                account(ProviderId::Codex, "chatgpt", "tok-talk", 1001),
+            ]
+        },
+        |_| {},
+    )
+    .await;
+    let turn = |messages: &str| {
+        let body = format!(
+            r#"{{"model":"gpt-6-sol","max_tokens":1000,"stream":true,"system":"You are Claude Code.","messages":{messages},"tools":[{{"name":"Bash","description":"Run","input_schema":{{"type":"object"}}}}]}}"#
+        );
+        claude_request(&h).body(body)
+    };
+    let response = turn(r#"[{"role":"user","content":"list files"}]"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "text/event-stream");
+    let stream = response.text().await.unwrap();
+    for expected in [
+        r#""model":"gpt-6-sol""#,
+        r#""text":"Hello""#,
+        r#""type":"tool_use","id":"call_1","name":"Bash""#,
+        r#""partial_json":"{\"command\":\"ls\"}""#,
+        r#""stop_reason":"tool_use""#,
+        "message_stop",
+    ] {
+        assert!(stream.contains(expected), "missing {expected} in {stream}");
+    }
+    assert!(
+        !stream.contains("enc-1"),
+        "opaque reasoning stays with slopmax"
+    );
+    let seen = h.log.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(seen.path, "/codex/responses");
+    let sent: Value = serde_json::from_slice(&seen.body).unwrap();
+    assert_eq!(sent["instructions"], "You are Claude Code.");
+    // The Claude Code session keys ChatGPT's prompt cache.
+    assert_eq!(sent["prompt_cache_key"], "sess-1");
+
+    // The next turn carries the call's result; the reasoning that led to
+    // the call goes back to the account that issued it.
+    let response = turn(
+        r#"[{"role":"user","content":"list files"},
+            {"role":"assistant","content":[{"type":"text","text":"Hello"},{"type":"tool_use","id":"call_1","name":"Bash","input":{"command":"ls"}}]},
+            {"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"a.rs"}]}]"#,
+    )
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let seen = h.log.lock().unwrap().last().cloned().unwrap();
+    let sent: Value = serde_json::from_slice(&seen.body).unwrap();
+    let types: Vec<&str> = sent["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        types,
+        [
+            "message",
+            "message",
+            "reasoning",
+            "function_call",
+            "function_call_output"
+        ]
+    );
+    assert_eq!(sent["input"][2]["encrypted_content"], "enc-1");
+    assert_eq!(sent["input"][4]["output"], "a.rs");
+
+    // Usage lands in the ledger under the ChatGPT account and GPT model.
+    let codex = h.ids[1].clone();
+    eventually(|| {
+        ledger::read(&h.dir.join("usage"), Timestamp::UNIX_EPOCH)
+            .iter()
+            .any(|e| e.account == codex && e.model.as_deref() == Some("gpt-6-sol") && e.input == 20)
+    })
+    .await;
+
+    // Claude's own models still go to the Claude account, untranslated.
+    let response = claude_request(&h).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(paths(&h).last().unwrap(), "/v1/messages?beta=true");
+}
+
+#[tokio::test]
+async fn translated_failures_reach_the_client_in_its_format() {
+    let h = harness_of(
+        |_| vec![account(ProviderId::Codex, "chatgpt", "tok-limited", 1000)],
+        |_| {},
+    )
+    .await;
+    // Every ChatGPT account is spent: Claude Code hears its own limit error.
+    let body = CLAUDE_BODY.replace("claude-opus-5-5", "gpt-6-sol");
+    let response = claude_request(&h).body(body).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        response.headers()["anthropic-ratelimit-unified-status"],
+        "rejected"
+    );
+    let error: Value = response.json().await.unwrap();
+    assert_eq!(error["type"], "error");
+    assert_eq!(error["error"]["type"], "rate_limit_error");
+
+    // Counting tokens for a GPT model is estimated locally.
+    let response = client()
+        .post(format!("{}/v1/messages/count_tokens", h.proxy))
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("user-agent", "claude-cli/2.1.287 (external, cli)")
+        .body(r#"{"model":"gpt-6-sol","messages":[{"role":"user","content":"hello there"}]}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let count: Value = response.json().await.unwrap();
+    assert!(count["input_tokens"].as_u64().unwrap() > 0);
 }
