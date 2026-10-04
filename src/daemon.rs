@@ -69,7 +69,7 @@ pub async fn run(config: Config) -> Result<()> {
         app.config.base_url()
     );
     axum::serve(listener, router(app.clone()))
-        .with_graceful_shutdown(shutdown())
+        .with_graceful_shutdown(shutdown(app.clone()))
         .await?;
     save_state(&app);
     tracing::info!("stopped");
@@ -90,7 +90,7 @@ where
     }
 }
 
-async fn shutdown() {
+async fn shutdown(app: Arc<App>) {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
     };
@@ -109,6 +109,7 @@ async fn shutdown() {
     tokio::select! {
         () = ctrl_c => {},
         () = terminate => {},
+        () = app.shutdown.notified() => {},
     }
 }
 

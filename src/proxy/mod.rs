@@ -40,6 +40,8 @@ pub struct App {
     http: reqwest::Client,
     /// OAuth and usage calls, with bounded timeouts.
     pub auth_http: reqwest::Client,
+    /// Signaled by `POST /slopmax/shutdown`.
+    pub shutdown: tokio::sync::Notify,
 }
 
 impl App {
@@ -61,6 +63,7 @@ impl App {
             upstream,
             http,
             auth_http: crate::auth::http_client(),
+            shutdown: tokio::sync::Notify::new(),
         })
     }
 
@@ -92,6 +95,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/hello", any(hello))
         .route("/slopmax/status", get(status))
         .route("/slopmax/refresh", post(refresh))
+        .route("/slopmax/shutdown", post(shutdown))
         .fallback(proxy)
         .with_state(app)
 }
@@ -121,6 +125,14 @@ async fn refresh(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
     }
     crate::daemon::poll_all(&app, true).await;
     axum::Json(app.report()).into_response()
+}
+
+async fn shutdown(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
+    if !authorized(&app.config, &headers) {
+        return unauthorized(None);
+    }
+    app.shutdown.notify_one();
+    axum::Json(json!({ "status": "stopping" })).into_response()
 }
 
 async fn proxy(State(app): State<Arc<App>>, request: Request) -> Response {
