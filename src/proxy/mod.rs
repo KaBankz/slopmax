@@ -13,6 +13,7 @@ mod socket;
 mod sse;
 mod start;
 mod transcode;
+pub mod warm;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -67,12 +68,23 @@ pub struct App {
     codex_version: Mutex<Option<String>>,
     /// Each answered request, as JSON, for the dashboard's live feed.
     events: broadcast::Sender<Bytes>,
+    /// The model Codex asked for last, which window warmups use.
+    codex_model: Mutex<Option<String>>,
+    /// When each account was last warmed.
+    warmed: Mutex<HashMap<String, Instant>>,
 }
 
 impl App {
     /// `origins` reroutes provider URLs; tests point them at a mock.
     pub fn new(config: Config, home: Home, state: PoolState, origins: Origins) -> Arc<Self> {
         let store = Store::at(home.accounts());
+        // The ledger remembers which model Codex used last, across restarts.
+        let month_ago = Timestamp::now() - SignedDuration::from_hours(24 * 30);
+        let codex_model = crate::ledger::read(&home.usage(), month_ago)
+            .into_iter()
+            .rev()
+            .find(|e| e.provider == ProviderId::Codex)
+            .and_then(|e| e.model);
         let ledger = Ledger::start(home.usage());
         let http = Client::builder()
             .connect_timeout(Duration::from_secs(10))
@@ -98,6 +110,8 @@ impl App {
             catalogs: Default::default(),
             codex_version: Default::default(),
             events: broadcast::channel(256).0,
+            codex_model: Mutex::new(codex_model),
+            warmed: Default::default(),
         })
     }
 
@@ -137,8 +151,22 @@ impl App {
         }
     }
 
-    /// Tells the dashboard's live feed about an answered request.
+    /// The model Codex asked for last.
+    pub(crate) fn last_codex_model(&self) -> Option<String> {
+        self.codex_model
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    /// Tells the dashboard's live feed about an answered request, and
+    /// remembers the model of a Codex one.
     pub(crate) fn broadcast(&self, entry: &crate::ledger::Entry) {
+        if entry.provider == ProviderId::Codex
+            && let Some(model) = &entry.model
+        {
+            *self.codex_model.lock().unwrap_or_else(|p| p.into_inner()) = Some(model.clone());
+        }
         if self.events.receiver_count() > 0
             && let Ok(line) = serde_json::to_vec(entry)
         {

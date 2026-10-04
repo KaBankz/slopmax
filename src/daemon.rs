@@ -73,6 +73,15 @@ pub async fn run(config: Config) -> Result<()> {
             },
         ));
     }
+    if app.config.warm_windows {
+        tokio::spawn(every(
+            Duration::from_secs(60),
+            app.clone(),
+            |app| async move {
+                proxy::warm::idle_accounts(&app).await;
+            },
+        ));
+    }
     if app.config.notify.is_enabled() {
         tokio::spawn(watch(app.clone()));
     }

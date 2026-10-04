@@ -176,6 +176,8 @@ Each request is adapted to the account serving it, and nothing more:
 
 Unused quota is lost when its window resets. The default `reset-first` strategy therefore puts new sessions on the account whose started window resets soonest, earliest deadline first, and saves fresh windows for later. `fill-first` drains accounts in priority order instead, and `least-used` spreads sessions across the least used accounts. A block lasts until the provider's stated reset, unless a fresh reading shows room sooner.
 
+ChatGPT starts a 5-hour window at an account's first request, so an account left idle after a reset gets its next reset late. With `warm_windows = true`, slopmax sends an idle ChatGPT account one tiny request as soon as its window resets, using the model Codex last used, so the next reset comes sooner when the account is needed. Claude accounts are never warmed: slopmax sends Claude only what Claude Code writes.
+
 ChatGPT accounts can hold reset credits, which reset an account's windows on the spot. slopmax redeems them:
 
 - on request, with `slopmax redeem <account>`;
@@ -272,6 +274,7 @@ command = 'notify-send slopmax "$SLOPMAX_MESSAGE"'  # also gets SLOPMAX_EVENT, _
 | `redeem_expiring_credits` | `true`           | Redeem a ChatGPT reset credit before it expires unused              |
 | `redeem_when_exhausted`   | `false`          | Redeem one when every Codex account is spent                        |
 | `websockets`              | `true`           | Relay Codex's WebSockets to ChatGPT's                               |
+| `warm_windows`            | `false`          | Start idle ChatGPT accounts' 5-hour windows as soon as they reset   |
 | `paid_overflow`           | `false`          | Let API keys take over a subscription's models once it is limited   |
 | `proxy`                   | none             | Upstream proxy (`http://`, `socks5://`, `socks5h://`), else `HTTPS_PROXY` |
 | `[aliases]`, `[fallbacks]` | none            | Model renames, and models to try once one is limited everywhere     |

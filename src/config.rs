@@ -40,6 +40,9 @@ pub struct Config {
     /// Relay Codex's WebSockets to ChatGPT's, which starts answers sooner
     /// than HTTP streaming. Off, Codex streams over HTTP.
     pub websockets: bool,
+    /// Start an idle ChatGPT account's 5-hour window with one tiny request
+    /// once the last one resets, so the next reset comes sooner.
+    pub warm_windows: bool,
     /// Let API keys serve a subscription's models once every subscription
     /// account is limited. Off, they serve those models only when asked
     /// for by name (`openai/gpt-6-sol`) or when no subscription exists.
@@ -100,6 +103,7 @@ impl Default for Config {
             redeem_expiring_credits: true,
             redeem_when_exhausted: false,
             websockets: true,
+            warm_windows: false,
             paid_overflow: false,
             proxy: None,
             aliases: BTreeMap::new(),
@@ -285,6 +289,12 @@ api_key = "{api_key}"
 # Relay Codex's WebSocket connections to ChatGPT, which starts answers
 # sooner than HTTP streaming. `slopmax setup codex` turns them on in Codex.
 # websockets = true
+
+# ChatGPT starts a 5-hour window at an account's first request. With this
+# on, an idle account gets one tiny request as soon as its window resets,
+# so its next reset comes sooner when you need it. Claude accounts are
+# never warmed.
+# warm_windows = false
 
 # Let API keys (`slopmax login openai`, `slopmax login anthropic`) serve a
 # subscription's models once every subscription account is limited. Off,

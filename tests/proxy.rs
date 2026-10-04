@@ -1571,3 +1571,43 @@ async fn client_keys_are_held_to_their_models() {
         .unwrap();
     assert_eq!(status.status(), StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn idle_chatgpt_windows_are_warmed_once() {
+    let h = harness(ProviderId::Codex, &["tok-ok"]).await;
+    // Warmups use the model Codex last asked for; there is none yet.
+    slopmax::proxy::warm::idle_accounts(&h.app).await;
+    assert!(paths(&h).is_empty());
+
+    let response = codex_request(&h).send().await.unwrap();
+    response.bytes().await.unwrap();
+    let now = Timestamp::now();
+    let reset = Window {
+        span: "5h".into(),
+        model: None,
+        used: 64.0,
+        resets_at: Some(now - SignedDuration::from_mins(1)),
+    };
+    let limits = Limits {
+        windows: vec![reset],
+        observed_at: Some(now),
+        reset_credits: None,
+    };
+    h.app.pool.observe(&h.ids[0], limits, now);
+
+    slopmax::proxy::warm::idle_accounts(&h.app).await;
+    let warmups: Vec<Value> = h
+        .log
+        .lock()
+        .unwrap()
+        .iter()
+        .skip(1)
+        .map(|s| serde_json::from_slice(&s.body).unwrap())
+        .collect();
+    assert_eq!(warmups.len(), 1);
+    assert_eq!(warmups[0]["model"], "gpt-6-sol");
+    assert_eq!(warmups[0]["instructions"], "Reply with OK.");
+    // Once per window.
+    slopmax::proxy::warm::idle_accounts(&h.app).await;
+    assert_eq!(paths(&h).len(), 2);
+}
