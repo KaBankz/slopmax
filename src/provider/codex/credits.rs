@@ -20,11 +20,18 @@ struct Listed {
     id: String,
     #[serde(default)]
     status: String,
+    /// What the credit resets; only `codex_rate_limits` resets Codex's
+    /// windows.
+    #[serde(default)]
+    reset_type: Option<String>,
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
     expires_at: Option<String>,
 }
+
+/// The kind of credit that resets Codex's usage windows.
+const CODEX_RESETS: &str = "codex_rate_limits";
 
 #[derive(Debug, Deserialize)]
 struct CreditList {
@@ -75,10 +82,16 @@ async fn list(http: &Client, account: &Account) -> Result<Vec<Credit>> {
         .json()
         .await
         .context("unexpected reset credit list")?;
+    Ok(available(list))
+}
+
+/// Unspent credits that reset Codex's windows, soonest-expiring first.
+fn available(list: CreditList) -> Vec<Credit> {
     let mut credits: Vec<Credit> = list
         .credits
         .into_iter()
         .filter(|c| c.status.is_empty() || c.status.eq_ignore_ascii_case("available"))
+        .filter(|c| c.reset_type.as_deref().is_none_or(|t| t == CODEX_RESETS))
         .map(|c| Credit {
             expires_at: c.expires_at.as_deref().and_then(|t| t.parse().ok()),
             id: c.id,
@@ -86,7 +99,7 @@ async fn list(http: &Client, account: &Account) -> Result<Vec<Credit>> {
         })
         .collect();
     credits.sort_by_key(|c| c.expires_at.unwrap_or(Timestamp::MAX));
-    Ok(credits)
+    credits
 }
 
 /// The request id is reused on a retry, so a lost response cannot spend
@@ -116,4 +129,25 @@ async fn redeem(http: &Client, account: &Account, credit: Option<&str>) -> Resul
         }
     }
     Err(last_error.expect("loop ran").into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_codex_window_credits_count() {
+        let list: CreditList = serde_json::from_str(
+            r#"{"credits": [
+                {"id": "late", "status": "available", "reset_type": "codex_rate_limits", "expires_at": "2026-12-01T00:00:00Z"},
+                {"id": "review", "status": "available", "reset_type": "code_review_rate_limits", "expires_at": "2026-10-05T00:00:00Z"},
+                {"id": "spent", "status": "redeemed", "reset_type": "codex_rate_limits", "expires_at": "2026-10-06T00:00:00Z"},
+                {"id": "soon", "status": "available", "reset_type": "codex_rate_limits", "expires_at": "2026-10-07T00:00:00Z"},
+                {"id": "untyped", "expires_at": "2026-11-01T00:00:00Z"}
+            ]}"#,
+        )
+        .unwrap();
+        let ids: Vec<String> = available(list).into_iter().map(|c| c.id).collect();
+        assert_eq!(ids, ["soon", "untyped", "late"]);
+    }
 }
