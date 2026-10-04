@@ -727,7 +727,8 @@ async fn translate_back(
     let watch = remembering(app, account, upstream);
     let decoder = translate::Decoder::new(upstream, request);
     if request.stream {
-        let encoder = translate::Encoder::new(client, &model, inbound.wants_usage());
+        let encoder =
+            translate::Encoder::for_request(client, request, &model, inbound.wants_usage());
         let stream = Transcode::new(body, json, decoder, encoder, watch);
         let mut out = Response::new(body::boxed(stream));
         out.headers_mut().insert(
@@ -751,7 +752,10 @@ async fn translate_back(
             let status = StatusCode::from_u16(failure.status).unwrap_or(StatusCode::BAD_GATEWAY);
             error(Some(client), status, &failure.message)
         }
-        _ => json_reply(StatusCode::OK, &translate::whole(client, &answer, &model)),
+        _ => json_reply(
+            StatusCode::OK,
+            &translate::whole(client, request, &answer, &model),
+        ),
     }
 }
 

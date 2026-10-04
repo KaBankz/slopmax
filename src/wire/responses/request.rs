@@ -159,6 +159,20 @@ fn item_into(item: &Value, request: &mut Request) {
             };
             push(request, Role::User, Part::Result(result));
         }
+        // Codex asks for remote compaction by ending its input so.
+        "compaction_trigger" => request.compact = true,
+        // A summary slopmax wrote is read back as the conversation so far;
+        // OpenAI's own is sealed and only OpenAI can expand it.
+        "compaction" => {
+            let summary = item
+                .get("encrypted_content")
+                .and_then(Value::as_str)
+                .and_then(super::compaction::open);
+            if let Some(summary) = summary {
+                let text = format!("{}\n\n{summary}", super::compaction::PREFIX);
+                push(request, Role::User, Part::Text(text));
+            }
+        }
         "reasoning" => {
             let summary: Vec<&str> = item
                 .get("summary")

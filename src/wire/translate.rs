@@ -10,7 +10,7 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
-use super::ir::{Answer, Event, Request, ToolKind};
+use super::ir::{Answer, Event, Message, Part, Request, Role, ToolChoice, ToolKind};
 use super::{Dialect, chat, messages, responses};
 
 /// Whether an API speaking `upstream` can serve a client speaking `client`
@@ -39,8 +39,22 @@ pub fn decode(client: Dialect, body: &[u8]) -> Result<Request, String> {
     }
 }
 
-/// Writes a request for an upstream; see [`can_translate`].
+/// Writes a request for an upstream; see [`can_translate`]. A request to
+/// compact asks the model for a summary of the conversation instead.
 pub fn encode(upstream: Dialect, request: &Request) -> Value {
+    let compacting;
+    let request = if request.compact {
+        let mut summary = request.clone();
+        summary.messages.push(Message {
+            role: Role::User,
+            parts: vec![Part::Text(responses::compaction::PROMPT.to_owned())],
+        });
+        summary.tool_choice = ToolChoice::None;
+        compacting = summary;
+        &compacting
+    } else {
+        request
+    };
     match upstream {
         Dialect::Responses => responses::request::encode(request),
         Dialect::Chat => chat::request::encode(request),
@@ -132,6 +146,22 @@ impl Encoder {
         }
     }
 
+    /// An encoder for the answer to `request`, which a compaction answer
+    /// turns into one compaction item.
+    pub fn for_request(
+        client: Dialect,
+        request: &Request,
+        model: &str,
+        include_usage: bool,
+    ) -> Self {
+        match client {
+            Dialect::Responses if request.compact => {
+                Self::Responses(responses::reply::Reply::compacting(model))
+            }
+            _ => Self::new(client, model, include_usage),
+        }
+    }
+
     pub fn event(&mut self, event: &Event, out: &mut Vec<u8>) {
         match self {
             Self::Messages(reply) => reply.event(event, out),
@@ -141,10 +171,11 @@ impl Encoder {
     }
 }
 
-/// A whole answer in the client's format.
-pub fn whole(client: Dialect, answer: &Answer, model: &str) -> Value {
+/// A whole answer to `request` in the client's format.
+pub fn whole(client: Dialect, request: &Request, answer: &Answer, model: &str) -> Value {
     match client {
         Dialect::Messages => messages::reply::whole(answer, model),
+        Dialect::Responses if request.compact => responses::reply::compacted(answer, model),
         Dialect::Responses => responses::reply::whole(answer, model),
         Dialect::Chat => chat::reply::whole(answer, model),
     }
@@ -192,7 +223,7 @@ mod tests {
 
         let answer = Answer::collect(events);
         assert_eq!(answer.stop(), Stop::ToolUse);
-        let message = whole(Dialect::Messages, &answer, "gpt-6-sol");
+        let message = whole(Dialect::Messages, &request, &answer, "gpt-6-sol");
         assert_eq!(message["content"][0]["input"]["command"], "ls");
     }
 
@@ -233,5 +264,55 @@ mod tests {
         assert!(can_translate(Dialect::Responses, Dialect::Chat));
         assert!(!can_translate(Dialect::Chat, Dialect::Messages));
         assert!(!can_translate(Dialect::Chat, Dialect::Chat));
+    }
+
+    /// Codex compacting a conversation on a Chat-only model: the model is
+    /// asked for a summary, which comes back sealed in a compaction item and
+    /// opens into the next request's history.
+    #[test]
+    fn compaction_is_emulated_with_a_summary() {
+        let body = br#"{"model":"grok-4","instructions":"x","stream":true,
+            "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"fix a.rs"}]},
+                     {"type":"compaction_trigger"}]}"#;
+        let request = decode(Dialect::Responses, body).unwrap();
+        assert!(request.compact);
+        let upstream = encode(Dialect::Chat, &request);
+        let last = upstream["messages"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone();
+        assert!(last["content"].as_str().unwrap().starts_with("Summarize"));
+
+        let mut encoder = Encoder::for_request(Dialect::Responses, &request, "grok-4", false);
+        let mut out = Vec::new();
+        for event in [
+            Event::Text("Fixed a.rs; ".into()),
+            Event::Text("tests pass.".into()),
+            Event::Done {
+                stop: crate::wire::ir::Stop::End,
+                usage: Default::default(),
+            },
+        ] {
+            encoder.event(&event, &mut out);
+        }
+        let text = String::from_utf8(out).unwrap();
+        let sealed = text
+            .split("\"encrypted_content\":\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .unwrap();
+        assert!(!text.contains("output_text"), "{text}");
+
+        let next = format!(
+            r#"{{"model":"grok-4","input":[{{"type":"compaction","encrypted_content":"{sealed}"}},
+                {{"type":"message","role":"user","content":[{{"type":"input_text","text":"go on"}}]}}]}}"#
+        );
+        let request = decode(Dialect::Responses, next.as_bytes()).unwrap();
+        let Part::Text(summary) = &request.messages[0].parts[0] else {
+            panic!("expected the summary first");
+        };
+        assert!(summary.ends_with("Fixed a.rs; tests pass."), "{summary}");
     }
 }

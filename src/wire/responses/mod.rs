@@ -1,5 +1,6 @@
 //! OpenAI Responses.
 
+pub mod compaction;
 pub mod events;
 pub mod reply;
 pub mod request;

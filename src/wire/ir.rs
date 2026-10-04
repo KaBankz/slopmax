@@ -31,6 +31,9 @@ pub struct Request {
     pub stream: bool,
     /// Keys the provider's prompt cache: the conversation's id.
     pub cache_key: Option<String>,
+    /// The client asks for its history to be compacted into a summary
+    /// (Codex's remote compaction) rather than for an answer.
+    pub compact: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

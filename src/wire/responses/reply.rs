@@ -27,6 +27,8 @@ pub struct Reply {
     open: Option<Open>,
     /// Finished items, for the final response.
     output: Vec<Value>,
+    /// Compacting: the answer's text is gathered into one compaction item.
+    summary: Option<String>,
 }
 
 impl Reply {
@@ -39,6 +41,15 @@ impl Reply {
             started: false,
             open: None,
             output: Vec::new(),
+            summary: None,
+        }
+    }
+
+    /// An encoder that turns the answer into one compaction item.
+    pub fn compacting(model: &str) -> Self {
+        Self {
+            summary: Some(String::new()),
+            ..Self::new(model)
         }
     }
 
@@ -61,6 +72,27 @@ impl Reply {
             let response = self.response("in_progress");
             self.send(out, "response.created", json!({"response": response}));
             self.send(out, "response.in_progress", json!({"response": response}));
+        }
+        if let Some(summary) = &mut self.summary {
+            match event {
+                Event::Text(text) => {
+                    summary.push_str(text);
+                    return;
+                }
+                Event::Done { .. } => {
+                    let summary = std::mem::take(summary);
+                    let item = compaction_item(&summary);
+                    let index = self.output.len();
+                    self.send(
+                        out,
+                        "response.output_item.added",
+                        json!({"output_index": index, "item": item}),
+                    );
+                    self.finish_item(out, item);
+                }
+                Event::Error(_) => {}
+                _ => return,
+            }
         }
         match event {
             Event::Text(text) => {
@@ -249,6 +281,21 @@ impl Reply {
         );
         self.output.push(item);
     }
+}
+
+/// A summary sealed in a compaction item.
+fn compaction_item(summary: &str) -> Value {
+    json!({"id": format!("cmp_{}", ids::token()), "type": "compaction",
+        "encrypted_content": super::compaction::seal(summary)})
+}
+
+/// A whole compaction answer: one compaction item.
+pub fn compacted(answer: &Answer, model: &str) -> Value {
+    let mut reply = Reply::new(model);
+    reply.output.push(compaction_item(&answer.text));
+    let mut response = reply.response("completed");
+    response["usage"] = usage_json(&answer.usage);
+    response
 }
 
 /// A whole answer as one response.
