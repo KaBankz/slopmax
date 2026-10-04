@@ -1,6 +1,7 @@
 //! Command-line interface.
 
 mod args;
+mod doctor;
 
 use std::collections::HashMap;
 use std::io::Write as _;
@@ -252,6 +253,7 @@ pub static APP: App = App {
                 arg("undo", "Restore what setup replaced", Kind::Flag(None)),
             ],
         ),
+        command("doctor", "Check the setup and say how to fix problems", &[]),
         command(
             "completions",
             "Print a shell completion script",
@@ -336,6 +338,7 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
             print!("{}", agent_named(m)?.env(&config, &exe));
         }
         "setup" => setup(&config, agent_named(m)?, m.flag("undo"))?,
+        "doctor" => return doctor::run(&config, &store).await,
         "completions" => print!("{}", args::completions(&APP, m.get("shell")?)),
         name => unreachable!("`{name}` is in the command table but not dispatched"),
     }
@@ -363,11 +366,17 @@ impl Daemon {
     }
 
     async fn is_running(&self) -> bool {
-        let Ok(response) = self.http.get(format!("{}/healthz", self.base)).send().await else {
-            return false;
-        };
-        let body: serde_json::Value = response.json().await.unwrap_or_default();
-        body["service"] == "slopmax"
+        self.version().await.is_some()
+    }
+
+    /// The running proxy's version, if one answers on the configured port.
+    async fn version(&self) -> Option<String> {
+        let url = format!("{}/healthz", self.base);
+        let body: serde_json::Value = self.http.get(url).send().await.ok()?.json().await.ok()?;
+        if body["service"] != "slopmax" {
+            return None;
+        }
+        body["version"].as_str().map(str::to_owned)
     }
 
     async fn report(&self, refresh: bool) -> Option<Report> {
@@ -879,6 +888,7 @@ mod tests {
             "run codex exec -c model=m hi",
             "env claude",
             "setup codex --undo",
+            "doctor",
             "completions fish",
         ];
         for line in lines {
