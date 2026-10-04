@@ -6,11 +6,13 @@ Created in [T3 Code](https://t3.codes).
 
 slopmax pools your Claude and ChatGPT subscriptions behind one local proxy, so Claude Code and Codex keep working when an account runs out. Each session stays on one account until that account is spent, then moves to the next. New sessions go to the quota that resets soonest, so less of it goes unused.
 
-- One Rust binary. No runtime, database, or browser extension.
-- Signs in with each provider's own OAuth flow, or imports logins from Claude Code, Codex, and CLIProxyAPI.
+- One Rust binary of about 5 MB. No runtime, database, or browser extension.
+- Signs in with each provider's own OAuth flow, or takes over logins from Claude Code, Codex, and CLIProxyAPI. A guided `slopmax init` does it all, and `slopmax doctor` says what to fix.
 - Tracks every account's 5-hour and weekly windows, from the usage APIs and from the headers on every response.
 - Fails over before the agent sees an error, and streams every response back as it arrives.
-- Redeems ChatGPT reset credits on request, and before they expire unused.
+- Routes by model to API keys (Anthropic, OpenAI, xAI) and to any OpenAI- or Anthropic-compatible endpoint, with aliases and fallbacks.
+- Translates between API formats, so Claude Code can run GPT models on your ChatGPT accounts and any OpenAI client can use them.
+- Records every request, with `slopmax usage` totals and what they would have cost on the API, and notifies you when accounts need attention.
 
 ## Install
 
@@ -28,12 +30,24 @@ mise run install    # cargo install --path . --locked
 ## Quick start
 
 ```sh
+slopmax             # the first time, a guided setup
+```
+
+`slopmax init` walks through it step by step:
+
+1. It finds the agents you have and the logins they hold, and offers to bring them over. If CLIProxyAPI is running, its logins are linked rather than copied (see [Accounts](#accounts)), so both can run while you switch.
+2. It signs you in to more accounts. Without a browser, Codex signs in with a code and Claude by pasting the final URL back.
+3. It installs the proxy as a service that starts at login.
+4. It points Claude Code and Codex at the proxy, keeping a backup for `--undo`.
+
+Or by hand:
+
+```sh
 slopmax login claude    # opens the sign-in page; repeat for each account
 slopmax login codex     # --device signs in with a code instead
-slopmax import          # or copy logins from Claude Code, Codex, and CLIProxyAPI
-
-slopmax run claude      # Claude Code through the pool (starts the proxy if needed)
-slopmax run codex       # Codex through the pool
+slopmax setup claude    # point Claude Code (and every app that runs it) at slopmax
+slopmax setup codex
+slopmax service install # keep the proxy running
 slopmax                 # every account's usage and status
 ```
 
@@ -48,6 +62,9 @@ CLAUDE                PLAN       5H                      WEEK                   
 
 CODEX                 PLAN       5H                      WEEK                    STATUS
  4 me@example.com     pro        █░░░░░░░░░  12% 4h10m   ███░░░░░░░  29% 5d17h   ● active · 1 session · 3 reset credits · 9 req · 310.4k tok
+
+XAI                   BILLING    MODELS                                          STATUS
+ 5 xAI API key …x9Qe  per token  grok-*                                          ready
 
 strategy reset-first · proxy running
 ```
@@ -64,33 +81,83 @@ Each window shows how much is used and when it resets. Limits scoped to one mode
 
 `slopmax setup <agent> --undo` puts back exactly what setup replaced. The edited file then holds the slopmax key, so setup keeps it private (mode 0600).
 
-- **Claude Code** gets `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`, the slopmax key. `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1` lets them win over `settings.json`, and `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` fills `/model` with the account's models.
-- **Codex** gets a custom model provider at `http://127.0.0.1:7567/codex` with `wire_api = "responses"`. It is named `OpenAI`, so Codex keeps first-party behavior such as remote compaction.
+- **Claude Code** gets `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`, the slopmax key. Every app that runs Claude Code reads `~/.claude/settings.json`, so `setup` covers the CLI, the Agent SDK, IDE extensions, and GUI wrappers such as T3 Code, Conductor, Orca, and Superset. The Claude desktop app is the exception: it starts its bundled Claude Code with its own environment, so it cannot be pointed at a proxy.
+- **Codex** gets a model provider at `http://127.0.0.1:7567/codex` with `wire_api = "responses"`. It is named `OpenAI`, so Codex keeps first-party behavior such as remote compaction. The Codex desktop app reads the same `config.toml`; restart it after `setup`. If it rewrites the file, `slopmax doctor` notices.
 
-Other clients can use the proxy directly. `/claude/*` and `/codex/*` map to the two providers, and bare `/v1/*` paths are routed by shape (`/v1/messages` to Claude, `/v1/responses` to Codex). Authenticate with `api_key` from the config, as a bearer token or `x-api-key`.
+Any other client can use the proxy as an OpenAI- or Anthropic-style API at `http://127.0.0.1:7567/v1`, authenticating with `api_key` from the config as a bearer token or `x-api-key`: `/v1/chat/completions`, `/v1/responses`, `/v1/messages`, and `/v1/models`.
+
+## Accounts
+
+Each account is a private JSON file in `~/.slopmax/accounts/`, named after a hash of the account's identity, so signing in again or re-importing updates the account instead of adding a copy.
+
+- **Subscriptions.** `slopmax login claude` and `slopmax login codex` run the same OAuth flow as the official clients: PKCE with a localhost callback, a pasted redirect URL on a machine without a browser, or a device code for Codex. The proxy refreshes tokens ahead of expiry (an hour early for Claude, a day for Codex) under a file lock, so no two processes spend the same refresh token. When a provider rejects a refresh, the account is flagged for re-login and leaves the rotation.
+- **API keys.** `slopmax login anthropic`, `openai`, or `xai` asks for the key at a hidden prompt, or reads it from stdin (`slopmax login xai < key.txt`), so it never lands in your shell history. It is checked against the provider's model list before it is saved.
+- **Compatible endpoints.** `slopmax login compat --url http://localhost:11434/v1` adds any API that speaks OpenAI Chat Completions (the default), Responses (`--dialect responses`), or Anthropic Messages (`--dialect messages`). Its models are read from the endpoint, or named with `--models 'qwen3-*,llama4'`.
+- **Imports.** `slopmax import` reads Claude Code's `~/.claude/.credentials.json` (or the macOS keychain), Codex's `~/.codex/auth.json`, and CLIProxyAPI's `~/.cli-proxy-api/*.json`. An imported login shares its refresh token with the tool it came from, and refresh tokens rotate on use, so whichever refreshes first signs the other out. Logins from CLIProxyAPI are therefore *linked*: slopmax follows the file CLIProxyAPI keeps refreshing and never refreshes them itself, so both can run while you switch over. Once CLIProxyAPI is stopped, `slopmax own all` hands refreshing to slopmax.
+
+## Routing
+
+A request's model picks who serves it: every provider with an account that serves the model, subscriptions first. Claude models go to Claude accounts, GPT models to ChatGPT accounts, `grok-*` to xAI keys, and a compatible endpoint's models to it.
+
+- **Paid overflow.** API keys that cover a subscription's models (an OpenAI key behind ChatGPT, an Anthropic key behind Claude) serve those models only when asked for by name, or when you have no such subscription. With `paid_overflow = true` they also take over once every subscription account is limited.
+- **Selectors.** A model name can pick a provider or one account: `openai/gpt-6-sol`, `work/gpt-6-sol`.
+- **Aliases and fallbacks.** In the config, `[aliases]` renames models and `[fallbacks]` lists models to try once one is limited everywhere:
+
+  ```toml
+  [aliases]
+  fast = "gpt-6-sol-mini"
+
+  [fallbacks]
+  "claude-opus-5-5" = ["gpt-6-sol"]     # Claude Code carries on with GPT
+  "gpt-6-sol" = ["openai/gpt-6-sol"]    # then on the API key
+  ```
+
+Claude subscriptions and Anthropic keys serve Claude Code only: Anthropic allows subscription logins in Claude Code alone, and slopmax applies the same rule to keys. A Claude model requested by any other client is refused with an explanation.
+
+## Translation
+
+When the account a request is routed to speaks another API format, slopmax translates the request and translates the answer back as it streams. Requests in a format the account speaks are forwarded as the client sent them.
+
+| Client                                 | Upstream                                    | For example                                                 |
+| -------------------------------------- | ------------------------------------------- | ----------------------------------------------------------- |
+| Claude Code (Messages)                 | ChatGPT, OpenAI, xAI, compatible endpoints  | `slopmax run claude --model gpt-6-sol`                      |
+| OpenAI clients (Chat Completions)      | ChatGPT accounts                            | Cursor, Open WebUI, scripts using the OpenAI SDK            |
+| Codex (Responses)                      | xAI and Chat-only endpoints                 | `slopmax run codex -m grok-4`                               |
+
+Nothing is ever translated into Anthropic's format: Claude models only ever see requests Claude Code wrote.
+
+Running Claude Code on GPT:
+
+```sh
+slopmax run claude --model gpt-6-sol
+```
+
+or `/model gpt-6-sol` in a running session. Claude Code does not know GPT's context window and assumes 200k tokens; set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to the model's real window to use all of it. Background tasks still use your Claude accounts' small model unless you set `ANTHROPIC_DEFAULT_HAIKU_MODEL` too.
+
+What crosses: text, images, documents, tool definitions and calls, tool results, the requested reasoning effort, structured output schemas, and token usage. What does not:
+
+- The model's reasoning is not shown in Claude Code. Claude Code would send it back to Anthropic, which rejects thinking it did not sign. slopmax keeps the upstream's encrypted reasoning itself and restores it on the next turn, for the same account only.
+- Anthropic's server tools (web search, code execution) run only on Anthropic and are left out.
+- Token counts for translated models are estimates.
+- Codex compacts long conversations remotely. A model reached by translation cannot, so slopmax asks it for a summary instead and hands that to Codex as the compacted history.
 
 ## How it works
 
-### Accounts
-
-`slopmax login` runs the same OAuth flow as the official client: PKCE with a localhost callback, or a device code for Codex. Each account is a private JSON file in `~/.slopmax/accounts/`, named after a hash of the account's identity, so signing in again or re-importing updates the account instead of adding a copy. `slopmax import` reads Claude Code's `~/.claude/.credentials.json` (or the macOS keychain), Codex's `~/.codex/auth.json`, and CLIProxyAPI's `~/.cli-proxy-api/*.json`, keeping CLIProxyAPI's priorities.
-
-The proxy refreshes tokens ahead of expiry: an hour early for Claude, a day for Codex. Refreshes happen under a file lock, so the proxy and a CLI command never spend the same refresh token twice. When a provider rejects a refresh, the account is flagged for re-login and leaves the rotation.
-
 ### Usage
 
-Every response carries rate-limit headers (`anthropic-ratelimit-unified-*`, `x-codex-*`), and slopmax updates the serving account's windows from them as requests flow. The proxy also polls each account's usage endpoint every `poll_mins` minutes and right after a window resets. While an account is blocked it polls every 10 minutes, because quota often comes back before the stated reset.
+Every response carries rate-limit headers (`anthropic-ratelimit-unified-*`, `x-codex-*`), and slopmax updates the serving account's windows from them as requests flow. The proxy also polls each subscription's usage endpoint every `poll_mins` minutes and right after a window resets. While an account is blocked it polls every 10 minutes, because quota often comes back before the stated reset.
 
 ### Switching
 
-Each request names its session: Claude Code's session id, or Codex's `session-id`. A session stays on its account for as long as that account can serve it, which keeps prompt caches warm. It moves only when the account refuses, fills up, or signs out, and it is forgotten after `session_ttl_mins` idle minutes. A new session goes to the account chosen with `slopmax use`, if that one can serve. Otherwise it goes to the highest priority tier, and within the tier the strategy decides.
+Each request names its session: Claude Code's session id, Codex's `session-id`, or for other clients a session header or `prompt_cache_key`. A session stays on its account for as long as that account can serve it, which keeps prompt caches warm. It moves only when the account refuses, fills up, or signs out, and it is forgotten after `session_ttl_mins` idle minutes. A new session goes to the account chosen with `slopmax use`, if that one can serve. Otherwise it goes to the highest priority tier, and within the tier the strategy decides.
 
-When the provider refuses a request (a rejected 5-hour or weekly window, `usage_limit_reached`, an invalid token), slopmax sets that account aside, until its reset when its quota is spent, and retries on the next one. This happens only before the agent has received anything; once a response starts streaming, it passes through untouched. When every account is spent, the agent gets its own native usage-limit error with the earliest reset time, and shows it as usual.
+When the provider refuses a request (a rejected 5-hour or weekly window, `usage_limit_reached`, an invalid token), slopmax sets that account aside, until its reset when its quota is spent, and retries on the next one. ChatGPT sometimes refuses inside a stream that has already started with a 200, so slopmax holds the first moments of a Codex stream back to catch that. Failover happens only before the agent has received anything; once a response starts streaming, it passes through untouched. When every account is spent, the agent gets its own native usage-limit error with the earliest reset time, and shows it as usual.
 
-Each request is adapted to the account serving it:
+Each request is adapted to the account serving it, and nothing more:
 
-- **Claude.** The account's token replaces the slopmax key, and the OAuth beta flag that subscription tokens require is added. Nothing else changes: the body, including Claude Code's billing header and `metadata.user_id`, reaches Anthropic byte for byte as Claude Code sent it.
+- **Claude.** The account's token replaces the slopmax key, and the OAuth beta flag that subscription tokens require is added. Nothing else changes: the body, including Claude Code's billing header and `metadata.user_id`, reaches Anthropic byte for byte as Claude Code sent it. slopmax does not imitate Claude Code or alter what it says about itself.
 - **Codex.** The account's token and workspace id are set. Encrypted reasoning items and `previous_response_id` only work on the account that created them, so they are dropped when a session moves, along with Codex's sticky routing header.
+- **Keys and endpoints.** The key replaces the slopmax key.
 
 ### Resets
 
@@ -102,64 +169,103 @@ ChatGPT accounts can hold reset credits, which reset an account's windows on the
 - in the last three hours before one would expire unused, if the account has usage to reset (`redeem_expiring_credits`, on by default);
 - when every Codex account is spent, then retries the request on the reset account (`redeem_when_exhausted`, off by default).
 
+## Usage and cost
+
+Every answered request is recorded in `~/.slopmax/usage/`, one JSON line each in monthly files: the account, model, tokens, latency, and time to first token.
+
+```
+$ slopmax usage 7d --by model
+MODEL                 REQ     INPUT    OUTPUT  CACHE READ  CACHE WRITE   API COST
+claude-opus-5-5       412    310.2k    188.0k      102.4M         2.9M     $39.98
+gpt-6-sol              96     88.1k     41.7k       12.0M            0          —
+total                 508    398.3k    229.7k      114.4M         2.9M    $39.98+
+```
+
+`API cost` is what the same tokens would cost on the pay-as-you-go API, at Anthropic's list prices and any you set under `[prices]` in the config. Requests to models without a price are counted apart and marked `+`. Group `--by day`, `model`, or `account`, over `today`, `7d`, `30d`, or `all`, or print `--json`.
+
+## Notifications
+
+A webhook or a command hears when every account of a kind is limited (so requests fail), when it recovers, and when an account needs signing in again. Add `limited` and `available` to `events` to hear about each account too.
+
+```toml
+[notify]
+webhook = "https://hooks.slack.com/services/…"     # JSON with "text" and "content" for Slack and Discord
+command = 'notify-send slopmax "$SLOPMAX_MESSAGE"'  # also gets SLOPMAX_EVENT, _PROVIDER, _ACCOUNT, _UNTIL
+```
+
+`slopmax notify` sends a test.
+
 ## Commands
 
-| Command                             | Description                                                            |
-| ----------------------------------- | ---------------------------------------------------------------------- |
-| `slopmax [status]`                  | Accounts, usage windows, and resets (`--watch`, `--refresh`, `--json`) |
-| `slopmax login <claude\|codex>`     | Connect an account (`--label`, `--device`, `--no-browser`)             |
-| `slopmax import [source]`           | Copy logins from `claude-code`, `codex`, `cliproxyapi`, or `all`       |
-| `slopmax use <account\|auto>`       | Prefer an account for new sessions, or let slopmax choose              |
-| `slopmax label <account> <name>`    | Rename an account                                                      |
-| `slopmax priority <account> <tier>` | Higher tiers are used first; negative tiers hold an account in reserve |
-| `slopmax enable\|disable <account>` | Put an account in or take it out of rotation                           |
-| `slopmax remove <account>`          | Forget an account                                                      |
-| `slopmax redeem <account>`          | Redeem a ChatGPT reset credit (`--yes` skips the prompt)               |
-| `slopmax start\|stop`               | Run the proxy in the background, or stop it                            |
-| `slopmax serve`                     | Run the proxy in the foreground                                        |
-| `slopmax run <agent> [args…]`       | Launch Claude Code or Codex through the proxy                          |
-| `slopmax env <agent>`               | Print shell setup for `eval`                                           |
-| `slopmax setup <agent> [--undo]`    | Point an agent's own config at the proxy, or restore it                |
+| Command                              | Description                                                                   |
+| ------------------------------------ | ----------------------------------------------------------------------------- |
+| `slopmax [status]`                   | Accounts, usage windows, and resets (`--watch`, `--refresh`, `--json`)        |
+| `slopmax init`                       | Guided setup of accounts, agents, and the service (`--yes` takes the defaults) |
+| `slopmax login <provider>`           | Sign in, or enter an API key (`--label`; `--device`, `--no-browser`; `--url`, `--dialect`, `--models` for `compat`) |
+| `slopmax import [source]`            | Copy logins from `claude-code`, `codex`, `cliproxyapi`, or `all` (`--own`)    |
+| `slopmax own <account\|all>`         | Refresh an account slopmax has been following from CLIProxyAPI               |
+| `slopmax use <account\|auto>`        | Prefer an account for new sessions, or let slopmax choose                     |
+| `slopmax label <account> <name>`     | Rename an account                                                             |
+| `slopmax priority <account> <tier>`  | Higher tiers are used first; negative tiers hold an account in reserve        |
+| `slopmax enable\|disable <account>`  | Put an account in or take it out of rotation                                  |
+| `slopmax remove <account>`           | Forget an account                                                             |
+| `slopmax redeem <account>`           | Redeem a ChatGPT reset credit (`--yes` skips the prompt)                      |
+| `slopmax service install\|uninstall\|status` | Run the proxy as a systemd user unit or launchd agent                 |
+| `slopmax start\|stop`                | Run the proxy in the background (through the service, if installed), or stop it |
+| `slopmax serve`                      | Run the proxy in the foreground                                               |
+| `slopmax run <agent> [args…]`        | Launch Claude Code or Codex through the proxy                                 |
+| `slopmax env <agent>`                | Print shell setup for `eval`                                                  |
+| `slopmax setup <agent> [--undo]`     | Point an agent's own config at the proxy, or restore it                       |
+| `slopmax usage [range]`              | Token totals and API-equivalent cost (`--by`, `--json`)                       |
+| `slopmax notify`                     | Send a test notification                                                      |
+| `slopmax doctor`                     | Check the setup and say how to fix problems                                   |
+| `slopmax completions <shell>`        | Print a completion script for bash, zsh, or fish                              |
 
-`<account>` is the number shown by `slopmax status`, or the account's id, email, or label.
+`<account>` is the number shown by `slopmax status`, or the account's id, email, or label. `<provider>` is `claude`, `codex`, `anthropic`, `openai`, `xai`, or `compat`.
 
 ## Configuration
 
 `~/.slopmax/config.toml` is written on first run, with each setting explained. `SLOPMAX_HOME` moves the whole directory.
 
-| Setting                   | Default          | Description                                                     |
-| ------------------------- | ---------------- | --------------------------------------------------------------- |
-| `listen`                  | `127.0.0.1:7567` | Proxy address                                                   |
-| `api_key`                 | generated        | Key agents present to the proxy                                 |
-| `strategy`                | `reset-first`    | `reset-first`, `fill-first`, or `least-used`                    |
-| `session_ttl_mins`        | `60`             | Idle minutes before a session's account is forgotten            |
-| `poll_mins`               | `5`              | Minutes between usage polls per account (`0` turns polling off) |
-| `refresh_tokens`          | `true`           | Refresh OAuth tokens before they expire                         |
-| `redeem_expiring_credits` | `true`           | Redeem a ChatGPT reset credit before it expires unused          |
-| `redeem_when_exhausted`   | `false`          | Redeem one when every Codex account is spent                    |
+| Setting                   | Default          | Description                                                         |
+| ------------------------- | ---------------- | ------------------------------------------------------------------- |
+| `listen`                  | `127.0.0.1:7567` | Proxy address                                                       |
+| `api_key`                 | generated        | Key clients present to the proxy                                    |
+| `strategy`                | `reset-first`    | `reset-first`, `fill-first`, or `least-used`                        |
+| `session_ttl_mins`        | `60`             | Idle minutes before a session's account is forgotten                |
+| `poll_mins`               | `5`              | Minutes between usage polls per account (`0` turns polling off)     |
+| `refresh_tokens`          | `true`           | Refresh OAuth tokens before they expire                             |
+| `redeem_expiring_credits` | `true`           | Redeem a ChatGPT reset credit before it expires unused              |
+| `redeem_when_exhausted`   | `false`          | Redeem one when every Codex account is spent                        |
+| `paid_overflow`           | `false`          | Let API keys take over a subscription's models once it is limited   |
+| `proxy`                   | none             | Upstream proxy (`http://`, `socks5://`, `socks5h://`), else `HTTPS_PROXY` |
+| `[aliases]`, `[fallbacks]` | none            | Model renames, and models to try once one is limited everywhere     |
+| `[prices]`                | none             | API prices for `slopmax usage`, beyond Anthropic's built-in list    |
+| `[notify]`                | none             | Webhook, command, and events for notifications                      |
 
-The background proxy logs to `~/.slopmax/slopmax.log`. `SLOPMAX_LOG` sets the log filter, for example `SLOPMAX_LOG=slopmax=debug`.
+The background proxy logs to `~/.slopmax/slopmax.log`. `SLOPMAX_LOG` sets the log level, for example `SLOPMAX_LOG=debug`.
 
 ## Compared with CLIProxyAPI and opencodex
 
-slopmax was designed after a close read of [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) and [opencodex](https://github.com/lidge-jun/opencodex). Both pool accounts and do a great deal more. slopmax stays small: two agents, two upstreams, and a scheduler built around reset times.
+slopmax was designed after a close read of [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) and [opencodex](https://github.com/lidge-jun/opencodex). Both pool accounts and translate between APIs, and both do a great deal more. slopmax aims for the same everyday features in one small binary, with a guided setup and a scheduler built around reset times.
 
-|                        | slopmax                                            | CLIProxyAPI                                    | opencodex                                              |
-| ---------------------- | -------------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------ |
-| Built with             | Rust, one binary                                   | Go                                             | TypeScript on Bun                                      |
-| Scope                  | Claude Code and Codex on subscription logins       | Many providers, translated between API formats | Codex and Claude Code plus other providers, with a GUI |
-| Default account choice | The quota that resets soonest                      | Round-robin within priority tiers              | One active account, switching at 80% used              |
-| Usage data             | Usage endpoints and response headers               | Response headers, for display                  | Usage endpoint and response headers                    |
-| Session stickiness     | Built in                                           | Opt-in                                         | Built in                                               |
-| Reset credits          | On request, before expiry, and when spent (opt-in) | —                                              | Before expiry (opt-in), plus Claude reset grants       |
+|                        | slopmax                                                        | CLIProxyAPI                                    | opencodex                                              |
+| ---------------------- | -------------------------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------ |
+| Built with             | Rust, one binary                                               | Go                                             | TypeScript on Bun                                      |
+| Setup                  | `slopmax init`, `slopmax doctor`                               | Config file                                    | Desktop app and CLI                                    |
+| Default account choice | The quota that resets soonest                                  | Round-robin within priority tiers              | One active account, switching at 80% used              |
+| Usage data             | Usage endpoints and response headers                           | Response headers, for display                  | Usage endpoint and response headers                    |
+| Session stickiness     | Built in                                                       | Opt-in                                         | Built in                                               |
+| Translation            | Through one common form: Messages, Responses, and Chat clients | Pairwise translators between many formats      | Responses-centered, with Claude Code inbound           |
+| Claude requests        | From Claude Code only, unchanged but for the credential        | From any client, rewritten to pass as Claude Code | From any client, with Claude Code's identity added   |
+| Reset credits          | On request, before expiry, and when spent (opt-in)             | —                                              | Before expiry (opt-in), plus Claude reset grants       |
 
 ## Caveats
 
-- An imported login shares its refresh token with the tool it came from. Refresh tokens rotate on use, so once one tool refreshes, the other is signed out. Sign in with `slopmax login` for an independent session, or set `refresh_tokens = false` while the other tool still owns the login.
-- Claude reset grants are not supported yet; only ChatGPT reset credits are.
-- There is no WebSocket transport. Codex learns this on its first attempt and falls back to HTTP streaming.
+- Anthropic's terms allow Claude subscription logins in Claude Code only, and pooling subscription accounts may conflict with a provider's terms of service. slopmax serves Claude accounts to Claude Code alone and forwards its requests unchanged, but whether to pool accounts is your call.
+- Claude reset grants are not supported; only ChatGPT reset credits are.
+- There is no WebSocket transport yet. Codex learns this on its first attempt and falls back to HTTP streaming.
 - Requests go out through rustls, without imitating any client's TLS fingerprint.
-- Pooling subscription accounts may conflict with a provider's terms of service. Use slopmax at your own discretion.
 
 ## Development
 
@@ -168,7 +274,7 @@ mise run check    # rustfmt, clippy with warnings denied, and the tests
 mise run build    # optimized release binary
 ```
 
-`tests/proxy.rs` runs the proxy end to end against a mock provider.
+`tests/proxy.rs` runs the proxy end to end against mock providers. [ARCHITECTURE.md](ARCHITECTURE.md) maps the code and walks through adding a provider, an agent, or an API format.
 
 ## License
 
