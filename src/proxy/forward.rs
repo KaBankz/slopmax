@@ -186,6 +186,13 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice) -> Attempt {
         }
         if response.status().is_success() {
             app.pool.record_success(&id, now);
+            let path = inbound.target.split('?').next().unwrap_or_default();
+            let model = inbound.model.as_deref().unwrap_or("-");
+            tracing::info!(
+                "{id} {} {path} {model} → {}",
+                inbound.parts.method,
+                response.status().as_u16()
+            );
             return Attempt::Done(stream_back(app, inbound.provider, id, response));
         }
 

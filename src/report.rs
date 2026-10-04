@@ -77,6 +77,9 @@ pub fn build(
 }
 
 const BAR: usize = 10;
+const PLAN: usize = 9;
+/// Width of a usage cell: bar, percentage, and reset countdown.
+const CELL: usize = BAR + 12;
 
 /// Renders the report as a table grouped by provider.
 pub fn render(report: &Report, now: Timestamp) -> String {
@@ -109,9 +112,9 @@ pub fn render(report: &Report, now: Timestamp) -> String {
             out,
             "\n{}  {}  {}  {}  {}",
             ui::bold(ui::pad(&provider.as_str().to_uppercase(), name_width + 4)),
-            ui::dim(ui::pad("PLAN", 9)),
-            ui::dim(ui::pad("5H", BAR + 12)),
-            ui::dim(ui::pad("WEEK", BAR + 12)),
+            ui::dim(ui::pad("PLAN", PLAN)),
+            ui::dim(ui::pad("5H", CELL)),
+            ui::dim(ui::pad("WEEK", CELL)),
             ui::dim("STATUS"),
         );
         for account in accounts {
@@ -131,7 +134,7 @@ pub fn render(report: &Report, now: Timestamp) -> String {
                 "{} {}  {}  {}  {}  {}",
                 ui::dim(format!("{index:>2}")),
                 ui::pad(&name, name_width + 1),
-                ui::pad(account.plan.as_deref().unwrap_or("—"), 9),
+                ui::pad(account.plan.as_deref().unwrap_or("—"), PLAN),
                 window_cell(span("5h"), now),
                 window_cell(week, now),
                 status_cell(account, now),
@@ -143,10 +146,18 @@ pub fn render(report: &Report, now: Timestamp) -> String {
                 .iter()
                 .filter(|w| w.model.is_some())
             {
+                // Under the matching column: the row prefix is the index and
+                // name, then the plan, then each usage cell.
+                let five_hour_column = name_width + 4 + 2 + PLAN + 2;
+                let column = match scoped.span.as_str() {
+                    "5h" => five_hour_column,
+                    _ => five_hour_column + CELL + 2,
+                };
+                let label = format!("└ {}", scoped.label());
                 let _ = writeln!(
                     out,
-                    "   {}  {}",
-                    ui::dim(ui::pad(&format!("└ {}", scoped.label()), name_width + 11)),
+                    "   {}{}",
+                    ui::dim(ui::pad(&label, column - 3)),
                     window_cell(Some(scoped), now),
                 );
             }
@@ -170,7 +181,7 @@ pub fn render(report: &Report, now: Timestamp) -> String {
 
 fn window_cell(window: Option<&Window>, now: Timestamp) -> String {
     let Some(window) = window else {
-        return ui::pad(&ui::dim("—"), BAR + 12);
+        return ui::pad(&ui::dim("—"), CELL);
     };
     let used = window.used_at(now);
     let reset = window
@@ -184,7 +195,7 @@ fn window_cell(window: Option<&Window>, now: Timestamp) -> String {
         ui::by_level(used, format!("{:>3.0}%", used)),
         ui::dim(reset)
     );
-    ui::pad(&cell, BAR + 12)
+    ui::pad(&cell, CELL)
 }
 
 fn status_cell(account: &AccountReport, now: Timestamp) -> String {

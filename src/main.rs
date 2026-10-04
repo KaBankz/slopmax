@@ -1,3 +1,4 @@
+use std::io::IsTerminal;
 use std::process::ExitCode;
 
 use clap::Parser;
@@ -20,6 +21,7 @@ async fn main() -> ExitCode {
                 .unwrap_or_else(|_| EnvFilter::new(default_level)),
         )
         .with_writer(std::io::stderr)
+        .with_ansi(std::io::stderr().is_terminal())
         .init();
 
     match cli::run(cli).await {
