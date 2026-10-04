@@ -18,6 +18,7 @@ pub mod pool;
 pub mod provider;
 pub mod proxy;
 pub mod report;
+pub mod service;
 pub mod time;
 pub mod ui;
 pub mod usage;

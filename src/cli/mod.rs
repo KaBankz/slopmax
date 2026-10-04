@@ -20,6 +20,7 @@ use crate::pool::{Pins, Pool, State};
 use crate::provider::ProviderId;
 use crate::provider::credits::Outcome;
 use crate::report::{self, Report};
+use crate::service::Manager;
 use crate::time::{SignedDuration, Timestamp};
 use crate::{daemon, fsx, net, paths, ui, usage};
 
@@ -63,6 +64,21 @@ const SOURCES: &[Choice] = &[
     Choice {
         value: "cliproxyapi",
         help: "CLIProxyAPI credential files (~/.cli-proxy-api/*.json)",
+    },
+];
+
+const SERVICE_ACTIONS: &[Choice] = &[
+    Choice {
+        value: "install",
+        help: "Start slopmax at login (systemd user unit or launchd agent)",
+    },
+    Choice {
+        value: "uninstall",
+        help: "Remove the service",
+    },
+    Choice {
+        value: "status",
+        help: "Show whether the service is installed and running",
     },
 ];
 
@@ -211,6 +227,11 @@ pub static APP: App = App {
         command("start", "Start the proxy in the background", &[]),
         command("stop", "Stop the background proxy", &[]),
         command(
+            "service",
+            "Run the proxy as a service that starts at login",
+            &[arg("action", "What to do", Kind::Required(SERVICE_ACTIONS))],
+        ),
+        command(
             "run",
             "Launch an agent through the proxy, starting the proxy if needed",
             &[
@@ -305,6 +326,7 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
         "serve" => daemon::run(config).await?,
         "start" => start(&config).await?,
         "stop" => stop(&config).await?,
+        "service" => service(&config, &m.get::<String>("action")?).await?,
         "run" => {
             ensure_running(&config).await?;
             return agent::run(agent_named(m)?, &config, &m.rest);
@@ -656,7 +678,7 @@ async fn start(config: &Config) -> Result<()> {
         println!("slopmax is already running on {}", config.base_url());
         return Ok(());
     }
-    spawn_background(config).await?;
+    launch(config).await?;
     println!(
         "slopmax running on {} {}",
         config.base_url(),
@@ -678,7 +700,75 @@ async fn stop(config: &Config) -> Result<()> {
 
 async fn ensure_running(config: &Config) -> Result<()> {
     if !Daemon::new(config).is_running().await {
-        spawn_background(config).await?;
+        launch(config).await?;
+    }
+    Ok(())
+}
+
+/// Starts the proxy: through the service when one is installed, so it stays
+/// supervised, else as a detached process.
+async fn launch(config: &Config) -> Result<()> {
+    match Manager::detect().filter(|m| m.status().installed) {
+        Some(manager) => {
+            manager.start()?;
+            wait_until_running(config).await
+        }
+        None => spawn_background(config).await,
+    }
+}
+
+async fn service(config: &Config, action: &str) -> Result<()> {
+    let manager = Manager::detect().context(
+        "no supported service manager here (systemd user services or launchd); \
+         run `slopmax start` from a login script instead",
+    )?;
+    match action {
+        "install" => {
+            let daemon = Daemon::new(config);
+            if daemon.is_running().await {
+                // The service takes over the port.
+                daemon.shutdown().await?;
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            }
+            let exe = std::env::current_exe().context("locating the slopmax binary")?;
+            let file = manager.install(&exe)?;
+            wait_until_running(config).await?;
+            println!(
+                "slopmax now starts at login {}",
+                ui::dim(format!("({})", file.display()))
+            );
+            if manager.status().lingering == Some(false) {
+                println!(
+                    "{}",
+                    ui::dim(
+                        "To keep it running after you log out (on a server), run \
+                         `loginctl enable-linger $USER`."
+                    )
+                );
+            }
+        }
+        "uninstall" => {
+            let file = manager.uninstall()?;
+            println!(
+                "Removed the service {}",
+                ui::dim(format!("({})", file.display()))
+            );
+        }
+        _ => {
+            let status = manager.status();
+            let state = match (status.installed, status.running) {
+                (false, _) => "not installed".to_owned(),
+                (true, true) => ui::green("installed and running"),
+                (true, false) => ui::yellow("installed, not running"),
+            };
+            println!("service: {state}");
+            if status.lingering == Some(false) && status.installed {
+                println!(
+                    "{}",
+                    ui::dim("It stops when you log out; `loginctl enable-linger $USER` keeps it.")
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -703,7 +793,10 @@ async fn spawn_background(config: &Config) -> Result<()> {
         command.process_group(0);
     }
     command.spawn().context("starting the proxy")?;
+    wait_until_running(config).await
+}
 
+async fn wait_until_running(config: &Config) -> Result<()> {
     let daemon = Daemon::new(config);
     for _ in 0..50 {
         if daemon.is_running().await {
@@ -779,6 +872,7 @@ mod tests {
             "serve",
             "start",
             "stop",
+            "service status",
             "run codex exec -c model=m hi",
             "env claude",
             "setup codex --undo",

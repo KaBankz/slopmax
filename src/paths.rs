@@ -3,7 +3,8 @@
 use std::env;
 use std::path::PathBuf;
 
-fn user_home() -> PathBuf {
+/// The user's home directory.
+pub fn user_home() -> PathBuf {
     env::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
