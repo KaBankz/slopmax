@@ -1,8 +1,6 @@
 //! Account connection: OAuth login, token refresh, and credential import.
 
 pub mod callback;
-pub mod claude;
-pub mod codex;
 pub mod import;
 pub mod jwt;
 pub mod pkce;
@@ -13,12 +11,9 @@ use anyhow::{Result, anyhow};
 use http::StatusCode;
 
 use crate::account::{Account, Store, Tokens};
-use crate::ids;
 use crate::log;
 use crate::net::{Client, Origins};
-use crate::provider::ProviderId;
 use crate::time::Timestamp;
-use pkce::Pkce;
 
 /// Tokens returned by a code exchange or refresh.
 #[derive(Debug, Clone)]
@@ -98,53 +93,25 @@ pub struct LoginOptions {
     pub no_browser: bool,
 }
 
-/// Runs an interactive OAuth login and returns the connected account.
-pub async fn login(provider: ProviderId, options: LoginOptions) -> Result<Account> {
-    let http = http_client(Origins::default());
-    if provider == ProviderId::Codex && options.device {
-        return codex::device_login(&http).await;
-    }
-    let pkce = Pkce::generate();
-    let state = ids::token();
-    let (url, port, path) = match provider {
-        ProviderId::Claude => (
-            claude::authorize_url(&pkce, &state),
-            claude::CALLBACK_PORT,
-            claude::CALLBACK_PATH,
-        ),
-        ProviderId::Codex => (
-            codex::authorize_url(&pkce, &state),
-            codex::CALLBACK_PORT,
-            codex::CALLBACK_PATH,
-        ),
-    };
-
-    let opened = !options.no_browser && callback::open_browser(&url);
+/// The browser half of an authorization-code login: opens (or prints)
+/// `url`, then waits for the redirect to `(port, path)` or a pasted URL.
+pub async fn browser_login(
+    title: &str,
+    url: &str,
+    (port, path): (u16, &'static str),
+    state: &str,
+    options: LoginOptions,
+) -> Result<callback::Callback> {
+    let opened = !options.no_browser && callback::open_browser(url);
     eprintln!(
-        "\n  {} your {provider} account in the browser:\n\n  {url}\n",
+        "\n  {} your {title} account in the browser:\n\n  {url}\n",
         if opened { "Opened" } else { "Authorize" }
     );
     eprintln!(
         "  Waiting for the redirect to localhost:{port}. If the browser runs on another\n  \
          machine, paste the final localhost URL from its address bar here.\n"
     );
-
-    let callback = callback::receive(port, path, &state).await?;
-    match provider {
-        ProviderId::Claude => {
-            let state = callback.state.as_deref().unwrap_or(&state);
-            claude::exchange(&http, &callback.code, state, &pkce).await
-        }
-        ProviderId::Codex => {
-            codex::exchange(
-                &http,
-                &callback.code,
-                &pkce.verifier,
-                &codex::redirect_uri(),
-            )
-            .await
-        }
-    }
+    callback::receive(port, path, state).await
 }
 
 /// Returns `account` with a usable access token, refreshing it when it is
@@ -162,7 +129,8 @@ pub async fn ensure_fresh(
     force: bool,
 ) -> Result<Account, RefreshError> {
     let now = Timestamp::now();
-    let due = move |a: &Account| force || a.tokens.expires_within(a.provider.refresh_lead(), now);
+    let due =
+        move |a: &Account| force || a.tokens.expires_within(a.provider.spec().refresh_lead, now);
     if !due(account) {
         return Ok(account.clone());
     }
@@ -196,11 +164,8 @@ async fn refresh_and_save(
     let Some(refresh_token) = account.tokens.refresh_token.clone() else {
         return Err(RefreshError::Revoked("no refresh token stored".into()));
     };
-    let result = match account.provider {
-        ProviderId::Claude => claude::refresh(http, &refresh_token).await,
-        ProviderId::Codex => codex::refresh(http, &refresh_token).await,
-    };
-    let grant = match result {
+    let provider = account.provider.get();
+    let grant = match provider.refresh(http, &refresh_token).await {
         Ok(grant) => grant,
         Err(err) => {
             if let RefreshError::Revoked(reason) = &err {
@@ -219,14 +184,7 @@ async fn refresh_and_save(
     account.tokens = tokens;
     account.auth_error = None;
 
-    match account.provider {
-        ProviderId::Codex => codex::apply_claims(&mut account),
-        ProviderId::Claude => {
-            if let Ok(profile) = claude::profile(http, &account.tokens.access_token).await {
-                claude::apply_profile(&mut account, &profile);
-            }
-        }
-    }
+    provider.identify(http, &mut account).await;
     // Persist before anyone uses the new token: the old refresh token is dead.
     if let Err(e) = store.save(&account) {
         log::error!("refreshed {} but could not save it: {e:#}", account.id);

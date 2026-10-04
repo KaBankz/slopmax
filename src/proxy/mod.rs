@@ -5,8 +5,6 @@
 //! key, assigned an account by the [`Pool`], and forwarded upstream with
 //! that account's credentials.
 
-mod claude;
-mod codex;
 mod forward;
 pub mod rawjson;
 mod sse;
@@ -288,7 +286,7 @@ const HOP_BY_HOP: [&str; 9] = [
 
 /// Client headers safe to forward upstream: everything but hop-by-hop
 /// headers and the agent's local credentials and cookies.
-fn forwardable(client: &HeaderMap) -> HeaderMap {
+pub(crate) fn forwardable(client: &HeaderMap) -> HeaderMap {
     let mut headers = HeaderMap::with_capacity(client.len());
     for (name, value) in client {
         let name_str = name.as_str();
@@ -305,7 +303,7 @@ fn forwardable(client: &HeaderMap) -> HeaderMap {
 }
 
 /// Upstream response headers safe to return to the agent.
-fn returnable(upstream: &HeaderMap) -> HeaderMap {
+pub(crate) fn returnable(upstream: &HeaderMap) -> HeaderMap {
     let mut headers = HeaderMap::with_capacity(upstream.len());
     for (name, value) in upstream {
         let name_str = name.as_str();

@@ -1,74 +1,11 @@
 //! Reads each account's usage windows from its provider's usage endpoint.
 
 use anyhow::{Result, anyhow, bail};
-use http::StatusCode;
-use serde_json::Value;
 
 use crate::account::{Account, Store};
-use crate::auth::{self, RefreshError, claude, codex};
-use crate::limits::{self, Limits};
+use crate::auth::{self, RefreshError};
 use crate::net::Client;
-use crate::provider::ProviderId;
-use crate::time::Timestamp;
-
-/// A usage reading, plus the plan when the endpoint reports one.
-#[derive(Debug, Clone)]
-pub struct Reading {
-    pub limits: Limits,
-    pub plan: Option<String>,
-}
-
-enum FetchError {
-    Unauthorized,
-    Other(anyhow::Error),
-}
-
-async fn fetch(http: &Client, account: &Account) -> Result<Reading, FetchError> {
-    let token = &account.tokens.access_token;
-    let request = match account.provider {
-        ProviderId::Claude => http
-            .get(format!("{}/api/oauth/usage", claude::API))
-            .header("anthropic-beta", claude::OAUTH_BETA),
-        ProviderId::Codex => {
-            let request = http.get(format!("{}/wham/usage", codex::BACKEND));
-            match &account.account_id {
-                Some(id) => request.header("chatgpt-account-id", id),
-                None => request,
-            }
-        }
-    };
-    let response = request
-        .bearer_auth(token)
-        .send()
-        .await
-        .map_err(|e| FetchError::Other(e.into()))?;
-    let status = response.status();
-    if status == StatusCode::UNAUTHORIZED {
-        return Err(FetchError::Unauthorized);
-    }
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        let snippet: String = body.chars().take(200).collect();
-        return Err(FetchError::Other(anyhow!(
-            "usage endpoint returned {status}: {snippet}"
-        )));
-    }
-    let body: Value = response
-        .json()
-        .await
-        .map_err(|e| FetchError::Other(e.into()))?;
-    let now = Timestamp::now();
-    Ok(match account.provider {
-        ProviderId::Claude => Reading {
-            limits: limits::from_claude_usage(&body, now),
-            plan: None,
-        },
-        ProviderId::Codex => {
-            let (limits, plan) = limits::from_codex_usage(&body, now);
-            Reading { limits, plan }
-        }
-    })
-}
+use crate::provider::{Reading, UsageError};
 
 /// Polls one account, refreshing its token first when due (if `refresh` is
 /// allowed) and retrying once after a forced refresh if the token is
@@ -83,18 +20,19 @@ pub async fn poll(
     if refresh {
         account = fresh(http, store, &account, false).await?;
     }
-    match fetch(http, &account).await {
+    let provider = account.provider.get();
+    match provider.usage(http, &account).await {
         Ok(reading) => Ok((account, reading)),
-        Err(FetchError::Other(e)) => Err(e),
-        Err(FetchError::Unauthorized) if refresh => {
+        Err(UsageError::Other(e)) => Err(e),
+        Err(UsageError::Unauthorized) if refresh => {
             account = fresh(http, store, &account, true).await?;
-            match fetch(http, &account).await {
+            match provider.usage(http, &account).await {
                 Ok(reading) => Ok((account, reading)),
-                Err(FetchError::Unauthorized) => bail!("token rejected after refresh"),
-                Err(FetchError::Other(e)) => Err(e),
+                Err(UsageError::Unauthorized) => bail!("token rejected after refresh"),
+                Err(UsageError::Other(e)) => Err(e),
             }
         }
-        Err(FetchError::Unauthorized) => bail!("token rejected (refresh disabled)"),
+        Err(UsageError::Unauthorized) => bail!("token rejected (refresh disabled)"),
     }
 }
 

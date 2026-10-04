@@ -10,11 +10,10 @@ use tokio::net::TcpListener;
 use crate::account::{Account, Store};
 use crate::auth;
 use crate::config::Config;
-use crate::credits::{self, Outcome};
 use crate::log;
 use crate::net::{Origins, server};
 use crate::pool::State;
-use crate::provider::ProviderId;
+use crate::provider::credits::Outcome;
 use crate::proxy::{self, App};
 use crate::time::{SignedDuration, Timestamp};
 use crate::{fsx, paths, usage};
@@ -209,7 +208,7 @@ pub async fn redeem_expiring(app: &App) {
     for account in app.pool.accounts() {
         let state = app.pool.state(&account.id);
         let used = state.limits.windows.iter().any(|w| w.used_at(now) > 0.0);
-        if account.provider != ProviderId::Codex
+        if account.provider.get().credits().is_none()
             || account.disabled
             || account.auth_error.is_some()
             || state.limits.reset_credits.unwrap_or(0) == 0
@@ -245,15 +244,20 @@ async fn redeem_if_expiring(
     account: &Account,
     now: Timestamp,
 ) -> Result<Option<Outcome>> {
-    let credits = credits::list(&app.auth_http, account).await?;
-    let expiring = credits.first().filter(|c| {
-        c.expires()
+    let Some(credits) = account.provider.get().credits() else {
+        return Ok(None);
+    };
+    let available = credits.list(&app.auth_http, account).await?;
+    let expiring = available.first().filter(|c| {
+        c.expires_at
             .is_some_and(|at| at.duration_since(now) <= CREDIT_EXPIRY_LEAD)
     });
     let Some(credit) = expiring else {
         return Ok(None);
     };
-    let outcome = credits::redeem(&app.auth_http, account, Some(&credit.id)).await?;
+    let outcome = credits
+        .redeem(&app.auth_http, account, Some(&credit.id))
+        .await?;
     Ok(Some(outcome))
 }
 

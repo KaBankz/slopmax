@@ -101,12 +101,11 @@ impl Account {
 
     /// The provider-side key that distinguishes accounts with separate limits.
     pub fn identity_key(&self) -> String {
-        let key = match self.provider {
-            ProviderId::Claude => self.org_id.as_ref().or(self.account_id.as_ref()),
-            ProviderId::Codex => self.account_id.as_ref(),
-        };
-        key.or(self.email.as_ref())
-            .cloned()
+        self.provider
+            .get()
+            .identity(self)
+            .or(self.email.as_deref())
+            .map(str::to_owned)
             .unwrap_or_else(|| self.tokens.refresh_token.clone().unwrap_or_default())
     }
 

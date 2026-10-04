@@ -14,10 +14,10 @@ use crate::account::Store;
 use crate::auth::import::{self, Source};
 use crate::auth::{self, LoginOptions};
 use crate::config::Config;
-use crate::credits::{self, Outcome};
 use crate::net::Origins;
 use crate::pool::{Pins, Pool, State};
 use crate::provider::ProviderId;
+use crate::provider::credits::Outcome;
 use crate::report::{self, Report};
 use crate::time::{SignedDuration, Timestamp};
 use crate::{agents, daemon, fsx, net, paths, ui, usage};
@@ -415,7 +415,15 @@ async fn login(
     label: Option<String>,
     options: LoginOptions,
 ) -> Result<()> {
-    let mut account = auth::login(provider, options).await?;
+    let spec = provider.spec();
+    if options.device && !spec.device_login {
+        bail!(
+            "--device works for ChatGPT accounts; {} signs in with a browser",
+            spec.title
+        );
+    }
+    let http = auth::http_client(Origins::default());
+    let mut account = provider.get().login(&http, options).await?;
     if label.is_some() {
         account.label = label;
     }
@@ -531,39 +539,39 @@ fn remove(store: &Store, query: &str) -> Result<()> {
 
 async fn redeem(config: &Config, store: &Store, query: &str, yes: bool) -> Result<()> {
     let account = store.find(query)?;
-    if account.provider != ProviderId::Codex {
+    let Some(credits) = account.provider.get().credits() else {
         bail!(
-            "reset credits are a ChatGPT feature; {} is a {} account",
+            "{} is a {} account, which has no reset credits",
             account.name(),
-            account.provider
+            account.provider.spec().title
         );
-    }
+    };
     let http = auth::http_client(Origins::default());
     let account = if config.refresh_tokens {
         auth::ensure_fresh(&http, store, &account, false).await?
     } else {
         account
     };
-    let credits = credits::list(&http, &account).await?;
-    let Some(next) = credits.first() else {
+    let available = credits.list(&http, &account).await?;
+    let Some(next) = available.first() else {
         println!("{} has no reset credits.", ui::bold(account.name()));
         return Ok(());
     };
     let now = Timestamp::now();
     let expiry = next
-        .expires()
+        .expires_at
         .map(|at| format!("; the next expires in {}", ui::until(at, now)))
         .unwrap_or_default();
-    let s = if credits.len() == 1 { "" } else { "s" };
+    let s = if available.len() == 1 { "" } else { "s" };
     println!(
         "{} has {} reset credit{s}{expiry}.",
         ui::bold(account.name()),
-        credits.len()
+        available.len()
     );
     if !yes && !confirm("Reset its usage windows now?")? {
         return Ok(());
     }
-    match credits::redeem(&http, &account, Some(&next.id)).await? {
+    match credits.redeem(&http, &account, Some(&next.id)).await? {
         Outcome::Reset => {
             println!("Reset the usage windows on {}.", ui::bold(account.name()));
             // Let a running proxy pick up the fresh windows right away.

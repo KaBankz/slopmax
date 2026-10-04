@@ -4,16 +4,14 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{Grant, RefreshError, pkce::Pkce};
 use crate::account::Account;
-use crate::log;
-use crate::net::Client;
-use crate::net::form;
+use crate::auth::pkce::Pkce;
+use crate::auth::{self, Grant, LoginOptions, RefreshError};
+use crate::net::{Client, form};
 use crate::provider::ProviderId;
 use crate::time::{SignedDuration, Timestamp};
+use crate::{ids, log};
 
-/// Anthropic's API: Messages, the OAuth profile, and usage.
-pub const API: &str = "https://api.anthropic.com";
 pub const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const AUTHORIZE_URL: &str = "https://claude.ai/oauth/authorize";
 const TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
@@ -125,6 +123,17 @@ impl Profile {
             _ => base,
         })
     }
+}
+
+/// Signs in through claude.ai.
+pub async fn login(http: &Client, options: LoginOptions) -> Result<Account> {
+    let pkce = Pkce::generate();
+    let state = ids::token();
+    let url = authorize_url(&pkce, &state);
+    let redirect = (CALLBACK_PORT, CALLBACK_PATH);
+    let callback = auth::browser_login("Claude", &url, redirect, &state, options).await?;
+    let state = callback.state.as_deref().unwrap_or(&state);
+    exchange(http, &callback.code, state, &pkce).await
 }
 
 /// Exchanges an authorization code for tokens and builds the account.

@@ -7,15 +7,14 @@ use http::StatusCode;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{Grant, RefreshError, jwt, pkce::Pkce};
 use crate::account::Account;
-use crate::net::Client;
-use crate::net::form;
+use crate::auth::pkce::Pkce;
+use crate::auth::{self, Grant, LoginOptions, RefreshError, jwt};
+use crate::ids;
+use crate::net::{Client, form};
 use crate::provider::ProviderId;
 use crate::time::Timestamp;
 
-/// The ChatGPT backend: the Codex API, usage, and reset credits.
-pub const BACKEND: &str = "https://chatgpt.com/backend-api";
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const ISSUER: &str = "https://auth.openai.com";
 const SCOPES: &str = "openid profile email offline_access";
@@ -52,6 +51,19 @@ pub fn authorize_url(pkce: &Pkce, state: &str) -> String {
         ("originator", "codex_cli_rs"),
     ];
     format!("{ISSUER}/oauth/authorize?{}", form::encode(params))
+}
+
+/// Signs in through auth.openai.com, in a browser or with a device code.
+pub async fn login(http: &Client, options: LoginOptions) -> Result<Account> {
+    if options.device {
+        return device_login(http).await;
+    }
+    let pkce = Pkce::generate();
+    let state = ids::token();
+    let url = authorize_url(&pkce, &state);
+    let redirect = (CALLBACK_PORT, CALLBACK_PATH);
+    let callback = auth::browser_login("ChatGPT", &url, redirect, &state, options).await?;
+    exchange(http, &callback.code, &pkce.verifier, &redirect_uri()).await
 }
 
 #[derive(Debug, Deserialize)]

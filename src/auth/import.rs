@@ -12,11 +12,12 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{claude, codex};
 use crate::account::{Account, Tokens};
 use crate::net::Client;
 use crate::paths;
 use crate::provider::ProviderId;
+use crate::provider::claude::oauth as claude;
+use crate::provider::codex::oauth as codex;
 use crate::time::Timestamp;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

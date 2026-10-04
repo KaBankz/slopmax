@@ -6,7 +6,6 @@ pub mod agents;
 pub mod auth;
 pub mod cli;
 pub mod config;
-pub mod credits;
 pub mod daemon;
 pub mod fsx;
 pub mod ids;

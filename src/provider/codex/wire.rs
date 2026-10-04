@@ -8,7 +8,7 @@
 use http::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
 
-use super::rawjson::{self, Seg};
+use crate::proxy::rawjson::{self, Seg};
 
 /// The session id for affinity. Codex sends the same `session-id` for a
 /// whole tree of subagents, matching its `prompt_cache_key`, so the tree
@@ -37,7 +37,7 @@ pub fn upstream_headers(
     account_id: Option<&str>,
     moved: bool,
 ) -> HeaderMap {
-    let mut headers = super::forwardable(client);
+    let mut headers = crate::proxy::forwardable(client);
     insert(
         &mut headers,
         "authorization",

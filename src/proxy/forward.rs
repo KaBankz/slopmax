@@ -15,17 +15,16 @@ use serde_json::json;
 
 use super::rawjson::{self, Seg};
 use super::sse::{Tap, Tapped};
-use super::{App, claude, codex, error, json_reply, returnable};
+use super::{App, error, json_reply, returnable};
 use crate::account::Account;
 use crate::auth;
-use crate::credits::{self, Outcome};
-use crate::limits::{self, Refusal};
 use crate::log;
 use crate::net::body;
 use crate::net::client::{self, Response as Upstream};
 use crate::net::server::{Request, Response};
 use crate::pool::{Choice, DEFAULT_BLOCK, DEFAULT_THROTTLE, Pick, Unavailable};
-use crate::provider::ProviderId;
+use crate::provider::credits::Outcome;
+use crate::provider::{ProviderId, Verdict, claude, codex};
 use crate::time::{SignedDuration, Timestamp};
 use crate::ui;
 
@@ -55,8 +54,8 @@ impl Inbound {
         let json = !encoded && rawjson::is_valid(&body);
         let inspectable: &[u8] = if json { &body } else { b"" };
         let session = match provider {
-            ProviderId::Claude => claude::session_id(&parts.headers, inspectable),
-            ProviderId::Codex => codex::session_id(&parts.headers, inspectable),
+            ProviderId::Claude => claude::wire::session_id(&parts.headers, inspectable),
+            ProviderId::Codex => codex::wire::session_id(&parts.headers, inspectable),
         };
         let model = json
             .then(|| rawjson::find_str(&body, &[Seg::Key("model")]))
@@ -72,15 +71,16 @@ impl Inbound {
         }
     }
 
-    /// The body to send upstream. Only a Codex session that moved accounts
-    /// is edited, to drop state the new account cannot read.
+    /// The body to send upstream: as the agent sent it, unless the session
+    /// moved accounts and the body holds state bound to the old one.
     fn body(&self, strip_state: bool) -> Bytes {
-        match self.provider {
-            ProviderId::Codex if strip_state && self.json => codex::strip_account_state(&self.body)
-                .map(Bytes::from)
-                .unwrap_or_else(|| self.body.clone()),
-            _ => self.body.clone(),
+        if strip_state
+            && self.json
+            && let Some(rebound) = self.provider.get().rebind(&self.body)
+        {
+            return rebound.into();
         }
+        self.body.clone()
     }
 }
 
@@ -157,13 +157,9 @@ pub(super) async fn forward(
             Ok(choice) => choice,
             Err(unavailable) => {
                 let spent = unavailable.until.is_some();
-                if spent
-                    && provider == ProviderId::Codex
-                    && app.config.redeem_when_exhausted
-                    && !rescued
-                {
+                if spent && app.config.redeem_when_exhausted && !rescued {
                     rescued = true;
-                    if let Some(id) = rescue(&app).await {
+                    if let Some(id) = rescue(&app, provider).await {
                         tried.retain(|t| *t != id);
                         continue;
                     }
@@ -198,12 +194,8 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice) -> Attempt {
             }
         };
         let now = Timestamp::now();
-        let headers = response.headers();
-        let observed = match inbound.provider {
-            ProviderId::Claude => limits::from_claude_headers(headers, now),
-            ProviderId::Codex => limits::from_codex_headers(headers, now),
-        };
-        if let Some(limits) = observed {
+        let provider = inbound.provider.get();
+        if let Some(limits) = provider.limits(response.headers(), now) {
             app.pool.observe(&id, limits, now);
         }
         if response.status().is_success() {
@@ -219,10 +211,16 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice) -> Attempt {
         }
 
         let mut failure = Failure::read(response).await;
-        let status = failure.status.as_u16();
-        log::info!("{id}: upstream returned {status}");
-        match (inbound.provider, status) {
-            (_, 401) if !refreshed && app.config.refresh_tokens => {
+        log::info!("{id}: upstream returned {}", failure.status.as_u16());
+        let verdict = provider.verdict(
+            failure.status,
+            &failure.headers,
+            &failure.body,
+            inbound.model.as_deref(),
+            now,
+        );
+        match verdict {
+            Verdict::Unauthorized if !refreshed && app.config.refresh_tokens => {
                 refreshed = true;
                 match auth::ensure_fresh(&app.auth_http, &app.store, &account, true).await {
                     Ok(fresh) => {
@@ -236,15 +234,13 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice) -> Attempt {
                     }
                 }
             }
-            (ProviderId::Codex, 400)
-                if !stripped && codex::rejects_account_state(&failure.body) =>
-            {
+            Verdict::StaleState if !stripped => {
                 stripped = true;
                 body = inbound.body(stripped);
                 continue;
             }
-            (_, 401 | 403) => {
-                let reason = if status == 401 {
+            Verdict::Unauthorized | Verdict::Forbidden => {
+                let reason = if verdict == Verdict::Unauthorized {
                     "unauthorized"
                 } else {
                     "forbidden"
@@ -252,51 +248,35 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice) -> Attempt {
                 app.pool.block(&id, now + ACCOUNT_BLOCK, None, reason);
                 return Attempt::Failed(Some(failure));
             }
-            (ProviderId::Claude, 429) | (ProviderId::Codex, 429 | 402) => {
-                let refusal = match inbound.provider {
-                    ProviderId::Claude => {
-                        limits::claude_refusal(&failure.headers, inbound.model.as_deref(), now)
-                    }
-                    ProviderId::Codex => {
-                        limits::codex_refusal(status, &failure.headers, &failure.body, now)
-                    }
-                };
-                match refusal {
-                    Refusal::Exhausted { until, model } => {
-                        failure.exhausted = true;
-                        let until = until.unwrap_or(now + DEFAULT_BLOCK);
-                        app.pool
-                            .block(&id, until, model.as_deref(), "usage limit reached");
-                        log::info!("{id}: limited until {until}; switching accounts");
-                    }
-                    Refusal::Throttled { until } => {
-                        app.pool
-                            .throttle(&id, until.unwrap_or(now + DEFAULT_THROTTLE));
-                    }
-                }
-                return Attempt::Failed(Some(failure));
-            }
-            (ProviderId::Codex, s) if s >= 500 && codex::reports_usage_limit(&failure.body) => {
+            Verdict::Exhausted { until, model } => {
                 failure.exhausted = true;
+                let until = until.unwrap_or(now + DEFAULT_BLOCK);
                 app.pool
-                    .block(&id, now + DEFAULT_BLOCK, None, "usage limit reached");
+                    .block(&id, until, model.as_deref(), "usage limit reached");
+                log::info!("{id}: limited until {until}; switching accounts");
                 return Attempt::Failed(Some(failure));
             }
-            _ => return Attempt::Done(failure.into_response()),
+            Verdict::Throttled { until } => {
+                app.pool
+                    .throttle(&id, until.unwrap_or(now + DEFAULT_THROTTLE));
+                return Attempt::Failed(Some(failure));
+            }
+            Verdict::StaleState | Verdict::Final => return Attempt::Done(failure.into_response()),
         }
     }
 }
 
-/// Redeems a banked reset credit on a spent Codex account. Returns the
-/// account that can serve again, if any.
-async fn rescue(app: &App) -> Option<String> {
+/// Redeems a banked reset credit on a spent account of `provider`, if it
+/// grants them. Returns the account that can serve again, if any.
+async fn rescue(app: &App, provider: ProviderId) -> Option<String> {
+    let credits = provider.get().credits()?;
     let _redeeming = app.redeeming.lock().await;
     let now = Timestamp::now();
     let accounts: Vec<Account> = app
         .pool
         .accounts()
         .into_iter()
-        .filter(|a| a.provider == ProviderId::Codex && !a.disabled && a.auth_error.is_none())
+        .filter(|a| a.provider == provider && !a.disabled && a.auth_error.is_none())
         .collect();
     // Another request may have redeemed while this one waited for the lock.
     if let Some(free) = accounts
@@ -320,7 +300,7 @@ async fn rescue(app: &App) -> Option<String> {
         let Some(account) = app.ready(&picked).await else {
             continue;
         };
-        match credits::redeem(&app.auth_http, &account, None).await {
+        match credits.redeem(&app.auth_http, &account, None).await {
             Ok(Outcome::Reset) => {
                 log::info!("{}: redeemed a reset credit", account.id);
                 app.pool.record_reset(&account.id, Timestamp::now());
@@ -340,22 +320,9 @@ async fn send(
     body: Bytes,
     moved: bool,
 ) -> Result<Upstream, client::Error> {
-    let token = &account.tokens.access_token;
-    let (url, headers) = match inbound.provider {
-        ProviderId::Claude => (
-            format!("{}{}", auth::claude::API, inbound.target),
-            claude::upstream_headers(&inbound.parts.headers, token),
-        ),
-        ProviderId::Codex => (
-            format!("{}/codex{}", auth::codex::BACKEND, inbound.target),
-            codex::upstream_headers(
-                &inbound.parts.headers,
-                token,
-                account.account_id.as_deref(),
-                moved,
-            ),
-        ),
-    };
+    let provider = inbound.provider.get();
+    let url = format!("{}{}", provider.spec().api, inbound.target);
+    let headers = provider.headers(&inbound.parts.headers, account, moved);
     app.http
         .request(inbound.parts.method.clone(), url)
         .headers(headers)
