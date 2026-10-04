@@ -334,6 +334,7 @@ pub struct Builder {
     read_timeout: Option<Duration>,
     proxy: Option<Proxy>,
     origins: Origins,
+    plain: bool,
 }
 
 impl Builder {
@@ -362,6 +363,13 @@ impl Builder {
     /// Sends requests through `proxy` (otherwise `HTTPS_PROXY`/`ALL_PROXY`).
     pub fn proxy(mut self, proxy: Option<Proxy>) -> Self {
         self.proxy = proxy;
+        self
+    }
+
+    /// Plain HTTP only, for calls to the local proxy. Loading the system's
+    /// trusted roots takes longer than such a call, so it is skipped.
+    pub fn plain_http(mut self) -> Self {
+        self.plain = true;
         self
     }
 
@@ -409,7 +417,11 @@ impl Builder {
             through,
             bypass: Arc::new(Bypass::from_env()),
         };
-        let roots = system_roots();
+        let roots = if self.plain {
+            Err("this client makes plain HTTP requests only")
+        } else {
+            system_roots()
+        };
         let https = HttpsConnectorBuilder::new()
             .with_tls_config(tls_config(roots.clone().ok()))
             .https_or_http()
@@ -657,6 +669,15 @@ impl Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn plain_clients_refuse_https() {
+        let client = Client::builder().plain_http().build();
+        let Err(error) = client.get("https://example.com/").send().await else {
+            panic!("a plain client reached an HTTPS address");
+        };
+        assert!(error.to_string().contains("plain HTTP"), "{error}");
+    }
 
     #[test]
     fn parses_proxy_urls() {

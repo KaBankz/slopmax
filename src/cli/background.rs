@@ -23,6 +23,7 @@ impl Daemon {
         let http = net::Client::builder()
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(1))
+            .plain_http()
             .build();
         Self {
             base: config.base_url(),
