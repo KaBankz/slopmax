@@ -31,6 +31,8 @@ pub struct Cli {
     command: Option<Command>,
 }
 
+const ACCOUNT: &str = "Number from `slopmax status`, or the account's id, email, or label";
+
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Show accounts, usage windows, and when limits reset
@@ -55,23 +57,42 @@ enum Command {
         source: Source,
     },
     /// Prefer an account for new sessions, or `auto` to let slopmax choose
-    Use { account: String },
+    Use {
+        #[arg(help = ACCOUNT)]
+        account: String,
+    },
     /// Set an account's display name
-    Label { account: String, label: String },
+    Label {
+        #[arg(help = ACCOUNT)]
+        account: String,
+        label: String,
+    },
     /// Set an account's priority; higher tiers are used first
     Priority {
+        #[arg(help = ACCOUNT)]
         account: String,
+        /// Tier, 0 by default; negative values hold an account in reserve
         #[arg(allow_hyphen_values = true)]
         priority: i32,
     },
     /// Route to an account again
-    Enable { account: String },
+    Enable {
+        #[arg(help = ACCOUNT)]
+        account: String,
+    },
     /// Stop routing to an account (its tokens are still kept fresh)
-    Disable { account: String },
+    Disable {
+        #[arg(help = ACCOUNT)]
+        account: String,
+    },
     /// Forget an account
-    Remove { account: String },
+    Remove {
+        #[arg(help = ACCOUNT)]
+        account: String,
+    },
     /// Redeem a banked reset credit, resetting a ChatGPT account's limits
     Redeem {
+        #[arg(help = ACCOUNT)]
         account: String,
         /// Skip the confirmation prompt
         #[arg(short, long)]
