@@ -12,11 +12,10 @@ use crate::auth;
 use crate::config::Config;
 use crate::credits::{self, Outcome};
 use crate::log;
-use crate::net::server;
+use crate::net::{Origins, server};
 use crate::pool::State;
 use crate::proxy::{self, App};
 use crate::time::{SignedDuration, Timestamp};
-use crate::upstream::Upstream;
 use crate::{fsx, paths, usage};
 
 /// How often blocked accounts are re-checked, in case quota frees up early.
@@ -30,7 +29,7 @@ pub async fn run(config: Config) -> Result<()> {
         .await
         .with_context(|| format!("cannot listen on {listen} (is slopmax already running?)"))?;
     let state: State = fsx::read_json(&paths::state_file())?.unwrap_or_default();
-    let app = App::new(config, Store::open(), Upstream::default(), state);
+    let app = App::new(config, Store::open(), state, Origins::default());
     app.sync()?;
 
     tokio::spawn(every(
@@ -168,7 +167,6 @@ pub async fn poll_all(app: &Arc<App>, force: bool) {
             let result = usage::poll(
                 &app.auth_http,
                 &app.store,
-                &app.upstream,
                 &account,
                 app.config.refresh_tokens,
             )
@@ -246,7 +244,7 @@ async fn redeem_if_expiring(
     account: &Account,
     now: Timestamp,
 ) -> Result<Option<Outcome>> {
-    let credits = credits::list(&app.auth_http, &app.upstream, account).await?;
+    let credits = credits::list(&app.auth_http, account).await?;
     let expiring = credits.first().filter(|c| {
         c.expires()
             .is_some_and(|at| at.duration_since(now) <= CREDIT_EXPIRY_LEAD)
@@ -254,7 +252,7 @@ async fn redeem_if_expiring(
     let Some(credit) = expiring else {
         return Ok(None);
     };
-    let outcome = credits::redeem(&app.auth_http, &app.upstream, account, Some(&credit.id)).await?;
+    let outcome = credits::redeem(&app.auth_http, account, Some(&credit.id)).await?;
     Ok(Some(outcome))
 }
 

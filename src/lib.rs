@@ -19,5 +19,4 @@ pub mod proxy;
 pub mod report;
 pub mod time;
 pub mod ui;
-pub mod upstream;
 pub mod usage;

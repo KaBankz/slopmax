@@ -13,6 +13,8 @@ use crate::net::Client;
 use crate::net::form;
 use crate::time::Timestamp;
 
+/// The ChatGPT backend: the Codex API, usage, and reset credits.
+pub const BACKEND: &str = "https://chatgpt.com/backend-api";
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const ISSUER: &str = "https://auth.openai.com";
 const SCOPES: &str = "openid profile email offline_access";

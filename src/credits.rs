@@ -11,11 +11,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::account::Account;
+use crate::auth::codex;
 use crate::ids;
 use crate::net::Client;
 use crate::net::client::RequestBuilder;
 use crate::time::Timestamp;
-use crate::upstream::Upstream;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Credit {
@@ -66,8 +66,8 @@ fn authorized(request: RequestBuilder, account: &Account) -> RequestBuilder {
 }
 
 /// Available credits, soonest-expiring first.
-pub async fn list(http: &Client, upstream: &Upstream, account: &Account) -> Result<Vec<Credit>> {
-    let url = format!("{}/wham/rate-limit-reset-credits", upstream.chatgpt);
+pub async fn list(http: &Client, account: &Account) -> Result<Vec<Credit>> {
+    let url = format!("{}/wham/rate-limit-reset-credits", codex::BACKEND);
     let response = authorized(http.get(url), account).send().await?;
     let status = response.status();
     if !status.is_success() {
@@ -88,13 +88,8 @@ pub async fn list(http: &Client, upstream: &Upstream, account: &Account) -> Resu
 
 /// Redeems one credit (the given one, or the server's choice). The request
 /// id is reused on a retry, so a lost response cannot spend two credits.
-pub async fn redeem(
-    http: &Client,
-    upstream: &Upstream,
-    account: &Account,
-    credit_id: Option<&str>,
-) -> Result<Outcome> {
-    let url = format!("{}/wham/rate-limit-reset-credits/consume", upstream.chatgpt);
+pub async fn redeem(http: &Client, account: &Account, credit_id: Option<&str>) -> Result<Outcome> {
+    let url = format!("{}/wham/rate-limit-reset-credits/consume", codex::BACKEND);
     let mut body = json!({ "redeem_request_id": ids::uuid_v4() });
     if let Some(id) = credit_id {
         body["credit_id"] = id.into();

@@ -11,6 +11,8 @@ use crate::net::Client;
 use crate::net::form;
 use crate::time::{SignedDuration, Timestamp};
 
+/// Anthropic's API: Messages, the OAuth profile, and usage.
+pub const API: &str = "https://api.anthropic.com";
 pub const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const AUTHORIZE_URL: &str = "https://claude.ai/oauth/authorize";
 const TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";

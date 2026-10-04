@@ -335,7 +335,11 @@ mod tests {
         fs::write(dir.join("xai-c.json"), r#"{"type":"xai"}"#).unwrap();
         fs::write(dir.join("config.yaml"), "port: 1").unwrap();
 
-        let found = from_cliproxyapi(&crate::auth::http_client(), &dir).await;
+        let found = from_cliproxyapi(
+            &crate::auth::http_client(crate::net::Origins::default()),
+            &dir,
+        )
+        .await;
         let accounts: Vec<Account> = found.into_iter().map(|f| f.account.unwrap()).collect();
         assert_eq!(accounts.len(), 2);
         let claude = &accounts[0];

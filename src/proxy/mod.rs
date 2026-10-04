@@ -23,13 +23,12 @@ use crate::account::{Account, Provider, Store};
 use crate::auth::{self, RefreshError};
 use crate::config::Config;
 use crate::log;
-use crate::net::Client;
 use crate::net::body;
 use crate::net::server::{Request, Response};
+use crate::net::{Client, Origins};
 use crate::pool::{Pins, Pool, State as PoolState};
 use crate::report::{self, Report};
 use crate::time::{SignedDuration, Timestamp};
-use crate::upstream::Upstream;
 use crate::{fsx, paths};
 
 /// Shared state for request handlers and background tasks.
@@ -37,7 +36,6 @@ pub struct App {
     pub config: Config,
     pub store: Store,
     pub pool: Pool,
-    pub upstream: Upstream,
     /// Inference traffic: long-lived streams, so only a stall timeout.
     http: Client,
     /// OAuth and usage calls, with bounded timeouts.
@@ -50,10 +48,12 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(config: Config, store: Store, upstream: Upstream, state: PoolState) -> Arc<Self> {
+    /// `origins` reroutes provider URLs; tests point them at a mock.
+    pub fn new(config: Config, store: Store, state: PoolState, origins: Origins) -> Arc<Self> {
         let http = Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .read_timeout(Duration::from_secs(600))
+            .origins(origins.clone())
             .build();
         let pool = Pool::new(
             config.strategy,
@@ -64,9 +64,8 @@ impl App {
             config,
             store,
             pool,
-            upstream,
             http,
-            auth_http: crate::auth::http_client(),
+            auth_http: crate::auth::http_client(origins),
             shutdown: tokio::sync::Notify::new(),
             redeeming: tokio::sync::Mutex::new(()),
         })

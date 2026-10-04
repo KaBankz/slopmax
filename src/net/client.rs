@@ -284,6 +284,29 @@ fn tls_config(roots: Option<Arc<rustls::RootCertStore>>) -> rustls::ClientConfig
         .with_no_client_auth()
 }
 
+/// URL prefixes to send elsewhere. Tests stand in for a provider this way:
+/// `https://api.anthropic.com` → `http://127.0.0.1:PORT`.
+#[derive(Debug, Clone, Default)]
+pub struct Origins(Arc<Vec<(String, String)>>);
+
+impl Origins {
+    pub fn new<'a>(pairs: impl IntoIterator<Item = (&'a str, &'a str)>) -> Self {
+        Self(Arc::new(
+            pairs
+                .into_iter()
+                .map(|(from, to)| (from.to_owned(), to.to_owned()))
+                .collect(),
+        ))
+    }
+
+    fn apply(&self, url: &str) -> Option<String> {
+        self.0.iter().find_map(|(from, to)| {
+            let rest = url.strip_prefix(from.as_str())?;
+            (rest.is_empty() || rest.starts_with(['/', '?'])).then(|| format!("{to}{rest}"))
+        })
+    }
+}
+
 /// An HTTP client. Cloning is cheap and shares the connection pool.
 #[derive(Clone)]
 pub struct Client {
@@ -293,6 +316,7 @@ pub struct Client {
     user_agent: Option<HeaderValue>,
     timeout: Option<Duration>,
     read_timeout: Option<Duration>,
+    origins: Origins,
 }
 
 /// Configures a [`Client`].
@@ -303,6 +327,7 @@ pub struct Builder {
     timeout: Option<Duration>,
     read_timeout: Option<Duration>,
     proxy: Option<Proxy>,
+    origins: Origins,
 }
 
 impl Builder {
@@ -331,6 +356,12 @@ impl Builder {
     /// Sends requests through `proxy` (otherwise `HTTPS_PROXY`/`ALL_PROXY`).
     pub fn proxy(mut self, proxy: Option<Proxy>) -> Self {
         self.proxy = proxy;
+        self
+    }
+
+    /// Sends requests for some URL prefixes elsewhere.
+    pub fn origins(mut self, origins: Origins) -> Self {
+        self.origins = origins;
         self
     }
 
@@ -389,6 +420,7 @@ impl Builder {
                 .and_then(|agent| HeaderValue::from_str(&agent).ok()),
             timeout: self.timeout,
             read_timeout: self.read_timeout,
+            origins: self.origins,
         }
     }
 }
@@ -407,7 +439,8 @@ impl Client {
     }
 
     pub fn request(&self, method: Method, url: impl AsRef<str>) -> RequestBuilder {
-        let url = url.as_ref();
+        let rewritten = self.origins.apply(url.as_ref());
+        let url = rewritten.as_deref().unwrap_or(url.as_ref());
         RequestBuilder {
             client: self.clone(),
             method,
@@ -620,6 +653,19 @@ mod tests {
         assert_eq!(socks.to_string(), "socks5h://10.0.0.2:1080");
         assert!(Proxy::parse("proxy.local:3128").is_err());
         assert!(Proxy::parse("ftp://proxy.local").is_err());
+    }
+
+    #[test]
+    fn origins_rewrite_matching_prefixes() {
+        let origins = Origins::new([("https://chatgpt.com/backend-api", "http://127.0.0.1:9")]);
+        assert_eq!(
+            origins
+                .apply("https://chatgpt.com/backend-api/wham/usage")
+                .as_deref(),
+            Some("http://127.0.0.1:9/wham/usage")
+        );
+        assert_eq!(origins.apply("https://chatgpt.com/backend-apix"), None);
+        assert_eq!(origins.apply("https://api.anthropic.com/v1/messages"), None);
     }
 
     #[test]

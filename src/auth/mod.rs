@@ -15,7 +15,7 @@ use http::StatusCode;
 use crate::account::{Account, Provider, Store, Tokens};
 use crate::ids;
 use crate::log;
-use crate::net::Client;
+use crate::net::{Client, Origins};
 use crate::time::Timestamp;
 use pkce::Pkce;
 
@@ -80,8 +80,9 @@ impl std::fmt::Display for RefreshError {
 impl std::error::Error for RefreshError {}
 
 /// HTTP client for OAuth and usage endpoints, with bounded timeouts.
-pub fn http_client() -> Client {
+pub fn http_client(origins: Origins) -> Client {
     Client::builder()
+        .origins(origins)
         .user_agent(concat!("slopmax/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30))
@@ -98,7 +99,7 @@ pub struct LoginOptions {
 
 /// Runs an interactive OAuth login and returns the connected account.
 pub async fn login(provider: Provider, options: LoginOptions) -> Result<Account> {
-    let http = http_client();
+    let http = http_client(Origins::default());
     if provider == Provider::Codex && options.device {
         return codex::device_login(&http).await;
     }

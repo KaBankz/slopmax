@@ -5,11 +5,10 @@ use http::StatusCode;
 use serde_json::Value;
 
 use crate::account::{Account, Provider, Store};
-use crate::auth::{self, RefreshError, claude};
+use crate::auth::{self, RefreshError, claude, codex};
 use crate::limits::{self, Limits};
 use crate::net::Client;
 use crate::time::Timestamp;
-use crate::upstream::Upstream;
 
 /// A usage reading, plus the plan when the endpoint reports one.
 #[derive(Debug, Clone)]
@@ -23,18 +22,14 @@ enum FetchError {
     Other(anyhow::Error),
 }
 
-async fn fetch(
-    http: &Client,
-    upstream: &Upstream,
-    account: &Account,
-) -> Result<Reading, FetchError> {
+async fn fetch(http: &Client, account: &Account) -> Result<Reading, FetchError> {
     let token = &account.tokens.access_token;
     let request = match account.provider {
         Provider::Claude => http
-            .get(upstream.claude_usage())
+            .get(format!("{}/api/oauth/usage", claude::API))
             .header("anthropic-beta", claude::OAUTH_BETA),
         Provider::Codex => {
-            let request = http.get(upstream.codex_usage());
+            let request = http.get(format!("{}/wham/usage", codex::BACKEND));
             match &account.account_id {
                 Some(id) => request.header("chatgpt-account-id", id),
                 None => request,
@@ -80,7 +75,6 @@ async fn fetch(
 pub async fn poll(
     http: &Client,
     store: &Store,
-    upstream: &Upstream,
     account: &Account,
     refresh: bool,
 ) -> Result<(Account, Reading)> {
@@ -88,12 +82,12 @@ pub async fn poll(
     if refresh {
         account = fresh(http, store, &account, false).await?;
     }
-    match fetch(http, upstream, &account).await {
+    match fetch(http, &account).await {
         Ok(reading) => Ok((account, reading)),
         Err(FetchError::Other(e)) => Err(e),
         Err(FetchError::Unauthorized) if refresh => {
             account = fresh(http, store, &account, true).await?;
-            match fetch(http, upstream, &account).await {
+            match fetch(http, &account).await {
                 Ok(reading) => Ok((account, reading)),
                 Err(FetchError::Unauthorized) => bail!("token rejected after refresh"),
                 Err(FetchError::Other(e)) => Err(e),

@@ -15,10 +15,10 @@ use crate::auth::import::{self, Source};
 use crate::auth::{self, LoginOptions};
 use crate::config::Config;
 use crate::credits::{self, Outcome};
+use crate::net::Origins;
 use crate::pool::{Pins, Pool, State};
 use crate::report::{self, Report};
 use crate::time::{SignedDuration, Timestamp};
-use crate::upstream::Upstream;
 use crate::{agents, daemon, fsx, net, paths, ui, usage};
 
 const ACCOUNT: &str = "Number from `slopmax status`, or the account's id, email, or label";
@@ -388,10 +388,9 @@ async fn offline_report(config: &Config, store: &Store, refresh: bool) -> Result
     let pool = Pool::new(config.strategy, SignedDuration::from_hours(1), state);
     pool.sync(store.list()?, pins.clone());
     if refresh {
-        let http = auth::http_client();
-        let upstream = Upstream::default();
+        let http = auth::http_client(Origins::default());
         for account in pool.accounts().iter().filter(|a| a.auth_error.is_none()) {
-            match usage::poll(&http, store, &upstream, account, config.refresh_tokens).await {
+            match usage::poll(&http, store, account, config.refresh_tokens).await {
                 Ok((_, reading)) => pool.observe(&account.id, reading.limits, Timestamp::now()),
                 Err(e) => eprintln!("{} {}: {e:#}", ui::yellow("warning:"), account.name()),
             }
@@ -441,7 +440,7 @@ async fn login(
 }
 
 async fn import(store: &Store, source: Source) -> Result<()> {
-    let http = auth::http_client();
+    let http = auth::http_client(Origins::default());
     let found = import::discover(&http, source).await;
     if found.is_empty() {
         println!("No logins found to import.");
@@ -538,14 +537,13 @@ async fn redeem(config: &Config, store: &Store, query: &str, yes: bool) -> Resul
             account.provider
         );
     }
-    let http = auth::http_client();
+    let http = auth::http_client(Origins::default());
     let account = if config.refresh_tokens {
         auth::ensure_fresh(&http, store, &account, false).await?
     } else {
         account
     };
-    let upstream = Upstream::default();
-    let credits = credits::list(&http, &upstream, &account).await?;
+    let credits = credits::list(&http, &account).await?;
     let Some(next) = credits.first() else {
         println!("{} has no reset credits.", ui::bold(account.name()));
         return Ok(());
@@ -564,7 +562,7 @@ async fn redeem(config: &Config, store: &Store, query: &str, yes: bool) -> Resul
     if !yes && !confirm("Reset its usage windows now?")? {
         return Ok(());
     }
-    match credits::redeem(&http, &upstream, &account, Some(&next.id)).await? {
+    match credits::redeem(&http, &account, Some(&next.id)).await? {
         Outcome::Reset => {
             println!("Reset the usage windows on {}.", ui::bold(account.name()));
             // Let a running proxy pick up the fresh windows right away.

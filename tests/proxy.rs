@@ -13,14 +13,13 @@ use serde_json::{Value, json};
 use slopmax::account::{Account, Provider, Store, Tokens};
 use slopmax::config::{Config, Strategy};
 use slopmax::limits::{Limits, Window};
-use slopmax::net::Client;
 use slopmax::net::body;
 use slopmax::net::client::RequestBuilder;
 use slopmax::net::server::{self, Request, Response};
+use slopmax::net::{Client, Origins};
 use slopmax::pool::State as PoolState;
 use slopmax::proxy::{self, App};
 use slopmax::time::{SignedDuration, Timestamp};
-use slopmax::upstream::Upstream;
 use tokio::net::TcpListener;
 
 const KEY: &str = "sm-test-key";
@@ -259,11 +258,11 @@ async fn harness_with(
         ..Config::default()
     };
     configure(&mut config);
-    let upstream = Upstream {
-        anthropic: upstream_url.clone(),
-        chatgpt: upstream_url,
-    };
-    let app = App::new(config, store, upstream, PoolState::default());
+    let origins = Origins::new([
+        ("https://api.anthropic.com", upstream_url.as_str()),
+        ("https://chatgpt.com/backend-api", upstream_url.as_str()),
+    ]);
+    let app = App::new(config, store, PoolState::default(), origins);
     app.pool.sync(app.store.list().unwrap(), Default::default());
     let proxy = serve({
         let app = app.clone();

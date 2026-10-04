@@ -317,7 +317,7 @@ async fn rescue(app: &App) -> Option<String> {
         let Some(account) = app.ready(&picked).await else {
             continue;
         };
-        match credits::redeem(&app.auth_http, &app.upstream, &account, None).await {
+        match credits::redeem(&app.auth_http, &account, None).await {
             Ok(Outcome::Reset) => {
                 log::info!("{}: redeemed a reset credit", account.id);
                 app.pool.record_reset(&account.id, Timestamp::now());
@@ -340,11 +340,11 @@ async fn send(
     let token = &account.tokens.access_token;
     let (url, headers) = match inbound.provider {
         Provider::Claude => (
-            app.upstream.claude(&inbound.target),
+            format!("{}{}", auth::claude::API, inbound.target),
             claude::upstream_headers(&inbound.parts.headers, token),
         ),
         Provider::Codex => (
-            app.upstream.codex(&inbound.target),
+            format!("{}/codex{}", auth::codex::BACKEND, inbound.target),
             codex::upstream_headers(
                 &inbound.parts.headers,
                 token,
