@@ -87,6 +87,14 @@ pub trait Agent: Send + Sync {
     /// What to tell the user after `setup`.
     fn setup_note(&self) -> &'static str;
 
+    /// Whether the agent has a saved login to import (checked without
+    /// touching it).
+    fn has_login(&self) -> bool;
+
+    /// Where the agent's config sends it today, when that is somewhere
+    /// other than its provider: a base URL or provider name.
+    fn wired_to(&self) -> Option<String>;
+
     /// The agent's own saved login, if it has one.
     fn import<'a>(&'a self, http: &'a Client) -> BoxFuture<'a, Option<Found>>;
 }

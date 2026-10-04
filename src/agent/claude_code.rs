@@ -150,6 +150,16 @@ impl Agent for ClaudeCode {
          tab and Cowork keep using the app's own login."
     }
 
+    fn has_login(&self) -> bool {
+        credentials().is_some()
+    }
+
+    fn wired_to(&self) -> Option<String> {
+        let settings = read_settings(&self.config_file()).ok()?;
+        let base = settings.get("env")?.get("ANTHROPIC_BASE_URL")?.as_str()?;
+        Some(base.to_owned())
+    }
+
     fn import<'a>(&'a self, http: &'a Client) -> BoxFuture<'a, Option<Found>> {
         Box::pin(async move {
             let oauth = credentials()?;

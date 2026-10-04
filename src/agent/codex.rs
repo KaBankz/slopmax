@@ -190,6 +190,28 @@ impl Agent for Codex {
          the same config."
     }
 
+    fn has_login(&self) -> bool {
+        let file = paths::codex_dir().join("auth.json");
+        fs::read_to_string(file)
+            .ok()
+            .and_then(|text| serde_json::from_str::<AuthFile>(&text).ok())
+            .is_some_and(|auth| auth.tokens.is_some())
+    }
+
+    fn wired_to(&self) -> Option<String> {
+        let doc = read_toml(&self.config_file()).ok()?;
+        let provider = doc.get("model_provider")?.as_str()?;
+        let base = doc
+            .get("model_providers")
+            .and_then(|p| p.get(provider))
+            .and_then(|t| t.get("base_url"))
+            .and_then(Item::as_str);
+        Some(match base {
+            Some(base) => format!("{provider} ({base})"),
+            None => provider.to_owned(),
+        })
+    }
+
     fn import<'a>(&'a self, _http: &'a Client) -> BoxFuture<'a, Option<Found>> {
         let file = paths::codex_dir().join("auth.json");
         let found = file.exists().then(|| Found {

@@ -2,6 +2,7 @@
 
 mod args;
 mod doctor;
+mod init;
 
 use std::collections::HashMap;
 use std::io::Write as _;
@@ -119,6 +120,15 @@ pub static APP: App = App {
     after_help: "Run without a command to show account status.",
     default: "status",
     commands: &[
+        command(
+            "init",
+            "Set up accounts, agents, and the background service, step by step",
+            &[arg(
+                "yes",
+                "Take every recommended answer without asking",
+                Kind::Flag(Some('y')),
+            )],
+        ),
         Command {
             name: "status",
             alias: Some("ls"),
@@ -272,6 +282,8 @@ struct StatusArgs {
 /// Parses `args` (without the program name), runs the command, and returns
 /// the process exit code.
 pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
+    let args: Vec<String> = args.into_iter().collect();
+    let bare = args.is_empty();
     let matches = match args::parse(&APP, args) {
         Ok(Parsed::Run(matches)) => matches,
         Ok(Parsed::Print(text)) => {
@@ -286,7 +298,20 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
     let m = &matches;
     let config = Config::load()?;
     let store = Store::open();
+    // A first run at a terminal starts the guided setup instead.
+    if bare && init::wanted(&store) {
+        init::run(&config, &store, init::Answers::Ask).await?;
+        return Ok(0);
+    }
     match m.command.name {
+        "init" => {
+            let answers = if m.flag("yes") {
+                init::Answers::Defaults
+            } else {
+                init::Answers::Ask
+            };
+            init::run(&config, &store, answers).await?;
+        }
         "status" => {
             let args = StatusArgs {
                 refresh: m.flag("refresh"),
@@ -785,7 +810,7 @@ async fn service(config: &Config, action: &str) -> Result<()> {
 /// Starts `slopmax serve` detached from the terminal, logging to a file.
 async fn spawn_background(config: &Config) -> Result<()> {
     let exe = std::env::current_exe().context("locating the slopmax binary")?;
-    std::fs::create_dir_all(paths::home())?;
+    fsx::private_dir(&paths::home())?;
     let log = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -868,6 +893,7 @@ mod tests {
     #[test]
     fn every_command_parses_a_typical_invocation() {
         let lines = [
+            "init --yes",
             "status --refresh",
             "ls -w",
             "login claude --label work",

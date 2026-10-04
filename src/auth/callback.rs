@@ -172,17 +172,24 @@ async fn read_pasted(tx: mpsc::Sender<Result<Callback>>) {
     }
 }
 
+/// Whether this machine can show a browser (it has a desktop session).
+pub fn has_browser() -> bool {
+    cfg!(any(target_os = "macos", windows))
+        || std::env::var_os("DISPLAY").is_some()
+        || std::env::var_os("WAYLAND_DISPLAY").is_some()
+}
+
 /// Opens `url` in the default browser; returns false when none is available.
 pub fn open_browser(url: &str) -> bool {
+    if !has_browser() {
+        return false;
+    }
     let program = if cfg!(target_os = "macos") {
         "open"
     } else if cfg!(windows) {
         "explorer"
-    } else if std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some()
-    {
-        "xdg-open"
     } else {
-        return false;
+        "xdg-open"
     };
     Command::new(program)
         .arg(url)

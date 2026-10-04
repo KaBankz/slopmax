@@ -13,7 +13,7 @@ use serde::de::DeserializeOwned;
 /// readers never observe a partially written file.
 pub fn write_private(path: &Path, data: &[u8]) -> io::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
-    fs::create_dir_all(dir)?;
+    private_dir(dir)?;
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
     let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
 
@@ -53,11 +53,24 @@ pub fn read_json<T: DeserializeOwned>(path: &Path) -> io::Result<Option<T>> {
 /// separate slopmax processes from refreshing the same token concurrently.
 pub fn lock(path: &Path) -> io::Result<File> {
     if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir)?;
+        private_dir(dir)?;
     }
     let file = private_options().truncate(false).open(path)?;
     file.lock()?;
     Ok(file)
+}
+
+/// Creates `dir` and any missing parents, readable only by the owner.
+/// Directories that already exist keep their permissions.
+pub fn private_dir(dir: &Path) -> io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(dir)
 }
 
 fn private_options() -> OpenOptions {
@@ -74,6 +87,19 @@ fn private_options() -> OpenOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn new_directories_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("slopmax-fsx-{}", crate::ids::token()));
+        write_private(&root.join("a/b/secret.json"), b"{}").unwrap();
+        for dir in [root.join("a"), root.join("a/b")] {
+            let mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "{}", dir.display());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn write_private_round_trips_and_restricts_permissions() {
