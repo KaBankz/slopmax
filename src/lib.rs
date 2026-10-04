@@ -7,6 +7,7 @@ pub mod config;
 pub mod fsx;
 pub mod limits;
 pub mod paths;
+pub mod pool;
 pub mod ui;
 
 /// Installs process-wide defaults. Call once before making HTTP requests.
