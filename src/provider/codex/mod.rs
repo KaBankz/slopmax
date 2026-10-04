@@ -14,6 +14,7 @@ use crate::auth::{Grant, LoginOptions, RefreshError};
 use crate::limits::Limits;
 use crate::net::Client;
 use crate::time::{SignedDuration, Timestamp};
+use crate::wire::Dialect;
 
 /// The ChatGPT backend: the Codex API, usage, and reset credits.
 pub const BACKEND: &str = "https://chatgpt.com/backend-api";
@@ -24,6 +25,7 @@ static SPEC: Spec = Spec {
     id: "codex",
     title: "ChatGPT",
     api: "https://chatgpt.com/backend-api/codex",
+    dialect: Dialect::Responses,
     // Access tokens live about ten days.
     refresh_lead: SignedDuration::from_hours(24),
     device_login: true,

@@ -28,6 +28,7 @@ use crate::pool::{Pins, Pool, State as PoolState};
 use crate::provider::ProviderId;
 use crate::report::{self, Report};
 use crate::time::{SignedDuration, Timestamp};
+use crate::wire::Dialect;
 use crate::{fsx, paths};
 
 /// Shared state for request handlers and background tasks.
@@ -162,14 +163,15 @@ async fn proxy(app: Arc<App>, request: Request) -> Response {
             "unknown path; slopmax serves /v1/*, /claude/*, and /codex/*",
         );
     };
+    let dialect = provider.spec().dialect;
     if !authorized(&app.config, request.headers()) {
-        return unauthorized(Some(provider));
+        return unauthorized(Some(dialect));
     }
     // Upgrades cannot be relayed. Refusing the handshake with 426 makes
     // Codex switch to HTTP streaming at once instead of retrying.
     if is_websocket(request.headers()) {
         return error(
-            Some(provider),
+            Some(dialect),
             StatusCode::UPGRADE_REQUIRED,
             "slopmax streams over HTTP; WebSockets are not supported",
         );
@@ -246,16 +248,16 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-fn unauthorized(provider: Option<ProviderId>) -> Response {
+fn unauthorized(dialect: Option<Dialect>) -> Response {
     error(
-        provider,
+        dialect,
         StatusCode::UNAUTHORIZED,
         "missing or invalid slopmax key; see `slopmax env`",
     )
 }
 
-/// An error in the shape each agent understands.
-fn error(provider: Option<ProviderId>, status: StatusCode, message: &str) -> Response {
+/// An error in the shape the agent understands (Messages when unknown).
+fn error(dialect: Option<Dialect>, status: StatusCode, message: &str) -> Response {
     let kind = match status.as_u16() {
         401 => "authentication_error",
         404 => "not_found_error",
@@ -265,10 +267,7 @@ fn error(provider: Option<ProviderId>, status: StatusCode, message: &str) -> Res
         s if s >= 500 => "api_error",
         _ => "invalid_request_error",
     };
-    let body = match provider {
-        Some(ProviderId::Codex) => json!({ "error": { "type": kind, "message": message } }),
-        _ => json!({ "type": "error", "error": { "type": kind, "message": message } }),
-    };
+    let body = dialect.unwrap_or(Dialect::Messages).error(kind, message);
     json_reply(status, &body)
 }
 

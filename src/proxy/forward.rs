@@ -11,7 +11,6 @@ use bytes::Bytes;
 use http::request::Parts;
 use http::{HeaderMap, HeaderValue, StatusCode};
 use http_body_util::LengthLimitError;
-use serde_json::json;
 
 use super::rawjson::{self, Seg};
 use super::sse::{Tap, Tapped};
@@ -27,6 +26,7 @@ use crate::provider::credits::Outcome;
 use crate::provider::{ProviderId, Verdict, claude, codex};
 use crate::time::{SignedDuration, Timestamp};
 use crate::ui;
+use crate::wire::Dialect;
 
 /// Largest request body accepted (images make Messages bodies big).
 const MAX_BODY: usize = 256 * 1024 * 1024;
@@ -132,14 +132,18 @@ pub(super) async fn forward(
         Ok(body) => body,
         Err(e) if e.is::<LengthLimitError>() => {
             return error(
-                Some(provider),
+                Some(provider.spec().dialect),
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "request body is too large",
             );
         }
         Err(e) => {
             let message = format!("could not read the request body: {e}");
-            return error(Some(provider), StatusCode::BAD_REQUEST, &message);
+            return error(
+                Some(provider.spec().dialect),
+                StatusCode::BAD_REQUEST,
+                &message,
+            );
         }
     };
     let inbound = Inbound::new(provider, target, parts, body);
@@ -207,7 +211,8 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice) -> Attempt {
                 inbound.parts.method,
                 response.status().as_u16()
             );
-            return Attempt::Done(stream_back(app, inbound.provider, id, response));
+            let dialect = inbound.provider.spec().dialect;
+            return Attempt::Done(stream_back(app, dialect, id, response));
         }
 
         let mut failure = Failure::read(response).await;
@@ -333,7 +338,7 @@ async fn send(
 
 /// Streams a successful response to the agent, recording token usage (and
 /// any quota refusal inside the stream) when it ends.
-fn stream_back(app: &Arc<App>, provider: ProviderId, id: String, response: Upstream) -> Response {
+fn stream_back(app: &Arc<App>, dialect: Dialect, id: String, response: Upstream) -> Response {
     let status = response.status();
     let headers = returnable(response.headers());
     // A compressed stream passes through unread; only the request counts.
@@ -341,9 +346,9 @@ fn stream_back(app: &Arc<App>, provider: ProviderId, id: String, response: Upstr
         .get("content-encoding")
         .is_some_and(|v| v.as_bytes() != b"identity");
     let tap = if compressed {
-        Tap::blind(provider)
+        Tap::blind(dialect)
     } else {
-        Tap::new(provider)
+        Tap::new(dialect)
     };
     let pool_app = Arc::clone(app);
     let stream = Tapped::new(response.into_body(), tap, move |outcome| {
@@ -363,50 +368,32 @@ fn stream_back(app: &Arc<App>, provider: ProviderId, id: String, response: Upstr
 
 /// The response when no account can take the request.
 fn give_up(provider: ProviderId, unavailable: Unavailable, last: Option<Failure>) -> Response {
+    let dialect = provider.spec().dialect;
     match (last, unavailable.until) {
         // Every account is spent: report the earliest reset, in the shape the
         // agent shows as its own usage-limit message.
-        (Some(failure), Some(until)) if failure.exhausted => exhausted(provider, until),
+        (Some(failure), Some(until)) if failure.exhausted => limit_reached(provider, until),
         (Some(failure), _) => failure.into_response(),
-        (None, Some(until)) => exhausted(provider, until),
+        (None, Some(until)) => limit_reached(provider, until),
         (None, None) => error(
-            Some(provider),
+            Some(dialect),
             StatusCode::SERVICE_UNAVAILABLE,
             &unavailable.reason,
         ),
     }
 }
 
-fn exhausted(provider: ProviderId, until: Timestamp) -> Response {
+fn limit_reached(provider: ProviderId, until: Timestamp) -> Response {
     let now = Timestamp::now();
-    let wait = until.duration_since(now).as_secs().max(1);
     let message = format!(
-        "slopmax: every {provider} account is rate limited; the next one frees up in {} (`slopmax status` for details)",
+        "slopmax: every {} account is rate limited; the next one frees up in {} (`slopmax status` for details)",
+        provider.spec().title,
         ui::duration(until.duration_since(now))
     );
-    let (body, extra) = match provider {
-        ProviderId::Claude => (
-            json!({ "type": "error", "error": { "type": "rate_limit_error", "message": message } }),
-            vec![
-                ("anthropic-ratelimit-unified-status", "rejected".to_owned()),
-                (
-                    "anthropic-ratelimit-unified-reset",
-                    until.as_second().to_string(),
-                ),
-            ],
-        ),
-        ProviderId::Codex => (
-            json!({ "error": {
-                "type": "usage_limit_reached",
-                "message": message,
-                "resets_at": until.as_second(),
-                "resets_in_seconds": wait,
-            } }),
-            Vec::new(),
-        ),
-    };
+    let (body, extra) = provider.spec().dialect.limit_reached(&message, until, now);
     let mut response = json_reply(StatusCode::TOO_MANY_REQUESTS, &body);
     let headers = response.headers_mut();
+    let wait = until.duration_since(now).as_secs().max(1);
     headers.insert("retry-after", HeaderValue::from(wait));
     for (name, value) in extra {
         if let Ok(value) = HeaderValue::from_str(&value) {

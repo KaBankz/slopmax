@@ -20,3 +20,4 @@ pub mod report;
 pub mod time;
 pub mod ui;
 pub mod usage;
+pub mod wire;

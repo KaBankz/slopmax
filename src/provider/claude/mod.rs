@@ -13,6 +13,7 @@ use crate::auth::{Grant, LoginOptions, RefreshError};
 use crate::limits::Limits;
 use crate::net::Client;
 use crate::time::{SignedDuration, Timestamp};
+use crate::wire::Dialect;
 
 /// Anthropic's API: Messages, the OAuth profile, and usage.
 pub const API: &str = "https://api.anthropic.com";
@@ -23,6 +24,7 @@ static SPEC: Spec = Spec {
     id: "claude",
     title: "Claude",
     api: API,
+    dialect: Dialect::Messages,
     // Access tokens live 8 hours.
     refresh_lead: SignedDuration::from_hours(1),
     device_login: false,

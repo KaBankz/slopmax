@@ -25,6 +25,7 @@ use crate::limits::{Limits, Refusal};
 use crate::net::Client;
 use crate::net::client::Response;
 use crate::time::{SignedDuration, Timestamp};
+use crate::wire::Dialect;
 
 pub use credits::ResetCredits;
 
@@ -89,6 +90,8 @@ pub struct Spec {
     pub title: &'static str,
     /// Base URL of the API agents talk to; their request path is appended.
     pub api: &'static str,
+    /// The format that API speaks.
+    pub dialect: Dialect,
     /// How long before expiry an access token is refreshed.
     pub refresh_lead: SignedDuration,
     /// Whether `slopmax login --device` is supported.

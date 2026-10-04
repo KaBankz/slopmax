@@ -1,8 +1,8 @@
 //! Watches streamed responses without altering them.
 //!
-//! Bytes pass straight through to the agent while a line parser picks out
-//! token usage (Claude `message_start`/`message_delta`, Codex
-//! `response.completed`) and refusals that arrive inside a 200 stream.
+//! Bytes pass straight through to the agent while a line parser hands each
+//! event to the dialect, which picks out token usage and refusals that
+//! arrive inside a 200 stream.
 
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
@@ -11,23 +11,14 @@ use bytes::Bytes;
 use hyper::body::{Body, Frame, SizeHint};
 use serde_json::Value;
 
-use crate::pool::Usage;
-use crate::provider::ProviderId;
+use crate::wire::{Dialect, Outcome};
 
 /// Longest line the tap will buffer; longer lines pass through unparsed.
 const MAX_LINE: usize = 16 * 1024 * 1024;
 
-/// What the tap learned from a finished (or abandoned) stream.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Outcome {
-    pub usage: Usage,
-    /// An in-stream error that means the account's quota is spent.
-    pub exhausted: bool,
-}
-
 #[derive(Debug)]
 pub struct Tap {
-    provider: ProviderId,
+    dialect: Dialect,
     /// Whether the bytes can be parsed (they are not compressed).
     readable: bool,
     line: Vec<u8>,
@@ -36,9 +27,9 @@ pub struct Tap {
 }
 
 impl Tap {
-    pub fn new(provider: ProviderId) -> Self {
+    pub fn new(dialect: Dialect) -> Self {
         Self {
-            provider,
+            dialect,
             readable: true,
             line: Vec::new(),
             overflow: false,
@@ -47,10 +38,10 @@ impl Tap {
     }
 
     /// A tap for a compressed stream: it only counts the request.
-    pub fn blind(provider: ProviderId) -> Self {
+    pub fn blind(dialect: Dialect) -> Self {
         Self {
             readable: false,
-            ..Self::new(provider)
+            ..Self::new(dialect)
         }
     }
 
@@ -97,67 +88,7 @@ impl Tap {
         let Ok(event) = serde_json::from_slice::<Value>(data.trim_ascii()) else {
             return;
         };
-        match self.provider {
-            ProviderId::Claude => self.claude_event(&event),
-            ProviderId::Codex => self.codex_event(&event),
-        }
-    }
-
-    fn claude_event(&mut self, event: &Value) {
-        let usage = match event.get("type").and_then(Value::as_str) {
-            Some("message_start") => event.pointer("/message/usage"),
-            Some("message_delta") => event.get("usage"),
-            Some("error") => {
-                let kind = event.pointer("/error/type").and_then(Value::as_str);
-                self.outcome.exhausted |= kind == Some("rate_limit_error");
-                None
-            }
-            _ => None,
-        };
-        let Some(usage) = usage else { return };
-        // A later event carries cumulative counts; zeros mean "unchanged".
-        let total = &mut self.outcome.usage;
-        let field = |name: &str| usage.get(name).and_then(Value::as_u64).filter(|n| *n > 0);
-        if let Some(n) = field("input_tokens") {
-            total.input_tokens = n;
-        }
-        if let Some(n) = field("output_tokens") {
-            total.output_tokens = n;
-        }
-        if let Some(n) = field("cache_read_input_tokens") {
-            total.cache_read_tokens = n;
-        }
-        if let Some(n) = field("cache_creation_input_tokens") {
-            total.cache_write_tokens = n;
-        }
-    }
-
-    fn codex_event(&mut self, event: &Value) {
-        match event.get("type").and_then(Value::as_str) {
-            Some("response.completed" | "response.incomplete" | "response.done") => {
-                let Some(usage) = event.pointer("/response/usage") else {
-                    return;
-                };
-                let number = |path: &str| usage.pointer(path).and_then(Value::as_u64).unwrap_or(0);
-                let cached = number("/input_tokens_details/cached_tokens");
-                let total = &mut self.outcome.usage;
-                // Codex counts cached tokens inside input_tokens.
-                total.input_tokens = number("/input_tokens").saturating_sub(cached);
-                total.cache_read_tokens = cached;
-                total.output_tokens = number("/output_tokens");
-            }
-            Some("response.failed" | "error") => {
-                let error = event
-                    .pointer("/response/error")
-                    .or_else(|| event.get("error"));
-                let code = error
-                    .and_then(|e| e.get("code").or_else(|| e.get("type")))
-                    .and_then(Value::as_str);
-                self.outcome.exhausted |=
-                    matches!(code, Some("usage_limit_reached" | "usage_limit_exceeded"));
-            }
-            _ => {}
-        }
+        self.dialect.observe(&event, &mut self.outcome);
     }
 }
 
@@ -229,6 +160,7 @@ impl<B> Drop for Tapped<B> {
 mod tests {
     use super::*;
     use crate::net::body::BoxError;
+    use crate::pool::Usage;
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
@@ -249,7 +181,7 @@ mod tests {
 
     #[test]
     fn claude_usage_merges_start_and_delta() {
-        let mut tap = Tap::new(ProviderId::Claude);
+        let mut tap = Tap::new(Dialect::Messages);
         let stream = concat!(
             "event: message_start\n",
             r#"data: {"type":"message_start","message":{"usage":{"input_tokens":2095,"cache_creation_input_tokens":7185,"cache_read_input_tokens":355598,"output_tokens":1}}}"#,
@@ -279,7 +211,7 @@ mod tests {
 
     #[test]
     fn codex_usage_separates_cached_input() {
-        let mut tap = Tap::new(ProviderId::Codex);
+        let mut tap = Tap::new(Dialect::Responses);
         tap.feed(br#"data: {"type":"response.completed","response":{"id":"r","usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":25},"output_tokens":40,"total_tokens":140}}}"#);
         tap.feed(b"\n\n");
         let usage = tap.finish().usage;
@@ -295,7 +227,7 @@ mod tests {
 
     #[test]
     fn codex_in_stream_usage_limit_is_exhaustion() {
-        let mut tap = Tap::new(ProviderId::Codex);
+        let mut tap = Tap::new(Dialect::Responses);
         tap.feed(b"data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"usage_limit_reached\"}}}\n");
         assert!(tap.finish().exhausted);
     }
@@ -310,7 +242,7 @@ mod tests {
             Bytes::from_static(b"data: tail\n"),
         ]));
         let log = seen.clone();
-        let mut body = Tapped::new(chunks, Tap::new(ProviderId::Claude), move |o| {
+        let mut body = Tapped::new(chunks, Tap::new(Dialect::Messages), move |o| {
             log.lock().unwrap().push(o)
         });
         let first = std::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await;
