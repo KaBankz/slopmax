@@ -1,0 +1,18 @@
+[package]
+name = "slopmax"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+description = "Lightweight multi-account switcher and proxy for Claude Code and Codex"
+license = "MIT"
+repository = "https://github.com/KaBankz/slopmax"
+readme = "README.md"
+keywords = ["claude", "codex", "proxy", "oauth", "cli"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true

@@ -1,0 +1,18 @@
+[tools]
+rust = { version = "1.99", components = "clippy,rustfmt" }
+
+[tasks.build]
+description = "Build an optimized release binary"
+run = "cargo build --release"
+
+[tasks.check]
+description = "Format check, lint, and test"
+run = [
+  "cargo fmt --all --check",
+  "cargo clippy --all-targets -- -D warnings",
+  "cargo test",
+]
+
+[tasks.install]
+description = "Install slopmax into ~/.cargo/bin"
+run = "cargo install --path . --locked"
