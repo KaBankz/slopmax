@@ -1,5 +1,8 @@
 name: CI
 
+# Every job runs a mise task, with the toolchain mise.toml pins, so CI
+# checks exactly what `mise run <task>` checks locally.
+
 on:
   push:
     branches: [master]
@@ -18,39 +21,24 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+      - uses: jdx/mise-action@v5
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all --check
-      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
-      - run: cargo test --locked
+      - run: mise run check
 
   msrv:
     name: Minimum Rust version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.89
+      - uses: jdx/mise-action@v5
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --locked
+      - run: mise run msrv
 
   budget:
     name: Size budget
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: jdx/mise-action@v5
       - uses: Swatinem/rust-cache@v2
-      - name: Dependencies stay few
-        run: |
-          host=$(rustc -vV | sed -n 's/host: //p')
-          cargo tree --locked --color never -e normal --target "$host" --prefix none | sed 's/ (\*)//' | sort -u > crates.txt
-          echo "$(wc -l < crates.txt) crates for $host"
-          test "$(wc -l < crates.txt)" -le 70 || { cat crates.txt; exit 1; }
-      - name: The binary stays small
-        run: |
-          cargo build --release --locked
-          bytes=$(stat -c %s target/release/slopmax)
-          echo "$bytes bytes"
-          test "$bytes" -le 6291456
+      - run: mise run budget

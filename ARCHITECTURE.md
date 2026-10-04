@@ -243,7 +243,7 @@ The binary is under 6 MB, from about 60 crates. The async stack is tokio, hyper,
 
 ## Performance
 
-What slopmax adds to a request is small next to a model's answer, and it should stay that way. `scripts/bench.sh` measures it: `examples/bench.rs` runs the real server (`daemon::serve`) in front of a mock provider that streams answers with usage and rate-limit headers, and `oha` drives Claude Code- and Codex-shaped requests through it, small ones and 300 KB conversations, one at a time and 32 at once.
+What slopmax adds to a request is small next to a model's answer, and it should stay that way. `mise run bench` measures it: `examples/bench.rs` runs the real server (`daemon::serve`) in front of a mock provider that streams answers with usage and rate-limit headers, and `oha` drives Claude Code- and Codex-shaped requests through it, small ones and 300 KB conversations, one at a time and 32 at once.
 
 On a 2-vCPU machine shared with the load generator and the mock (which answers a small request in 0.2 ms on its own):
 
@@ -267,4 +267,4 @@ The allocator is the platform's own. mimalloc and jemalloc were 4 to 30% faster 
 
 - Unit tests sit next to the code: parsers and codecs against recorded shapes, the planner over tables of accounts, the pool's placement and failover.
 - `tests/proxy.rs` runs the real proxy against a mock provider on a local port. `net::Origins` rewrites the providers' base URLs to it, and the mock answers by bearer token, so each account can be made to succeed, hit its limit, or reject its token.
-- `mise run check` runs rustfmt, clippy with warnings denied, and every test.
+- `mise run check` runs rustfmt, clippy with warnings denied, and every test, as CI does: every CI job is a mise task, with the toolchain mise.toml pins.

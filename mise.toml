@@ -1,17 +1,43 @@
+# The toolchain and every task, for development and CI alike.
+
 [tools]
 rust = { version = "1.99", components = "clippy,rustfmt" }
 
 [tasks.build]
 description = "Build an optimized release binary"
-run = "cargo build --release"
+run = "cargo build --release --locked"
 
 [tasks.check]
 description = "Format check, lint, and test"
 run = [
   "cargo fmt --all --check",
-  "cargo clippy --all-targets -- -D warnings",
-  "cargo test",
+  "cargo clippy --all-targets --all-features --locked -- -D warnings",
+  "cargo test --locked",
 ]
+
+[tasks.msrv]
+description = "Check that the minimum supported Rust version still builds"
+tools = { rust = "1.89" }
+run = "cargo check --all-targets --all-features --locked"
+
+[tasks.budget]
+description = "Hold the dependency tree to 70 crates and the binary to 6 MB"
+run = '''
+host=$(rustc -vV | sed -n 's/host: //p')
+crates=$(cargo tree --locked --color never -e normal --target "$host" --prefix none | sed 's/ (\*)//' | sort -u)
+count=$(printf '%s\n' "$crates" | wc -l | tr -d ' ')
+echo "$count crates for $host (budget 70)"
+[ "$count" -le 70 ] || { printf '%s\n' "$crates"; exit 1; }
+cargo build --release --locked
+bytes=$(wc -c < target/release/slopmax | tr -d ' ')
+echo "$bytes bytes (budget 6291456)"
+[ "$bytes" -le 6291456 ]
+'''
+
+[tasks.bench]
+description = "Measure the latency, throughput, memory, and startup slopmax adds"
+tools = { oha = "1.16", jq = "1.8", hyperfine = "1.20" }
+run = "scripts/bench.sh"
 
 [tasks.install]
 description = "Install slopmax into ~/.cargo/bin"

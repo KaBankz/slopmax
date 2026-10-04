@@ -329,12 +329,17 @@ slopmax was designed after a close read of [CLIProxyAPI](https://github.com/rout
 
 ## Development
 
+[mise](https://mise.jdx.dev) pins the toolchain and runs every task, here and in CI:
+
 ```sh
-mise run check    # rustfmt, clippy with warnings denied, and the tests
-mise run build    # optimized release binary
+mise run check     # rustfmt, clippy with warnings denied, and the tests
+mise run msrv      # builds with the minimum supported Rust (1.89)
+mise run budget    # at most 70 crates and a 6 MB binary
+mise run bench     # the latency, throughput, memory, and startup slopmax adds
+mise run build     # optimized release binary
 ```
 
-`tests/proxy.rs` runs the proxy end to end against mock providers, and `scripts/bench.sh` measures the latency, throughput, and memory it adds. [ARCHITECTURE.md](ARCHITECTURE.md) maps the code, walks through adding a provider, an agent, or an API format, and lists the current numbers.
+`tests/proxy.rs` runs the proxy end to end against mock providers. [ARCHITECTURE.md](ARCHITECTURE.md) maps the code, walks through adding a provider, an agent, or an API format, and lists the current numbers.
 
 ## License
 
