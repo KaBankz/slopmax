@@ -14,7 +14,8 @@ use jiff::Timestamp;
 use reqwest::{Client, StatusCode};
 
 use crate::account::{Account, Provider, Store, Tokens};
-use pkce::{Pkce, random_token};
+use crate::ids;
+use pkce::Pkce;
 
 /// Tokens returned by a code exchange or refresh.
 #[derive(Debug, Clone)]
@@ -101,7 +102,7 @@ pub async fn login(provider: Provider, options: LoginOptions) -> Result<Account>
         return codex::device_login(&http).await;
     }
     let pkce = Pkce::generate();
-    let state = random_token(24);
+    let state = ids::token();
     let (url, port, path) = match provider {
         Provider::Claude => (
             claude::authorize_url(&pkce, &state),

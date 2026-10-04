@@ -8,6 +8,7 @@ use serde_json::json;
 
 use super::{Grant, RefreshError, pkce::Pkce};
 use crate::account::{Account, Provider};
+use crate::ids;
 
 pub const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const AUTHORIZE_URL: &str = "https://claude.ai/oauth/authorize";
@@ -152,7 +153,7 @@ pub async fn exchange(http: &Client, code: &str, state: &str, pkce: &Pkce) -> Re
         account.org_id = o.uuid.clone();
         account.org_name = o.name.clone();
     }
-    account.device_id = Some(new_device_id());
+    account.device_id = Some(ids::hex64());
     match profile(http, &account.tokens.access_token).await {
         Ok(profile) => apply_profile(&mut account, &profile),
         Err(e) => tracing::warn!("profile lookup failed: {e:#}"),
@@ -185,13 +186,6 @@ pub fn apply_profile(account: &mut Account, profile: &Profile) {
     keep(&mut account.org_id, &profile.organization.uuid);
     keep(&mut account.org_name, &profile.organization.name);
     keep(&mut account.plan, &profile.plan());
-}
-
-/// A random 64-hex device id, stable per account once assigned.
-pub fn new_device_id() -> String {
-    let mut bytes = [0u8; 32];
-    getrandom::fill(&mut bytes).expect("operating system RNG is unavailable");
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Redeems a refresh token. Anthropic rotates refresh tokens, so the old one

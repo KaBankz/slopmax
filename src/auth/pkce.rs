@@ -4,6 +4,8 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use sha2::{Digest, Sha256};
 
+use crate::ids;
+
 /// A PKCE verifier and its S256 challenge.
 #[derive(Debug, Clone)]
 pub struct Pkce {
@@ -13,20 +15,13 @@ pub struct Pkce {
 
 impl Pkce {
     pub fn generate() -> Self {
-        let verifier = random_token(32);
+        let verifier = ids::token();
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
         Self {
             verifier,
             challenge,
         }
     }
-}
-
-/// `len` random bytes, base64url-encoded without padding.
-pub fn random_token(len: usize) -> String {
-    let mut bytes = vec![0u8; len];
-    getrandom::fill(&mut bytes).expect("operating system RNG is unavailable");
-    URL_SAFE_NO_PAD.encode(bytes)
 }
 
 #[cfg(test)]

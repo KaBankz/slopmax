@@ -7,8 +7,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::auth::pkce::random_token;
-use crate::{fsx, paths};
+use crate::{fsx, ids, paths};
 
 /// Default proxy port: "slop" on a phone keypad.
 pub const DEFAULT_PORT: u16 = 7567;
@@ -82,7 +81,7 @@ impl Config {
             Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
         };
         if config.api_key.is_empty() {
-            config.api_key = format!("sm-{}", random_token(24));
+            config.api_key = format!("sm-{}", ids::token());
             config.save_to(path)?;
         }
         Ok(config)

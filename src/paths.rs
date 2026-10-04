@@ -52,7 +52,7 @@ pub fn cliproxyapi_dir() -> PathBuf {
     user_home().join(".cli-proxy-api")
 }
 
-/// opencodex's default home, used for imports.
-pub fn opencodex_dir() -> PathBuf {
-    env_dir("OPENCODEX_HOME").unwrap_or_else(|| user_home().join(".opencodex"))
+/// Manual account preferences set by `slopmax use`.
+pub fn pins_file() -> PathBuf {
+    home().join("pins.json")
 }

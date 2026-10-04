@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use super::{claude, codex};
 use crate::account::{Account, Provider, Tokens};
-use crate::paths;
+use crate::{ids, paths};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Source {
@@ -124,7 +124,7 @@ async fn from_claude_code(http: &Client, oauth: ClaudeCodeOauth) -> Result<Accou
         .await
         .context("could not read the Claude profile")?;
     claude::apply_profile(&mut account, &profile);
-    account.device_id = Some(claude::new_device_id());
+    account.device_id = Some(ids::hex64());
     account.assign_id();
     Ok(account)
 }
@@ -248,7 +248,7 @@ async fn from_cliproxy_file(
             {
                 claude::apply_profile(&mut account, &profile);
             }
-            account.device_id.get_or_insert_with(claude::new_device_id);
+            account.device_id.get_or_insert_with(ids::hex64);
         }
         Provider::Codex => {
             account.account_id = file.account_id;
