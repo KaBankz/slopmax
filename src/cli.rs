@@ -111,7 +111,7 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
-    /// Print shell exports that point an agent at the proxy
+    /// Print shell setup that points an agent at the proxy, for `eval`
     Env { agent: Provider },
     /// Point an agent's own config at the proxy (or restore it)
     Setup {
@@ -173,7 +173,10 @@ pub async fn run(cli: Cli) -> Result<i32> {
             ensure_running(&config).await?;
             return agents::run(agent, &config, &args);
         }
-        Command::Env { agent } => print!("{}", agents::env_script(agent, &config)),
+        Command::Env { agent } => {
+            let exe = std::env::current_exe().context("locating the slopmax binary")?;
+            print!("{}", agents::env_script(agent, &config, &exe));
+        }
         Command::Setup { agent, undo } => setup(&config, agent, undo)?,
     }
     Ok(0)

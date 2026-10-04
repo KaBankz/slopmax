@@ -2,7 +2,7 @@
 //!
 //! Three ways, from least to most invasive:
 //! - `slopmax run <agent>` launches the agent wired up for that session;
-//! - `slopmax env <agent>` prints shell exports;
+//! - `slopmax env <agent>` prints shell setup to `eval`;
 //! - `slopmax setup <agent>` writes the wiring into the agent's own config
 //!   (keeping a backup for `--undo`).
 
@@ -112,8 +112,10 @@ pub fn run(agent: Provider, config: &Config, args: &[String]) -> Result<i32> {
     }
 }
 
-/// Shell commands that wire the current shell to the proxy.
-pub fn env_script(agent: Provider, config: &Config) -> String {
+/// Shell commands that wire the current shell to the proxy. Codex gets a
+/// function that goes through `slopmax run` (at `exe`), since its overrides
+/// must follow any session subcommand; see [`codex_argv`].
+pub fn env_script(agent: Provider, config: &Config, exe: &Path) -> String {
     match agent {
         Provider::Claude => {
             let mut out: String = claude_env(config)
@@ -124,13 +126,8 @@ pub fn env_script(agent: Provider, config: &Config) -> String {
             out
         }
         Provider::Codex => {
-            let overrides: Vec<String> =
-                codex_args(config).iter().map(|a| shell_quote(a)).collect();
-            format!(
-                "export {CODEX_KEY_ENV}={}\nalias codex='codex {}'\n",
-                shell_quote(&config.api_key),
-                overrides.join(" ").replace('\'', "'\\''")
-            )
+            let exe = shell_quote(&exe.to_string_lossy());
+            format!("codex() {{ {exe} run codex \"$@\"; }}\n")
         }
     }
 }
@@ -364,11 +361,24 @@ mod tests {
 
     #[test]
     fn claude_env_points_at_the_proxy() {
-        let script = env_script(Provider::Claude, &config());
+        let script = env_script(Provider::Claude, &config(), Path::new("slopmax"));
         assert!(script.contains("export ANTHROPIC_BASE_URL=http://127.0.0.1:7567"));
         assert!(script.contains("export ANTHROPIC_AUTH_TOKEN=sm-test"));
         assert!(script.contains("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1"));
         assert!(script.contains("unset ANTHROPIC_API_KEY"));
+    }
+
+    #[test]
+    fn codex_env_hands_off_to_run() {
+        let script = env_script(
+            Provider::Codex,
+            &config(),
+            Path::new("/opt/my tools/slopmax"),
+        );
+        assert_eq!(
+            script,
+            "codex() { '/opt/my tools/slopmax' run codex \"$@\"; }\n"
+        );
     }
 
     fn temp(name: &str) -> PathBuf {
