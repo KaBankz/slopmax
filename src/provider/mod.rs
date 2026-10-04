@@ -28,7 +28,7 @@ use serde_json::Value;
 
 use crate::account::Account;
 use crate::auth::{Grant, LoginOptions, RefreshError};
-use crate::limits::{Limits, Refusal};
+use crate::limits::{Limits, PoolWindow, Refusal};
 use crate::net::Client;
 use crate::net::client::Response;
 use crate::time::{SignedDuration, Timestamp};
@@ -334,6 +334,10 @@ pub trait Provider: Send + Sync {
         model: Option<&str>,
         now: Timestamp,
     ) -> Verdict;
+
+    /// Puts the pool's usage windows in place of the serving account's in
+    /// the response headers the agent reads, so it sees one account.
+    fn show_pool(&self, _windows: &[PoolWindow], _headers: &mut HeaderMap) {}
 
     /// Banked reset credits, for providers that grant them.
     fn credits(&self) -> Option<&dyn ResetCredits> {

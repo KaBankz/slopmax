@@ -1611,3 +1611,76 @@ async fn idle_chatgpt_windows_are_warmed_once() {
     slopmax::proxy::warm::idle_accounts(&h.app).await;
     assert_eq!(paths(&h).len(), 2);
 }
+
+/// Records a reading for `id`: `used` percent of a `span` window.
+fn observe(h: &Harness, id: &str, span: &str, used: f64) {
+    let now = Timestamp::now();
+    let limits = Limits {
+        windows: vec![Window {
+            span: span.into(),
+            model: None,
+            used,
+            resets_at: Some(now + SignedDuration::from_hours(2)),
+        }],
+        observed_at: Some(now),
+        reset_credits: None,
+    };
+    h.app.pool.observe(id, limits, now);
+}
+
+#[tokio::test]
+async fn agents_see_the_pool_not_the_serving_account() {
+    // Codex: the serving account reports 40% of its week; the other has
+    // used 10%, so the pool has used 25%.
+    let h = harness(ProviderId::Codex, &["tok-ok", "tok-ok"]).await;
+    observe(&h, &h.ids[1], "7d", 10.0);
+    let response = codex_request(&h).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-codex-primary-used-percent"], "25.0");
+    assert_eq!(
+        response.headers()["x-codex-primary-window-minutes"],
+        "10080"
+    );
+
+    // Claude: 25% here and 75% on the other account read as 50%.
+    let h = harness(ProviderId::Claude, &["tok-ok", "tok-ok"]).await;
+    observe(&h, &h.ids[1], "5h", 75.0);
+    let response = claude_request(&h).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers();
+    assert_eq!(
+        headers["anthropic-ratelimit-unified-5h-utilization"],
+        "0.50"
+    );
+    assert_eq!(headers["anthropic-ratelimit-unified-status"], "allowed");
+    assert!(!headers.contains_key("anthropic-ratelimit-unified-representative-claim"));
+}
+
+#[tokio::test]
+async fn codex_sockets_report_the_pool_too() {
+    let h = harness(ProviderId::Codex, &["tok-ok", "tok-ok"]).await;
+    observe(&h, &h.ids[1], "5h", 0.0);
+    let (_, socket) = open_socket(&h, "gpt-6-sol").await;
+    let (mut reader, mut writer) = socket.unwrap();
+    let create =
+        json!({"type": "response.create", "model": "gpt-6-sol", "input": [], "stream": true});
+    writer
+        .send(&ws::Message::Text(create.to_string()))
+        .await
+        .unwrap();
+    let mut seen = None;
+    while let Some(ws::Message::Text(text)) = reader.message().await.unwrap() {
+        let event: Value = serde_json::from_str(&text).unwrap();
+        if event["type"] == "codex.rate_limits" {
+            seen = Some(event);
+        }
+        if text.contains("response.completed") {
+            break;
+        }
+    }
+    // The serving account sent 33% of its 5-hour window; the other is idle.
+    let event = seen.unwrap();
+    assert_eq!(event["rate_limits"]["primary"]["used_percent"], 16.5);
+    assert_eq!(event["rate_limits"]["primary"]["window_minutes"], 300);
+    assert_eq!(event["rate_limits"]["limit_reached"], false);
+}

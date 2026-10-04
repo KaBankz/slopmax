@@ -408,6 +408,20 @@ async fn from_upstream(
                     if let Some(limits) = limits::from_event(&event, now) {
                         app.pool.observe(&id, limits, now);
                     }
+                    // Codex sees the pool, not this account.
+                    let windows = app.pool.pooled(ProviderId::Codex, now);
+                    if !windows.is_empty() {
+                        let mut pooled = event.clone();
+                        limits::pool_event(&windows, &mut pooled);
+                        if to_client
+                            .send(Message::Text(pooled.to_string()))
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                        continue;
+                    }
                 }
                 "response.completed" | "response.incomplete" | "response.done" => {
                     app.pool.record_success(&id, now);

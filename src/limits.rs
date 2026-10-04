@@ -168,6 +168,69 @@ impl Limits {
     }
 }
 
+/// One window of a pool of accounts, read as if they were one account.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PoolWindow {
+    /// `5h`, `7d`, or `30d`.
+    pub span: &'static str,
+    /// Percent used: the mean of the accounts' usage.
+    pub used: f64,
+    /// When capacity next comes back: the soonest reset of a window in
+    /// use.
+    pub resets_at: Option<Timestamp>,
+}
+
+impl PoolWindow {
+    /// The window's length in minutes, as Codex states it.
+    pub fn minutes(&self) -> i64 {
+        match self.span {
+            "5h" => 300,
+            "30d" => 43_200,
+            _ => 10_080,
+        }
+    }
+}
+
+/// The windows of a pool of accounts, each given by its limits and whether
+/// it sits out (a blocked account counts as full in its shortest window).
+/// Accounts without a reading for a window are left out of its mean.
+pub fn pooled<'a>(
+    accounts: impl IntoIterator<Item = (&'a Limits, bool)>,
+    now: Timestamp,
+) -> Vec<PoolWindow> {
+    let accounts: Vec<(&Limits, bool)> = accounts.into_iter().collect();
+    let mut windows = Vec::new();
+    for span in ["5h", "7d", "30d"] {
+        let readings: Vec<(f64, Option<Timestamp>)> = accounts
+            .iter()
+            .filter_map(|(limits, blocked)| {
+                let window = limits.shared().find(|w| w.span == span)?;
+                let shortest = limits.shared().map(|w| span_rank(&w.span)).min();
+                let used = match blocked {
+                    true if shortest == Some(span_rank(span)) => 100.0,
+                    _ => window.used_at(now),
+                };
+                Some((used, window.upcoming_reset(now)))
+            })
+            .collect();
+        if readings.is_empty() {
+            continue;
+        }
+        let used = readings.iter().map(|(used, _)| used).sum::<f64>() / readings.len() as f64;
+        let resets_at = readings
+            .iter()
+            .filter(|(used, _)| *used > 0.0)
+            .filter_map(|(_, reset)| *reset)
+            .min();
+        windows.push(PoolWindow {
+            span,
+            used,
+            resets_at,
+        });
+    }
+    windows
+}
+
 fn span_rank(span: &str) -> u8 {
     match span {
         "5h" => 0,
@@ -250,6 +313,45 @@ mod tests {
         });
         assert_eq!(limits.windows.len(), 1);
         assert_eq!(limits.windows[0].span, "7d");
+    }
+
+    #[test]
+    fn pools_read_as_one_account() {
+        let now = ts(1000);
+        let account = |five_hour: f64, reset: i64, week: f64| Limits {
+            windows: vec![
+                Window::new("5h", five_hour, Some(ts(reset))),
+                Window::new("7d", week, Some(ts(90_000))),
+            ],
+            observed_at: Some(now),
+            reset_credits: None,
+        };
+        let busy = account(90.0, 4000, 60.0);
+        let fresh = account(10.0, 2000, 20.0);
+        let idle = account(0.0, 1500, 0.0);
+        let pool = pooled([(&busy, false), (&fresh, false), (&idle, false)], now);
+        assert_eq!(pool.len(), 2);
+        assert_eq!(pool[0].span, "5h");
+        assert!(
+            (pool[0].used - 100.0 / 3.0).abs() < 1e-9,
+            "{}",
+            pool[0].used
+        );
+        // The soonest reset of a window in use; the idle one frees nothing.
+        assert_eq!(pool[0].resets_at, Some(ts(2000)));
+        assert!((pool[1].used - 80.0 / 3.0).abs() < 1e-9);
+        assert_eq!(pool[0].minutes(), 300);
+        assert_eq!(pool[1].minutes(), 10_080);
+
+        // A blocked account counts as full in its shortest window.
+        let pool = pooled([(&fresh, true), (&idle, false)], now);
+        assert_eq!(pool[0].used, 50.0);
+        assert_eq!(pool[1].used, 10.0);
+        // Accounts never measured are left out.
+        let unknown = Limits::default();
+        let pool = pooled([(&busy, false), (&unknown, false)], now);
+        assert_eq!(pool[0].used, 90.0);
+        assert!(pooled([(&unknown, false)], now).is_empty());
     }
 
     #[test]

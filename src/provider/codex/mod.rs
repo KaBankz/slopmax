@@ -11,7 +11,7 @@ use http::{HeaderMap, StatusCode};
 use super::{Billing, BoxFuture, Provider, Reading, ResetCredits, Spec, UsageError, Verdict};
 use crate::account::Account;
 use crate::auth::{Grant, LoginOptions, RefreshError};
-use crate::limits::Limits;
+use crate::limits::{Limits, PoolWindow};
 use crate::net::Client;
 use crate::time::{SignedDuration, Timestamp};
 use crate::wire::Dialect;
@@ -98,6 +98,10 @@ impl Provider for Codex {
 
     fn limits(&self, headers: &HeaderMap, now: Timestamp) -> Option<Limits> {
         limits::from_headers(headers, now)
+    }
+
+    fn show_pool(&self, windows: &[PoolWindow], headers: &mut HeaderMap) {
+        limits::pool_headers(windows, headers);
     }
 
     fn verdict(

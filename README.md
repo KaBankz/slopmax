@@ -67,6 +67,7 @@ CLAUDE                PLAN       5H                      WEEK                   
    └ 7d Fable                                            ██████░░░░  58% 1d23h
  2 home@example.com   max 5x     ██████████ 100% 1h02m   ███████░░░  71% 4d2h    limited · back in 1h02m
  3 team@example.com   team       ░░░░░░░░░░   0%         ░░░░░░░░░░   0%         ready · priority -1
+   pool               3 accts    ██████░░░░  57% 1h02m   ████░░░░░░  40% 1d23h   what the agents see
 
 CODEX                 PLAN       5H                      WEEK                    STATUS
  4 me@example.com     pro        █░░░░░░░░░  12% 4h10m   ███░░░░░░░  29% 5d17h   ● active · 1 session · 3 reset credits · 9 req · 310.4k tok
@@ -77,7 +78,7 @@ XAI                   BILLING    MODELS                                         
 strategy reset-first · proxy running
 ```
 
-Each window shows how much is used and when it resets. Limits scoped to one model, such as a weekly cap on a Claude model, are listed under their account. `--watch` keeps the display updated, `--refresh` polls the providers first, and `--json` prints the report for scripts.
+Each window shows how much is used and when it resets. The pool row is the provider's accounts read as one, which is what the agents are shown (see [One account](#one-account)). Limits scoped to one model, such as a weekly cap on a Claude model, are listed under their account. `--watch` keeps the display updated, `--refresh` polls the providers first, and `--json` prints the report for scripts.
 
 ## Connecting agents
 
@@ -109,6 +110,14 @@ Each request is adapted to the account serving it, and nothing more:
 - **Claude.** The account's token replaces the slopmax key, and the OAuth beta flag that subscription tokens require is added. Nothing else changes: the body, including Claude Code's billing header and `metadata.user_id`, reaches Anthropic byte for byte as Claude Code sent it. slopmax does not imitate Claude Code or alter what it says about itself.
 - **Codex.** The account's token and workspace id are set. Encrypted reasoning items and `previous_response_id` only work on the account that created them, so they are dropped when a session moves, along with Codex's sticky routing header.
 - **Keys and endpoints.** The key replaces the slopmax key.
+
+### One account
+
+slopmax aims to make several accounts of one provider feel like a single account to the agent. Beyond failing over before the agent sees an error:
+
+- **Usage reads as the pool's.** Every response's quota headers describe the account that served it, and agents show them. Codex, for example, warns when less than a tenth of a window is left. slopmax replaces them with the pool's standing: each window's average usage across the working accounts, and the soonest reset that frees capacity. Codex's limit display and warnings then describe the pool, over HTTP and over WebSockets. For Claude it rewrites `anthropic-ratelimit-unified-*` the way Claude Code's gateway documentation asks gateways to, though Claude Code connected with a token does not show these today.
+- **Conversations survive a move.** A session that moves mid-conversation, even mid tool call, carries its history to the new account. Claude accepts thinking signed by another of your accounts (checked with Haiku 4.5 and Opus 5.5, between a Max and a Team account). If it ever refuses one, Claude Code drops the old thinking and retries by itself. ChatGPT's account-bound state is dropped on a move, as described above.
+- **The prompt cache does not move.** It belongs to an account, so the first request after a move costs more and answers slower. That is why sessions only move when they must.
 
 ### Resets
 

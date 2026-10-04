@@ -1,12 +1,14 @@
 //! Claude's usage windows: response headers, the usage endpoint, and 429s.
 
-use http::HeaderMap;
+use http::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
 
 use crate::limits::{
-    Limits, Refusal, Window, header, header_f64, header_time, parse_time, retry_after,
+    Limits, PoolWindow, Refusal, Window, header, header_f64, header_time, parse_time, retry_after,
 };
 use crate::time::Timestamp;
+
+const UNIFIED: &str = "anthropic-ratelimit-unified-";
 
 /// Claude: `anthropic-ratelimit-unified-{5h,7d}-{utilization,reset}`.
 /// Utilization is a 0–1 fraction; resets are unix seconds.
@@ -23,6 +25,75 @@ pub fn from_headers(headers: &HeaderMap, now: Timestamp) -> Option<Limits> {
         })
         .collect();
     Limits::observed(windows, now)
+}
+
+/// Puts the pool's standing in place of the serving account's, so the agent
+/// sees one account. This follows Claude Code's contract for gateways:
+/// strip the upstream's `anthropic-ratelimit-unified-*` headers and report
+/// the caller's own standing, warning past 75% and again past 95%.
+pub fn pool_headers(windows: &[PoolWindow], headers: &mut HeaderMap) {
+    let upstream: Vec<HeaderName> = headers
+        .keys()
+        .filter(|name| name.as_str().starts_with(UNIFIED))
+        .cloned()
+        .collect();
+    for name in upstream {
+        headers.remove(name);
+    }
+    let mut set = |name: String, value: String| {
+        if let (Ok(name), Ok(value)) = (HeaderName::try_from(name), HeaderValue::try_from(value)) {
+            headers.insert(name, value);
+        }
+    };
+    let mut fullest: Option<(&PoolWindow, &str)> = None;
+    for window in windows {
+        let (key, claim) = match window.span {
+            "5h" => ("5h", "five_hour"),
+            "7d" => ("7d", "seven_day"),
+            _ => continue,
+        };
+        // Below 1 while requests are still served.
+        let fraction = (window.used / 100.0).clamp(0.0, 0.99);
+        let passed = [0.95, 0.75].into_iter().find(|t| fraction >= *t);
+        set(
+            format!("{UNIFIED}{key}-utilization"),
+            format!("{fraction:.2}"),
+        );
+        let status = if passed.is_some() {
+            "allowed_warning"
+        } else {
+            "allowed"
+        };
+        set(format!("{UNIFIED}{key}-status"), status.into());
+        if let Some(at) = window.resets_at {
+            set(format!("{UNIFIED}{key}-reset"), at.as_second().to_string());
+        }
+        if let Some(threshold) = passed {
+            set(
+                format!("{UNIFIED}{key}-surpassed-threshold"),
+                threshold.to_string(),
+            );
+        }
+        if fullest.is_none_or(|(f, _)| window.used > f.used) {
+            fullest = Some((window, claim));
+        }
+    }
+    let Some((window, claim)) = fullest else {
+        return;
+    };
+    let warning = window.used >= 75.0;
+    let status = if warning {
+        "allowed_warning"
+    } else {
+        "allowed"
+    };
+    set(format!("{UNIFIED}status"), status.into());
+    if warning {
+        set(format!("{UNIFIED}representative-claim"), claim.into());
+    }
+    if let Some(at) = window.resets_at {
+        set(format!("{UNIFIED}reset"), at.as_second().to_string());
+    }
 }
 
 /// Claude `GET /api/oauth/usage`: `five_hour`, `seven_day`, and model-scoped
@@ -141,6 +212,77 @@ pub fn refusal(headers: &HeaderMap, model: Option<&str>, now: Timestamp) -> Refu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pool_headers_replace_the_accounts() {
+        let mut headers = HeaderMap::new();
+        for (name, value) in [
+            ("anthropic-ratelimit-unified-status", "allowed_warning"),
+            ("anthropic-ratelimit-unified-5h-utilization", "0.97"),
+            ("anthropic-ratelimit-unified-overage-status", "allowed"),
+            (
+                "anthropic-ratelimit-unified-representative-claim",
+                "five_hour",
+            ),
+            ("request-id", "req_1"),
+        ] {
+            headers.insert(name, HeaderValue::from_static(value));
+        }
+        let reset = Timestamp::from_second(5_000).unwrap();
+        let pool = [
+            PoolWindow {
+                span: "5h",
+                used: 48.5,
+                resets_at: Some(reset),
+            },
+            PoolWindow {
+                span: "7d",
+                used: 30.0,
+                resets_at: None,
+            },
+        ];
+        pool_headers(&pool, &mut headers);
+        let get = |name: &str| headers.get(name).map(|v| v.to_str().unwrap());
+        assert_eq!(get("anthropic-ratelimit-unified-status"), Some("allowed"));
+        assert_eq!(
+            get("anthropic-ratelimit-unified-5h-utilization"),
+            Some("0.48")
+        );
+        assert_eq!(get("anthropic-ratelimit-unified-5h-reset"), Some("5000"));
+        assert_eq!(
+            get("anthropic-ratelimit-unified-7d-utilization"),
+            Some("0.30")
+        );
+        assert_eq!(get("anthropic-ratelimit-unified-reset"), Some("5000"));
+        assert_eq!(
+            get("anthropic-ratelimit-unified-representative-claim"),
+            None
+        );
+        assert_eq!(get("anthropic-ratelimit-unified-overage-status"), None);
+        assert_eq!(get("request-id"), Some("req_1"));
+
+        // A pool running low warns as one account would.
+        let low = [PoolWindow {
+            span: "7d",
+            used: 96.0,
+            resets_at: Some(reset),
+        }];
+        pool_headers(&low, &mut headers);
+        let get = |name: &str| headers.get(name).map(|v| v.to_str().unwrap());
+        assert_eq!(
+            get("anthropic-ratelimit-unified-status"),
+            Some("allowed_warning")
+        );
+        assert_eq!(
+            get("anthropic-ratelimit-unified-representative-claim"),
+            Some("seven_day")
+        );
+        assert_eq!(
+            get("anthropic-ratelimit-unified-7d-surpassed-threshold"),
+            Some("0.95")
+        );
+        assert_eq!(get("anthropic-ratelimit-unified-5h-utilization"), None);
+    }
     use http::HeaderValue;
     use serde_json::json;
 

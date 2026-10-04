@@ -220,10 +220,12 @@ struct Failure {
     exhausted: bool,
     /// For a translated request, the client's format to retell it in.
     client: Option<Dialect>,
+    /// The provider that answered.
+    provider: ProviderId,
 }
 
 impl Failure {
-    async fn read(response: Upstream) -> Self {
+    async fn read(response: Upstream, provider: ProviderId) -> Self {
         let status = response.status();
         let headers = response.headers().clone();
         let body = response.bytes().await.unwrap_or_default();
@@ -233,16 +235,19 @@ impl Failure {
             body,
             exhausted: false,
             client: None,
+            provider,
         }
     }
 
-    fn into_response(self) -> Response {
+    fn into_response(self, app: &App) -> Response {
         if let Some(client) = self.client {
             return retold(client, self.status, &self.body);
         }
         let mut response = Response::new(body::full(self.body));
         *response.status_mut() = self.status;
-        *response.headers_mut() = returnable(&self.headers);
+        let mut headers = returnable(&self.headers);
+        app.show_pool(self.provider, &mut headers);
+        *response.headers_mut() = headers;
         response
     }
 }
@@ -362,7 +367,7 @@ pub(super) async fn forward(
             }
         }
     }
-    give_up(dialect, steps[0].provider, unavailable, last)
+    give_up(&app, dialect, steps[0].provider, unavailable, last)
 }
 
 /// Combines why two steps could not serve: the earliest return wins.
@@ -446,6 +451,7 @@ async fn attempt(
                             body: held,
                             exhausted,
                             client: lane.map(|_| dialect),
+                            provider: step.provider,
                         };
                         return Attempt::Failed(Some(failure));
                     }
@@ -478,7 +484,7 @@ async fn attempt(
             return Attempt::Done(response);
         }
 
-        let mut failure = Failure::read(response).await;
+        let mut failure = Failure::read(response, step.provider).await;
         failure.client = lane.map(|_| dialect);
         log::info!("{id}: upstream returned {}", failure.status.as_u16());
         let verdict = provider.verdict(failure.status, &failure.headers, &failure.body, model, now);
@@ -522,7 +528,9 @@ async fn attempt(
                     .throttle(&id, until.unwrap_or(now + DEFAULT_THROTTLE));
                 return Attempt::Failed(Some(failure));
             }
-            Verdict::StaleState | Verdict::Final => return Attempt::Done(failure.into_response()),
+            Verdict::StaleState | Verdict::Final => {
+                return Attempt::Done(failure.into_response(app));
+            }
         }
     }
 }
@@ -710,9 +718,11 @@ fn stream_back(
     body: Body,
 ) -> Response {
     let status = served.status;
+    let mut returned = returnable(headers);
+    app.show_pool(served.provider, &mut returned);
     let mut out = Response::new(recorded(app, dialect, served, headers, body));
     *out.status_mut() = status;
-    *out.headers_mut() = returnable(headers);
+    *out.headers_mut() = returned;
     out
 }
 
@@ -840,6 +850,7 @@ fn recorded(
 
 /// The response when no account can take the request.
 fn give_up(
+    app: &App,
     dialect: Dialect,
     provider: ProviderId,
     unavailable: Option<Unavailable>,
@@ -852,7 +863,7 @@ fn give_up(
         (Some(failure), Some(until)) if failure.exhausted => {
             limit_reached(dialect, provider, until)
         }
-        (Some(failure), _) => failure.into_response(),
+        (Some(failure), _) => failure.into_response(app),
         (None, Some(until)) => limit_reached(dialect, provider, until),
         (None, None) => error(
             Some(dialect),

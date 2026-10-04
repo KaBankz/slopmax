@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::account::Account;
 use crate::config::Strategy;
-use crate::limits::{Limits, UNKNOWN_SCORE};
+use crate::limits::{Limits, PoolWindow, UNKNOWN_SCORE};
 use crate::provider::ProviderId;
 use crate::time::{SignedDuration, Timestamp};
 
@@ -455,6 +455,22 @@ impl Pool {
             .usage
             .add(usage);
         inner.dirty = true;
+    }
+
+    /// The provider's working accounts read as one account: see
+    /// [`limits::pooled`](crate::limits::pooled).
+    pub fn pooled(&self, provider: ProviderId, now: Timestamp) -> Vec<PoolWindow> {
+        let inner = self.lock();
+        let unknown = AccountState::default();
+        let accounts = inner
+            .accounts
+            .iter()
+            .filter(|a| a.provider == provider && !a.disabled && a.auth_error.is_none())
+            .map(|a| {
+                let state = inner.states.get(&a.id).unwrap_or(&unknown);
+                (&state.limits, state.is_blocked(now))
+            });
+        crate::limits::pooled(accounts, now)
     }
 
     pub fn state(&self, id: &str) -> AccountState {

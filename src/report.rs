@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::account::Account;
 use crate::config::Strategy;
-use crate::limits::Window;
+use crate::limits::{self, Window};
 use crate::pool::{AccountState, Pins};
 use crate::provider::ProviderId;
 use crate::time::Timestamp;
@@ -144,7 +144,7 @@ pub fn render(report: &Report, now: Timestamp) -> String {
             ui::dim(ui::pad("WEEK", CELL)),
             ui::dim("STATUS"),
         );
-        for account in accounts {
+        for &account in &accounts {
             index += 1;
             let shared: Vec<&Window> = account
                 .state
@@ -189,6 +189,7 @@ pub fn render(report: &Report, now: Timestamp) -> String {
                 );
             }
         }
+        pool_row(&mut out, &accounts, name_width, now);
     }
     let _ = writeln!(
         out,
@@ -243,6 +244,39 @@ fn metered(
         );
     }
     index
+}
+
+/// The pool as the agents see it: its working accounts read as one.
+fn pool_row(out: &mut String, accounts: &[&AccountReport], name_width: usize, now: Timestamp) {
+    let working: Vec<&&AccountReport> = accounts
+        .iter()
+        .filter(|a| !a.disabled && a.auth_error.is_none())
+        .collect();
+    if working.len() < 2 {
+        return;
+    }
+    let windows = limits::pooled(
+        working
+            .iter()
+            .map(|a| (&a.state.limits, a.state.is_blocked(now))),
+        now,
+    );
+    let window = |span: &str| {
+        windows
+            .iter()
+            .find(|w| w.span == span)
+            .map(|w| Window::new(span, w.used, w.resets_at))
+    };
+    let week = window("7d").or_else(|| window("30d"));
+    let _ = writeln!(
+        out,
+        "   {}  {}  {}  {}  {}",
+        ui::pad(&ui::bold("pool"), name_width + 1),
+        ui::pad(&ui::dim(format!("{} accts", working.len())), PLAN),
+        window_cell(window("5h").as_ref(), now),
+        window_cell(week.as_ref(), now),
+        ui::dim("what the agents see"),
+    );
 }
 
 fn window_cell(window: Option<&Window>, now: Timestamp) -> String {
@@ -327,6 +361,43 @@ mod tests {
 
     fn ts(secs: i64) -> Timestamp {
         Timestamp::from_second(secs).unwrap()
+    }
+
+    #[test]
+    fn pools_get_a_row_of_their_own() {
+        let now = ts(1_000);
+        let account = |email: &str, used: f64| {
+            let mut account = Account::new(ProviderId::Claude, Tokens::default());
+            account.email = Some(email.into());
+            account.org_id = Some(email.into());
+            account.assign_id();
+            let state = AccountState {
+                limits: Limits {
+                    windows: vec![Window::new("5h", used, Some(ts(4_600)))],
+                    observed_at: Some(now),
+                    reset_credits: None,
+                },
+                ..AccountState::default()
+            };
+            (account, state)
+        };
+        let accounts = [account("a@x.dev", 80.0), account("b@x.dev", 20.0)];
+        let states: HashMap<String, AccountState> = accounts
+            .iter()
+            .map(|(a, s)| (a.id.clone(), s.clone()))
+            .collect();
+        let report = build(
+            accounts.iter().map(|(a, _)| a.clone()).collect(),
+            |id| states[id].clone(),
+            &Pins::new(),
+            &HashMap::new(),
+            Strategy::ResetFirst,
+            true,
+        );
+        let text = render(&report, now);
+        let pool = text.lines().find(|l| l.contains("pool")).unwrap();
+        assert!(pool.contains(" 50%"), "{pool}");
+        assert!(pool.contains("2 accts"), "{pool}");
     }
 
     #[test]

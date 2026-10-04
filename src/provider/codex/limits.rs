@@ -1,11 +1,11 @@
 //! ChatGPT's usage windows: response headers, the usage endpoint, and
 //! refusals.
 
-use http::HeaderMap;
-use serde_json::Value;
+use http::{HeaderMap, HeaderValue};
+use serde_json::{Value, json};
 
 use crate::limits::{
-    Limits, Refusal, Window, header_f64, header_time, parse_time, retry_after, span_for,
+    Limits, PoolWindow, Refusal, Window, header_f64, header_time, parse_time, retry_after, span_for,
 };
 use crate::time::{SignedDuration, Timestamp};
 
@@ -22,6 +22,62 @@ pub fn from_headers(headers: &HeaderMap, now: Timestamp) -> Option<Limits> {
         })
         .collect();
     Limits::observed(windows, now)
+}
+
+/// Puts the pool's standing in place of the serving account's in
+/// `x-codex-{primary,secondary}-*`, shortest window first, so Codex's limit
+/// display and warnings describe the pool as one account.
+pub fn pool_headers(windows: &[PoolWindow], headers: &mut HeaderMap) {
+    let mut windows = windows.iter();
+    for slot in ["primary", "secondary"] {
+        for field in [
+            "used-percent",
+            "window-minutes",
+            "reset-at",
+            "reset-after-seconds",
+            "over-secondary-limit-percent",
+        ] {
+            headers.remove(format!("x-codex-{slot}-{field}"));
+        }
+        let Some(window) = windows.next() else {
+            continue;
+        };
+        let mut set = |field: &str, value: String| {
+            if let Ok(value) = HeaderValue::try_from(value) {
+                headers.insert(
+                    http::HeaderName::try_from(format!("x-codex-{slot}-{field}"))
+                        .expect("valid header names"),
+                    value,
+                );
+            }
+        };
+        set("used-percent", format!("{:.1}", window.used));
+        set("window-minutes", window.minutes().to_string());
+        if let Some(at) = window.resets_at {
+            set("reset-at", at.as_second().to_string());
+        }
+    }
+}
+
+/// The same for a `codex.rate_limits` socket event.
+pub fn pool_event(windows: &[PoolWindow], event: &mut Value) {
+    let Some(limits) = event.get_mut("rate_limits").and_then(Value::as_object_mut) else {
+        return;
+    };
+    let mut slots = windows.iter();
+    for slot in ["primary", "secondary"] {
+        let window = slots.next().map(|w| {
+            json!({
+                "used_percent": (w.used * 10.0).round() / 10.0,
+                "window_minutes": w.minutes(),
+                "reset_at": w.resets_at.map(|at| at.as_second()),
+            })
+        });
+        limits.insert(slot.into(), window.unwrap_or(Value::Null));
+    }
+    let full = windows.iter().any(|w| w.used >= 100.0);
+    limits.insert("limit_reached".into(), json!(full));
+    limits.insert("allowed".into(), json!(!full));
 }
 
 /// A `codex.rate_limits` event, which ChatGPT sends over WebSockets in
@@ -128,6 +184,47 @@ mod tests {
             map.insert(*k, HeaderValue::from_str(v).unwrap());
         }
         map
+    }
+
+    #[test]
+    fn pool_headers_and_events_describe_the_pool() {
+        let pool = [
+            PoolWindow {
+                span: "5h",
+                used: 22.5,
+                resets_at: Some(ts(4_000)),
+            },
+            PoolWindow {
+                span: "7d",
+                used: 35.0,
+                resets_at: None,
+            },
+        ];
+        let mut h = headers(&[
+            ("x-codex-primary-used-percent", "95"),
+            ("x-codex-primary-window-minutes", "300"),
+            ("x-codex-primary-reset-at", "1234"),
+            ("x-codex-secondary-used-percent", "70"),
+            ("x-codex-credits-has-credits", "true"),
+        ]);
+        pool_headers(&pool, &mut h);
+        let get = |name: &str| h.get(name).map(|v| v.to_str().unwrap());
+        assert_eq!(get("x-codex-primary-used-percent"), Some("22.5"));
+        assert_eq!(get("x-codex-primary-window-minutes"), Some("300"));
+        assert_eq!(get("x-codex-primary-reset-at"), Some("4000"));
+        assert_eq!(get("x-codex-secondary-used-percent"), Some("35.0"));
+        assert_eq!(get("x-codex-secondary-window-minutes"), Some("10080"));
+        assert_eq!(get("x-codex-secondary-reset-at"), None);
+        assert_eq!(get("x-codex-credits-has-credits"), Some("true"));
+
+        let mut event = json!({"type": "codex.rate_limits", "plan_type": "pro",
+            "rate_limits": {"allowed": true, "limit_reached": true,
+                "primary": {"used_percent": 100, "window_minutes": 300, "reset_at": 9}}});
+        pool_event(&pool, &mut event);
+        assert_eq!(event["rate_limits"]["primary"]["used_percent"], 22.5);
+        assert_eq!(event["rate_limits"]["secondary"]["window_minutes"], 10080);
+        assert_eq!(event["rate_limits"]["limit_reached"], false);
+        assert_eq!(event["plan_type"], "pro");
     }
 
     #[test]

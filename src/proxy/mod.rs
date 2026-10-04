@@ -151,6 +151,18 @@ impl App {
         }
     }
 
+    /// Puts the pool's usage windows in place of the serving account's in
+    /// response headers, so the agent sees its provider's accounts as one.
+    pub(crate) fn show_pool(&self, provider: ProviderId, headers: &mut HeaderMap) {
+        if !provider.spec().is_subscription() {
+            return;
+        }
+        let windows = self.pool.pooled(provider, Timestamp::now());
+        if !windows.is_empty() {
+            provider.get().show_pool(&windows, headers);
+        }
+    }
+
     /// The model Codex asked for last.
     pub(crate) fn last_codex_model(&self) -> Option<String> {
         self.codex_model
