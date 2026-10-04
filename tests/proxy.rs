@@ -17,7 +17,7 @@ use slopmax::limits::{Limits, Window};
 use slopmax::net::body;
 use slopmax::net::client::RequestBuilder;
 use slopmax::net::server::{self, Request, Response};
-use slopmax::net::{Client, Origins};
+use slopmax::net::{Client, Origins, ws};
 use slopmax::paths::Home;
 use slopmax::pool::State as PoolState;
 use slopmax::provider::ProviderId;
@@ -76,7 +76,10 @@ fn redeemed(log: &Log) -> bool {
 
 /// The provider stand-in: records each request, then answers by route and
 /// bearer token.
-async fn mock(log: Log, request: Request) -> Response {
+async fn mock(log: Log, mut request: Request) -> Response {
+    if request.headers().contains_key("upgrade") {
+        return mock_socket(log, &mut request);
+    }
     let (parts, incoming) = request.into_parts();
     let body = body::read(incoming, usize::MAX).await.unwrap();
     log.lock().unwrap().push(Seen {
@@ -137,6 +140,70 @@ async fn mock(log: Log, request: Request) -> Response {
         }
         _ => reply(StatusCode::NOT_FOUND, &[], ""),
     }
+}
+
+/// ChatGPT's WebSocket endpoint: answers each `response.create` by the
+/// account's token, as `mock_codex` does over HTTP.
+fn mock_socket(log: Log, request: &mut Request) -> Response {
+    let headers = request.headers().clone();
+    log.lock().unwrap().push(Seen {
+        path: format!("ws {}", request.uri()),
+        headers: headers.clone(),
+        body: Bytes::new(),
+    });
+    let key = headers["sec-websocket-key"].to_str().unwrap().to_owned();
+    let token = headers["authorization"].to_str().unwrap().to_owned();
+    let upgrading = hyper::upgrade::on(request);
+    tokio::spawn(async move {
+        let io = hyper_util::rt::TokioIo::new(upgrading.await.unwrap());
+        let (read, write) = tokio::io::split(io);
+        let mut reader = ws::Reader::new(tokio::io::BufReader::new(read));
+        let mut writer = ws::Writer::server(write);
+        while let Ok(Some(message)) = reader.message().await {
+            let ws::Message::Text(text) = message else {
+                break;
+            };
+            log.lock().unwrap().push(Seen {
+                path: "ws message".into(),
+                headers: HeaderMap::new(),
+                body: Bytes::from(text),
+            });
+            let events: Vec<Value> = match token.as_str() {
+                "Bearer tok-limited" => vec![
+                    json!({"type": "response.created", "response": {"id": "r"}}),
+                    json!({"type": "error", "status": 429,
+                        "error": {"type": "usage_limit_reached", "message": "limit", "resets_at": reset_in(5400)}}),
+                ],
+                _ => vec![
+                    json!({"type": "response.created", "response": {"id": "r"}}),
+                    json!({"type": "codex.rate_limits", "rate_limits": {"primary":
+                        {"used_percent": 33, "window_minutes": 300, "reset_at": reset_in(3600)}}}),
+                    json!({"type": "response.output_text.delta", "item_id": "m", "delta": "Hi"}),
+                    json!({"type": "response.completed", "response": {"id": "r", "usage":
+                        {"input_tokens": 50, "input_tokens_details": {"cached_tokens": 20},
+                         "output_tokens": 4, "total_tokens": 54}}}),
+                ],
+            };
+            for event in events {
+                if writer
+                    .send(&ws::Message::Text(event.to_string()))
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        }
+    });
+    let mut response = reply(StatusCode::SWITCHING_PROTOCOLS, &[], Bytes::new());
+    let out = response.headers_mut();
+    out.insert("upgrade", "websocket".parse().unwrap());
+    out.insert("connection", "Upgrade".parse().unwrap());
+    out.insert(
+        "sec-websocket-accept",
+        ws::accept_key(&key).parse().unwrap(),
+    );
+    response
 }
 
 /// `answer` for requests carrying `authorization`, else a 401.
@@ -749,18 +816,178 @@ async fn credits_about_to_expire_are_redeemed_on_used_accounts() {
 }
 
 #[tokio::test]
-async fn websocket_handshakes_are_refused_so_codex_uses_http() {
+async fn websockets_off_or_for_other_models_send_codex_to_http() {
+    let h = harness_with(ProviderId::Codex, &["tok-ok"], |config| {
+        config.websockets = false
+    })
+    .await;
+    let (status, _) = open_socket(&h, "gpt-6-sol").await;
+    assert_eq!(status, 426);
+    assert!(h.log.lock().unwrap().is_empty());
+
+    let h = harness_of(|_| vec![key(ProviderId::Xai, "key-xai")], |_| {}).await;
+    let (status, _) = open_socket(&h, "grok-4").await;
+    assert_eq!(status, 426, "translated models stream over HTTP");
+}
+
+/// A WebSocket handshake to the proxy, as Codex sends it. Returns the
+/// status and, after a 101, the socket.
+async fn open_socket(
+    h: &Harness,
+    model: &str,
+) -> (
+    u16,
+    Option<(
+        ws::Reader<tokio::io::BufReader<tokio::io::ReadHalf<tokio::net::TcpStream>>>,
+        ws::Writer<tokio::io::WriteHalf<tokio::net::TcpStream>>,
+    )>,
+) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    let address = h.proxy.strip_prefix("http://").unwrap();
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+    let handshake = format!(
+        "GET /codex/responses HTTP/1.1\r\nhost: {address}\r\nupgrade: websocket\r\n\
+         connection: Upgrade\r\nsec-websocket-version: 13\r\n\
+         sec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\nauthorization: Bearer {KEY}\r\n\
+         user-agent: codex_exec/0.159.3 (Linux; x86_64)\r\nsession-id: ws-session\r\n\
+         x-codex-routing-hint: model={model}\r\n\r\n"
+    );
+    stream.write_all(handshake.as_bytes()).await.unwrap();
+    let (read, write) = tokio::io::split(stream);
+    let mut read = tokio::io::BufReader::new(read);
+    let mut status_line = String::new();
+    read.read_line(&mut status_line).await.unwrap();
+    let status: u16 = status_line.split(' ').nth(1).unwrap().parse().unwrap();
+    let mut accept = None;
+    loop {
+        let mut line = String::new();
+        read.read_line(&mut line).await.unwrap();
+        if line == "\r\n" {
+            break;
+        }
+        if let Some(value) = line
+            .to_ascii_lowercase()
+            .strip_prefix("sec-websocket-accept:")
+        {
+            accept = Some(value.trim().to_owned());
+        }
+    }
+    if status != 101 {
+        return (status, None);
+    }
+    assert_eq!(
+        accept.as_deref(),
+        Some(
+            ws::accept_key("dGhlIHNhbXBsZSBub25jZQ==")
+                .to_ascii_lowercase()
+                .as_str()
+        )
+    );
+    (
+        status,
+        Some((ws::Reader::new(read), ws::Writer::client(write))),
+    )
+}
+
+#[tokio::test]
+async fn codex_websockets_are_relayed_to_chatgpt() {
     let h = harness(ProviderId::Codex, &["tok-ok"]).await;
-    let response = client()
-        .get(format!("{}/v1/responses", h.proxy))
-        .header("authorization", format!("Bearer {KEY}"))
-        .header("upgrade", "websocket")
-        .header("sec-websocket-version", "13")
-        .send()
+    let (status, socket) = open_socket(&h, "gpt-6-sol").await;
+    assert_eq!(status, 101);
+    let (mut reader, mut writer) = socket.unwrap();
+    let create =
+        json!({"type": "response.create", "model": "gpt-6-sol", "input": [], "stream": true});
+    writer
+        .send(&ws::Message::Text(create.to_string()))
         .await
         .unwrap();
-    assert_eq!(response.status(), 426);
-    assert!(h.log.lock().unwrap().is_empty());
+    let mut types = Vec::new();
+    while let Some(ws::Message::Text(text)) = reader.message().await.unwrap() {
+        let event: Value = serde_json::from_str(&text).unwrap();
+        types.push(event["type"].as_str().unwrap().to_owned());
+        if event["type"] == "response.completed" {
+            break;
+        }
+    }
+    assert_eq!(
+        types,
+        [
+            "response.created",
+            "codex.rate_limits",
+            "response.output_text.delta",
+            "response.completed"
+        ]
+    );
+    let upstream = h.log.lock().unwrap()[0].clone();
+    assert_eq!(upstream.path, "ws /codex/responses");
+    assert_eq!(upstream.headers["authorization"], "Bearer tok-ok");
+    assert_eq!(
+        upstream.headers["openai-beta"],
+        "responses_websockets=2026-02-06"
+    );
+    assert_eq!(upstream.headers["chatgpt-account-id"], "acct-codex0");
+    assert_ne!(
+        upstream.headers["sec-websocket-key"], "dGhlIHNhbXBsZSBub25jZQ==",
+        "the upstream handshake has its own key"
+    );
+    // The rate-limit event updated the account's windows, and the turn
+    // reached the ledger.
+    let id = h.ids[0].clone();
+    eventually(|| {
+        ledger::read(&h.dir.join("usage"), Timestamp::UNIX_EPOCH)
+            .iter()
+            .any(|e| e.account == id && e.input == 30 && e.cache_read == 20 && e.output == 4)
+    })
+    .await;
+    let state = h.app.pool.state(&h.ids[0]);
+    assert_eq!(state.limits.windows[0].used, 33.0);
+}
+
+#[tokio::test]
+async fn spent_accounts_close_the_socket_so_codex_reconnects_elsewhere() {
+    let h = harness(ProviderId::Codex, &["tok-limited", "tok-ok"]).await;
+    let create =
+        json!({"type": "response.create", "model": "gpt-6-sol", "input": [], "stream": true})
+            .to_string();
+
+    let (_, socket) = open_socket(&h, "gpt-6-sol").await;
+    let (mut reader, mut writer) = socket.unwrap();
+    writer
+        .send(&ws::Message::Text(create.clone()))
+        .await
+        .unwrap();
+    let mut closed = None;
+    while let Some(message) = reader.message().await.unwrap() {
+        if let ws::Message::Close(close) = message {
+            closed = close;
+            break;
+        }
+    }
+    assert_eq!(closed.map(|(code, _)| code), Some(1012));
+    assert!(h.app.pool.state(&h.ids[0]).is_blocked(Timestamp::now()));
+
+    // Codex's retry opens a new socket, which lands on the other account.
+    let (_, socket) = open_socket(&h, "gpt-6-sol").await;
+    let (mut reader, mut writer) = socket.unwrap();
+    writer.send(&ws::Message::Text(create)).await.unwrap();
+    let mut completed = false;
+    while let Some(ws::Message::Text(text)) = reader.message().await.unwrap() {
+        if text.contains("response.completed") {
+            completed = true;
+            break;
+        }
+    }
+    assert!(completed);
+    let tokens: Vec<String> = h
+        .log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|s| s.path.starts_with("ws /"))
+        .map(|s| s.headers["authorization"].to_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(tokens, ["Bearer tok-limited", "Bearer tok-ok"]);
 }
 
 #[tokio::test]

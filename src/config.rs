@@ -37,6 +37,9 @@ pub struct Config {
     /// When every Codex account is spent, redeem a banked reset credit
     /// instead of failing the request.
     pub redeem_when_exhausted: bool,
+    /// Relay Codex's WebSockets to ChatGPT's, which starts answers sooner
+    /// than HTTP streaming. Off, Codex streams over HTTP.
+    pub websockets: bool,
     /// Let API keys serve a subscription's models once every subscription
     /// account is limited. Off, they serve those models only when asked
     /// for by name (`openai/gpt-6-sol`) or when no subscription exists.
@@ -96,6 +99,7 @@ impl Default for Config {
             refresh_tokens: true,
             redeem_expiring_credits: true,
             redeem_when_exhausted: false,
+            websockets: true,
             paid_overflow: false,
             proxy: None,
             aliases: BTreeMap::new(),
@@ -277,6 +281,10 @@ api_key = "{api_key}"
 # When every Codex account is spent, redeem a reset credit instead of
 # failing the request.
 # redeem_when_exhausted = false
+
+# Relay Codex's WebSocket connections to ChatGPT, which starts answers
+# sooner than HTTP streaming. `slopmax setup codex` turns them on in Codex.
+# websockets = true
 
 # Let API keys (`slopmax login openai`, `slopmax login anthropic`) serve a
 # subscription's models once every subscription account is limited. Off,

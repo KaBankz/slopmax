@@ -635,6 +635,15 @@ impl Response {
         serde_json::from_slice(&bytes).map_err(|e| Error::new(Kind::Decode, e))
     }
 
+    /// The connection, once a `101 Switching Protocols` hands it over (a
+    /// WebSocket handshake).
+    pub async fn upgrade(self) -> Result<TokioIo<hyper::upgrade::Upgraded>, Error> {
+        hyper::upgrade::on(self.inner)
+            .await
+            .map(TokioIo::new)
+            .map_err(|e| Error::new(Kind::Connect, e))
+    }
+
     /// The body as a stream of chunks, failing if it stalls for longer than
     /// the client's read timeout.
     pub fn into_body(self) -> body::Body {

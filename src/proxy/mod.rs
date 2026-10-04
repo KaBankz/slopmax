@@ -9,6 +9,7 @@ mod admin;
 mod forward;
 mod models;
 pub mod rawjson;
+mod socket;
 mod sse;
 mod start;
 mod transcode;
@@ -136,6 +137,15 @@ impl App {
         }
     }
 
+    /// Tells the dashboard's live feed about an answered request.
+    pub(crate) fn broadcast(&self, entry: &crate::ledger::Entry) {
+        if self.events.receiver_count() > 0
+            && let Ok(line) = serde_json::to_vec(entry)
+        {
+            let _ = self.events.send(line.into());
+        }
+    }
+
     pub fn report(&self) -> Report {
         let now = Timestamp::now();
         report::build(
@@ -197,14 +207,10 @@ async fn proxy(app: Arc<App>, request: Request) -> Response {
     if let Some(version) = crate::provider::codex::wire::client_version(request.headers()) {
         *app.codex_version.lock().unwrap_or_else(|p| p.into_inner()) = Some(version);
     }
-    // Upgrades cannot be relayed. Refusing the handshake with 426 makes
-    // Codex switch to HTTP streaming at once instead of retrying.
+    // Codex's sockets are relayed when they can be; refusing a handshake
+    // with 426 makes Codex stream over HTTP at once instead of retrying.
     if is_websocket(request.headers()) {
-        return error(
-            Some(dialect),
-            StatusCode::UPGRADE_REQUIRED,
-            "slopmax streams over HTTP; WebSockets are not supported",
-        );
+        return socket::accept(app, target, request).await;
     }
     forward::forward(app, target, request, client).await
 }

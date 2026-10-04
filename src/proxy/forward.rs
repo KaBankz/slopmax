@@ -829,11 +829,7 @@ fn recorded(
             first_byte_ms: first_byte.map(millis),
             attempts: served.attempts,
         };
-        if pool_app.events.receiver_count() > 0
-            && let Ok(line) = serde_json::to_vec(&entry)
-        {
-            let _ = pool_app.events.send(line.into());
-        }
+        pool_app.broadcast(&entry);
         pool_app.ledger.record(entry);
     });
     body::boxed(stream)

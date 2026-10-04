@@ -4,5 +4,6 @@ pub mod body;
 pub mod client;
 pub mod form;
 pub mod server;
+pub mod ws;
 
 pub use client::{Client, Origins};

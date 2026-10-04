@@ -55,6 +55,8 @@ src/
 7. **The answer.** Rate-limit headers update the account's windows (`Provider::limits`). A refusal is classified by `Provider::verdict` into a `Verdict` (exhausted, throttled, unauthorized, stale state, or final), which decides whether to block the account and try the next. For Codex the first moments of the stream are held (`proxy/start.rs`) to catch refusals inside a 200.
 8. **Streaming back.** `proxy/sse.rs`'s `Tapped` watches the stream for token usage and records the request in the ledger when it ends. A translated answer also passes through `proxy/transcode.rs`, which reads the upstream's events and writes the client's.
 
+Codex's WebSockets take a different path, through `proxy/socket.rs`. The handshake is routed like a request, using the model from Codex's `x-codex-routing-hint`. slopmax opens ChatGPT's socket on the chosen account (`net/ws.rs` frames both), then relays messages both ways. On the way it reads `codex.rate_limits` events and finished turns, and closes the socket when the account is spent so Codex reconnects on another. Anything it cannot relay is answered 426, and Codex falls back to HTTP.
+
 ## Providers
 
 ```rust

@@ -24,6 +24,24 @@ pub fn from_headers(headers: &HeaderMap, now: Timestamp) -> Option<Limits> {
     Limits::observed(windows, now)
 }
 
+/// A `codex.rate_limits` event, which ChatGPT sends over WebSockets in
+/// place of the rate-limit headers.
+pub fn from_event(event: &Value, now: Timestamp) -> Option<Limits> {
+    let limits = event.get("rate_limits")?;
+    let windows = ["primary", "secondary"]
+        .into_iter()
+        .filter_map(|slot| {
+            let w = limits.get(slot).filter(|w| w.is_object())?;
+            let used = w.get("used_percent")?.as_f64()?;
+            let minutes = w.get("window_minutes").and_then(Value::as_f64);
+            let reset = w.get("reset_at").and_then(parse_time);
+            let span = minutes.map_or("7d", |m| span_for((m * 60.0) as i64));
+            Some(Window::new(span, used, reset))
+        })
+        .collect();
+    Limits::observed(windows, now)
+}
+
 /// Codex `GET /backend-api/wham/usage`. Returns the limits and the plan.
 pub fn from_usage(body: &Value, now: Timestamp) -> (Limits, Option<String>) {
     let rate_limit = body.get("rate_limit");
@@ -110,6 +128,29 @@ mod tests {
             map.insert(*k, HeaderValue::from_str(v).unwrap());
         }
         map
+    }
+
+    #[test]
+    fn websocket_rate_limit_events() {
+        let event = json!({"type": "codex.rate_limits", "plan_type": "pro",
+            "rate_limits": {"allowed": true, "limit_reached": false,
+                "primary": {"used_percent": 42, "window_minutes": 300, "reset_at": 9000},
+                "secondary": {"used_percent": 7, "window_minutes": 10080, "reset_at": 99000}}});
+        let limits = from_event(&event, ts(1000)).unwrap();
+        let spans: Vec<(&str, f64)> = limits
+            .windows
+            .iter()
+            .map(|w| (w.span.as_str(), w.used))
+            .collect();
+        assert_eq!(spans, [("5h", 42.0), ("7d", 7.0)]);
+        assert_eq!(limits.windows[0].resets_at, Some(ts(9000)));
+        assert!(
+            from_event(
+                &json!({"type": "codex.rate_limits", "rate_limits": {"primary": null}}),
+                ts(0)
+            )
+            .is_none()
+        );
     }
 
     #[test]

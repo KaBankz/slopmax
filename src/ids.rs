@@ -5,7 +5,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ring::digest::{self, SHA256};
 use ring::rand::{SecureRandom, SystemRandom};
 
-fn random_bytes<const N: usize>() -> [u8; N] {
+/// `N` random bytes from the operating system.
+pub fn random<const N: usize>() -> [u8; N] {
     let mut bytes = [0u8; N];
     SystemRandom::new()
         .fill(&mut bytes)
@@ -27,17 +28,17 @@ fn hex(bytes: &[u8]) -> String {
 
 /// 32 random bytes, base64url-encoded without padding (43 characters).
 pub fn token() -> String {
-    URL_SAFE_NO_PAD.encode(random_bytes::<32>())
+    URL_SAFE_NO_PAD.encode(random::<32>())
 }
 
 /// 32 random bytes as lowercase hex (64 characters).
 pub fn hex64() -> String {
-    hex(&random_bytes::<32>())
+    hex(&random::<32>())
 }
 
 /// A random RFC 4122 version 4 UUID.
 pub fn uuid_v4() -> String {
-    let mut b = random_bytes::<16>();
+    let mut b = random::<16>();
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
     let h = hex(&b);

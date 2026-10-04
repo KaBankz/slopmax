@@ -37,7 +37,8 @@ const SESSION_COMMANDS: [&str; 5] = ["exec", "e", "review", "resume", "fork"];
 
 /// `-c` overrides that point Codex at the proxy through a custom provider.
 /// Named "OpenAI" so Codex keeps first-party behavior such as remote
-/// compaction; `env_key` sends the slopmax key as a bearer token.
+/// compaction; `env_key` sends the slopmax key as a bearer token, and
+/// `supports_websockets` lets Codex use the faster WebSocket transport.
 fn overrides(config: &Config) -> Vec<String> {
     let base = format!("{}/codex", config.base_url());
     let set = |key: &str, val: &str| ["-c".to_owned(), format!("{key}={}", toml_string(val))];
@@ -50,6 +51,12 @@ fn overrides(config: &Config) -> Vec<String> {
         ("env_key", KEY_ENV),
     ] {
         args.extend(set(&format!("model_providers.{PROVIDER}.{key}"), val));
+    }
+    if config.websockets {
+        args.push("-c".into());
+        args.push(format!(
+            "model_providers.{PROVIDER}.supports_websockets=true"
+        ));
     }
     args
 }
@@ -157,6 +164,9 @@ impl Agent for Codex {
         table["base_url"] = value(format!("{}/codex", config.base_url()));
         table["wire_api"] = value("responses");
         table["experimental_bearer_token"] = value(config.api_key.as_str());
+        if config.websockets {
+            table["supports_websockets"] = value(true);
+        }
         // Keeps the desktop app's account screens when signed in to Codex;
         // requests still carry the slopmax key, which takes precedence.
         let signed_in = file
