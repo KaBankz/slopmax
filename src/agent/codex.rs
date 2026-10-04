@@ -157,6 +157,14 @@ impl Agent for Codex {
         table["base_url"] = value(format!("{}/codex", config.base_url()));
         table["wire_api"] = value("responses");
         table["experimental_bearer_token"] = value(config.api_key.as_str());
+        // Keeps the desktop app's account screens when signed in to Codex;
+        // requests still carry the slopmax key, which takes precedence.
+        let signed_in = file
+            .parent()
+            .is_some_and(|dir| dir.join("auth.json").exists());
+        if signed_in {
+            table["requires_openai_auth"] = value(true);
+        }
         providers.insert(PROVIDER, Item::Table(table));
 
         // The file now holds the slopmax key, so it stays private.
@@ -175,6 +183,11 @@ impl Agent for Codex {
             providers.remove(PROVIDER);
         }
         Ok(fsx::write_private(file, doc.to_string().as_bytes())?)
+    }
+
+    fn setup_note(&self) -> &'static str {
+        "Restart Codex. Quit and reopen the Codex (ChatGPT) desktop app, which reads \
+         the same config."
     }
 
     fn import<'a>(&'a self, _http: &'a Client) -> BoxFuture<'a, Option<Found>> {
@@ -353,6 +366,16 @@ mod tests {
         assert!(wired.contains(r#"base_url = "http://127.0.0.1:7567/codex""#));
         assert!(wired.contains(r#"experimental_bearer_token = "sm-test""#));
         assert!(wired.contains("[model_providers.cliproxyapi]"));
+        assert!(
+            !wired.contains("requires_openai_auth"),
+            "not signed in to Codex"
+        );
+
+        // Signed in: the desktop app keeps its account screens.
+        std::fs::write(dir.join("auth.json"), "{}").unwrap();
+        Codex.setup(&config(), &file, &mut saved).unwrap();
+        let wired = std::fs::read_to_string(&file).unwrap();
+        assert!(wired.contains("requires_openai_auth = true"));
 
         Codex.undo(&file, saved.unwrap()).unwrap();
         let restored = std::fs::read_to_string(&file).unwrap();

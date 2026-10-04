@@ -832,9 +832,12 @@ fn setup(config: &Config, agent: &dyn Agent, undo: bool) -> Result<()> {
         "{app} now uses slopmax {}",
         ui::dim(format!("({})", path.display()))
     );
+    println!("{}", ui::dim(agent.setup_note()));
     println!(
         "{}",
-        ui::dim("Start the proxy with `slopmax start` and restart the agent. Undo with `--undo`.")
+        ui::dim(
+            "Start the proxy with `slopmax start` (or `slopmax service install`). Undo with `--undo`."
+        )
     );
     Ok(())
 }

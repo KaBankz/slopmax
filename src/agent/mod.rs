@@ -84,6 +84,9 @@ pub trait Agent: Send + Sync {
     /// Restores what [`Agent::setup`] replaced.
     fn undo(&self, file: &Path, saved: Value) -> Result<()>;
 
+    /// What to tell the user after `setup`.
+    fn setup_note(&self) -> &'static str;
+
     /// The agent's own saved login, if it has one.
     fn import<'a>(&'a self, http: &'a Client) -> BoxFuture<'a, Option<Found>>;
 }

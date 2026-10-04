@@ -145,6 +145,11 @@ impl Agent for ClaudeCode {
         Ok(fsx::write_json(file, &settings)?)
     }
 
+    fn setup_note(&self) -> &'static str {
+        "Restart Claude Code and the apps that run it. The Claude desktop app's Code \
+         tab and Cowork keep using the app's own login."
+    }
+
     fn import<'a>(&'a self, http: &'a Client) -> BoxFuture<'a, Option<Found>> {
         Box::pin(async move {
             let oauth = credentials()?;
