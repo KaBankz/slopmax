@@ -79,6 +79,25 @@ pub fn from_usage(body: &Value, now: Timestamp) -> Limits {
     }
 }
 
+/// Whether a 429 refuses fast mode for want of usage credits rather than
+/// for a spent window. That belongs to the request: every account would
+/// answer the same, and all of them stay healthy for ordinary requests.
+pub fn fast_mode_refused(headers: &HeaderMap, body: &[u8]) -> bool {
+    let window_rejected = ["5h-", "7d-"].iter().any(|key| {
+        header(headers, &format!("anthropic-ratelimit-unified-{key}status")) == Some("rejected")
+    });
+    if window_rejected {
+        return false;
+    }
+    let message = serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|v| v.pointer("/error/message")?.as_str().map(str::to_lowercase))
+        .unwrap_or_else(|| String::from_utf8_lossy(body).to_lowercase());
+    message.contains("fast request rejected")
+        || (message.contains("fast")
+            && (message.contains("usage credits") || message.contains("credits are required")))
+}
+
 /// Classifies a Claude 429 from its unified rate-limit headers.
 ///
 /// A rejected 5h or 7d window blocks the whole account until the latest of
@@ -211,6 +230,19 @@ mod tests {
                 model: Some("claude-fable-5".into())
             }
         );
+    }
+
+    #[test]
+    fn fast_mode_credit_refusals_are_told_apart() {
+        let body = br#"{"type":"error","error":{"type":"rate_limit_error","message":"Usage credits are required for fast mode."}}"#;
+        assert!(fast_mode_refused(&HeaderMap::new(), body));
+        let spent = headers(&[("anthropic-ratelimit-unified-5h-status", "rejected")]);
+        assert!(
+            !fast_mode_refused(&spent, body),
+            "a spent window comes first"
+        );
+        let limit = br#"{"type":"error","error":{"type":"rate_limit_error","message":"limit"}}"#;
+        assert!(!fast_mode_refused(&HeaderMap::new(), limit));
     }
 
     #[test]

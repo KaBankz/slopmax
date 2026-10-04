@@ -108,11 +108,22 @@ impl AccountState {
     }
 }
 
-/// Persisted runtime state: per-account health plus manual pins.
+/// Persisted runtime state: per-account health and live sessions.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct State {
     #[serde(default)]
     pub accounts: BTreeMap<String, AccountState>,
+    /// Kept so a restart does not move sessions (and lose their caches).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    sessions: Vec<SavedSession>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SavedSession {
+    provider: ProviderId,
+    session: String,
+    account: String,
+    last_used: Timestamp,
 }
 
 /// Manual account preference per provider, set by `slopmax use`.
@@ -172,8 +183,22 @@ pub struct Pool {
 
 impl Pool {
     pub fn new(strategy: Strategy, session_ttl: SignedDuration, state: State) -> Self {
+        let now = Timestamp::now();
+        let sessions = state
+            .sessions
+            .into_iter()
+            .filter(|s| now.duration_since(s.last_used) < session_ttl)
+            .map(|s| {
+                let binding = Binding {
+                    account: s.account,
+                    last_used: s.last_used,
+                };
+                ((s.provider, s.session), binding)
+            })
+            .collect();
         let inner = Inner {
             states: state.accounts.into_iter().collect(),
+            sessions,
             ..Inner::default()
         };
         Self {
@@ -286,6 +311,7 @@ impl Pool {
                     last_used: now,
                 },
             );
+            inner.dirty = true;
         }
         Ok(Choice {
             account,
@@ -368,9 +394,6 @@ impl Pool {
             None => state.blocked_until = state.blocked_until.max(Some(until)),
         }
         state.last_error = Some(reason.to_owned());
-        inner
-            .sessions
-            .retain(|_, binding| binding.account != id || model.is_some());
         inner.dirty = true;
     }
 
@@ -442,7 +465,17 @@ impl Pool {
         inner
             .sessions
             .retain(|_, b| now.duration_since(b.last_used) < self.session_ttl);
-        (State { accounts }, dirty)
+        let sessions = inner
+            .sessions
+            .iter()
+            .map(|((provider, session), b)| SavedSession {
+                provider: *provider,
+                session: session.clone(),
+                account: b.account.clone(),
+                last_used: b.last_used,
+            })
+            .collect();
+        (State { accounts, sessions }, dirty)
     }
 
     /// The account each live session is bound to, for display.
@@ -635,9 +668,44 @@ mod tests {
         let choice = pool.pick(&req, ts(1003)).unwrap();
         assert_eq!(choice.account.id, b.id);
         assert_eq!(
-            choice.moved_from, None,
-            "the block already released the binding"
+            choice.moved_from.as_deref(),
+            Some(a.id.as_str()),
+            "the move is reported, so account-bound state can be dropped up front"
         );
+    }
+
+    #[test]
+    fn sessions_survive_a_restart() {
+        let a = account(ProviderId::Claude, "a", 1);
+        let b = account(ProviderId::Claude, "b", 2);
+        let first = pool(Strategy::LeastUsed, &[&a, &b]);
+        first.observe(
+            &a.id,
+            limits(vec![window("7d", 90.0, Some(9000))]),
+            ts(1000),
+        );
+        first.observe(
+            &b.id,
+            limits(vec![window("7d", 10.0, Some(9000))]),
+            ts(1000),
+        );
+        assert_eq!(pick(&first, Some("s1"), 1000).unwrap(), b.id);
+
+        let (state, _) = first.snapshot(ts(1001));
+        let json = serde_json::to_string(&state).unwrap();
+        let restored = Pool::new(
+            Strategy::LeastUsed,
+            SignedDuration::from_hours(1_000_000),
+            serde_json::from_str(&json).unwrap(),
+        );
+        restored.sync(vec![a.clone(), b.clone()], Pins::default());
+        // b is now the busier account, but the session stays on it.
+        restored.observe(
+            &b.id,
+            limits(vec![window("7d", 95.0, Some(9000))]),
+            ts(1001),
+        );
+        assert_eq!(pick(&restored, Some("s1"), 1002).unwrap(), b.id);
     }
 
     #[test]

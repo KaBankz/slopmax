@@ -83,11 +83,14 @@ impl Provider for Claude {
         &self,
         status: StatusCode,
         headers: &HeaderMap,
-        _body: &[u8],
+        body: &[u8],
         model: Option<&str>,
         now: Timestamp,
     ) -> Verdict {
         match status {
+            StatusCode::TOO_MANY_REQUESTS if limits::fast_mode_refused(headers, body) => {
+                Verdict::Final
+            }
             StatusCode::TOO_MANY_REQUESTS => limits::refusal(headers, model, now).into(),
             _ => Verdict::of_status(status),
         }

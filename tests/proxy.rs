@@ -135,6 +135,11 @@ fn mock_claude(headers: &HeaderMap) -> Response {
                 "\n\n",
             ),
         ),
+        "Bearer tok-fast" => reply(
+            StatusCode::TOO_MANY_REQUESTS,
+            &[("anthropic-ratelimit-unified-status", "allowed".to_owned())],
+            r#"{"type":"error","error":{"type":"rate_limit_error","message":"Usage credits are required for fast mode."}}"#,
+        ),
         _ => reply(
             StatusCode::UNAUTHORIZED,
             &[],
@@ -625,4 +630,22 @@ async fn websocket_handshakes_are_refused_so_codex_uses_http() {
         .unwrap();
     assert_eq!(response.status(), 426);
     assert!(h.log.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn fast_mode_refusals_reach_claude_code_without_benching_accounts() {
+    let h = harness(ProviderId::Claude, &["tok-fast", "tok-ok"]).await;
+    let response = claude_request(&h).send().await.unwrap();
+    assert_eq!(response.status(), 429);
+    let body: Value = response.json().await.unwrap();
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("fast mode")
+    );
+    assert_eq!(h.log.lock().unwrap().len(), 1, "no other account is tried");
+    let state = h.app.pool.state(&h.ids[0]);
+    assert_eq!(state.blocked_until, None);
+    assert_eq!(state.throttled_until, None);
 }
