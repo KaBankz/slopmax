@@ -27,6 +27,12 @@ const CREDIT_EXPIRY_LEAD: SignedDuration = SignedDuration::from_hours(3);
 const WATCH_EVERY: Duration = Duration::from_secs(15);
 
 pub async fn run(config: Config) -> Result<()> {
+    serve(config, Home::current(), Origins::default()).await
+}
+
+/// Runs the proxy from `home`, sending provider traffic to `origins`
+/// (benchmarks point them at a local mock).
+pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<()> {
     let listen = config.listen;
     let listener = TcpListener::bind(listen).await.with_context(|| {
         match server::port_holder(listen.port()) {
@@ -34,9 +40,8 @@ pub async fn run(config: Config) -> Result<()> {
             None => format!("cannot listen on {listen}"),
         }
     })?;
-    let home = Home::current();
     let state: State = fsx::read_json(&home.state())?.unwrap_or_default();
-    let app = App::new(config, home, state, Origins::default());
+    let app = App::new(config, home, state, origins);
     app.sync()?;
 
     tokio::spawn(every(

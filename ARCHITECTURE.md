@@ -241,6 +241,26 @@ State a format cannot carry back is kept by slopmax: the encrypted reasoning an 
 
 The binary is under 6 MB, from about 60 crates. The async stack is tokio, hyper, and rustls (with ring). serde_json, toml_edit, memchr, base64, and anyhow round it out. Time, logging, the CLI parser, form encoding, and the HTTP client conveniences are small in-house modules, because the crates for them each pull in far more than slopmax uses. A crate earns its place by doing its job measurably better than a small module would: faster, leaner, or more correct. The CI holds the tree to 70 crates and the binary to 6 MB; raising either needs that reason in the commit.
 
+## Performance
+
+What slopmax adds to a request is small next to a model's answer, and it should stay that way. `scripts/bench.sh` measures it: `examples/bench.rs` runs the real server (`daemon::serve`) in front of a mock provider that streams answers with usage and rate-limit headers, and `oha` drives Claude Code- and Codex-shaped requests through it, small ones and 300 KB conversations, one at a time and 32 at once.
+
+On a 2-vCPU machine shared with the load generator and the mock (which answers a small request in 0.2 ms on its own):
+
+| | Round trip through slopmax (p50) | 32 at once | Memory |
+| --- | --- | --- | --- |
+| Small request | 1.1 ms | 1,600 req/s | 7 MB idle |
+| 300 KB request | 1.9 ms | 1,050 req/s | 40 MB peak under that load |
+
+`slopmax --version` and `status` take about 2 ms, and `serve` answers about 22 ms after it starts.
+
+The hot path keeps to a few rules:
+
+- Request bodies are never parsed whole. `proxy/rawjson.rs` scans for the few values slopmax reads (`model`, `stream`, session ids) and stops once it has them, jumping over strings with SIMD search (`memchr`).
+- The stream tap reads events in place and parses only those that mention usage or an error.
+- Sockets set `TCP_NODELAY`, so each streamed event leaves as it arrives.
+- Commands that only talk to the local proxy skip loading the system's trusted roots.
+
 ## Testing
 
 - Unit tests sit next to the code: parsers and codecs against recorded shapes, the planner over tables of accounts, the pool's placement and failover.

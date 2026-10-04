@@ -332,7 +332,7 @@ mise run check    # rustfmt, clippy with warnings denied, and the tests
 mise run build    # optimized release binary
 ```
 
-`tests/proxy.rs` runs the proxy end to end against mock providers. [ARCHITECTURE.md](ARCHITECTURE.md) maps the code and walks through adding a provider, an agent, or an API format.
+`tests/proxy.rs` runs the proxy end to end against mock providers, and `scripts/bench.sh` measures the latency, throughput, and memory it adds. [ARCHITECTURE.md](ARCHITECTURE.md) maps the code, walks through adding a provider, an agent, or an API format, and lists the current numbers.
 
 ## License
 

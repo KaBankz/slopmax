@@ -10,6 +10,7 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 - The log notes when a session moves to another account.
 - CLIProxyAPI's management calls for quota tools (`auth-files`, `api-call`, `reset-quota` under `/v0/management/`), so apps such as T3 Code can show every pooled account's usage and redeem reset credits. `api-call` answers only those tools' usage and reset-credit calls, and never relays a request with an account's token.
 - `/slopmax/status` reports each provider's pool, and the dashboard and `slopmax status` draw their pool rows from it.
+- `scripts/bench.sh` measures what the proxy adds to a request (latency, throughput, memory) against a local mock provider.
 
 ### Changed
 
