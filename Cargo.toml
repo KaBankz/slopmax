@@ -39,9 +39,6 @@ tower-service = "0.3.3"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.190"
 
-[dev-dependencies]
-tokio = { version = "1.53.2", features = ["test-util"] }
-
 [profile.release]
 lto = "fat"
 codegen-units = 1

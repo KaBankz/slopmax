@@ -122,7 +122,7 @@ pub struct Stalled(Duration);
 
 impl std::fmt::Display for Stalled {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "no data for {}s", self.0.as_secs())
+        write!(f, "no data for {:?}", self.0)
     }
 }
 
@@ -183,10 +183,10 @@ mod tests {
         }
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn stalled_bodies_fail() {
-        let body = IdleTimeout::new(Silent, Duration::from_secs(5));
+        let body = IdleTimeout::new(Silent, Duration::from_millis(100));
         let err = read(body, 10).await.unwrap_err();
-        assert_eq!(err.to_string(), "no data for 5s");
+        assert_eq!(err.to_string(), "no data for 100ms");
     }
 }
