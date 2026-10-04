@@ -97,6 +97,21 @@ const SERVICE_ACTIONS: &[Choice] = &[
     },
 ];
 
+const KEY_ACTIONS: &[Choice] = &[
+    Choice {
+        value: "list",
+        help: "Show the keys",
+    },
+    Choice {
+        value: "add",
+        help: "Make a key for another machine or tool",
+    },
+    Choice {
+        value: "remove",
+        help: "Revoke a key",
+    },
+];
+
 const RANGES: &[Choice] = &[
     Choice {
         value: "today",
@@ -323,6 +338,31 @@ pub static APP: App = App {
                 arg("json", "Print machine-readable JSON", Kind::Flag(None)),
             ],
         ),
+        command(
+            "key",
+            "Manage keys for other machines and tools",
+            &[
+                arg("action", "What to do", Kind::Optional(KEY_ACTIONS, "list")),
+                arg("name", "The key's name", Kind::Optional(&[], "")),
+                arg(
+                    "models",
+                    "Models it may use, comma-separated patterns (default: any)",
+                    Kind::Value(None, "MODELS"),
+                ),
+            ],
+        ),
+        command(
+            "logs",
+            "Show the background proxy's log",
+            &[
+                arg("follow", "Keep printing new lines", Kind::Flag(Some('f'))),
+                arg(
+                    "lines",
+                    "How many lines to show first (default 40)",
+                    Kind::Value(Some('n'), "N"),
+                ),
+            ],
+        ),
         command("notify", "Send a test notification", &[]),
         command(
             "dashboard",
@@ -474,6 +514,14 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
             config.notify.send(&http, &event).await?;
             println!("Sent a test notification.");
         }
+        "key" => key(&config, m.get::<String>("action")?.as_str(), m)?,
+        "logs" => {
+            let lines = match m.value("lines") {
+                Some(n) => n.parse().context("--lines takes a number")?,
+                None => 40,
+            };
+            background::logs(lines, m.flag("follow")).await?;
+        }
         "dashboard" => {
             ensure_running(&config).await?;
             // The key travels in the fragment, which browsers do not send.
@@ -503,6 +551,54 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
 }
 
 /// The agent named by the `agent` argument.
+/// `slopmax key list|add|remove`.
+fn key(config: &Config, action: &str, m: &args::Matches) -> Result<()> {
+    let path = paths::config_file();
+    let name = m.value("name").filter(|n| !n.is_empty());
+    match (action, name) {
+        ("list", _) => {
+            if config.keys.is_empty() {
+                println!("No client keys. Make one with `slopmax key add <name>`.");
+            }
+            for key in &config.keys {
+                let models = if key.models.is_empty() {
+                    "any model".to_owned()
+                } else {
+                    key.models.join(", ")
+                };
+                println!("{}  {}", ui::bold(&key.name), ui::dim(models));
+            }
+        }
+        ("add", Some(name)) => {
+            let models: Vec<String> = m
+                .value("models")
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
+                .collect();
+            let key = Config::add_key(&path, name, &models)?;
+            println!("{key}");
+            eprintln!(
+                "{}",
+                ui::dim(format!(
+                    "Added the key {name:?}. Clients present it as a bearer token or x-api-key; a running proxy picks it up after `slopmax stop && slopmax start`."
+                ))
+            );
+        }
+        ("remove", Some(name)) => {
+            if !Config::remove_key(&path, name)? {
+                bail!("no key named {name:?}");
+            }
+            println!("Revoked the key {name:?}.");
+        }
+        (_, None) => bail!("`slopmax key {action}` needs the key's name"),
+        _ => unreachable!("key actions are checked by the parser"),
+    }
+    Ok(())
+}
+
 /// A compatible endpoint from `login compat` arguments.
 fn endpoint(url: &str, dialect: Option<&str>, models: Option<&str>) -> Result<Endpoint> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
@@ -601,6 +697,8 @@ mod tests {
             "setup codex --undo",
             "usage 30d --by model",
             "notify",
+            "key add laptop --models gpt-*",
+            "logs -f -n 100",
             "dashboard --print",
             "doctor",
             "completions fish",

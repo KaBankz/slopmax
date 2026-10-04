@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 
 use super::{App, json_reply};
 use crate::account::Account;
+use crate::config::ClientKey;
 use crate::log;
 use crate::net::server::Response;
 
@@ -33,7 +34,8 @@ pub(super) fn wants_list(headers: &HeaderMap, query: &str) -> bool {
     !claude_code && !headers.contains_key("anthropic-version") && !query.contains("client_version=")
 }
 
-pub(super) async fn list(app: &Arc<App>) -> Response {
+/// The list, narrowed to what `key` may use when a client key asks.
+pub(super) async fn list(app: &Arc<App>, key: Option<&ClientKey>) -> Response {
     let version = app
         .codex_version
         .lock()
@@ -60,6 +62,9 @@ pub(super) async fn list(app: &Arc<App>) -> Response {
     }
     for alias in app.config.aliases.keys() {
         models.entry(alias.clone()).or_insert("slopmax");
+    }
+    if let Some(key) = key {
+        models.retain(|id, _| key.allows(id));
     }
     let data: Vec<Value> = models
         .into_iter()

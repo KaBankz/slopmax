@@ -26,7 +26,7 @@ use tokio::sync::broadcast;
 
 use crate::account::{Account, Store};
 use crate::auth::{self, RefreshError};
-use crate::config::Config;
+use crate::config::{ClientKey, Config};
 use crate::fsx;
 use crate::ledger::Ledger;
 use crate::log;
@@ -162,9 +162,13 @@ pub async fn handle(app: Arc<App>, request: Request) -> Response {
         (&Method::GET, "/v1/models")
             if models::wants_list(request.headers(), request.uri().query().unwrap_or("")) =>
         {
-            match authorized(&app.config, request.headers()) {
-                true => models::list(&app).await,
-                false => unauthorized(Some(Dialect::Chat)),
+            match caller(&app.config, request.headers()) {
+                Some(Caller::Owner) => models::list(&app, None).await,
+                Some(Caller::Client(key)) => {
+                    let key = key.clone();
+                    models::list(&app, Some(&key)).await
+                }
+                None => unauthorized(Some(Dialect::Chat)),
             }
         }
         _ => proxy(app, request).await,
@@ -185,9 +189,11 @@ async fn proxy(app: Arc<App>, request: Request) -> Response {
         );
     };
     let dialect = target.dialect;
-    if !authorized(&app.config, request.headers()) {
-        return unauthorized(Some(dialect));
-    }
+    let client = match caller(&app.config, request.headers()) {
+        Some(Caller::Owner) => None,
+        Some(Caller::Client(key)) => Some(key.clone()),
+        None => return unauthorized(Some(dialect)),
+    };
     if let Some(version) = crate::provider::codex::wire::client_version(request.headers()) {
         *app.codex_version.lock().unwrap_or_else(|p| p.into_inner()) = Some(version);
     }
@@ -200,7 +206,7 @@ async fn proxy(app: Arc<App>, request: Request) -> Response {
             "slopmax streams over HTTP; WebSockets are not supported",
         );
     }
-    forward::forward(app, target, request).await
+    forward::forward(app, target, request, client).await
 }
 
 /// Where a request goes, judged from its path.
@@ -296,8 +302,17 @@ fn route(path_and_query: &str, headers: &HeaderMap) -> Option<Target> {
     })
 }
 
-/// Accepts the slopmax key as a bearer token or `x-api-key`.
-fn authorized(config: &Config, headers: &HeaderMap) -> bool {
+/// Who a request comes from, by the key it presents.
+#[derive(Debug, Clone, Copy)]
+enum Caller<'a> {
+    /// The owner's `api_key`.
+    Owner,
+    /// One of the config's client keys.
+    Client(&'a ClientKey),
+}
+
+/// The key a request presents, as a bearer token or `x-api-key`.
+fn caller<'a>(config: &'a Config, headers: &HeaderMap) -> Option<Caller<'a>> {
     let bearer = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -305,8 +320,24 @@ fn authorized(config: &Config, headers: &HeaderMap) -> bool {
             v.strip_prefix("Bearer ")
                 .or_else(|| v.strip_prefix("bearer "))
         });
-    let key = bearer.or_else(|| headers.get("x-api-key").and_then(|v| v.to_str().ok()));
-    key.is_some_and(|key| constant_time_eq(key.trim().as_bytes(), config.api_key.as_bytes()))
+    let key = bearer
+        .or_else(|| headers.get("x-api-key").and_then(|v| v.to_str().ok()))?
+        .trim()
+        .as_bytes();
+    if constant_time_eq(key, config.api_key.as_bytes()) {
+        return Some(Caller::Owner);
+    }
+    config
+        .keys
+        .iter()
+        .find(|k| constant_time_eq(key, k.key.as_bytes()))
+        .map(Caller::Client)
+}
+
+/// Whether the request carries the owner's key, which slopmax's own API
+/// requires.
+fn authorized(config: &Config, headers: &HeaderMap) -> bool {
+    matches!(caller(config, headers), Some(Caller::Owner))
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -464,6 +495,30 @@ mod tests {
         );
         assert_eq!(at("/codexx/responses"), None);
         assert_eq!(at("/other"), None);
+    }
+
+    #[test]
+    fn client_keys_reach_the_proxy_but_not_the_admin_api() {
+        let config = Config {
+            api_key: "sm-owner".into(),
+            keys: vec![ClientKey {
+                name: "laptop".into(),
+                key: "sm-laptop".into(),
+                models: vec!["gpt-*".into()],
+            }],
+            ..Config::default()
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer sm-laptop"),
+        );
+        assert!(matches!(caller(&config, &headers), Some(Caller::Client(k)) if k.name == "laptop"));
+        assert!(!authorized(&config, &headers));
+        headers.insert("authorization", HeaderValue::from_static("Bearer sm-owner"));
+        assert!(matches!(caller(&config, &headers), Some(Caller::Owner)));
+        headers.insert("authorization", HeaderValue::from_static("Bearer sm-other"));
+        assert!(caller(&config, &headers).is_none());
     }
 
     #[test]

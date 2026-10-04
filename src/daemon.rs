@@ -28,9 +28,12 @@ const WATCH_EVERY: Duration = Duration::from_secs(15);
 
 pub async fn run(config: Config) -> Result<()> {
     let listen = config.listen;
-    let listener = TcpListener::bind(listen)
-        .await
-        .with_context(|| format!("cannot listen on {listen} (is slopmax already running?)"))?;
+    let listener = TcpListener::bind(listen).await.with_context(|| {
+        match server::port_holder(listen.port()) {
+            Some(holder) => format!("cannot listen on {listen}: {holder} is using that port"),
+            None => format!("cannot listen on {listen}"),
+        }
+    })?;
     let home = Home::current();
     let state: State = fsx::read_json(&home.state())?.unwrap_or_default();
     let app = App::new(config, home, state, Origins::default());

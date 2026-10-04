@@ -57,6 +57,32 @@ pub struct Config {
     /// Where to send notifications, and which.
     #[serde(skip_serializing_if = "notify::Settings::is_empty")]
     pub notify: notify::Settings,
+    /// Keys for other machines and tools, each possibly limited to some
+    /// models. Only `api_key` reaches slopmax's own API.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<ClientKey>,
+}
+
+/// A key a client presents instead of `api_key`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClientKey {
+    pub name: String,
+    pub key: String,
+    /// The models it may use, as patterns where `*` matches anything; any
+    /// model when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<String>,
+}
+
+impl ClientKey {
+    pub fn allows(&self, model: &str) -> bool {
+        self.models.is_empty()
+            || self
+                .models
+                .iter()
+                .any(|p| crate::provider::matches(p, model))
+    }
 }
 
 impl Default for Config {
@@ -76,6 +102,7 @@ impl Default for Config {
             fallbacks: BTreeMap::new(),
             prices: BTreeMap::new(),
             notify: notify::Settings::default(),
+            keys: Vec::new(),
         }
     }
 }
@@ -136,6 +163,58 @@ impl Config {
                 .with_context(|| format!("writing {}", path.display()))?;
         }
         Ok(config)
+    }
+
+    /// Adds a client key named `name` to the config at `path`, keeping the
+    /// file's comments, and returns the new key.
+    pub fn add_key(path: &Path, name: &str, models: &[String]) -> Result<String> {
+        let config = Self::load_from(path)?;
+        if config.keys.iter().any(|k| k.name == name) {
+            anyhow::bail!("a key named {name:?} already exists");
+        }
+        let key = format!("sm-{}", ids::token());
+        let mut doc = Self::document(path)?;
+        let mut entry = toml_edit::Table::new();
+        entry["name"] = toml_edit::value(name);
+        entry["key"] = toml_edit::value(&key);
+        if !models.is_empty() {
+            let list: toml_edit::Array = models.iter().map(String::as_str).collect();
+            entry["models"] = toml_edit::value(list);
+        }
+        doc.entry("keys")
+            .or_insert_with(|| toml_edit::Item::ArrayOfTables(Default::default()))
+            .as_array_of_tables_mut()
+            .context("`keys` in config.toml is not a list of [[keys]] tables")?
+            .push(entry);
+        fsx::write_private(path, doc.to_string().as_bytes())
+            .with_context(|| format!("writing {}", path.display()))?;
+        Ok(key)
+    }
+
+    /// Removes the client key named `name`; returns whether there was one.
+    pub fn remove_key(path: &Path, name: &str) -> Result<bool> {
+        let mut doc = Self::document(path)?;
+        let Some(keys) = doc.get_mut("keys").and_then(|k| k.as_array_of_tables_mut()) else {
+            return Ok(false);
+        };
+        let before = keys.len();
+        keys.retain(|table| table.get("name").and_then(|n| n.as_str()) != Some(name));
+        if keys.len() == before {
+            return Ok(false);
+        }
+        if keys.is_empty() {
+            doc.remove("keys");
+        }
+        fsx::write_private(path, doc.to_string().as_bytes())
+            .with_context(|| format!("writing {}", path.display()))?;
+        Ok(true)
+    }
+
+    fn document(path: &Path) -> Result<DocumentMut> {
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        text.parse()
+            .with_context(|| format!("invalid config {}", path.display()))
     }
 
     /// Base URL agents use to reach the proxy.
@@ -217,6 +296,13 @@ api_key = "{api_key}"
 #   webhook = "https://hooks.slack.com/services/..."
 #   command = 'notify-send slopmax "$SLOPMAX_MESSAGE"'
 #   events = ["exhausted", "recovered", "signed-out"]
+
+# More keys, for other machines and tools, made with `slopmax key add`. A
+# key may be limited to some models; only api_key reaches slopmax's own API.
+#   [[keys]]
+#   name = "laptop"
+#   key = "sm-..."
+#   models = ["gpt-*"]
 
 # API prices for `slopmax usage`, in dollars per million tokens. Anthropic's
 # list prices are built in; add models it can't price. Cache reads default
@@ -318,6 +404,29 @@ mod tests {
             (2.0, 8.0, None)
         );
         assert!(toml_edit::de::from_str::<Config>("[prices.m]\ninput = 1\n").is_err());
+    }
+
+    #[test]
+    fn client_keys_are_added_and_removed_in_place() {
+        let path = temp_config();
+        let first = Config::load_from(&path).unwrap();
+        let laptop = Config::add_key(&path, "laptop", &["gpt-*".into()]).unwrap();
+        let ci = Config::add_key(&path, "ci", &[]).unwrap();
+        assert!(Config::add_key(&path, "ci", &[]).is_err());
+        let config = Config::load_from(&path).unwrap();
+        assert_eq!(config.api_key, first.api_key);
+        assert_eq!(config.keys.len(), 2);
+        assert_eq!(config.keys[0].key, laptop);
+        assert!(config.keys[0].allows("gpt-6-sol") && !config.keys[0].allows("claude-opus-5-5"));
+        assert!(config.keys[1].allows("anything"));
+        assert_ne!(laptop, ci);
+        // The template's comments survive.
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("# slopmax settings."));
+        assert!(Config::remove_key(&path, "laptop").unwrap());
+        assert!(!Config::remove_key(&path, "laptop").unwrap());
+        assert_eq!(Config::load_from(&path).unwrap().keys.len(), 1);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
     #[test]

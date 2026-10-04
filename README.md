@@ -183,6 +183,24 @@ total                 508    398.3k    229.7k      114.4M         2.9M    $39.98
 
 `API cost` is what the same tokens would cost on the pay-as-you-go API, at Anthropic's list prices and any you set under `[prices]` in the config. Requests to models without a price are counted apart and marked `+`. Group `--by day`, `model`, or `account`, over `today`, `7d`, `30d`, or `all`, or print `--json`.
 
+## Dashboard
+
+`slopmax dashboard` opens a page that shows every account's windows and reset countdowns, usage and cost by day, model, or account, and a live feed of answered requests. It can enable, disable, pin, reprioritize, and redeem. The page is one file built into the binary and loads nothing from elsewhere. It takes the slopmax key from its address's `#fragment`, which browsers never send to a server. On a remote machine, forward the port first (`ssh -L 7567:127.0.0.1:7567 host`).
+
+The same data is available as JSON under `/slopmax/` (`status`, `usage`, `events`, `accounts/<id>/<action>`), with the slopmax key.
+
+## Other machines
+
+Set `listen = "0.0.0.0:7567"` to serve your network, and give each machine or tool its own key, so you can revoke them one at a time:
+
+```sh
+slopmax key add laptop                    # prints the new key
+slopmax key add ci --models 'gpt-*'       # a key limited to some models
+slopmax key remove laptop
+```
+
+Client keys can use the proxy but not slopmax's own API, and `slopmax doctor` notes when the proxy listens beyond this machine.
+
 ## Notifications
 
 A webhook or a command hears when every account of a kind is limited (so requests fail), when it recovers, and when an account needs signing in again. Add `limited` and `available` to `events` to hear about each account too.
@@ -217,6 +235,9 @@ command = 'notify-send slopmax "$SLOPMAX_MESSAGE"'  # also gets SLOPMAX_EVENT, _
 | `slopmax env <agent>`                | Print shell setup for `eval`                                                  |
 | `slopmax setup <agent> [--undo]`     | Point an agent's own config at the proxy, or restore it                       |
 | `slopmax usage [range]`              | Token totals and API-equivalent cost (`--by`, `--json`)                       |
+| `slopmax dashboard`                  | Open the dashboard in a browser (`--print` shows its address)                 |
+| `slopmax logs [-f]`                  | The background proxy's log (`-n` lines, `-f` to follow)                       |
+| `slopmax key [list\|add\|remove] [name]` | Keys for other machines and tools (`--models` limits what a key may use)  |
 | `slopmax notify`                     | Send a test notification                                                      |
 | `slopmax doctor`                     | Check the setup and say how to fix problems                                   |
 | `slopmax completions <shell>`        | Print a completion script for bash, zsh, or fish                              |
@@ -242,6 +263,7 @@ command = 'notify-send slopmax "$SLOPMAX_MESSAGE"'  # also gets SLOPMAX_EVENT, _
 | `[aliases]`, `[fallbacks]` | none            | Model renames, and models to try once one is limited everywhere     |
 | `[prices]`                | none             | API prices for `slopmax usage`, beyond Anthropic's built-in list    |
 | `[notify]`                | none             | Webhook, command, and events for notifications                      |
+| `[[keys]]`                | none             | Client keys, made with `slopmax key add`, each possibly limited to some models |
 
 The background proxy logs to `~/.slopmax/slopmax.log`. `SLOPMAX_LOG` sets the log level, for example `SLOPMAX_LOG=debug`.
 

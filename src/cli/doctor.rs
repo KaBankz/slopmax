@@ -11,7 +11,7 @@ use serde_json::Value;
 use super::background::Daemon;
 use crate::account::{Account, Store};
 use crate::config::Config;
-use crate::net::Origins;
+use crate::net::{Origins, server};
 use crate::provider::ProviderId;
 use crate::service::Manager;
 use crate::time::{SignedDuration, Timestamp};
@@ -114,16 +114,33 @@ async fn proxy(config: &Config) -> Section {
             format!("running version {version}, but this binary is {ours}"),
             Some("slopmax stop && slopmax start"),
         ),
-        None if port_taken(config.listen) => s.add(
-            Level::Fail,
-            format!("port {} is taken by another program", config.listen.port()),
-            Some("set `listen` in config.toml to a free port"),
-        ),
+        None if port_taken(config.listen) => {
+            let port = config.listen.port();
+            let holder = server::port_holder(port).unwrap_or_else(|| "another program".into());
+            s.add(
+                Level::Fail,
+                format!("port {port} is taken by {holder}"),
+                Some("set `listen` in config.toml to a free port"),
+            );
+        }
         None => s.add(
             Level::Warn,
             "not running",
             Some("slopmax start (or `slopmax service install` to start at login)"),
         ),
+    }
+    if !config.listen.ip().is_loopback() {
+        let named = config.keys.len();
+        s.add(
+            Level::Note,
+            format!(
+                "listens beyond this machine on {}: anyone who can reach it with the key \
+                 ({named} client key{} besides api_key) can use your accounts",
+                config.listen,
+                if named == 1 { "" } else { "s" }
+            ),
+            Some("give other machines their own keys with `slopmax key add <name>`"),
+        );
     }
     if let Some(manager) = Manager::detect() {
         let status = manager.status();

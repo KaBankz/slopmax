@@ -107,3 +107,95 @@ mod tests {
             .unwrap();
     }
 }
+
+/// The program listening on TCP `port`, as `name (pid N)`, when the
+/// system says. Used to explain a port that is already taken.
+pub fn port_holder(port: u16) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        // Listening sockets of that port, by inode…
+        let inodes: Vec<String> = ["/proc/net/tcp", "/proc/net/tcp6"]
+            .iter()
+            .filter_map(|table| std::fs::read_to_string(table).ok())
+            .flat_map(|text| {
+                text.lines()
+                    .skip(1)
+                    .filter_map(|line| {
+                        let fields: Vec<&str> = line.split_whitespace().collect();
+                        let local = u16::from_str_radix(fields.get(1)?.rsplit(':').next()?, 16);
+                        let listening = *fields.get(3)? == "0A";
+                        (local == Ok(port) && listening)
+                            .then(|| fields.get(9).map(|i| i.to_string()))?
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        if inodes.is_empty() {
+            return None;
+        }
+        // …and the process holding one of them.
+        for entry in std::fs::read_dir("/proc").ok()?.flatten() {
+            let pid = entry.file_name().to_string_lossy().into_owned();
+            if !pid.bytes().all(|b| b.is_ascii_digit()) {
+                continue;
+            }
+            let Ok(fds) = std::fs::read_dir(entry.path().join("fd")) else {
+                continue;
+            };
+            for fd in fds.flatten() {
+                let Ok(target) = std::fs::read_link(fd.path()) else {
+                    continue;
+                };
+                let target = target.to_string_lossy();
+                if inodes
+                    .iter()
+                    .any(|inode| target == format!("socket:[{inode}]").as_str())
+                {
+                    let name =
+                        std::fs::read_to_string(entry.path().join("comm")).unwrap_or_default();
+                    return Some(format!("{} (pid {pid})", name.trim()));
+                }
+            }
+        }
+        // The socket belongs to a process this user cannot see.
+        Some("another user's program".into())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("lsof")
+            .args(["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-Fpc"])
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        let pid = text.lines().find_map(|l| l.strip_prefix('p'))?;
+        let name = text
+            .lines()
+            .find_map(|l| l.strip_prefix('c'))
+            .unwrap_or("a program");
+        Some(format!("{name} (pid {pid})"))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = port;
+        None
+    }
+}
+
+#[cfg(test)]
+mod port_tests {
+    use super::*;
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn names_the_program_holding_a_port() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let holder = port_holder(port).unwrap();
+        assert!(
+            holder.contains(&format!("pid {}", std::process::id())),
+            "{holder}"
+        );
+        drop(listener);
+        assert_eq!(port_holder(port), None);
+    }
+}

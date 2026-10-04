@@ -1303,3 +1303,44 @@ async fn the_dashboard_api_reports_acts_and_streams() {
     assert_eq!(usage["rows"]["gpt-6-sol"]["requests"], 1);
     assert_eq!(usage["total"]["output"], 7);
 }
+
+#[tokio::test]
+async fn client_keys_are_held_to_their_models() {
+    use slopmax::config::ClientKey;
+
+    let h = harness_with(ProviderId::Codex, &["tok-ok"], |config| {
+        config.keys.push(ClientKey {
+            name: "laptop".into(),
+            key: "sm-laptop".into(),
+            models: vec!["gpt-6-*".into()],
+        });
+    })
+    .await;
+    let with = |model: &str| {
+        client()
+            .post(format!("{}/codex/responses", h.proxy))
+            .header("authorization", "Bearer sm-laptop")
+            .body(format!(r#"{{"model":"{model}","input":[],"stream":true}}"#))
+    };
+    assert_eq!(
+        with("gpt-6-sol").send().await.unwrap().status(),
+        StatusCode::OK
+    );
+    let refused = with("gpt-5-mini").send().await.unwrap();
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+    let body: Value = refused.json().await.unwrap();
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("laptop")
+    );
+    // Client keys never reach slopmax's own API.
+    let status = client()
+        .get(format!("{}/slopmax/status", h.proxy))
+        .header("authorization", "Bearer sm-laptop")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(status.status(), StatusCode::UNAUTHORIZED);
+}

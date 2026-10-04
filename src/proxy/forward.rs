@@ -28,6 +28,7 @@ use super::{App, Target, error, json_reply, returnable};
 use crate::account::Account;
 use crate::agent::{self, Agent};
 use crate::auth;
+use crate::config::ClientKey;
 use crate::ledger::Entry;
 use crate::log;
 use crate::net::body::{self, Body};
@@ -285,7 +286,14 @@ enum Attempt {
     Failed(Option<Failure>),
 }
 
-pub(super) async fn forward(app: Arc<App>, target: Target, request: Request) -> Response {
+/// Serves a request; `client` is the client key it came with, if not the
+/// owner's.
+pub(super) async fn forward(
+    app: Arc<App>,
+    target: Target,
+    request: Request,
+    client: Option<ClientKey>,
+) -> Response {
     let dialect = target.dialect;
     let (parts, body) = request.into_parts();
     let body = match body::read(body, MAX_BODY).await {
@@ -303,6 +311,12 @@ pub(super) async fn forward(app: Arc<App>, target: Target, request: Request) -> 
         }
     };
     let inbound = Inbound::new(target, parts, body);
+    if let (Some(key), Some(model)) = (&client, &inbound.model)
+        && !key.allows(model)
+    {
+        let message = format!("the key {:?} may not use {model}", key.name);
+        return error(Some(dialect), StatusCode::FORBIDDEN, &message);
+    }
     let steps = match inbound.plan(&app) {
         Ok(steps) => steps,
         Err(no) => return refusal(dialect, &inbound.parts.headers, no),
