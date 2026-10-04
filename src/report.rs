@@ -37,6 +37,9 @@ pub struct AccountReport {
     pub pinned: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_error: Option<String>,
+    /// The tool whose copy of the tokens slopmax follows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follows: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_expires_at: Option<Timestamp>,
     pub sessions: usize,
@@ -66,6 +69,7 @@ pub fn build(
             disabled: a.disabled,
             priority: a.priority,
             auth_error: a.auth_error,
+            follows: a.link.map(|link| link.tool),
         })
         .collect();
     Report {
@@ -227,6 +231,9 @@ fn status_cell(account: &AccountReport, now: Timestamp) -> String {
     }
     if account.priority != 0 {
         parts.push(ui::dim(format!("priority {}", account.priority)));
+    }
+    if let Some(tool) = &account.follows {
+        parts.push(ui::dim(format!("follows {tool}")));
     }
     if let Some(credits) = state.limits.reset_credits.filter(|n| *n > 0) {
         parts.push(ui::cyan(format!(

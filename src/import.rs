@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::account::{Account, Tokens};
+use crate::account::{Account, Link, Tokens};
 use crate::agent::{Agent, ClaudeCode, Codex};
 use crate::auth::jwt;
 use crate::net::Client;
@@ -119,27 +119,51 @@ async fn from_cliproxyapi(http: &Client, dir: &Path) -> Vec<Found> {
         };
         found.push(Found {
             origin: path.display().to_string(),
-            account: from_cliproxy_file(http, provider, file).await,
+            account: from_cliproxy_file(http, provider, file, &path).await,
         });
     }
     found
+}
+
+fn cliproxy_tokens(file: &CliProxyFile) -> Result<Tokens> {
+    let parse_time = |s: &Option<String>| s.as_deref().and_then(|t| t.parse::<Timestamp>().ok());
+    let access_token = file.access_token.clone().context("no access token")?;
+    Ok(Tokens {
+        expires_at: jwt::expiry(&access_token).or_else(|| parse_time(&file.expired)),
+        refreshed_at: parse_time(&file.last_refresh),
+        access_token,
+        refresh_token: file.refresh_token.clone().filter(|t| !t.is_empty()),
+        id_token: file.id_token.clone().filter(|t| !t.is_empty()),
+    })
+}
+
+/// The tokens a linked account's source holds right now.
+pub fn linked_tokens(link: &Link) -> Result<Tokens> {
+    match link.tool.as_str() {
+        "cliproxyapi" => {
+            let text = fs::read_to_string(&link.path)
+                .with_context(|| format!("reading {}", link.path.display()))?;
+            let file: CliProxyFile = serde_json::from_str(&text)
+                .with_context(|| format!("parsing {}", link.path.display()))?;
+            cliproxy_tokens(&file)
+        }
+        tool => anyhow::bail!("cannot follow logins from {tool}"),
+    }
 }
 
 async fn from_cliproxy_file(
     http: &Client,
     provider: ProviderId,
     file: CliProxyFile,
+    path: &Path,
 ) -> Result<Account> {
-    let parse_time = |s: &Option<String>| s.as_deref().and_then(|t| t.parse::<Timestamp>().ok());
-    let access_token = file.access_token.context("no access token")?;
-    let tokens = Tokens {
-        expires_at: jwt::expiry(&access_token).or_else(|| parse_time(&file.expired)),
-        refreshed_at: parse_time(&file.last_refresh),
-        access_token,
-        refresh_token: file.refresh_token.filter(|t| !t.is_empty()),
-        id_token: file.id_token.filter(|t| !t.is_empty()),
-    };
+    let tokens = cliproxy_tokens(&file)?;
     let mut account = Account::new(provider, tokens);
+    // CLIProxyAPI keeps refreshing its copy; follow it until `slopmax own`.
+    account.link = Some(Link {
+        tool: "cliproxyapi".into(),
+        path: path.to_owned(),
+    });
     account.email = file.email;
     account.label = file.label;
     account.disabled = file.disabled;
@@ -208,6 +232,9 @@ mod tests {
         assert_eq!(accounts.len(), 2);
         let claude = &accounts[0];
         assert_eq!(claude.org_id.as_deref(), Some("org-1"));
+        let link = claude.link.as_ref().expect("CLIProxyAPI logins are linked");
+        assert_eq!(link.tool, "cliproxyapi");
+        assert_eq!(link.path, dir.join("claude-a.json"));
         assert_eq!(claude.priority, 3);
         let codex = &accounts[1];
         assert_eq!(codex.account_id.as_deref(), Some("ws-9"));

@@ -90,7 +90,9 @@ impl App {
             .ok()
             .flatten()
             .unwrap_or_else(|| picked.clone());
-        if !self.config.refresh_tokens {
+        // Following a linked account's source is read-only, so it happens
+        // even when refreshing is off.
+        if !self.config.refresh_tokens && account.link.is_none() {
             return Some(account);
         }
         match auth::ensure_fresh(&self.auth_http, &self.store, &account, false).await {

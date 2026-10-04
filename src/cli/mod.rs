@@ -145,10 +145,26 @@ pub static APP: App = App {
         command(
             "import",
             "Copy existing logins from Claude Code, Codex, or CLIProxyAPI",
+            &[
+                arg(
+                    "source",
+                    "Where to import from",
+                    Kind::Optional(SOURCES, "all"),
+                ),
+                arg(
+                    "own",
+                    "Refresh imported CLIProxyAPI logins here instead of following its files",
+                    Kind::Flag(None),
+                ),
+            ],
+        ),
+        command(
+            "own",
+            "Take over refreshing an account slopmax follows from another tool",
             &[arg(
-                "source",
-                "Where to import from",
-                Kind::Optional(SOURCES, "all"),
+                "account",
+                "Number from `slopmax status`, the account's id, email, or label, or `all`",
+                Kind::Required(&[]),
             )],
         ),
         command(
@@ -267,7 +283,8 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
             let label = m.value("label").map(str::to_owned);
             login(&store, m.get("provider")?, label, options).await?;
         }
-        "import" => import(&store, m.get("source")?).await?,
+        "import" => import(&store, m.get("source")?, m.flag("own")).await?,
+        "own" => own(&store, &m.get::<String>("account")?)?,
         "use" => use_account(&store, &m.get::<String>("account")?)?,
         "label" => {
             let id = store.find(&m.get::<String>("account")?)?.id;
@@ -449,21 +466,23 @@ async fn login(
     Ok(())
 }
 
-async fn import(store: &Store, source: Source) -> Result<()> {
+async fn import(store: &Store, source: Source, own: bool) -> Result<()> {
     let http = auth::http_client(Origins::default());
     let found = import::discover(&http, source).await;
     if found.is_empty() {
         println!("No logins found to import.");
         return Ok(());
     }
-    let mut imported = 0;
-    let mut from_cliproxyapi = false;
+    let (mut imported, mut linked) = (0, 0);
     for item in found {
         match item.account {
-            Ok(account) => {
+            Ok(mut account) => {
+                if own {
+                    account.link = None;
+                }
                 let (account, created) = store.upsert(account)?;
                 imported += 1;
-                from_cliproxyapi |= item.origin.contains(".cli-proxy-api");
+                linked += usize::from(account.link.is_some());
                 println!(
                     "  {} {} {} {}",
                     if created {
@@ -479,21 +498,56 @@ async fn import(store: &Store, source: Source) -> Result<()> {
             Err(e) => println!("  {} {}: {e:#}", ui::dim("skipped"), item.origin),
         }
     }
-    if imported > 0 {
+    if linked > 0 {
         println!(
-            "\n{} Imported logins share refresh tokens with their source, and whichever\n\
-             refreshes first invalidates the other's copy. Use the agents through slopmax\n\
+            "\n{} CLIProxyAPI keeps refreshing {linked} of these, and slopmax follows its files,\n        \
+             so both can run while you switch over. Once CLIProxyAPI is stopped, run\n        \
+             `slopmax own all` so slopmax refreshes them.",
+            ui::cyan("linked:")
+        );
+    }
+    if imported > linked {
+        println!(
+            "\n{} Imported logins share refresh tokens with their source, and whichever\n      \
+             refreshes first invalidates the other's copy. Use the agents through slopmax\n      \
              from now on (`slopmax setup claude`, `slopmax setup codex`).",
             ui::yellow("note:")
         );
-        if from_cliproxyapi {
-            println!(
-                "      Stop CLIProxyAPI before starting slopmax, or set `refresh_tokens = false`\n      \
-                 in {} while both run.",
-                paths::config_file().display()
-            );
-        }
     }
+    Ok(())
+}
+
+/// Stops following another tool's copy of an account's tokens.
+fn own(store: &Store, query: &str) -> Result<()> {
+    let accounts = if query == "all" {
+        store
+            .list()?
+            .into_iter()
+            .filter(|a| a.link.is_some())
+            .collect()
+    } else {
+        vec![store.find(query)?]
+    };
+    if accounts.is_empty() {
+        println!("No accounts follow another tool.");
+        return Ok(());
+    }
+    for account in accounts {
+        let Some(link) = &account.link else {
+            println!("{} already refreshes here.", ui::bold(account.name()));
+            continue;
+        };
+        store.update(&account.id, |a| a.link = None)?;
+        println!(
+            "slopmax now refreshes {} {}",
+            ui::bold(account.name()),
+            ui::dim(format!("(was following {})", link.tool))
+        );
+    }
+    println!(
+        "{}",
+        ui::dim("Its first refresh signs the old copy out, so keep the other tool stopped.")
+    );
     Ok(())
 }
 
@@ -713,7 +767,8 @@ mod tests {
             "ls -w",
             "login claude --label work",
             "login codex --device --no-browser",
-            "import cliproxyapi",
+            "import cliproxyapi --own",
+            "own all",
             "use auto",
             "label 1 work",
             "priority 3 -1",

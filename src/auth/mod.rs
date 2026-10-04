@@ -10,9 +10,9 @@ use anyhow::{Result, anyhow};
 use http::StatusCode;
 
 use crate::account::{Account, Store, Tokens};
-use crate::log;
 use crate::net::{Client, Origins};
 use crate::time::Timestamp;
+use crate::{import, log};
 
 /// Tokens returned by a code exchange or refresh.
 #[derive(Debug, Clone)]
@@ -133,6 +133,9 @@ pub async fn ensure_fresh(
     if !due(account) {
         return Ok(account.clone());
     }
+    if account.link.is_some() {
+        return follow(store, account, force).await;
+    }
     let (http, store, stale) = (http.clone(), store.clone(), account.clone());
     let task = tokio::spawn(async move {
         let id = stale.id.clone();
@@ -153,6 +156,45 @@ pub async fn ensure_fresh(
         refresh_and_save(&http, &store, current).await
     });
     task.await.map_err(|e| RefreshError::Transient(e.into()))?
+}
+
+/// For a linked account: adopts the tokens its source tool rotated, since
+/// refreshing here would sign that tool out.
+async fn follow(store: &Store, account: &Account, force: bool) -> Result<Account, RefreshError> {
+    let link = account
+        .link
+        .clone()
+        .expect("only linked accounts are followed");
+    let (store, id) = (store.clone(), account.id.clone());
+    let followed = tokio::task::spawn_blocking(move || -> Result<Option<Account>> {
+        let tokens = import::linked_tokens(&link)?;
+        let _lock = store.lock(&id)?;
+        let Some(mut current) = store.get(&id)? else {
+            return Ok(None);
+        };
+        if current.tokens.access_token == tokens.access_token {
+            return Ok(Some(current));
+        }
+        current.tokens = tokens;
+        current.auth_error = None;
+        store.save(&current)?;
+        Ok(Some(current))
+    })
+    .await
+    .map_err(|e| RefreshError::Transient(e.into()))?
+    .map_err(RefreshError::Transient)?;
+    let current = followed.unwrap_or_else(|| account.clone());
+    let rotated = current.tokens.access_token != account.tokens.access_token;
+    if !rotated && (force || current.tokens.is_expired(Timestamp::now())) {
+        let tool = account
+            .link
+            .as_ref()
+            .map_or("its source", |l| l.tool.as_str());
+        return Err(RefreshError::Transient(anyhow!(
+            "{tool} has not refreshed this login yet (`slopmax own` lets slopmax refresh it)"
+        )));
+    }
+    Ok(current)
 }
 
 async fn refresh_and_save(
@@ -194,6 +236,53 @@ async fn refresh_and_save(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn linked_accounts_follow_their_source() {
+        use crate::account::Link;
+        use crate::provider::ProviderId;
+
+        let dir = std::env::temp_dir().join(format!("slopmax-link-{}", crate::ids::token()));
+        let store = Store::at(dir.join("accounts"));
+        let source = dir.join("claude-x.json");
+        let write = |token: &str, expired: &str| {
+            let file = serde_json::json!({
+                "type": "claude", "access_token": token, "refresh_token": "rt", "expired": expired
+            });
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(&source, file.to_string()).unwrap();
+        };
+        write("old", "2000-01-01T00:00:00Z");
+        let mut account = Account::new(
+            ProviderId::Claude,
+            Tokens {
+                access_token: "old".into(),
+                refresh_token: Some("rt".into()),
+                expires_at: "2000-01-01T00:00:00Z".parse().ok(),
+                ..Tokens::default()
+            },
+        );
+        account.org_id = Some("org".into());
+        account.assign_id();
+        account.link = Some(Link {
+            tool: "cliproxyapi".into(),
+            path: source.clone(),
+        });
+        store.save(&account).unwrap();
+        let http = http_client(Origins::default());
+
+        // Not rotated yet: slopmax waits for the source rather than refreshing.
+        let waiting = ensure_fresh(&http, &store, &account, false).await;
+        assert!(matches!(waiting, Err(RefreshError::Transient(_))));
+
+        write("new", "2099-01-01T00:00:00Z");
+        let fresh = ensure_fresh(&http, &store, &account, false).await.unwrap();
+        assert_eq!(fresh.tokens.access_token, "new");
+        let saved = store.get(&account.id).unwrap().unwrap();
+        assert_eq!(saved.tokens.access_token, "new");
+        assert!(saved.link.is_some());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn classifies_refresh_failures() {

@@ -74,7 +74,20 @@ pub struct Account {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_error: Option<String>,
     pub tokens: Tokens,
+    /// Another tool still refreshes these tokens; slopmax follows its file
+    /// instead of refreshing (see `slopmax own`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<Link>,
     pub added_at: Timestamp,
+}
+
+/// Where a linked account's tokens come from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Link {
+    /// The tool that owns them: `cliproxyapi`.
+    pub tool: String,
+    /// The file it keeps them in.
+    pub path: PathBuf,
 }
 
 impl Account {
@@ -93,6 +106,7 @@ impl Account {
             priority: 0,
             auth_error: None,
             tokens,
+            link: None,
             added_at: Timestamp::now(),
         };
         account.assign_id();
