@@ -91,6 +91,9 @@ pub struct Limits {
 /// still selectable, so an unmeasured account never looks empty.
 pub const UNKNOWN_SCORE: f64 = 101.0;
 
+/// Age after which a reading without reset times no longer blocks.
+const STALE_AFTER: SignedDuration = SignedDuration::from_mins(5);
+
 impl Limits {
     /// A reading taken at `now`, or `None` when it carries no windows.
     fn observed(windows: Vec<Window>, now: Timestamp) -> Option<Self> {
@@ -131,16 +134,25 @@ impl Limits {
             .unwrap_or(UNKNOWN_SCORE)
     }
 
+    /// Shared windows that are full. A full window without a reset time
+    /// only counts while the reading is fresh, so stale data cannot park an
+    /// account forever.
+    fn full(&self, now: Timestamp) -> impl Iterator<Item = &Window> {
+        let fresh = self
+            .observed_at
+            .is_some_and(|at| now.duration_since(at) < STALE_AFTER);
+        self.shared()
+            .filter(move |w| w.is_full(now) && (fresh || w.upcoming_reset(now).is_some()))
+    }
+
     /// If a shared window is full, when the account is usable again: the
     /// latest reset among full windows, since every one of them must reopen.
     pub fn exhausted_until(&self, now: Timestamp) -> Option<Timestamp> {
-        let mut full = self.shared().filter(|w| w.is_full(now)).peekable();
-        full.peek()?;
-        full.filter_map(|w| w.upcoming_reset(now)).max()
+        self.full(now).filter_map(|w| w.upcoming_reset(now)).max()
     }
 
     pub fn is_exhausted(&self, now: Timestamp) -> bool {
-        self.shared().any(|w| w.is_full(now))
+        self.full(now).next().is_some()
     }
 
     /// The soonest moment some spare capacity on this account expires: the

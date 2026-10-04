@@ -137,11 +137,11 @@ pub fn apply_claims(account: &mut Account) {
 
 /// Redeems a refresh token. OpenAI rotates refresh tokens on use.
 pub async fn refresh(http: &Client, refresh_token: &str) -> Result<Grant, RefreshError> {
+    // Same shape as the Codex CLI: JSON, no scope.
     let body = json!({
         "client_id": CLIENT_ID,
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
-        "scope": "openid profile email",
     });
     let response = http
         .post(format!("{ISSUER}/oauth/token"))
