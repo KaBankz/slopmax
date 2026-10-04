@@ -12,7 +12,7 @@ pub struct Pkce {
 }
 
 impl Pkce {
-    pub fn new() -> Self {
+    pub fn generate() -> Self {
         let verifier = random_token(32);
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
         Self {
@@ -43,8 +43,8 @@ mod tests {
 
     #[test]
     fn verifier_is_url_safe_and_unique() {
-        let a = Pkce::new();
-        let b = Pkce::new();
+        let a = Pkce::generate();
+        let b = Pkce::generate();
         assert_ne!(a.verifier, b.verifier);
         assert_eq!(a.verifier.len(), 43);
         assert!(
