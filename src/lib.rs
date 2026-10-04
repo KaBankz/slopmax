@@ -12,6 +12,7 @@ pub mod fsx;
 pub mod ids;
 pub mod limits;
 pub mod log;
+pub mod net;
 pub mod paths;
 pub mod pool;
 pub mod proxy;

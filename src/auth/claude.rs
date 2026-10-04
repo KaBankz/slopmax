@@ -8,6 +8,7 @@ use serde_json::json;
 use super::{Grant, RefreshError, pkce::Pkce};
 use crate::account::{Account, Provider};
 use crate::log;
+use crate::net::form;
 use crate::time::{SignedDuration, Timestamp};
 
 pub const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
@@ -39,9 +40,7 @@ pub fn authorize_url(pkce: &Pkce, state: &str) -> String {
         ("code_challenge_method", "S256"),
         ("state", state),
     ];
-    url::Url::parse_with_params(AUTHORIZE_URL, params)
-        .expect("static authorize URL is valid")
-        .into()
+    format!("{AUTHORIZE_URL}?{}", form::encode(params))
 }
 
 #[derive(Debug, Deserialize)]

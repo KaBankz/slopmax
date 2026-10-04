@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::{Grant, RefreshError, jwt, pkce::Pkce};
 use crate::account::{Account, Provider};
+use crate::net::form;
 use crate::time::Timestamp;
 
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -46,9 +47,7 @@ pub fn authorize_url(pkce: &Pkce, state: &str) -> String {
         ("state", state),
         ("originator", "codex_cli_rs"),
     ];
-    url::Url::parse_with_params(&format!("{ISSUER}/oauth/authorize"), params)
-        .expect("static authorize URL is valid")
-        .into()
+    format!("{ISSUER}/oauth/authorize?{}", form::encode(params))
 }
 
 #[derive(Debug, Deserialize)]
@@ -84,9 +83,7 @@ pub async fn exchange(
         ("client_id", CLIENT_ID),
         ("code_verifier", verifier),
     ];
-    let body = url::form_urlencoded::Serializer::new(String::new())
-        .extend_pairs(form)
-        .finish();
+    let body = form::encode(form);
     let response = http
         .post(format!("{ISSUER}/oauth/token"))
         .header("content-type", "application/x-www-form-urlencoded")

@@ -90,7 +90,7 @@ impl Config {
         };
         let invalid = || format!("invalid config {}", path.display());
         let mut config = match &text {
-            Some(text) => toml::from_str::<Self>(text).with_context(invalid)?,
+            Some(text) => toml_edit::de::from_str::<Self>(text).with_context(invalid)?,
             None => Self::default(),
         };
         if config.api_key.is_empty() {
@@ -206,7 +206,7 @@ mod tests {
             ..Config::default()
         };
         let text = template("sm-key");
-        assert_eq!(toml::from_str::<Config>(&text).unwrap(), expected);
+        assert_eq!(toml_edit::de::from_str::<Config>(&text).unwrap(), expected);
 
         let uncommented: String = text
             .lines()
@@ -216,20 +216,28 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        assert_eq!(toml::from_str::<Config>(&uncommented).unwrap(), expected);
-        let listed: toml::Table = toml::from_str(&uncommented).unwrap();
-        let fields = toml::Value::try_from(&expected).unwrap();
-        let fields = fields.as_table().unwrap();
         assert_eq!(
-            listed.keys().collect::<std::collections::BTreeSet<_>>(),
-            fields.keys().collect(),
+            toml_edit::de::from_str::<Config>(&uncommented).unwrap(),
+            expected
         );
+        let listed: DocumentMut = uncommented.parse().unwrap();
+        let fields: DocumentMut = toml_edit::ser::to_string(&expected)
+            .unwrap()
+            .parse()
+            .unwrap();
+        let keys = |doc: &DocumentMut| {
+            doc.iter()
+                .map(|(key, _)| key.to_owned())
+                .collect::<std::collections::BTreeSet<_>>()
+        };
+        assert_eq!(keys(&listed), keys(&fields));
     }
 
     #[test]
     fn parses_partial_config() {
         let config: Config =
-            toml::from_str("strategy = \"fill-first\"\nlisten = \"0.0.0.0:9000\"").unwrap();
+            toml_edit::de::from_str("strategy = \"fill-first\"\nlisten = \"0.0.0.0:9000\"")
+                .unwrap();
         assert_eq!(config.strategy, Strategy::FillFirst);
         assert_eq!(config.base_url(), "http://127.0.0.1:9000");
         assert_eq!(config.session_ttl_mins, 60);
@@ -237,6 +245,6 @@ mod tests {
 
     #[test]
     fn rejects_unknown_keys() {
-        assert!(toml::from_str::<Config>("lisen = \"x\"").is_err());
+        assert!(toml_edit::de::from_str::<Config>("lisen = \"x\"").is_err());
     }
 }

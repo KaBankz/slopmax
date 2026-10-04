@@ -24,9 +24,7 @@ rustls = { version = "0.23.45", default-features = false, features = ["ring", "s
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
 tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync", "fs", "process", "io-util", "io-std"] }
-toml = "1.1.6"
-toml_edit = "0.25.15"
-url = "2.5.8"
+toml_edit = { version = "0.25.15", features = ["serde"] }
 
 [profile.release]
 lto = "fat"

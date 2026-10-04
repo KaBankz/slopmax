@@ -9,6 +9,7 @@ use std::net::SocketAddr;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use crate::net::form;
 use anyhow::{Result, anyhow, bail};
 use axum::Router;
 use axum::extract::{Query, State};
@@ -86,15 +87,15 @@ fn parse_query(query: &str) -> Params {
         error: None,
         error_description: None,
     };
-    for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
-        let slot = match key.as_ref() {
+    for (key, value) in form::decode(query) {
+        let slot = match key.as_str() {
             "code" => &mut params.code,
             "state" => &mut params.state,
             "error" => &mut params.error,
             "error_description" => &mut params.error_description,
             _ => continue,
         };
-        *slot = Some(value.into_owned());
+        *slot = Some(value);
     }
     params
 }
