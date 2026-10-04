@@ -1,5 +1,6 @@
 //! User configuration, stored as TOML in `~/.slopmax/config.toml`.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -8,6 +9,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use toml_edit::DocumentMut;
 
+use crate::pricing::Custom;
 use crate::{fsx, ids, paths};
 
 /// Default proxy port: "slop" on a phone keypad.
@@ -35,6 +37,9 @@ pub struct Config {
     /// When every Codex account is spent, redeem a banked reset credit
     /// instead of failing the request.
     pub redeem_when_exhausted: bool,
+    /// Per-model API prices for `slopmax usage`, beyond the built-in ones.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub prices: BTreeMap<String, Custom>,
 }
 
 impl Default for Config {
@@ -48,6 +53,7 @@ impl Default for Config {
             refresh_tokens: true,
             redeem_expiring_credits: true,
             redeem_when_exhausted: false,
+            prices: BTreeMap::new(),
         }
     }
 }
@@ -161,6 +167,14 @@ api_key = "{api_key}"
 # When every Codex account is spent, redeem a reset credit instead of
 # failing the request.
 # redeem_when_exhausted = false
+
+# API prices for `slopmax usage`, in dollars per million tokens. Anthropic's
+# list prices are built in; add models it can't price. Cache reads default
+# to a tenth of input, cache writes to 1.25x input. For example:
+#   [prices."my-model"]
+#   input = 2.0
+#   output = 8.0
+#   cache_read = 0.5
 "#
     )
 }
@@ -211,7 +225,8 @@ mod tests {
         let uncommented: String = text
             .lines()
             .map(|line| match line.strip_prefix("# ") {
-                Some(setting) if setting.contains(" = ") => setting,
+                // Settings start the line; indented ones are examples.
+                Some(setting) if setting.contains(" = ") && !setting.starts_with(' ') => setting,
                 _ => line,
             })
             .collect::<Vec<_>>()
@@ -241,6 +256,18 @@ mod tests {
         assert_eq!(config.strategy, Strategy::FillFirst);
         assert_eq!(config.base_url(), "http://127.0.0.1:9000");
         assert_eq!(config.session_ttl_mins, 60);
+    }
+
+    #[test]
+    fn parses_custom_prices() {
+        let config: Config =
+            toml_edit::de::from_str("[prices.\"my-model\"]\ninput = 2.0\noutput = 8\n").unwrap();
+        let price = config.prices["my-model"];
+        assert_eq!(
+            (price.input, price.output, price.cache_read),
+            (2.0, 8.0, None)
+        );
+        assert!(toml_edit::de::from_str::<Config>("[prices.m]\ninput = 1\n").is_err());
     }
 
     #[test]

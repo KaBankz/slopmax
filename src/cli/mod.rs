@@ -5,6 +5,7 @@ mod args;
 mod background;
 mod doctor;
 mod init;
+mod usage;
 
 use anyhow::{Context, Result, bail};
 
@@ -72,6 +73,25 @@ const SERVICE_ACTIONS: &[Choice] = &[
     Choice {
         value: "status",
         help: "Show whether the service is installed and running",
+    },
+];
+
+const RANGES: &[Choice] = &[
+    Choice {
+        value: "today",
+        help: "Since midnight",
+    },
+    Choice {
+        value: "7d",
+        help: "Today and the 6 days before",
+    },
+    Choice {
+        value: "30d",
+        help: "Today and the 29 days before",
+    },
+    Choice {
+        value: "all",
+        help: "Everything recorded",
     },
 ];
 
@@ -254,6 +274,19 @@ pub static APP: App = App {
                 arg("undo", "Restore what setup replaced", Kind::Flag(None)),
             ],
         ),
+        command(
+            "usage",
+            "Show token usage and its API-equivalent cost",
+            &[
+                arg("range", "Which period", Kind::Optional(RANGES, "7d")),
+                arg(
+                    "by",
+                    "Group by day, model, or account",
+                    Kind::Value(Some('b'), "BY"),
+                ),
+                arg("json", "Print machine-readable JSON", Kind::Flag(None)),
+            ],
+        ),
         command("doctor", "Check the setup and say how to fix problems", &[]),
         command(
             "completions",
@@ -354,6 +387,19 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
             print!("{}", agent_named(m)?.env(&config, &exe));
         }
         "setup" => setup(&config, agent_named(m)?, m.flag("undo"))?,
+        "usage" => {
+            let by = m.value("by").unwrap_or("day");
+            if !matches!(by, "day" | "model" | "account") {
+                bail!("--by takes day, model, or account");
+            }
+            usage::run(
+                &config,
+                &store,
+                &m.get::<String>("range")?,
+                by,
+                m.flag("json"),
+            )?;
+        }
         "doctor" => return doctor::run(&config, &store).await,
         "completions" => print!("{}", args::completions(&APP, m.get("shell")?)),
         name => unreachable!("`{name}` is in the command table but not dispatched"),
@@ -432,6 +478,7 @@ mod tests {
             "run codex exec -c model=m hi",
             "env claude",
             "setup codex --undo",
+            "usage 30d --by model",
             "doctor",
             "completions fish",
         ];

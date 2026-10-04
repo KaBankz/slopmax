@@ -60,6 +60,16 @@ pub fn bar(percent: f64, width: usize) -> String {
     by_level(percent, body)
 }
 
+/// A count in three significant figures: `1234567` → `1.2M`.
+pub fn compact(n: u64) -> String {
+    match n {
+        n if n >= 1_000_000_000 => format!("{:.1}B", n as f64 / 1e9),
+        n if n >= 1_000_000 => format!("{:.1}M", n as f64 / 1e6),
+        n if n >= 1_000 => format!("{:.1}k", n as f64 / 1e3),
+        n => n.to_string(),
+    }
+}
+
 /// Formats a duration with its two most significant units, e.g. `3d4h`,
 /// `2h05m`, `9m30s`.
 pub fn duration(d: SignedDuration) -> String {

@@ -245,7 +245,7 @@ fn status_cell(account: &AccountReport, now: Timestamp) -> String {
         parts.push(ui::dim(format!(
             "{} req · {} tok",
             state.usage.requests,
-            compact(state.usage.total_tokens())
+            ui::compact(state.usage.total_tokens())
         )));
     }
     if let Some(error) = state
@@ -266,16 +266,6 @@ fn blocked_until(state: &AccountState, now: Timestamp) -> Option<Timestamp> {
         .then(|| state.limits.exhausted_until(now))
         .flatten();
     block.max(quota)
-}
-
-/// `1234567` → `1.2M`.
-fn compact(n: u64) -> String {
-    match n {
-        n if n >= 1_000_000_000 => format!("{:.1}B", n as f64 / 1e9),
-        n if n >= 1_000_000 => format!("{:.1}M", n as f64 / 1e6),
-        n if n >= 1_000 => format!("{:.1}k", n as f64 / 1e3),
-        n => n.to_string(),
-    }
 }
 
 #[cfg(test)]
@@ -355,8 +345,8 @@ mod tests {
 
     #[test]
     fn compact_numbers() {
-        assert_eq!(compact(999), "999");
-        assert_eq!(compact(12_345), "12.3k");
-        assert_eq!(compact(1_234_567), "1.2M");
+        assert_eq!(ui::compact(999), "999");
+        assert_eq!(ui::compact(12_345), "12.3k");
+        assert_eq!(ui::compact(1_234_567), "1.2M");
     }
 }

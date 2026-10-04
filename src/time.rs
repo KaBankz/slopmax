@@ -157,6 +157,19 @@ impl Timestamp {
         (c.year, c.month, c.day)
     }
 
+    /// Midnight starting `(year, month, day)`, `offset` east of UTC.
+    pub fn midnight(year: i64, month: u32, day: u32, offset: SignedDuration) -> Option<Self> {
+        let civil = Civil {
+            year,
+            month,
+            day,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+        civil.to_timestamp(offset.as_secs(), 0)
+    }
+
     /// This machine's UTC offset at this instant (daylight saving
     /// included), or zero where it cannot be read.
     pub fn local_offset(self) -> SignedDuration {
