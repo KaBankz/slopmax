@@ -17,9 +17,10 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
-use crate::account::{Account, Provider};
+use crate::account::Account;
 use crate::config::Strategy;
 use crate::limits::{Limits, UNKNOWN_SCORE};
+use crate::provider::ProviderId;
 use crate::time::{SignedDuration, Timestamp};
 
 /// How long to sit out an account after a quota refusal without a reset time.
@@ -115,7 +116,7 @@ pub struct State {
 }
 
 /// Manual account preference per provider, set by `slopmax use`.
-pub type Pins = BTreeMap<Provider, String>;
+pub type Pins = BTreeMap<ProviderId, String>;
 
 #[derive(Debug, Clone)]
 struct Binding {
@@ -126,7 +127,7 @@ struct Binding {
 /// A request for an account.
 #[derive(Debug, Clone, Copy)]
 pub struct Pick<'a> {
-    pub provider: Provider,
+    pub provider: ProviderId,
     /// Conversation id from the agent, used to keep a session on one account.
     pub session: Option<&'a str>,
     pub model: Option<&'a str>,
@@ -156,7 +157,7 @@ pub struct Unavailable {
 struct Inner {
     accounts: Vec<Account>,
     states: HashMap<String, AccountState>,
-    sessions: HashMap<(Provider, String), Binding>,
+    sessions: HashMap<(ProviderId, String), Binding>,
     pins: Pins,
     dirty: bool,
 }
@@ -192,7 +193,7 @@ impl Pool {
     /// removed account, or to a provider whose pin changed, are released.
     pub fn sync(&self, accounts: Vec<Account>, pins: Pins) {
         let mut inner = self.lock();
-        let changed_pins: Vec<Provider> = Provider::ALL
+        let changed_pins: Vec<ProviderId> = ProviderId::ALL
             .into_iter()
             .filter(|p| inner.pins.get(p) != pins.get(p))
             .collect();
@@ -496,7 +497,7 @@ mod tests {
         Timestamp::from_second(secs).unwrap()
     }
 
-    fn account(provider: Provider, org: &str, added: i64) -> Account {
+    fn account(provider: ProviderId, org: &str, added: i64) -> Account {
         let mut account = Account::new(provider, Tokens::default());
         account.org_id = Some(org.into());
         account.account_id = Some(org.into());
@@ -530,7 +531,7 @@ mod tests {
 
     fn pick(pool: &Pool, session: Option<&str>, now: i64) -> Result<String, Unavailable> {
         let req = Pick {
-            provider: Provider::Claude,
+            provider: ProviderId::Claude,
             session,
             model: None,
             exclude: &[],
@@ -540,9 +541,9 @@ mod tests {
 
     #[test]
     fn reset_first_spends_the_window_that_expires_soonest() {
-        let a = account(Provider::Claude, "a", 1);
-        let b = account(Provider::Claude, "b", 2);
-        let c = account(Provider::Claude, "c", 3);
+        let a = account(ProviderId::Claude, "a", 1);
+        let b = account(ProviderId::Claude, "b", 2);
+        let c = account(ProviderId::Claude, "c", 3);
         let pool = pool(Strategy::ResetFirst, &[&a, &b, &c]);
         // a: idle. b: 5h window resets in 3h. c: weekly resets in 2 days.
         pool.observe(&a.id, limits(vec![window("5h", 0.0, None)]), ts(1000));
@@ -561,8 +562,8 @@ mod tests {
 
     #[test]
     fn fill_first_drains_in_order() {
-        let a = account(Provider::Claude, "a", 1);
-        let b = account(Provider::Claude, "b", 2);
+        let a = account(ProviderId::Claude, "a", 1);
+        let b = account(ProviderId::Claude, "b", 2);
         let pool = pool(Strategy::FillFirst, &[&b, &a]);
         assert_eq!(pick(&pool, None, 1000).unwrap(), a.id);
         pool.block(&a.id, ts(5000), None, "limit");
@@ -576,9 +577,9 @@ mod tests {
 
     #[test]
     fn least_used_prefers_headroom_and_ranks_unknown_last() {
-        let a = account(Provider::Claude, "a", 1);
-        let b = account(Provider::Claude, "b", 2);
-        let c = account(Provider::Claude, "c", 3);
+        let a = account(ProviderId::Claude, "a", 1);
+        let b = account(ProviderId::Claude, "b", 2);
+        let c = account(ProviderId::Claude, "c", 3);
         let pool = pool(Strategy::LeastUsed, &[&a, &b, &c]);
         pool.observe(
             &a.id,
@@ -595,8 +596,8 @@ mod tests {
 
     #[test]
     fn sessions_stick_until_their_account_cannot_serve() {
-        let a = account(Provider::Claude, "a", 1);
-        let b = account(Provider::Claude, "b", 2);
+        let a = account(ProviderId::Claude, "a", 1);
+        let b = account(ProviderId::Claude, "b", 2);
         let pool = pool(Strategy::LeastUsed, &[&a, &b]);
         pool.observe(
             &a.id,
@@ -626,7 +627,7 @@ mod tests {
         // Once a is refused, the session moves and reports where it came from.
         pool.block(&a.id, ts(5000), None, "limit");
         let req = Pick {
-            provider: Provider::Claude,
+            provider: ProviderId::Claude,
             session: Some("s1"),
             model: None,
             exclude: &[],
@@ -641,13 +642,13 @@ mod tests {
 
     #[test]
     fn moved_from_reports_a_session_leaving_its_account() {
-        let a = account(Provider::Claude, "a", 1);
-        let b = account(Provider::Claude, "b", 2);
+        let a = account(ProviderId::Claude, "a", 1);
+        let b = account(ProviderId::Claude, "b", 2);
         let pool = pool(Strategy::FillFirst, &[&a, &b]);
         assert_eq!(pick(&pool, Some("s"), 1000).unwrap(), a.id);
         let exclude = [a.id.clone()];
         let req = Pick {
-            provider: Provider::Claude,
+            provider: ProviderId::Claude,
             session: Some("s"),
             model: None,
             exclude: &exclude,
@@ -659,8 +660,8 @@ mod tests {
 
     #[test]
     fn sessions_expire_after_ttl() {
-        let a = account(Provider::Claude, "a", 1);
-        let b = account(Provider::Claude, "b", 2);
+        let a = account(ProviderId::Claude, "a", 1);
+        let b = account(ProviderId::Claude, "b", 2);
         let pool = pool(Strategy::FillFirst, &[&a, &b]);
         pool.block(&a.id, ts(1500), None, "limit");
         assert_eq!(pick(&pool, Some("s"), 1000).unwrap(), b.id);
@@ -672,22 +673,22 @@ mod tests {
 
     #[test]
     fn priority_tiers_and_pins_come_before_strategy() {
-        let a = account(Provider::Claude, "a", 1);
-        let mut b = account(Provider::Claude, "b", 2);
+        let a = account(ProviderId::Claude, "a", 1);
+        let mut b = account(ProviderId::Claude, "b", 2);
         b.priority = 5;
         let pool = pool(Strategy::FillFirst, &[&a, &b]);
         assert_eq!(pick(&pool, None, 1000).unwrap(), b.id);
         pool.sync(
             vec![a.clone(), b.clone()],
-            Pins::from([(Provider::Claude, a.id.clone())]),
+            Pins::from([(ProviderId::Claude, a.id.clone())]),
         );
         assert_eq!(pick(&pool, None, 1000).unwrap(), a.id);
     }
 
     #[test]
     fn known_exhaustion_is_skipped_without_a_request() {
-        let a = account(Provider::Claude, "a", 1);
-        let b = account(Provider::Claude, "b", 2);
+        let a = account(ProviderId::Claude, "a", 1);
+        let b = account(ProviderId::Claude, "b", 2);
         let pool = pool(Strategy::FillFirst, &[&a, &b]);
         pool.observe(
             &a.id,
@@ -700,8 +701,8 @@ mod tests {
 
     #[test]
     fn unavailable_reports_the_earliest_return() {
-        let a = account(Provider::Claude, "a", 1);
-        let b = account(Provider::Claude, "b", 2);
+        let a = account(ProviderId::Claude, "a", 1);
+        let b = account(ProviderId::Claude, "b", 2);
         let pool = pool(Strategy::FillFirst, &[&a, &b]);
         pool.block(&a.id, ts(9000), None, "limit");
         pool.block(&b.id, ts(7000), None, "limit");
@@ -711,11 +712,11 @@ mod tests {
 
     #[test]
     fn model_blocks_only_affect_that_model() {
-        let a = account(Provider::Claude, "a", 1);
+        let a = account(ProviderId::Claude, "a", 1);
         let pool = pool(Strategy::FillFirst, &[&a]);
         pool.block(&a.id, ts(9000), Some("claude-fable"), "overage cap");
         let req = |model| Pick {
-            provider: Provider::Claude,
+            provider: ProviderId::Claude,
             session: None,
             model: Some(model),
             exclude: &[],
@@ -726,7 +727,7 @@ mod tests {
 
     #[test]
     fn fresh_reading_lifts_a_block_early() {
-        let a = account(Provider::Claude, "a", 1);
+        let a = account(ProviderId::Claude, "a", 1);
         let pool = pool(Strategy::FillFirst, &[&a]);
         pool.block(&a.id, ts(90_000), None, "limit");
         assert!(pick(&pool, None, 1000).is_err());
@@ -740,9 +741,9 @@ mod tests {
 
     #[test]
     fn disabled_and_signed_out_accounts_are_skipped() {
-        let mut a = account(Provider::Claude, "a", 1);
+        let mut a = account(ProviderId::Claude, "a", 1);
         a.disabled = true;
-        let mut b = account(Provider::Claude, "b", 2);
+        let mut b = account(ProviderId::Claude, "b", 2);
         b.auth_error = Some("revoked".into());
         let pool = pool(Strategy::FillFirst, &[&a, &b]);
         assert!(
@@ -755,12 +756,12 @@ mod tests {
 
     #[test]
     fn blocks_on_tried_accounts_still_report_when_the_pool_frees_up() {
-        let a = account(Provider::Claude, "a", 1);
+        let a = account(ProviderId::Claude, "a", 1);
         let pool = pool(Strategy::FillFirst, &[&a]);
         pool.block(&a.id, ts(5000), None, "limit");
         let exclude = [a.id.clone()];
         let req = Pick {
-            provider: Provider::Claude,
+            provider: ProviderId::Claude,
             session: None,
             model: None,
             exclude: &exclude,

@@ -5,7 +5,6 @@
 //! of the provider-side identity (Claude organization, ChatGPT workspace), so
 //! one email in two organizations stays two accounts with separate limits.
 
-use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -13,54 +12,9 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::log;
+use crate::provider::ProviderId;
 use crate::time::{SignedDuration, Timestamp};
 use crate::{fsx, ids, paths};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Provider {
-    /// Anthropic Claude Pro/Max, used by Claude Code.
-    Claude,
-    /// ChatGPT Plus/Pro/Team, used by Codex.
-    Codex,
-}
-
-impl Provider {
-    pub const ALL: [Self; 2] = [Self::Claude, Self::Codex];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Claude => "claude",
-            Self::Codex => "codex",
-        }
-    }
-
-    /// How long before expiry an access token is refreshed. Claude tokens
-    /// live 8 hours and Codex tokens about 10 days.
-    pub fn refresh_lead(self) -> SignedDuration {
-        match self {
-            Self::Claude => SignedDuration::from_hours(1),
-            Self::Codex => SignedDuration::from_hours(24),
-        }
-    }
-}
-
-impl std::str::FromStr for Provider {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, String> {
-        Self::ALL
-            .into_iter()
-            .find(|p| p.as_str() == s)
-            .ok_or_else(|| format!("expected claude or codex, got {s:?}"))
-    }
-}
-
-impl fmt::Display for Provider {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
 
 /// OAuth tokens for one account.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -93,7 +47,7 @@ impl Tokens {
 pub struct Account {
     /// Stable handle, e.g. `claude-1a2b3c4d`.
     pub id: String,
-    pub provider: Provider,
+    pub provider: ProviderId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -125,7 +79,7 @@ pub struct Account {
 
 impl Account {
     /// Builds an account and derives its id from the provider identity.
-    pub fn new(provider: Provider, tokens: Tokens) -> Self {
+    pub fn new(provider: ProviderId, tokens: Tokens) -> Self {
         let mut account = Self {
             id: String::new(),
             provider,
@@ -148,8 +102,8 @@ impl Account {
     /// The provider-side key that distinguishes accounts with separate limits.
     pub fn identity_key(&self) -> String {
         let key = match self.provider {
-            Provider::Claude => self.org_id.as_ref().or(self.account_id.as_ref()),
-            Provider::Codex => self.account_id.as_ref(),
+            ProviderId::Claude => self.org_id.as_ref().or(self.account_id.as_ref()),
+            ProviderId::Codex => self.account_id.as_ref(),
         };
         key.or(self.email.as_ref())
             .cloned()
@@ -338,14 +292,14 @@ mod tests {
         let mut account = claude("org-1", "me@x.dev");
         account.assign_id();
         assert_eq!(account.id, "claude-c24787a7");
-        let mut codex = Account::new(Provider::Codex, Tokens::default());
+        let mut codex = Account::new(ProviderId::Codex, Tokens::default());
         codex.account_id = Some("ws-9".into());
         codex.assign_id();
         assert_eq!(codex.id, "codex-372c403d");
     }
 
     fn claude(org: &str, email: &str) -> Account {
-        let mut account = Account::new(Provider::Claude, Tokens::default());
+        let mut account = Account::new(ProviderId::Claude, Tokens::default());
         account.org_id = Some(org.into());
         account.email = Some(email.into());
         account.assign_id();

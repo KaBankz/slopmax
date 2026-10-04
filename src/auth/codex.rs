@@ -8,9 +8,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{Grant, RefreshError, jwt, pkce::Pkce};
-use crate::account::{Account, Provider};
+use crate::account::Account;
 use crate::net::Client;
 use crate::net::form;
+use crate::provider::ProviderId;
 use crate::time::Timestamp;
 
 /// The ChatGPT backend: the Codex API, usage, and reset credits.
@@ -97,7 +98,10 @@ pub async fn exchange(
         bail!("token exchange failed ({status}): {text}");
     }
     let token: TokenResponse = serde_json::from_str(&text).context("unexpected token response")?;
-    let mut account = Account::new(Provider::Codex, token.grant().into_tokens(Timestamp::now()));
+    let mut account = Account::new(
+        ProviderId::Codex,
+        token.grant().into_tokens(Timestamp::now()),
+    );
     apply_claims(&mut account);
     Ok(account)
 }
@@ -248,7 +252,7 @@ mod tests {
         }));
         let access = jwt::encode_unsigned(&json!({ "exp": 1_900_000_000 }));
         let mut account = Account::new(
-            Provider::Codex,
+            ProviderId::Codex,
             Tokens {
                 access_token: access,
                 id_token: Some(id_token),
@@ -269,7 +273,7 @@ mod tests {
             AUTH_CLAIM: { "chatgpt_account_id": "ws-2" }
         }));
         let mut account = Account::new(
-            Provider::Codex,
+            ProviderId::Codex,
             Tokens {
                 access_token: access,
                 ..Tokens::default()

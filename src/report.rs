@@ -5,10 +5,11 @@ use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
 
-use crate::account::{Account, Provider};
+use crate::account::Account;
 use crate::config::Strategy;
 use crate::limits::Window;
 use crate::pool::{AccountState, Pins};
+use crate::provider::ProviderId;
 use crate::time::Timestamp;
 use crate::ui;
 
@@ -25,7 +26,7 @@ pub struct Report {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountReport {
     pub id: String,
-    pub provider: Provider,
+    pub provider: ProviderId,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
@@ -99,7 +100,7 @@ pub fn render(report: &Report, now: Timestamp) -> String {
         .unwrap_or(0)
         .clamp(7, 36);
     let mut index = 0;
-    for provider in Provider::ALL {
+    for provider in ProviderId::ALL {
         let accounts: Vec<&AccountReport> = report
             .accounts
             .iter()
@@ -282,7 +283,7 @@ mod tests {
 
     #[test]
     fn renders_windows_status_and_scoped_limits() {
-        let mut account = Account::new(Provider::Claude, Tokens::default());
+        let mut account = Account::new(ProviderId::Claude, Tokens::default());
         account.email = Some("me@x.dev".into());
         account.plan = Some("max 20x".into());
         account.org_id = Some("org".into());

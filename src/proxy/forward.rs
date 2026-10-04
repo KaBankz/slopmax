@@ -16,7 +16,7 @@ use serde_json::json;
 use super::rawjson::{self, Seg};
 use super::sse::{Tap, Tapped};
 use super::{App, claude, codex, error, json_reply, returnable};
-use crate::account::{Account, Provider};
+use crate::account::Account;
 use crate::auth;
 use crate::credits::{self, Outcome};
 use crate::limits::{self, Refusal};
@@ -25,6 +25,7 @@ use crate::net::body;
 use crate::net::client::{self, Response as Upstream};
 use crate::net::server::{Request, Response};
 use crate::pool::{Choice, DEFAULT_BLOCK, DEFAULT_THROTTLE, Pick, Unavailable};
+use crate::provider::ProviderId;
 use crate::time::{SignedDuration, Timestamp};
 use crate::ui;
 
@@ -35,7 +36,7 @@ const ACCOUNT_BLOCK: SignedDuration = SignedDuration::from_mins(30);
 
 /// The agent's request, buffered so it can be replayed on another account.
 struct Inbound {
-    provider: Provider,
+    provider: ProviderId,
     target: String,
     parts: Parts,
     body: Bytes,
@@ -46,7 +47,7 @@ struct Inbound {
 }
 
 impl Inbound {
-    fn new(provider: Provider, target: String, parts: Parts, body: Bytes) -> Self {
+    fn new(provider: ProviderId, target: String, parts: Parts, body: Bytes) -> Self {
         let encoded = parts
             .headers
             .get("content-encoding")
@@ -54,8 +55,8 @@ impl Inbound {
         let json = !encoded && rawjson::is_valid(&body);
         let inspectable: &[u8] = if json { &body } else { b"" };
         let session = match provider {
-            Provider::Claude => claude::session_id(&parts.headers, inspectable),
-            Provider::Codex => codex::session_id(&parts.headers, inspectable),
+            ProviderId::Claude => claude::session_id(&parts.headers, inspectable),
+            ProviderId::Codex => codex::session_id(&parts.headers, inspectable),
         };
         let model = json
             .then(|| rawjson::find_str(&body, &[Seg::Key("model")]))
@@ -75,7 +76,7 @@ impl Inbound {
     /// is edited, to drop state the new account cannot read.
     fn body(&self, strip_state: bool) -> Bytes {
         match self.provider {
-            Provider::Codex if strip_state && self.json => codex::strip_account_state(&self.body)
+            ProviderId::Codex if strip_state && self.json => codex::strip_account_state(&self.body)
                 .map(Bytes::from)
                 .unwrap_or_else(|| self.body.clone()),
             _ => self.body.clone(),
@@ -122,7 +123,7 @@ enum Attempt {
 
 pub(super) async fn forward(
     app: Arc<App>,
-    provider: Provider,
+    provider: ProviderId,
     target: String,
     request: Request,
 ) -> Response {
@@ -157,7 +158,7 @@ pub(super) async fn forward(
             Err(unavailable) => {
                 let spent = unavailable.until.is_some();
                 if spent
-                    && provider == Provider::Codex
+                    && provider == ProviderId::Codex
                     && app.config.redeem_when_exhausted
                     && !rescued
                 {
@@ -199,8 +200,8 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice) -> Attempt {
         let now = Timestamp::now();
         let headers = response.headers();
         let observed = match inbound.provider {
-            Provider::Claude => limits::from_claude_headers(headers, now),
-            Provider::Codex => limits::from_codex_headers(headers, now),
+            ProviderId::Claude => limits::from_claude_headers(headers, now),
+            ProviderId::Codex => limits::from_codex_headers(headers, now),
         };
         if let Some(limits) = observed {
             app.pool.observe(&id, limits, now);
@@ -235,7 +236,9 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice) -> Attempt {
                     }
                 }
             }
-            (Provider::Codex, 400) if !stripped && codex::rejects_account_state(&failure.body) => {
+            (ProviderId::Codex, 400)
+                if !stripped && codex::rejects_account_state(&failure.body) =>
+            {
                 stripped = true;
                 body = inbound.body(stripped);
                 continue;
@@ -249,12 +252,12 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice) -> Attempt {
                 app.pool.block(&id, now + ACCOUNT_BLOCK, None, reason);
                 return Attempt::Failed(Some(failure));
             }
-            (Provider::Claude, 429) | (Provider::Codex, 429 | 402) => {
+            (ProviderId::Claude, 429) | (ProviderId::Codex, 429 | 402) => {
                 let refusal = match inbound.provider {
-                    Provider::Claude => {
+                    ProviderId::Claude => {
                         limits::claude_refusal(&failure.headers, inbound.model.as_deref(), now)
                     }
-                    Provider::Codex => {
+                    ProviderId::Codex => {
                         limits::codex_refusal(status, &failure.headers, &failure.body, now)
                     }
                 };
@@ -273,7 +276,7 @@ async fn attempt(app: &Arc<App>, inbound: &Inbound, choice: Choice) -> Attempt {
                 }
                 return Attempt::Failed(Some(failure));
             }
-            (Provider::Codex, s) if s >= 500 && codex::reports_usage_limit(&failure.body) => {
+            (ProviderId::Codex, s) if s >= 500 && codex::reports_usage_limit(&failure.body) => {
                 failure.exhausted = true;
                 app.pool
                     .block(&id, now + DEFAULT_BLOCK, None, "usage limit reached");
@@ -293,7 +296,7 @@ async fn rescue(app: &App) -> Option<String> {
         .pool
         .accounts()
         .into_iter()
-        .filter(|a| a.provider == Provider::Codex && !a.disabled && a.auth_error.is_none())
+        .filter(|a| a.provider == ProviderId::Codex && !a.disabled && a.auth_error.is_none())
         .collect();
     // Another request may have redeemed while this one waited for the lock.
     if let Some(free) = accounts
@@ -339,11 +342,11 @@ async fn send(
 ) -> Result<Upstream, client::Error> {
     let token = &account.tokens.access_token;
     let (url, headers) = match inbound.provider {
-        Provider::Claude => (
+        ProviderId::Claude => (
             format!("{}{}", auth::claude::API, inbound.target),
             claude::upstream_headers(&inbound.parts.headers, token),
         ),
-        Provider::Codex => (
+        ProviderId::Codex => (
             format!("{}/codex{}", auth::codex::BACKEND, inbound.target),
             codex::upstream_headers(
                 &inbound.parts.headers,
@@ -363,7 +366,7 @@ async fn send(
 
 /// Streams a successful response to the agent, recording token usage (and
 /// any quota refusal inside the stream) when it ends.
-fn stream_back(app: &Arc<App>, provider: Provider, id: String, response: Upstream) -> Response {
+fn stream_back(app: &Arc<App>, provider: ProviderId, id: String, response: Upstream) -> Response {
     let status = response.status();
     let headers = returnable(response.headers());
     // A compressed stream passes through unread; only the request counts.
@@ -392,7 +395,7 @@ fn stream_back(app: &Arc<App>, provider: Provider, id: String, response: Upstrea
 }
 
 /// The response when no account can take the request.
-fn give_up(provider: Provider, unavailable: Unavailable, last: Option<Failure>) -> Response {
+fn give_up(provider: ProviderId, unavailable: Unavailable, last: Option<Failure>) -> Response {
     match (last, unavailable.until) {
         // Every account is spent: report the earliest reset, in the shape the
         // agent shows as its own usage-limit message.
@@ -407,7 +410,7 @@ fn give_up(provider: Provider, unavailable: Unavailable, last: Option<Failure>) 
     }
 }
 
-fn exhausted(provider: Provider, until: Timestamp) -> Response {
+fn exhausted(provider: ProviderId, until: Timestamp) -> Response {
     let now = Timestamp::now();
     let wait = until.duration_since(now).as_secs().max(1);
     let message = format!(
@@ -415,7 +418,7 @@ fn exhausted(provider: Provider, until: Timestamp) -> Response {
         ui::duration(until.duration_since(now))
     );
     let (body, extra) = match provider {
-        Provider::Claude => (
+        ProviderId::Claude => (
             json!({ "type": "error", "error": { "type": "rate_limit_error", "message": message } }),
             vec![
                 ("anthropic-ratelimit-unified-status", "rejected".to_owned()),
@@ -425,7 +428,7 @@ fn exhausted(provider: Provider, until: Timestamp) -> Response {
                 ),
             ],
         ),
-        Provider::Codex => (
+        ProviderId::Codex => (
             json!({ "error": {
                 "type": "usage_limit_reached",
                 "message": message,

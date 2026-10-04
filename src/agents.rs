@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use toml_edit::{DocumentMut, Item, Table, value};
 
-use crate::account::Provider;
 use crate::config::Config;
+use crate::provider::ProviderId;
 use crate::{fsx, paths};
 
 /// Codex model provider id written by slopmax.
@@ -78,9 +78,9 @@ pub fn codex_argv(config: &Config, args: &[String]) -> Vec<String> {
 }
 
 /// Launches the agent through the proxy and returns its exit status.
-pub fn run(agent: Provider, config: &Config, args: &[String]) -> Result<i32> {
+pub fn run(agent: ProviderId, config: &Config, args: &[String]) -> Result<i32> {
     let mut command = match agent {
-        Provider::Claude => {
+        ProviderId::Claude => {
             let mut command = Command::new("claude");
             command
                 .envs(claude_env(config))
@@ -88,7 +88,7 @@ pub fn run(agent: Provider, config: &Config, args: &[String]) -> Result<i32> {
                 .args(args);
             command
         }
-        Provider::Codex => {
+        ProviderId::Codex => {
             let mut command = Command::new("codex");
             command
                 .env(CODEX_KEY_ENV, &config.api_key)
@@ -115,9 +115,9 @@ pub fn run(agent: Provider, config: &Config, args: &[String]) -> Result<i32> {
 /// Shell commands that wire the current shell to the proxy. Codex gets a
 /// function that goes through `slopmax run` (at `exe`), since its overrides
 /// must follow any session subcommand; see [`codex_argv`].
-pub fn env_script(agent: Provider, config: &Config, exe: &Path) -> String {
+pub fn env_script(agent: ProviderId, config: &Config, exe: &Path) -> String {
     match agent {
-        Provider::Claude => {
+        ProviderId::Claude => {
             let mut out: String = claude_env(config)
                 .into_iter()
                 .map(|(k, v)| format!("export {k}={}\n", shell_quote(&v)))
@@ -125,7 +125,7 @@ pub fn env_script(agent: Provider, config: &Config, exe: &Path) -> String {
             out.push_str("unset ANTHROPIC_API_KEY\n");
             out
         }
-        Provider::Codex => {
+        ProviderId::Codex => {
             let exe = shell_quote(&exe.to_string_lossy());
             format!("codex() {{ {exe} run codex \"$@\"; }}\n")
         }
@@ -166,10 +166,10 @@ impl Backup {
 /// The agent config file `setup` edits. A symlink (say, into a dotfiles
 /// repository) is followed, so the file it points to is edited in place
 /// rather than the link being replaced.
-pub fn config_path(agent: Provider) -> PathBuf {
+pub fn config_path(agent: ProviderId) -> PathBuf {
     let path = match agent {
-        Provider::Claude => paths::claude_dir().join("settings.json"),
-        Provider::Codex => paths::codex_dir().join("config.toml"),
+        ProviderId::Claude => paths::claude_dir().join("settings.json"),
+        ProviderId::Codex => paths::codex_dir().join("config.toml"),
     };
     resolve(path)
 }
@@ -183,21 +183,21 @@ fn backup_path() -> PathBuf {
 }
 
 /// Persists the wiring in the agent's config. Returns the file changed.
-pub fn setup(agent: Provider, config: &Config) -> Result<PathBuf> {
+pub fn setup(agent: ProviderId, config: &Config) -> Result<PathBuf> {
     let path = config_path(agent);
     match agent {
-        Provider::Claude => setup_claude(config, &path, &backup_path())?,
-        Provider::Codex => setup_codex(config, &path, &backup_path())?,
+        ProviderId::Claude => setup_claude(config, &path, &backup_path())?,
+        ProviderId::Codex => setup_codex(config, &path, &backup_path())?,
     }
     Ok(path)
 }
 
 /// Reverts `setup`. Returns the file changed.
-pub fn undo(agent: Provider) -> Result<PathBuf> {
+pub fn undo(agent: ProviderId) -> Result<PathBuf> {
     let path = config_path(agent);
     match agent {
-        Provider::Claude => undo_claude(&path, &backup_path())?,
-        Provider::Codex => undo_codex(&path, &backup_path())?,
+        ProviderId::Claude => undo_claude(&path, &backup_path())?,
+        ProviderId::Codex => undo_codex(&path, &backup_path())?,
     }
     Ok(path)
 }
@@ -368,7 +368,7 @@ mod tests {
 
     #[test]
     fn claude_env_points_at_the_proxy() {
-        let script = env_script(Provider::Claude, &config(), Path::new("slopmax"));
+        let script = env_script(ProviderId::Claude, &config(), Path::new("slopmax"));
         assert!(script.contains("export ANTHROPIC_BASE_URL=http://127.0.0.1:7567"));
         assert!(script.contains("export ANTHROPIC_AUTH_TOKEN=sm-test"));
         assert!(script.contains("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1"));
@@ -378,7 +378,7 @@ mod tests {
     #[test]
     fn codex_env_hands_off_to_run() {
         let script = env_script(
-            Provider::Codex,
+            ProviderId::Codex,
             &config(),
             Path::new("/opt/my tools/slopmax"),
         );

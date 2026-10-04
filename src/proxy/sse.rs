@@ -11,8 +11,8 @@ use bytes::Bytes;
 use hyper::body::{Body, Frame, SizeHint};
 use serde_json::Value;
 
-use crate::account::Provider;
 use crate::pool::Usage;
+use crate::provider::ProviderId;
 
 /// Longest line the tap will buffer; longer lines pass through unparsed.
 const MAX_LINE: usize = 16 * 1024 * 1024;
@@ -27,7 +27,7 @@ pub struct Outcome {
 
 #[derive(Debug)]
 pub struct Tap {
-    provider: Provider,
+    provider: ProviderId,
     /// Whether the bytes can be parsed (they are not compressed).
     readable: bool,
     line: Vec<u8>,
@@ -36,7 +36,7 @@ pub struct Tap {
 }
 
 impl Tap {
-    pub fn new(provider: Provider) -> Self {
+    pub fn new(provider: ProviderId) -> Self {
         Self {
             provider,
             readable: true,
@@ -47,7 +47,7 @@ impl Tap {
     }
 
     /// A tap for a compressed stream: it only counts the request.
-    pub fn blind(provider: Provider) -> Self {
+    pub fn blind(provider: ProviderId) -> Self {
         Self {
             readable: false,
             ..Self::new(provider)
@@ -98,8 +98,8 @@ impl Tap {
             return;
         };
         match self.provider {
-            Provider::Claude => self.claude_event(&event),
-            Provider::Codex => self.codex_event(&event),
+            ProviderId::Claude => self.claude_event(&event),
+            ProviderId::Codex => self.codex_event(&event),
         }
     }
 
@@ -249,7 +249,7 @@ mod tests {
 
     #[test]
     fn claude_usage_merges_start_and_delta() {
-        let mut tap = Tap::new(Provider::Claude);
+        let mut tap = Tap::new(ProviderId::Claude);
         let stream = concat!(
             "event: message_start\n",
             r#"data: {"type":"message_start","message":{"usage":{"input_tokens":2095,"cache_creation_input_tokens":7185,"cache_read_input_tokens":355598,"output_tokens":1}}}"#,
@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn codex_usage_separates_cached_input() {
-        let mut tap = Tap::new(Provider::Codex);
+        let mut tap = Tap::new(ProviderId::Codex);
         tap.feed(br#"data: {"type":"response.completed","response":{"id":"r","usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":25},"output_tokens":40,"total_tokens":140}}}"#);
         tap.feed(b"\n\n");
         let usage = tap.finish().usage;
@@ -295,7 +295,7 @@ mod tests {
 
     #[test]
     fn codex_in_stream_usage_limit_is_exhaustion() {
-        let mut tap = Tap::new(Provider::Codex);
+        let mut tap = Tap::new(ProviderId::Codex);
         tap.feed(b"data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"usage_limit_reached\"}}}\n");
         assert!(tap.finish().exhausted);
     }
@@ -310,7 +310,7 @@ mod tests {
             Bytes::from_static(b"data: tail\n"),
         ]));
         let log = seen.clone();
-        let mut body = Tapped::new(chunks, Tap::new(Provider::Claude), move |o| {
+        let mut body = Tapped::new(chunks, Tap::new(ProviderId::Claude), move |o| {
             log.lock().unwrap().push(o)
         });
         let first = std::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await;

@@ -7,13 +7,14 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use tokio::net::TcpListener;
 
-use crate::account::{Account, Provider, Store};
+use crate::account::{Account, Store};
 use crate::auth;
 use crate::config::Config;
 use crate::credits::{self, Outcome};
 use crate::log;
 use crate::net::{Origins, server};
 use crate::pool::State;
+use crate::provider::ProviderId;
 use crate::proxy::{self, App};
 use crate::time::{SignedDuration, Timestamp};
 use crate::{fsx, paths, usage};
@@ -208,7 +209,7 @@ pub async fn redeem_expiring(app: &App) {
     for account in app.pool.accounts() {
         let state = app.pool.state(&account.id);
         let used = state.limits.windows.iter().any(|w| w.used_at(now) > 0.0);
-        if account.provider != Provider::Codex
+        if account.provider != ProviderId::Codex
             || account.disabled
             || account.auth_error.is_some()
             || state.limits.reset_credits.unwrap_or(0) == 0

@@ -12,10 +12,11 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 use http::StatusCode;
 
-use crate::account::{Account, Provider, Store, Tokens};
+use crate::account::{Account, Store, Tokens};
 use crate::ids;
 use crate::log;
 use crate::net::{Client, Origins};
+use crate::provider::ProviderId;
 use crate::time::Timestamp;
 use pkce::Pkce;
 
@@ -98,20 +99,20 @@ pub struct LoginOptions {
 }
 
 /// Runs an interactive OAuth login and returns the connected account.
-pub async fn login(provider: Provider, options: LoginOptions) -> Result<Account> {
+pub async fn login(provider: ProviderId, options: LoginOptions) -> Result<Account> {
     let http = http_client(Origins::default());
-    if provider == Provider::Codex && options.device {
+    if provider == ProviderId::Codex && options.device {
         return codex::device_login(&http).await;
     }
     let pkce = Pkce::generate();
     let state = ids::token();
     let (url, port, path) = match provider {
-        Provider::Claude => (
+        ProviderId::Claude => (
             claude::authorize_url(&pkce, &state),
             claude::CALLBACK_PORT,
             claude::CALLBACK_PATH,
         ),
-        Provider::Codex => (
+        ProviderId::Codex => (
             codex::authorize_url(&pkce, &state),
             codex::CALLBACK_PORT,
             codex::CALLBACK_PATH,
@@ -130,11 +131,11 @@ pub async fn login(provider: Provider, options: LoginOptions) -> Result<Account>
 
     let callback = callback::receive(port, path, &state).await?;
     match provider {
-        Provider::Claude => {
+        ProviderId::Claude => {
             let state = callback.state.as_deref().unwrap_or(&state);
             claude::exchange(&http, &callback.code, state, &pkce).await
         }
-        Provider::Codex => {
+        ProviderId::Codex => {
             codex::exchange(
                 &http,
                 &callback.code,
@@ -196,8 +197,8 @@ async fn refresh_and_save(
         return Err(RefreshError::Revoked("no refresh token stored".into()));
     };
     let result = match account.provider {
-        Provider::Claude => claude::refresh(http, &refresh_token).await,
-        Provider::Codex => codex::refresh(http, &refresh_token).await,
+        ProviderId::Claude => claude::refresh(http, &refresh_token).await,
+        ProviderId::Codex => codex::refresh(http, &refresh_token).await,
     };
     let grant = match result {
         Ok(grant) => grant,
@@ -219,8 +220,8 @@ async fn refresh_and_save(
     account.auth_error = None;
 
     match account.provider {
-        Provider::Codex => codex::apply_claims(&mut account),
-        Provider::Claude => {
+        ProviderId::Codex => codex::apply_claims(&mut account),
+        ProviderId::Claude => {
             if let Ok(profile) = claude::profile(http, &account.tokens.access_token).await {
                 claude::apply_profile(&mut account, &profile);
             }

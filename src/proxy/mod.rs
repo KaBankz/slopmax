@@ -19,7 +19,7 @@ use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use serde::Serialize;
 use serde_json::json;
 
-use crate::account::{Account, Provider, Store};
+use crate::account::{Account, Store};
 use crate::auth::{self, RefreshError};
 use crate::config::Config;
 use crate::log;
@@ -27,6 +27,7 @@ use crate::net::body;
 use crate::net::server::{Request, Response};
 use crate::net::{Client, Origins};
 use crate::pool::{Pins, Pool, State as PoolState};
+use crate::provider::ProviderId;
 use crate::report::{self, Report};
 use crate::time::{SignedDuration, Timestamp};
 use crate::{fsx, paths};
@@ -203,7 +204,7 @@ fn empty_reply(status: StatusCode) -> Response {
 }
 
 /// Maps a request path to a provider and the upstream path.
-fn route(path_and_query: &str, headers: &HeaderMap) -> Option<(Provider, String)> {
+fn route(path_and_query: &str, headers: &HeaderMap) -> Option<(ProviderId, String)> {
     let strip = |prefix: &str| {
         path_and_query
             .strip_prefix(prefix)
@@ -211,10 +212,10 @@ fn route(path_and_query: &str, headers: &HeaderMap) -> Option<(Provider, String)
             .map(str::to_owned)
     };
     if let Some(rest) = strip("/claude") {
-        return Some((Provider::Claude, rest));
+        return Some((ProviderId::Claude, rest));
     }
     if let Some(rest) = strip("/codex") {
-        return Some((Provider::Codex, rest));
+        return Some((ProviderId::Codex, rest));
     }
     // Unprefixed /v1 paths, as an OpenAI- or Anthropic-style base URL sends.
     let rest = strip("/v1")?;
@@ -224,9 +225,9 @@ fn route(path_and_query: &str, headers: &HeaderMap) -> Option<(Provider, String)
             && rest.contains("client_version=")
             && !headers.contains_key("anthropic-version"));
     Some(if codex {
-        (Provider::Codex, rest)
+        (ProviderId::Codex, rest)
     } else {
-        (Provider::Claude, format!("/v1{rest}"))
+        (ProviderId::Claude, format!("/v1{rest}"))
     })
 }
 
@@ -247,7 +248,7 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-fn unauthorized(provider: Option<Provider>) -> Response {
+fn unauthorized(provider: Option<ProviderId>) -> Response {
     error(
         provider,
         StatusCode::UNAUTHORIZED,
@@ -256,7 +257,7 @@ fn unauthorized(provider: Option<Provider>) -> Response {
 }
 
 /// An error in the shape each agent understands.
-fn error(provider: Option<Provider>, status: StatusCode, message: &str) -> Response {
+fn error(provider: Option<ProviderId>, status: StatusCode, message: &str) -> Response {
     let kind = match status.as_u16() {
         401 => "authentication_error",
         404 => "not_found_error",
@@ -267,7 +268,7 @@ fn error(provider: Option<Provider>, status: StatusCode, message: &str) -> Respo
         _ => "invalid_request_error",
     };
     let body = match provider {
-        Some(Provider::Codex) => json!({ "error": { "type": kind, "message": message } }),
+        Some(ProviderId::Codex) => json!({ "error": { "type": kind, "message": message } }),
         _ => json!({ "type": "error", "error": { "type": kind, "message": message } }),
     };
     json_reply(status, &body)
@@ -324,27 +325,27 @@ mod tests {
         let none = HeaderMap::new();
         assert_eq!(
             route("/claude/v1/messages?beta=true", &none),
-            Some((Provider::Claude, "/v1/messages?beta=true".into()))
+            Some((ProviderId::Claude, "/v1/messages?beta=true".into()))
         );
         assert_eq!(
             route("/codex/responses", &none),
-            Some((Provider::Codex, "/responses".into()))
+            Some((ProviderId::Codex, "/responses".into()))
         );
         assert_eq!(
             route("/v1/messages?beta=true", &none),
-            Some((Provider::Claude, "/v1/messages?beta=true".into()))
+            Some((ProviderId::Claude, "/v1/messages?beta=true".into()))
         );
         assert_eq!(
             route("/v1/responses", &none),
-            Some((Provider::Codex, "/responses".into()))
+            Some((ProviderId::Codex, "/responses".into()))
         );
         assert_eq!(
             route("/v1/models?client_version=0.159.3", &none),
-            Some((Provider::Codex, "/models?client_version=0.159.3".into()))
+            Some((ProviderId::Codex, "/models?client_version=0.159.3".into()))
         );
         assert_eq!(
             route("/v1/models?limit=1000", &none),
-            Some((Provider::Claude, "/v1/models?limit=1000".into()))
+            Some((ProviderId::Claude, "/v1/models?limit=1000".into()))
         );
         assert_eq!(route("/codexx/responses", &none), None);
         assert_eq!(route("/other", &none), None);

@@ -4,10 +4,11 @@ use anyhow::{Result, anyhow, bail};
 use http::StatusCode;
 use serde_json::Value;
 
-use crate::account::{Account, Provider, Store};
+use crate::account::{Account, Store};
 use crate::auth::{self, RefreshError, claude, codex};
 use crate::limits::{self, Limits};
 use crate::net::Client;
+use crate::provider::ProviderId;
 use crate::time::Timestamp;
 
 /// A usage reading, plus the plan when the endpoint reports one.
@@ -25,10 +26,10 @@ enum FetchError {
 async fn fetch(http: &Client, account: &Account) -> Result<Reading, FetchError> {
     let token = &account.tokens.access_token;
     let request = match account.provider {
-        Provider::Claude => http
+        ProviderId::Claude => http
             .get(format!("{}/api/oauth/usage", claude::API))
             .header("anthropic-beta", claude::OAUTH_BETA),
-        Provider::Codex => {
+        ProviderId::Codex => {
             let request = http.get(format!("{}/wham/usage", codex::BACKEND));
             match &account.account_id {
                 Some(id) => request.header("chatgpt-account-id", id),
@@ -58,11 +59,11 @@ async fn fetch(http: &Client, account: &Account) -> Result<Reading, FetchError> 
         .map_err(|e| FetchError::Other(e.into()))?;
     let now = Timestamp::now();
     Ok(match account.provider {
-        Provider::Claude => Reading {
+        ProviderId::Claude => Reading {
             limits: limits::from_claude_usage(&body, now),
             plan: None,
         },
-        Provider::Codex => {
+        ProviderId::Codex => {
             let (limits, plan) = limits::from_codex_usage(&body, now);
             Reading { limits, plan }
         }

@@ -15,6 +15,7 @@ pub mod log;
 pub mod net;
 pub mod paths;
 pub mod pool;
+pub mod provider;
 pub mod proxy;
 pub mod report;
 pub mod time;

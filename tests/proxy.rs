@@ -10,7 +10,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use http::{HeaderMap, Method, StatusCode};
 use serde_json::{Value, json};
-use slopmax::account::{Account, Provider, Store, Tokens};
+use slopmax::account::{Account, Store, Tokens};
 use slopmax::config::{Config, Strategy};
 use slopmax::limits::{Limits, Window};
 use slopmax::net::body;
@@ -18,6 +18,7 @@ use slopmax::net::client::RequestBuilder;
 use slopmax::net::server::{self, Request, Response};
 use slopmax::net::{Client, Origins};
 use slopmax::pool::State as PoolState;
+use slopmax::provider::ProviderId;
 use slopmax::proxy::{self, App};
 use slopmax::time::{SignedDuration, Timestamp};
 use tokio::net::TcpListener;
@@ -201,7 +202,7 @@ impl Drop for TempDir {
     }
 }
 
-fn account(provider: Provider, name: &str, token: &str, added: i64) -> Account {
+fn account(provider: ProviderId, name: &str, token: &str, added: i64) -> Account {
     let mut account = Account::new(
         provider,
         Tokens {
@@ -220,12 +221,12 @@ fn account(provider: Provider, name: &str, token: &str, added: i64) -> Account {
 }
 
 /// Accounts are tried in the order given (fill-first by age).
-async fn harness(provider: Provider, tokens: &[&str]) -> Harness {
+async fn harness(provider: ProviderId, tokens: &[&str]) -> Harness {
     harness_with(provider, tokens, |_| {}).await
 }
 
 async fn harness_with(
-    provider: Provider,
+    provider: ProviderId,
     tokens: &[&str],
     configure: impl FnOnce(&mut Config),
 ) -> Harness {
@@ -345,7 +346,7 @@ async fn eventually(check: impl Fn() -> bool) {
 
 #[tokio::test]
 async fn claude_fails_over_and_forwards_the_request_unchanged() {
-    let h = harness(Provider::Claude, &["tok-limited", "tok-ok"]).await;
+    let h = harness(ProviderId::Claude, &["tok-limited", "tok-ok"]).await;
     let response = claude_request(&h).send().await.unwrap();
     assert_eq!(response.status(), 200);
     let text = response.text().await.unwrap();
@@ -407,7 +408,7 @@ async fn claude_fails_over_and_forwards_the_request_unchanged() {
 
 #[tokio::test]
 async fn every_account_spent_returns_the_agents_own_limit_error() {
-    let h = harness(Provider::Claude, &["tok-limited", "tok-limited"]).await;
+    let h = harness(ProviderId::Claude, &["tok-limited", "tok-limited"]).await;
     let response = claude_request(&h).send().await.unwrap();
     assert_eq!(response.status(), 429);
     let retry_after: i64 = response.headers()["retry-after"]
@@ -432,7 +433,7 @@ async fn every_account_spent_returns_the_agents_own_limit_error() {
 
 #[tokio::test]
 async fn codex_fails_over_with_workspace_and_version_headers() {
-    let h = harness(Provider::Codex, &["tok-limited", "tok-ok"]).await;
+    let h = harness(ProviderId::Codex, &["tok-limited", "tok-ok"]).await;
     let response = client()
         .post(format!("{}/codex/responses", h.proxy))
         .header("authorization", format!("Bearer {KEY}"))
@@ -471,7 +472,7 @@ async fn codex_fails_over_with_workspace_and_version_headers() {
 
 #[tokio::test]
 async fn codex_exhaustion_uses_usage_limit_shape() {
-    let h = harness(Provider::Codex, &["tok-limited"]).await;
+    let h = harness(ProviderId::Codex, &["tok-limited"]).await;
     let response = client()
         .post(format!("{}/v1/responses", h.proxy))
         .header("authorization", format!("Bearer {KEY}"))
@@ -487,7 +488,7 @@ async fn codex_exhaustion_uses_usage_limit_shape() {
 
 #[tokio::test]
 async fn rejects_requests_without_the_slopmax_key() {
-    let h = harness(Provider::Claude, &["tok-ok"]).await;
+    let h = harness(ProviderId::Claude, &["tok-ok"]).await;
     let response = client()
         .post(format!("{}/v1/messages", h.proxy))
         .header("x-api-key", "wrong")
@@ -522,7 +523,7 @@ async fn rejects_requests_without_the_slopmax_key() {
 
 #[tokio::test]
 async fn revoked_tokens_move_to_the_next_account() {
-    let h = harness(Provider::Claude, &["tok-revoked", "tok-ok"]).await;
+    let h = harness(ProviderId::Claude, &["tok-revoked", "tok-ok"]).await;
     let response = claude_request(&h).send().await.unwrap();
     assert_eq!(response.status(), 200);
     let seen = h.log.lock().unwrap();
@@ -533,7 +534,7 @@ async fn revoked_tokens_move_to_the_next_account() {
 
 #[tokio::test]
 async fn spent_codex_pool_redeems_a_credit_when_allowed() {
-    let h = harness_with(Provider::Codex, &["tok-credit"], |config| {
+    let h = harness_with(ProviderId::Codex, &["tok-credit"], |config| {
         config.redeem_when_exhausted = true;
     })
     .await;
@@ -563,7 +564,7 @@ async fn spent_codex_pool_redeems_a_credit_when_allowed() {
 
 #[tokio::test]
 async fn spent_codex_pool_keeps_its_credits_by_default() {
-    let h = harness(Provider::Codex, &["tok-credit"]).await;
+    let h = harness(ProviderId::Codex, &["tok-credit"]).await;
     observe_usage(&h, &h.ids[0], 90.0);
     let response = codex_request(&h).send().await.unwrap();
     assert_eq!(response.status(), 429);
@@ -573,7 +574,11 @@ async fn spent_codex_pool_keeps_its_credits_by_default() {
 
 #[tokio::test]
 async fn credits_about_to_expire_are_redeemed_on_used_accounts() {
-    let h = harness(Provider::Codex, &["tok-expiring", "tok-later", "tok-idle"]).await;
+    let h = harness(
+        ProviderId::Codex,
+        &["tok-expiring", "tok-later", "tok-idle"],
+    )
+    .await;
     for (id, used) in h.ids.iter().zip([30.0, 30.0, 0.0]) {
         observe_usage(&h, id, used);
     }
@@ -609,7 +614,7 @@ async fn credits_about_to_expire_are_redeemed_on_used_accounts() {
 
 #[tokio::test]
 async fn websocket_handshakes_are_refused_so_codex_uses_http() {
-    let h = harness(Provider::Codex, &["tok-ok"]).await;
+    let h = harness(ProviderId::Codex, &["tok-ok"]).await;
     let response = client()
         .get(format!("{}/v1/responses", h.proxy))
         .header("authorization", format!("Bearer {KEY}"))

@@ -10,13 +10,14 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 
 use self::args::{App, Arg, Choice, Command, Kind, Parsed};
-use crate::account::{Provider, Store};
+use crate::account::Store;
 use crate::auth::import::{self, Source};
 use crate::auth::{self, LoginOptions};
 use crate::config::Config;
 use crate::credits::{self, Outcome};
 use crate::net::Origins;
 use crate::pool::{Pins, Pool, State};
+use crate::provider::ProviderId;
 use crate::report::{self, Report};
 use crate::time::{SignedDuration, Timestamp};
 use crate::{agents, daemon, fsx, net, paths, ui, usage};
@@ -410,7 +411,7 @@ async fn offline_report(config: &Config, store: &Store, refresh: bool) -> Result
 
 async fn login(
     store: &Store,
-    provider: Provider,
+    provider: ProviderId,
     label: Option<String>,
     options: LoginOptions,
 ) -> Result<()> {
@@ -530,7 +531,7 @@ fn remove(store: &Store, query: &str) -> Result<()> {
 
 async fn redeem(config: &Config, store: &Store, query: &str, yes: bool) -> Result<()> {
     let account = store.find(query)?;
-    if account.provider != Provider::Codex {
+    if account.provider != ProviderId::Codex {
         bail!(
             "reset credits are a ChatGPT feature; {} is a {} account",
             account.name(),
@@ -653,10 +654,10 @@ async fn spawn_background(config: &Config) -> Result<()> {
     )
 }
 
-fn setup(config: &Config, agent: Provider, undo: bool) -> Result<()> {
+fn setup(config: &Config, agent: ProviderId, undo: bool) -> Result<()> {
     let app = match agent {
-        Provider::Claude => "Claude Code",
-        Provider::Codex => "Codex",
+        ProviderId::Claude => "Claude Code",
+        ProviderId::Codex => "Codex",
     };
     if undo {
         let path = agents::undo(agent)?;

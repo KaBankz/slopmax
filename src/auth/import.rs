@@ -13,9 +13,10 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::{claude, codex};
-use crate::account::{Account, Provider, Tokens};
+use crate::account::{Account, Tokens};
 use crate::net::Client;
 use crate::paths;
+use crate::provider::ProviderId;
 use crate::time::Timestamp;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,7 +132,7 @@ async fn from_claude_code(http: &Client, oauth: ClaudeCodeOauth) -> Result<Accou
         tokens = grant.into_tokens(now);
         tokens.refresh_token = tokens.refresh_token.or(Some(refresh));
     }
-    let mut account = Account::new(Provider::Claude, tokens);
+    let mut account = Account::new(ProviderId::Claude, tokens);
     let profile = claude::profile(http, &account.tokens.access_token)
         .await
         .context("could not read the Claude profile")?;
@@ -160,7 +161,7 @@ fn from_codex_auth(path: &Path) -> Result<Account> {
         bail!("not a ChatGPT login (API key or proxy auth)");
     };
     let mut account = Account::new(
-        Provider::Codex,
+        ProviderId::Codex,
         Tokens {
             expires_at: super::jwt::expiry(&tokens.access_token),
             access_token: tokens.access_token,
@@ -212,8 +213,8 @@ async fn from_cliproxyapi(http: &Client, dir: &Path) -> Vec<Found> {
             .and_then(|text| serde_json::from_str::<CliProxyFile>(&text).ok());
         let Some(file) = file else { continue };
         let provider = match file.kind.as_str() {
-            "claude" => Provider::Claude,
-            "codex" => Provider::Codex,
+            "claude" => ProviderId::Claude,
+            "codex" => ProviderId::Codex,
             _ => continue,
         };
         found.push(Found {
@@ -226,7 +227,7 @@ async fn from_cliproxyapi(http: &Client, dir: &Path) -> Vec<Found> {
 
 async fn from_cliproxy_file(
     http: &Client,
-    provider: Provider,
+    provider: ProviderId,
     file: CliProxyFile,
 ) -> Result<Account> {
     let parse_time = |s: &Option<String>| s.as_deref().and_then(|t| t.parse::<Timestamp>().ok());
@@ -247,7 +248,7 @@ async fn from_cliproxy_file(
         .and_then(|p| p.as_i64().or_else(|| p.as_str()?.parse().ok()))
         .unwrap_or(0) as i32;
     match provider {
-        Provider::Claude => {
+        ProviderId::Claude => {
             account.account_id = file.account_uuid;
             account.org_id = file.organization_uuid;
             account.org_name = file.organization_name;
@@ -257,7 +258,7 @@ async fn from_cliproxy_file(
                 claude::apply_profile(&mut account, &profile);
             }
         }
-        Provider::Codex => {
+        ProviderId::Codex => {
             account.account_id = file.account_id;
             account.plan = file.plan_type;
             codex::apply_claims(&mut account);

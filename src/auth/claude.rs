@@ -5,10 +5,11 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::{Grant, RefreshError, pkce::Pkce};
-use crate::account::{Account, Provider};
+use crate::account::Account;
 use crate::log;
 use crate::net::Client;
 use crate::net::form;
+use crate::provider::ProviderId;
 use crate::time::{SignedDuration, Timestamp};
 
 /// Anthropic's API: Messages, the OAuth profile, and usage.
@@ -145,7 +146,7 @@ pub async fn exchange(http: &Client, code: &str, state: &str, pkce: &Pkce) -> Re
     }
     let token: TokenResponse = serde_json::from_str(&text).context("unexpected token response")?;
 
-    let mut account = Account::new(Provider::Claude, token.grant(now).into_tokens(now));
+    let mut account = Account::new(ProviderId::Claude, token.grant(now).into_tokens(now));
     if let Some(a) = &token.account {
         account.account_id = a.uuid.clone();
         account.email = a.email_address.clone();
@@ -254,7 +255,7 @@ mod tests {
 
     #[test]
     fn apply_profile_never_erases_identity() {
-        let mut account = Account::new(Provider::Claude, Tokens::default());
+        let mut account = Account::new(ProviderId::Claude, Tokens::default());
         account.email = Some("me@x.dev".into());
         apply_profile(&mut account, &Profile::default());
         assert_eq!(account.email.as_deref(), Some("me@x.dev"));
