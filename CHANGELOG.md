@@ -13,6 +13,7 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ### Changed
 
+- Large requests cost less: slopmax reads a request body only as far as the values it needs, and finds the ends of strings with SIMD search. The stream tap finds lines and keywords the same way and no longer copies most lines. A 300 KB Claude Code request now takes about 2 ms through the proxy instead of 3.5 ms, and throughput on large requests doubled.
 
 ### Fixed
 

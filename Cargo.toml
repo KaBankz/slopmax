@@ -19,6 +19,7 @@ http-body-util = "0.1.5"
 hyper = { version = "1.11.1", features = ["http1", "client", "server"] }
 hyper-rustls = { version = "0.27.10", default-features = false, features = ["http1", "ring", "tls12"] }
 hyper-util = { version = "0.1.21", features = ["client-legacy", "http1", "tokio"] }
+memchr = "2.8.3"
 ring = "0.17.14"
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8.4"

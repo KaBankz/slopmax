@@ -486,6 +486,7 @@ dependencies = [
  "hyper-rustls",
  "hyper-util",
  "libc",
+ "memchr",
  "ring",
  "rustls",
  "rustls-native-certs",

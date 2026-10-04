@@ -239,7 +239,7 @@ State a format cannot carry back is kept by slopmax: the encrypted reasoning an 
 
 ## Dependencies
 
-The binary is under 6 MB, from about 60 crates. The async stack is tokio, hyper, and rustls (with ring). serde_json, toml_edit, base64, and anyhow round it out. Time, logging, the CLI parser, form encoding, and the HTTP client conveniences are small in-house modules, because the crates for them each pull in far more than slopmax uses. New dependencies need a reason that outweighs their size.
+The binary is under 6 MB, from about 60 crates. The async stack is tokio, hyper, and rustls (with ring). serde_json, toml_edit, memchr, base64, and anyhow round it out. Time, logging, the CLI parser, form encoding, and the HTTP client conveniences are small in-house modules, because the crates for them each pull in far more than slopmax uses. A crate earns its place by doing its job measurably better than a small module would: faster, leaner, or more correct. The CI holds the tree to 70 crates and the binary to 6 MB; raising either needs that reason in the commit.
 
 ## Testing
 

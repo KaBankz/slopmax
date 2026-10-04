@@ -80,11 +80,19 @@ impl Tap {
             }
             Shape::Events => {}
         }
-        while let Some(newline) = chunk.iter().position(|b| *b == b'\n') {
+        while let Some(newline) = memchr::memchr(b'\n', chunk) {
             if !self.overflow {
-                self.line.extend_from_slice(&chunk[..newline]);
-                let line = std::mem::take(&mut self.line);
-                self.line(&line);
+                if self.line.is_empty() {
+                    // The whole line is in this chunk: read it in place.
+                    self.line(&chunk[..newline]);
+                } else {
+                    self.line.extend_from_slice(&chunk[..newline]);
+                    let line = std::mem::take(&mut self.line);
+                    self.line(&line);
+                    // Keep the buffer for the next split line.
+                    self.line = line;
+                    self.line.clear();
+                }
             }
             self.overflow = false;
             chunk = &chunk[newline + 1..];
@@ -118,7 +126,7 @@ impl Tap {
         };
         let interesting = [&b"usage"[..], b"error", b"failed"]
             .iter()
-            .any(|needle| data.windows(needle.len()).any(|w| w == *needle));
+            .any(|needle| memchr::memmem::find(data, needle).is_some());
         if !interesting {
             return;
         }
