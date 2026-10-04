@@ -1,8 +1,12 @@
 # Changelog
 
-Every version has a signed tag and a GitHub release, whose notes come from this file.
+Every version has a signed tag and a GitHub release, whose notes come from this file. Versions follow [Semantic Versioning](https://semver.org): a minor release adds features, a patch release only fixes. Before 1.0, a minor release may also change something you rely on, and its notes say what.
 
 ## [Unreleased]
+
+## [0.3.0] - 2026-10-04
+
+Agents and quota tools such as T3 Code see the pool as one account, and requests pass through the proxy much faster.
 
 ### Added
 
@@ -70,6 +74,7 @@ The first version.
 - `slopmax run`, `env`, and `setup` (with `--undo`) connect Claude Code and Codex.
 - Adapted Claude requests to the serving account (`metadata.user_id` and the billing-header checksum). 0.2.0 removed this.
 
-[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/KaBankz/slopmax/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/KaBankz/slopmax/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/KaBankz/slopmax/releases/tag/v0.1.0
