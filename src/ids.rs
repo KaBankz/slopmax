@@ -1,12 +1,24 @@
-//! Random identifiers.
+//! Random identifiers and digests.
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use ring::digest::{self, SHA256};
+use ring::rand::{SecureRandom, SystemRandom};
 
 fn random_bytes<const N: usize>() -> [u8; N] {
     let mut bytes = [0u8; N];
-    getrandom::fill(&mut bytes).expect("operating system RNG is unavailable");
+    SystemRandom::new()
+        .fill(&mut bytes)
+        .expect("operating system RNG is unavailable");
     bytes
+}
+
+/// SHA-256 of `data`.
+pub fn sha256(data: &[u8]) -> [u8; 32] {
+    digest::digest(&SHA256, data)
+        .as_ref()
+        .try_into()
+        .expect("SHA-256 digests are 32 bytes")
 }
 
 fn hex(bytes: &[u8]) -> String {

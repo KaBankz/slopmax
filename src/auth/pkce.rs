@@ -2,7 +2,6 @@
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use sha2::{Digest, Sha256};
 
 use crate::ids;
 
@@ -16,7 +15,7 @@ pub struct Pkce {
 impl Pkce {
     pub fn generate() -> Self {
         let verifier = ids::token();
-        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+        let challenge = URL_SAFE_NO_PAD.encode(ids::sha256(verifier.as_bytes()));
         Self {
             verifier,
             challenge,
@@ -32,7 +31,7 @@ mod tests {
     fn challenge_matches_rfc7636_example() {
         // Appendix B of RFC 7636.
         let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
-        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+        let challenge = URL_SAFE_NO_PAD.encode(ids::sha256(verifier.as_bytes()));
         assert_eq!(challenge, "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
     }
 

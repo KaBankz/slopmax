@@ -11,11 +11,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::log;
 use crate::time::{SignedDuration, Timestamp};
-use crate::{fsx, paths};
+use crate::{fsx, ids, paths};
 
 #[derive(
     Debug,
@@ -160,7 +159,7 @@ impl Account {
 
     /// Recomputes `id` from the identity; call after identity fields change.
     pub fn assign_id(&mut self) {
-        let digest = Sha256::digest(self.identity_key().as_bytes());
+        let digest = ids::sha256(self.identity_key().as_bytes());
         let hex: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
         self.id = format!("{}-{hex}", self.provider);
     }
@@ -332,6 +331,18 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("slopmax-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         Store::at(dir)
+    }
+
+    #[test]
+    fn ids_hash_the_identity_as_before() {
+        // Ids name the account files, so they must never change.
+        let mut account = claude("org-1", "me@x.dev");
+        account.assign_id();
+        assert_eq!(account.id, "claude-c24787a7");
+        let mut codex = Account::new(Provider::Codex, Tokens::default());
+        codex.account_id = Some("ws-9".into());
+        codex.assign_id();
+        assert_eq!(codex.id, "codex-372c403d");
     }
 
     fn claude(org: &str, email: &str) -> Account {
