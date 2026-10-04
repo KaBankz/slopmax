@@ -11,8 +11,12 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 - CLIProxyAPI's management calls for quota tools (`auth-files`, `api-call`, `reset-quota` under `/v0/management/`), so apps such as T3 Code can show every pooled account's usage and redeem reset credits. `api-call` answers only those tools' usage and reset-credit calls, and never relays a request with an account's token.
 - `/slopmax/status` reports each provider's pool, and the dashboard and `slopmax status` draw their pool rows from it.
 
+### Changed
+
+
 ### Fixed
 
+- Streamed answers reach the agent as they arrive. The proxy's own connections now set `TCP_NODELAY`; without it, small writes waited for the agent to acknowledge the previous one, which added about 40 ms to every response.
 - Only reset credits for Codex's own windows (`codex_rate_limits`) are counted and redeemed. A credit of another kind could be spent on Codex's windows, which it does not reset.
 
 ## [0.2.0] - 2026-10-04

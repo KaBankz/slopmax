@@ -46,6 +46,10 @@ where
             },
             () = &mut shutdown => break,
         };
+        // Streamed answers are many small writes. Nagle's algorithm would
+        // hold each until the client acknowledges the last, and clients
+        // delay acknowledgments by up to 40 ms.
+        let _ = stream.set_nodelay(true);
         let handler = handler.clone();
         let mut stopping = stopping.clone();
         tokio::spawn(async move {
