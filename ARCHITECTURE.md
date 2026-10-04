@@ -37,7 +37,8 @@ src/
   proxy/        mod.rs (App, the handler, keys), forward.rs (the failover loop), sse.rs and
                 start.rs (stream taps and holds), transcode.rs (translated streams), socket.rs
                 (Codex's WebSockets), models.rs (/v1/models), admin.rs and dashboard.html
-                (/slopmax/*), warm.rs (window warmups), rawjson.rs (in-place JSON edits)
+                (/slopmax/*), hub.rs (CLIProxyAPI's management calls for quota tools),
+                warm.rs (window warmups), rawjson.rs (in-place JSON edits)
   wire/         formats: errors and usage per Dialect; ir.rs and one codec per format
   daemon.rs     the long-running proxy and its background tasks
   ledger.rs     the usage ledger; summary.rs totals it; pricing.rs prices it

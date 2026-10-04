@@ -21,6 +21,18 @@ pub struct Report {
     pub live: bool,
     pub generated_at: Timestamp,
     pub accounts: Vec<AccountReport>,
+    /// Each subscription's working accounts read as one, as agents see them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pools: Vec<PoolReport>,
+}
+
+/// A provider's working accounts (enabled and signed in) read as one: each
+/// window's average use, and the soonest reset that frees capacity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PoolReport {
+    pub provider: ProviderId,
+    pub accounts: usize,
+    pub windows: Vec<Window>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,8 +70,9 @@ pub fn build(
     sessions: &HashMap<String, usize>,
     strategy: Strategy,
     live: bool,
+    now: Timestamp,
 ) -> Report {
-    let accounts = accounts
+    let accounts: Vec<AccountReport> = accounts
         .into_iter()
         .map(|a| AccountReport {
             endpoint: (!a.provider.spec().is_subscription())
@@ -90,13 +103,44 @@ pub fn build(
             follows: a.link.map(|link| link.tool),
         })
         .collect();
+    let pools = ProviderId::ALL
+        .into_iter()
+        .filter(|p| p.spec().is_subscription())
+        .filter_map(|p| pool(p, &accounts, now))
+        .collect();
     Report {
         version: env!("CARGO_PKG_VERSION").into(),
         strategy,
         live,
-        generated_at: Timestamp::now(),
+        generated_at: now,
         accounts,
+        pools,
     }
+}
+
+/// See [`limits::pooled`].
+fn pool(provider: ProviderId, accounts: &[AccountReport], now: Timestamp) -> Option<PoolReport> {
+    let working: Vec<&AccountReport> = accounts
+        .iter()
+        .filter(|a| a.provider == provider && !a.disabled && a.auth_error.is_none())
+        .collect();
+    if working.is_empty() {
+        return None;
+    }
+    let windows = limits::pooled(
+        working
+            .iter()
+            .map(|a| (&a.state.limits, a.state.is_blocked(now))),
+        now,
+    )
+    .into_iter()
+    .map(|w| Window::new(w.span, w.used, w.resets_at))
+    .collect();
+    Some(PoolReport {
+        provider,
+        accounts: working.len(),
+        windows,
+    })
 }
 
 const BAR: usize = 10;
@@ -189,7 +233,8 @@ pub fn render(report: &Report, now: Timestamp) -> String {
                 );
             }
         }
-        pool_row(&mut out, &accounts, name_width, now);
+        let pool = report.pools.iter().find(|p| p.provider == provider);
+        pool_row(&mut out, pool, name_width, now);
     }
     let _ = writeln!(
         out,
@@ -246,35 +291,20 @@ fn metered(
     index
 }
 
-/// The pool as the agents see it: its working accounts read as one.
-fn pool_row(out: &mut String, accounts: &[&AccountReport], name_width: usize, now: Timestamp) {
-    let working: Vec<&&AccountReport> = accounts
-        .iter()
-        .filter(|a| !a.disabled && a.auth_error.is_none())
-        .collect();
-    if working.len() < 2 {
+/// The pool as the agents see it, when it has more than one account.
+fn pool_row(out: &mut String, pool: Option<&PoolReport>, name_width: usize, now: Timestamp) {
+    let Some(pool) = pool.filter(|p| p.accounts > 1) else {
         return;
-    }
-    let windows = limits::pooled(
-        working
-            .iter()
-            .map(|a| (&a.state.limits, a.state.is_blocked(now))),
-        now,
-    );
-    let window = |span: &str| {
-        windows
-            .iter()
-            .find(|w| w.span == span)
-            .map(|w| Window::new(span, w.used, w.resets_at))
     };
+    let window = |span: &str| pool.windows.iter().find(|w| w.span == span);
     let week = window("7d").or_else(|| window("30d"));
     let _ = writeln!(
         out,
         "   {}  {}  {}  {}  {}",
         ui::pad(&ui::bold("pool"), name_width + 1),
-        ui::pad(&ui::dim(format!("{} accts", working.len())), PLAN),
-        window_cell(window("5h").as_ref(), now),
-        window_cell(week.as_ref(), now),
+        ui::pad(&ui::dim(format!("{} accts", pool.accounts)), PLAN),
+        window_cell(window("5h"), now),
+        window_cell(week, now),
         ui::dim("what the agents see"),
     );
 }
@@ -393,6 +423,7 @@ mod tests {
             &HashMap::new(),
             Strategy::ResetFirst,
             true,
+            now,
         );
         let text = render(&report, now);
         let pool = text.lines().find(|l| l.contains("pool")).unwrap();
@@ -441,6 +472,7 @@ mod tests {
             &HashMap::new(),
             Strategy::ResetFirst,
             true,
+            ts(1000),
         );
         let text = render(&report, ts(1000));
         assert!(text.contains("CLAUDE"), "{text}");
@@ -461,6 +493,7 @@ mod tests {
             &HashMap::new(),
             Strategy::FillFirst,
             false,
+            ts(0),
         );
         assert!(render(&report, ts(0)).contains("slopmax login claude"));
     }

@@ -162,7 +162,17 @@ total                 508    398.3k    229.7k      114.4M         2.9M    $39.98
 
 `slopmax dashboard` opens a page that shows every account's windows and reset countdowns, usage and cost by day, model, or account, and a live feed of answered requests. It can enable, disable, pin, reprioritize, and redeem. The page is one file built into the binary and loads nothing from elsewhere. It takes the slopmax key from its address's `#fragment`, which browsers never send to a server. On a remote machine, forward the port first (`ssh -L 7567:127.0.0.1:7567 host`).
 
-The same data is available as JSON under `/slopmax/` (`status`, `usage`, `events`, `accounts/<id>/<action>`), with the slopmax key.
+The same data is available as JSON under `/slopmax/` (`status`, `usage`, `events`, `accounts/<id>/<action>`), with the slopmax key. `status` includes each provider's pool, the usage the agents see.
+
+### Tools built for CLIProxyAPI
+
+Apps that show a CLIProxyAPI hub's quotas can show slopmax's. In T3 Code, add a CLIProxyAPI hub to the provider settings, with `http://127.0.0.1:7567` as the hub URL and slopmax's `api_key` as the management key. T3 then lists every pooled account's windows and ChatGPT reset credits, and can redeem them.
+
+slopmax answers the three management calls these tools make: `auth-files`, `api-call`, and `reset-quota`. CLIProxyAPI's `api-call` sends any request to any address with an account's token filled in. slopmax's answers only the usage and reset-credit calls, so the key never puts a token in a client's hands:
+
+- Usage comes from the readings slopmax already keeps, without calling the providers.
+- Reset credits are listed by ChatGPT, and each list is reused for five minutes.
+- `reset-quota` lifts slopmax's blocks on the account and reads its usage again.
 
 ## Notifications
 

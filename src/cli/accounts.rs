@@ -74,6 +74,7 @@ async fn offline_report(config: &Config, store: &Store, refresh: bool) -> Result
         &HashMap::new(),
         config.strategy,
         false,
+        Timestamp::now(),
     ))
 }
 

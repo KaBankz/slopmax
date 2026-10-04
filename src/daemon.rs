@@ -200,40 +200,37 @@ pub async fn poll_all(app: &Arc<App>, force: bool) {
     let mut polls = tokio::task::JoinSet::new();
     for account in due {
         let app = Arc::clone(app);
-        polls.spawn(async move {
-            let result = usage::poll(
-                &app.auth_http,
-                &app.store,
-                &account,
-                app.config.refresh_tokens,
-            )
-            .await;
-            (account, result)
-        });
+        polls.spawn(async move { poll_one(&app, &account).await });
     }
-    while let Some(joined) = polls.join_next().await {
-        let Ok((account, result)) = joined else {
-            continue;
-        };
-        match result {
-            Ok((fresh, reading)) => {
-                app.pool
-                    .observe(&account.id, reading.limits, Timestamp::now());
-                if reading.plan.is_some() && reading.plan != fresh.plan {
-                    let (store, id, plan) = (app.store.clone(), fresh.id.clone(), reading.plan);
-                    let saved =
-                        tokio::task::spawn_blocking(move || store.update(&id, |a| a.plan = plan))
-                            .await;
-                    if let Ok(Err(e)) = saved {
-                        log::warn!("{}: saving plan: {e:#}", fresh.id);
-                    }
+    while polls.join_next().await.is_some() {}
+}
+
+/// Polls one account's usage and records the reading, or the failure.
+pub async fn poll_one(app: &App, account: &Account) {
+    let result = usage::poll(
+        &app.auth_http,
+        &app.store,
+        account,
+        app.config.refresh_tokens,
+    )
+    .await;
+    match result {
+        Ok((fresh, reading)) => {
+            app.pool
+                .observe(&account.id, reading.limits, Timestamp::now());
+            if reading.plan.is_some() && reading.plan != fresh.plan {
+                let (store, id, plan) = (app.store.clone(), fresh.id.clone(), reading.plan);
+                let saved =
+                    tokio::task::spawn_blocking(move || store.update(&id, |a| a.plan = plan)).await;
+                if let Ok(Err(e)) = saved {
+                    log::warn!("{}: saving plan: {e:#}", fresh.id);
                 }
             }
-            Err(e) => {
-                log::warn!("{}: usage poll failed: {e:#}", account.id);
-                app.pool
-                    .record_error(&account.id, &format!("usage poll: {e:#}"));
-            }
+        }
+        Err(e) => {
+            log::warn!("{}: usage poll failed: {e:#}", account.id);
+            app.pool
+                .record_error(&account.id, &format!("usage poll: {e:#}"));
         }
     }
 }

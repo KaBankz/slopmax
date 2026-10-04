@@ -446,6 +446,22 @@ impl Pool {
         inner.dirty = true;
     }
 
+    /// Lifts the account's blocks and throttling, so the next request tries
+    /// it again; a refusal sets it aside anew if its quota is still spent.
+    /// Returns the models whose blocks were lifted.
+    pub fn clear_blocks(&self, id: &str) -> Vec<String> {
+        let mut inner = self.lock();
+        let state = inner.states.entry(id.to_owned()).or_default();
+        state.blocked_until = None;
+        state.throttled_until = None;
+        let models = std::mem::take(&mut state.model_blocks)
+            .into_iter()
+            .map(|b| b.model)
+            .collect();
+        inner.dirty = true;
+        models
+    }
+
     pub fn add_usage(&self, id: &str, usage: &Usage) {
         let mut inner = self.lock();
         inner

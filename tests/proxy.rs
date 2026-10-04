@@ -92,6 +92,16 @@ async fn mock(log: Log, mut request: Request) -> Response {
         (Method::POST, "/v1/messages") => mock_claude(headers),
         (Method::POST, "/codex/responses") => mock_codex(&log, headers),
         (Method::GET, "/wham/rate-limit-reset-credits") => mock_credits(headers),
+        (Method::GET, "/wham/usage") => {
+            let usage = json!({ "plan_type": "pro", "rate_limit": { "primary_window": {
+                "used_percent": 5, "limit_window_seconds": 18000, "reset_at": reset_in(3600)
+            } } });
+            keyed(
+                headers,
+                "Bearer tok-ok",
+                reply(StatusCode::OK, &[], usage.to_string()),
+            )
+        }
         (Method::POST, "/wham/rate-limit-reset-credits/consume") => {
             reply(StatusCode::OK, &[], json!({ "code": "reset" }).to_string())
         }
@@ -1683,4 +1693,220 @@ async fn codex_sockets_report_the_pool_too() {
     assert_eq!(event["rate_limits"]["primary"]["used_percent"], 16.5);
     assert_eq!(event["rate_limits"]["primary"]["window_minutes"], 300);
     assert_eq!(event["rate_limits"]["limit_reached"], false);
+}
+
+/// One `api-call` as T3 Code sends it to a CLIProxyAPI hub: the status the
+/// provider answered with, and its body.
+async fn api_call(
+    h: &Harness,
+    auth_index: &str,
+    method: &str,
+    url: &str,
+    data: Option<Value>,
+) -> (u64, Value) {
+    let mut call = json!({
+        "auth_index": auth_index,
+        "method": method,
+        "url": url,
+        "header": { "Authorization": "Bearer $TOKEN$" },
+    });
+    if let Some(data) = data {
+        call["data"] = json!(data.to_string());
+    }
+    let response = client()
+        .post(format!("{}/v0/management/api-call", h.proxy))
+        .header("authorization", format!("Bearer {KEY}"))
+        .json(&call)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let reply: Value = response.json().await.unwrap();
+    let body = serde_json::from_str(reply["body"].as_str().unwrap()).unwrap();
+    (reply["status_code"].as_u64().unwrap(), body)
+}
+
+#[tokio::test]
+async fn hub_clients_read_usage_and_redeem_credits_without_a_relay() {
+    const CLAUDE_USAGE: &str = "https://api.anthropic.com/api/oauth/usage";
+    const CODEX_USAGE: &str = "https://chatgpt.com/backend-api/wham/usage";
+    const CREDITS: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
+    const CONSUME: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
+
+    let h = harness_of(
+        |_| {
+            vec![
+                account(ProviderId::Claude, "claude0", "tok-ok", 1000),
+                account(ProviderId::Codex, "codex0", "tok-ok", 1001),
+            ]
+        },
+        |_| {},
+    )
+    .await;
+    let (claude, codex) = (h.ids[0].as_str(), h.ids[1].as_str());
+    let management = |path: &str| {
+        client()
+            .request(Method::POST, format!("{}/v0/management/{path}", h.proxy))
+            .header("authorization", format!("Bearer {KEY}"))
+    };
+
+    // The management key is slopmax's own, as a bearer token or in
+    // CLIProxyAPI's header.
+    let files = |name: &str, value: String| {
+        client()
+            .get(format!("{}/v0/management/auth-files", h.proxy))
+            .header(name, value)
+            .send()
+    };
+    let wrong = files("authorization", "Bearer wrong".into()).await.unwrap();
+    assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
+    let other = files("x-management-key", KEY.into()).await.unwrap();
+    assert_eq!(other.status(), StatusCode::OK);
+    let listed: Value = files("authorization", format!("Bearer {KEY}"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let file = |id: &str| {
+        listed["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["auth_index"] == id)
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(file(claude)["provider"], "claude");
+    assert_eq!(file(claude)["email"], "claude0@example.com");
+    assert_eq!(file(codex)["provider"], "codex");
+    assert_eq!(file(codex)["disabled"], false);
+    assert_eq!(file(codex)["id_token"]["chatgpt_account_id"], "acct-codex0");
+    // T3 rejects a null where it reads a string, so unknowns are left out.
+    assert!(file(codex)["id_token"].get("chatgpt_plan_type").is_none());
+
+    // Usage comes from slopmax's own readings, so there is none before one.
+    let (status, _) = api_call(&h, claude, "GET", CLAUDE_USAGE, None).await;
+    assert_eq!(status, 503);
+    let now = Timestamp::now();
+    let resets = now + SignedDuration::from_hours(2);
+    let window = |span: &str, model: Option<&str>, used| Window {
+        span: span.into(),
+        model: model.map(Into::into),
+        used,
+        resets_at: Some(resets),
+    };
+    let limits = Limits {
+        windows: vec![window("5h", None, 30.0), window("7d", Some("Fable"), 58.0)],
+        observed_at: Some(now),
+        reset_credits: None,
+    };
+    h.app.pool.observe(claude, limits, now);
+    let (status, usage) = api_call(&h, claude, "GET", CLAUDE_USAGE, None).await;
+    assert_eq!(status, 200);
+    assert_eq!(usage["five_hour"]["utilization"], 30.0);
+    assert_eq!(usage["five_hour"]["resets_at"], resets.to_string());
+    assert_eq!(usage["seven_day"], Value::Null);
+    assert_eq!(usage["limits"][0]["kind"], "weekly_scoped");
+    assert_eq!(usage["limits"][0]["percent"], 58.0);
+    assert_eq!(
+        usage["limits"][0]["scope"]["model"]["display_name"],
+        "Fable"
+    );
+
+    observe(&h, codex, "5h", 40.0);
+    let (status, usage) = api_call(&h, codex, "GET", CODEX_USAGE, None).await;
+    assert_eq!(status, 200);
+    let primary = &usage["rate_limit"]["primary_window"];
+    assert_eq!(primary["used_percent"], 40.0);
+    assert_eq!(primary["limit_window_seconds"], 18_000);
+    assert!(primary["reset_at"].is_i64());
+    assert_eq!(usage["rate_limit"]["secondary_window"], Value::Null);
+    assert!(paths(&h).is_empty(), "usage reads stay inside slopmax");
+
+    // Reset credits are listed by ChatGPT, then reused for a few minutes,
+    // since tools ask on every refresh.
+    let (status, list) = api_call(&h, codex, "GET", CREDITS, None).await;
+    assert_eq!(status, 200);
+    let credit = &list["credits"][0];
+    assert_eq!(credit["id"], "credit-later");
+    assert_eq!(credit["status"], "available");
+    assert_eq!(credit["reset_type"], "codex_rate_limits");
+    assert!(credit["expires_at"].is_string());
+    api_call(&h, codex, "GET", CREDITS, None).await;
+    assert_eq!(paths(&h), ["/wham/rate-limit-reset-credits"]);
+
+    let data = json!({ "redeem_request_id": "0b1c2d3e-0000-5000-8000-000000000000", "credit_id": "credit-later" });
+    let (status, consumed) = api_call(&h, codex, "POST", CONSUME, Some(data)).await;
+    assert_eq!(status, 200);
+    assert_eq!(consumed["code"], "reset");
+    let sent = h.log.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(sent.path, "/wham/rate-limit-reset-credits/consume");
+    let sent: Value = serde_json::from_slice(&sent.body).unwrap();
+    assert_eq!(sent["credit_id"], "credit-later");
+
+    // reset-quota lifts slopmax's blocks and reads the usage again.
+    let later = Timestamp::now() + SignedDuration::from_hours(1);
+    h.app.pool.block(codex, later, None, "spent");
+    let reply: Value = management("reset-quota")
+        .json(&json!({ "auth_index": codex }))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(reply["status"], "ok");
+    assert_eq!(reply["auth_index"], codex);
+    assert!(h.app.pool.state(codex).blocked_until.is_none());
+    eventually(|| {
+        let state = h.app.pool.state(codex);
+        state.limits.windows.iter().any(|w| w.used == 5.0)
+    })
+    .await;
+
+    // Nothing else goes out with an account's token.
+    for (index, url) in [
+        (codex, "https://example.com/collect"),
+        (codex, CLAUDE_USAGE),
+        (claude, CODEX_USAGE),
+        (claude, "https://api.anthropic.com/v1/messages"),
+    ] {
+        let call = json!({ "auth_index": index, "method": "GET", "url": url,
+                           "header": { "Authorization": "Bearer $TOKEN$" } });
+        let refused = management("api-call").json(&call).send().await.unwrap();
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN, "{url}");
+    }
+    let call = json!({ "auth_index": "codex-nope", "method": "GET", "url": CODEX_USAGE });
+    let unknown = management("api-call").json(&call).send().await.unwrap();
+    assert_eq!(unknown.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        paths(&h).iter().all(|p| p.starts_with("/wham/")),
+        "{:?}",
+        paths(&h)
+    );
+
+    // slopmax's own status carries the same pool view in one call.
+    let report: Value = client()
+        .get(format!("{}/slopmax/status", h.proxy))
+        .header("authorization", format!("Bearer {KEY}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let pool = |provider: &str| {
+        report["pools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["provider"] == provider)
+            .cloned()
+            .unwrap()
+    };
+    assert_eq!(pool("claude")["accounts"], 1);
+    assert_eq!(pool("claude")["windows"][0]["span"], "5h");
+    assert_eq!(pool("claude")["windows"][0]["used"], 30.0);
+    assert_eq!(pool("codex")["accounts"], 1);
 }
