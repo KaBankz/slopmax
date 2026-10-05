@@ -15,7 +15,7 @@ use slopmax_core::config::Config;
 use slopmax_core::human;
 use slopmax_core::limits::Window;
 use slopmax_core::provider::ProviderId;
-use slopmax_core::report::{self, AccountReport, PoolReport, Report};
+use slopmax_core::report::{self, AccountReport, Condition, PoolReport, Report};
 use slopmax_core::time::Timestamp;
 
 pub(super) async fn run(config: &Config, store: &Store, args: StatusArgs) -> Result<()> {
@@ -90,15 +90,6 @@ fn render(report: &Report, now: Timestamp) -> String {
         );
         for &account in &accounts {
             index += 1;
-            let shared: Vec<&Window> = account
-                .state
-                .limits
-                .windows
-                .iter()
-                .filter(|w| w.model.is_none())
-                .collect();
-            let span = |name: &str| shared.iter().find(|w| w.span == name).copied();
-            let week = span("7d").or_else(|| span("30d"));
             let name: String = account.name.chars().take(name_width).collect();
             let _ = writeln!(
                 out,
@@ -106,17 +97,11 @@ fn render(report: &Report, now: Timestamp) -> String {
                 ui::dim(format!("{index:>2}")),
                 ui::pad(&name, name_width + 1),
                 ui::pad(account.plan.as_deref().unwrap_or("—"), PLAN),
-                window_cell(span("5h"), now),
-                window_cell(week, now),
+                window_cell(account.window("5h"), now),
+                window_cell(account.long_window(), now),
                 status_cell(account, now),
             );
-            for scoped in account
-                .state
-                .limits
-                .windows
-                .iter()
-                .filter(|w| w.model.is_some())
-            {
+            for scoped in account.scoped_windows() {
                 // Under the matching column: the row prefix is the index and
                 // name, then the plan, then each usage cell.
                 let five_hour_column = name_width + 4 + 2 + PLAN + 2;
@@ -196,15 +181,13 @@ fn pool_row(out: &mut String, pool: Option<&PoolReport>, name_width: usize, now:
     let Some(pool) = pool.filter(|p| p.accounts > 1) else {
         return;
     };
-    let window = |span: &str| pool.windows.iter().find(|w| w.span == span);
-    let week = window("7d").or_else(|| window("30d"));
     let _ = writeln!(
         out,
         "   {}  {}  {}  {}  {}",
         ui::pad(&ui::bold("pool"), name_width + 1),
         ui::pad(&ui::dim(format!("{} accts", pool.accounts)), PLAN),
-        window_cell(window("5h"), now),
-        window_cell(week, now),
+        window_cell(pool.window("5h"), now),
+        window_cell(pool.long_window(), now),
         ui::dim("what the agents see"),
     );
 }
@@ -230,27 +213,19 @@ fn window_cell(window: Option<&Window>, now: Timestamp) -> String {
 
 fn status_cell(account: &AccountReport, now: Timestamp) -> String {
     let state = &account.state;
-    let mut parts = Vec::new();
-    if let Some(error) = &account.auth_error {
-        parts.push(ui::red(format!("re-login needed ({error})")));
-    } else if account.disabled {
-        parts.push(ui::dim("disabled"));
-    } else if let Some(until) = state.limited_until(now) {
-        parts.push(ui::yellow(format!(
-            "limited · back in {}",
-            human::until(until, now)
-        )));
-    } else if state.throttled_until.is_some_and(|at| at > now) {
-        parts.push(ui::yellow("throttled"));
-    } else if account.sessions > 0 {
-        let s = if account.sessions == 1 { "" } else { "s" };
-        parts.push(ui::green(format!(
-            "● active · {} session{s}",
-            account.sessions
-        )));
-    } else {
-        parts.push(ui::green("ready"));
-    }
+    let mut parts = vec![match account.condition(now) {
+        Condition::SignInNeeded(error) => ui::red(format!("re-login needed ({error})")),
+        Condition::Disabled => ui::dim("disabled"),
+        Condition::Limited(until) => {
+            ui::yellow(format!("limited · back in {}", human::until(until, now)))
+        }
+        Condition::Throttled => ui::yellow("throttled"),
+        Condition::Active(sessions) => {
+            let s = if sessions == 1 { "" } else { "s" };
+            ui::green(format!("● active · {sessions} session{s}"))
+        }
+        Condition::Ready => ui::green("ready"),
+    }];
     if account.pinned {
         parts.push(ui::cyan("pinned"));
     }
@@ -273,11 +248,7 @@ fn status_cell(account: &AccountReport, now: Timestamp) -> String {
             human::compact(state.usage.total_tokens())
         )));
     }
-    if let Some(error) = state
-        .last_error
-        .as_ref()
-        .filter(|_| account.auth_error.is_none() && state.limited_until(now).is_none())
-    {
+    if let Some(error) = account.last_error(now) {
         parts.push(ui::dim(format!("last error: {error}")));
     }
     parts.join(ui::dim(" · ").as_str())

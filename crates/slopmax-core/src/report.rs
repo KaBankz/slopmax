@@ -66,6 +66,101 @@ pub struct AccountReport {
     pub state: AccountState,
 }
 
+/// Where an account stands, most pressing first: what the status column of
+/// `slopmax status` and the app shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Condition {
+    /// Its sign-in stopped working; only signing in again fixes it.
+    SignInNeeded(String),
+    Disabled,
+    /// Out of quota until then.
+    Limited(Timestamp),
+    /// Briefly held back by the provider.
+    Throttled,
+    /// Serving this many sessions.
+    Active(usize),
+    Ready,
+}
+
+/// How alarming a window's use is, so every front end colors it alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Level {
+    Ok,
+    /// 70% or more.
+    Warn,
+    /// 90% or more.
+    Bad,
+}
+
+impl Level {
+    pub fn of(used: f64) -> Self {
+        match used {
+            u if u >= 90.0 => Self::Bad,
+            u if u >= 70.0 => Self::Warn,
+            _ => Self::Ok,
+        }
+    }
+}
+
+impl AccountReport {
+    pub fn condition(&self, now: Timestamp) -> Condition {
+        let state = &self.state;
+        if let Some(error) = &self.auth_error {
+            Condition::SignInNeeded(error.clone())
+        } else if self.disabled {
+            Condition::Disabled
+        } else if let Some(until) = state.limited_until(now) {
+            Condition::Limited(until)
+        } else if state.throttled_until.is_some_and(|at| at > now) {
+            Condition::Throttled
+        } else if self.sessions > 0 {
+            Condition::Active(self.sessions)
+        } else {
+            Condition::Ready
+        }
+    }
+
+    /// The window covering every request over `span` (`5h`, `7d`, `30d`).
+    pub fn window(&self, span: &str) -> Option<&Window> {
+        shared(&self.state.limits.windows, span)
+    }
+
+    /// The longer window: the week, or for plans without one, the month.
+    pub fn long_window(&self) -> Option<&Window> {
+        self.window("7d").or_else(|| self.window("30d"))
+    }
+
+    /// Windows that cover one model only.
+    pub fn scoped_windows(&self) -> impl Iterator<Item = &Window> {
+        self.state
+            .limits
+            .windows
+            .iter()
+            .filter(|w| w.model.is_some())
+    }
+
+    /// The last error worth showing beside the condition, which already
+    /// says when the sign-in failed or the account is limited.
+    pub fn last_error(&self, now: Timestamp) -> Option<&str> {
+        let shown = self.auth_error.is_some() || self.state.limited_until(now).is_some();
+        self.state.last_error.as_deref().filter(|_| !shown)
+    }
+}
+
+impl PoolReport {
+    pub fn window(&self, span: &str) -> Option<&Window> {
+        shared(&self.windows, span)
+    }
+
+    pub fn long_window(&self) -> Option<&Window> {
+        self.window("7d").or_else(|| self.window("30d"))
+    }
+}
+
+fn shared<'a>(windows: &'a [Window], span: &str) -> Option<&'a Window> {
+    windows.iter().find(|w| w.model.is_none() && w.span == span)
+}
+
 pub fn build(
     accounts: Vec<Account>,
     state_of: impl Fn(&str) -> AccountState,
@@ -178,4 +273,51 @@ pub async fn offline(config: &Config, store: &Store, refresh: bool) -> Result<Re
         false,
         Timestamp::now(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::account::Tokens;
+
+    fn ts(secs: i64) -> Timestamp {
+        Timestamp::from_second(secs).unwrap()
+    }
+
+    #[test]
+    fn conditions_put_the_most_pressing_first() {
+        let now = ts(1_000);
+        let mut account = Account::new(ProviderId::Codex, Tokens::default());
+        account.disabled = true;
+        account.auth_error = Some("refresh token rejected".into());
+        let report = build(
+            vec![account],
+            |_| AccountState {
+                throttled_until: Some(ts(1_030)),
+                ..AccountState::default()
+            },
+            &Pins::new(),
+            &HashMap::new(),
+            Strategy::FillFirst,
+            false,
+            now,
+        );
+        let mut account = report.accounts[0].clone();
+        let condition = |a: &AccountReport| a.condition(now);
+        assert!(matches!(condition(&account), Condition::SignInNeeded(_)));
+        account.auth_error = None;
+        assert_eq!(condition(&account), Condition::Disabled);
+        account.disabled = false;
+        assert_eq!(condition(&account), Condition::Throttled);
+        account.state.throttled_until = None;
+        account.sessions = 2;
+        assert_eq!(condition(&account), Condition::Active(2));
+    }
+
+    #[test]
+    fn levels_turn_at_70_and_90_percent() {
+        assert_eq!(Level::of(69.9), Level::Ok);
+        assert_eq!(Level::of(70.0), Level::Warn);
+        assert_eq!(Level::of(90.0), Level::Bad);
+    }
 }

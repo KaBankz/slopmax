@@ -18,7 +18,6 @@ use slopmax_core::agent::{self, Agent};
 use slopmax_core::auth::{self, LoginOptions};
 use slopmax_core::config::Config;
 use slopmax_core::net::Origins;
-use slopmax_core::net::client::Proxy;
 use slopmax_core::provider::ProviderId;
 use slopmax_core::time::Timestamp;
 use slopmax_core::wire::Dialect;
@@ -408,10 +407,7 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
     };
     let m = &matches;
     let config = Config::load()?;
-    if let Some(proxy) = &config.proxy {
-        let proxy = Proxy::parse(proxy).map_err(|e| anyhow::anyhow!("config `proxy`: {e}"))?;
-        Proxy::set_default(proxy);
-    }
+    config.apply()?;
     let store = Store::open();
     // A first run at a terminal starts the guided setup instead.
     if bare && init::wanted(&store) {

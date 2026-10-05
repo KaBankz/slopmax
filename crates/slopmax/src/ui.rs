@@ -5,6 +5,8 @@ use std::fmt::Display;
 use std::io::IsTerminal;
 use std::sync::OnceLock;
 
+use slopmax_core::report::Level;
+
 fn color_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED
@@ -45,10 +47,10 @@ pub fn cyan(text: impl Display) -> String {
 
 /// Colors `text` by how much of a quota is used.
 pub fn by_level(percent: f64, text: impl Display) -> String {
-    match percent {
-        p if p >= 90.0 => red(text),
-        p if p >= 70.0 => yellow(text),
-        _ => green(text),
+    match Level::of(percent) {
+        Level::Bad => red(text),
+        Level::Warn => yellow(text),
+        Level::Ok => green(text),
     }
 }
 

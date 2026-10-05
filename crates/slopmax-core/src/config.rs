@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use toml_edit::DocumentMut;
 
+use crate::net::client::Proxy;
 use crate::pricing::Custom;
 use crate::{fsx, ids, notify, paths};
 
@@ -245,6 +246,16 @@ impl Config {
             ip.to_string()
         };
         format!("http://{host}:{}", self.listen.port())
+    }
+
+    /// Applies the settings that hold for the whole process: the proxy for
+    /// requests to providers.
+    pub fn apply(&self) -> Result<()> {
+        if let Some(proxy) = &self.proxy {
+            let proxy = Proxy::parse(proxy).map_err(|e| anyhow::anyhow!("config `proxy`: {e}"))?;
+            Proxy::set_default(proxy);
+        }
+        Ok(())
     }
 
     /// The dashboard's address. The key travels in the fragment, which
