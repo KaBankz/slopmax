@@ -43,3 +43,7 @@ run = "scripts/bench.sh"
 [tasks.install]
 description = "Install slopmax into ~/.cargo/bin"
 run = "cargo install --path crates/slopmax --locked"
+
+[tasks.demo]
+description = "Run a throwaway slopmax with fake accounts, for working on the app or the dashboard"
+run = "scripts/demo.sh"
