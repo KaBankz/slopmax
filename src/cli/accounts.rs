@@ -1,82 +1,20 @@
-//! Account commands: status, login, import, and managing accounts.
-
-use std::collections::HashMap;
-use std::io::Write as _;
-use std::time::Duration;
+//! Account commands: connecting, importing, and managing accounts. The
+//! changes themselves are shared with the app and the dashboard.
 
 use anyhow::{Result, bail};
 
-use super::background::Daemon;
-use super::{StatusArgs, term};
-use crate::account::Store;
+use super::term;
+use crate::account::{self, Store};
 use crate::auth::{self, LoginOptions};
+use crate::background::Daemon;
 use crate::config::Config;
 use crate::import::{self, Source};
 use crate::net::Origins;
-use crate::pool::{Pins, Pool, State};
+use crate::paths::Home;
 use crate::provider::credits::Outcome;
 use crate::provider::{Billing, Credential, ProviderId};
-use crate::report::{self, Report};
-use crate::time::{SignedDuration, Timestamp};
-use crate::{fsx, human, paths, ui, usage};
-
-pub(super) async fn status(config: &Config, store: &Store, args: StatusArgs) -> Result<()> {
-    let daemon = Daemon::new(config);
-    let mut refresh = args.refresh;
-    loop {
-        let report = match daemon.report(refresh).await {
-            Some(report) => report,
-            None => offline_report(config, store, refresh).await?,
-        };
-        if args.json {
-            println!("{}", serde_json::to_string_pretty(&report)?);
-            return Ok(());
-        }
-        let text = report::render(&report, Timestamp::now());
-        if args.watch {
-            print!("\x1b[2J\x1b[H{text}");
-            std::io::stdout().flush()?;
-        } else {
-            print!("{text}");
-            return Ok(());
-        }
-        refresh = false;
-        tokio::time::sleep(Duration::from_secs(5)).await;
-    }
-}
-
-/// Status from disk when no proxy is running, optionally polling the
-/// providers directly.
-async fn offline_report(config: &Config, store: &Store, refresh: bool) -> Result<Report> {
-    let state: State = fsx::read_json(&paths::state_file())?.unwrap_or_default();
-    let pins: Pins = fsx::read_json(&paths::pins_file())?.unwrap_or_default();
-    let pool = Pool::new(config.strategy, SignedDuration::from_hours(1), state);
-    pool.sync(store.list()?, pins.clone());
-    if refresh {
-        let http = auth::http_client(Origins::default());
-        let polled = pool
-            .accounts()
-            .into_iter()
-            .filter(|a| a.auth_error.is_none() && a.provider.spec().is_subscription());
-        for account in polled {
-            match usage::poll(&http, store, &account, config.refresh_tokens).await {
-                Ok((_, reading)) => pool.observe(&account.id, reading.limits, Timestamp::now()),
-                Err(e) => eprintln!("{} {}: {e:#}", ui::yellow("warning:"), account.name()),
-            }
-        }
-        let (state, _) = pool.snapshot(Timestamp::now());
-        fsx::write_json(&paths::state_file(), &state)?;
-    }
-    Ok(report::build(
-        store.list()?,
-        |id| pool.state(id),
-        &pins,
-        &HashMap::new(),
-        config.strategy,
-        false,
-        Timestamp::now(),
-    ))
-}
+use crate::time::Timestamp;
+use crate::{human, ui};
 
 pub(super) async fn login(
     store: &Store,
@@ -149,13 +87,9 @@ pub(super) async fn import(store: &Store, source: Source, own: bool) -> Result<(
         return Ok(());
     }
     let (mut imported, mut linked) = (0, 0);
-    for item in found {
-        match item.account {
-            Ok(mut account) => {
-                if own {
-                    account.link = None;
-                }
-                let (account, created) = store.upsert(account)?;
+    for saved in import::save(store, found, own) {
+        match saved.account {
+            Ok((account, created)) => {
                 imported += 1;
                 linked += usize::from(account.link.is_some());
                 println!(
@@ -167,10 +101,10 @@ pub(super) async fn import(store: &Store, source: Source, own: bool) -> Result<(
                     },
                     account.provider,
                     ui::bold(account.name()),
-                    ui::dim(format!("from {}", item.origin))
+                    ui::dim(format!("from {}", saved.origin))
                 );
             }
-            Err(e) => println!("  {} {}: {e:#}", ui::dim("skipped"), item.origin),
+            Err(e) => println!("  {} {}: {e:#}", ui::dim("skipped"), saved.origin),
         }
     }
     if linked > 0 {
@@ -227,17 +161,14 @@ pub(super) fn own(store: &Store, query: &str) -> Result<()> {
 }
 
 pub(super) fn use_account(store: &Store, query: &str) -> Result<()> {
-    let path = paths::pins_file();
-    let mut pins: Pins = fsx::read_json(&path)?.unwrap_or_default();
+    let home = Home::current();
     if query == "auto" {
-        pins.clear();
-        fsx::write_json(&path, &pins)?;
+        account::unpin_all(&home)?;
         println!("slopmax will choose accounts automatically.");
         return Ok(());
     }
     let account = store.find(query)?;
-    pins.insert(account.provider, account.id.clone());
-    fsx::write_json(&path, &pins)?;
+    account::pin(&home, &account)?;
     println!(
         "New {} sessions will use {} while it has quota.",
         account.provider,
@@ -256,13 +187,7 @@ pub(super) fn set_disabled(store: &Store, query: &str, disabled: bool) -> Result
 
 pub(super) fn remove(store: &Store, query: &str) -> Result<()> {
     let account = store.find(query)?;
-    store.remove(&account.id)?;
-    let path = paths::pins_file();
-    let mut pins: Pins = fsx::read_json(&path)?.unwrap_or_default();
-    if pins.get(&account.provider) == Some(&account.id) {
-        pins.remove(&account.provider);
-        fsx::write_json(&path, &pins)?;
-    }
+    account::forget(store, &Home::current(), &account)?;
     println!("Removed {}", ui::bold(account.name()));
     Ok(())
 }

@@ -109,6 +109,28 @@ pub trait Agent: Send + Sync {
     fn import<'a>(&'a self, http: &'a Client) -> BoxFuture<'a, Option<Found>>;
 }
 
+/// Where an agent's own config sends it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Wiring {
+    /// Through this slopmax.
+    Slopmax,
+    /// Somewhere else: a base URL or a provider's name.
+    Elsewhere(String),
+    /// Straight to its provider, as installed.
+    Direct,
+}
+
+/// Where `agent`'s own config sends it, judged against this `config`.
+pub fn wiring(agent: &dyn Agent, config: &Config) -> Wiring {
+    match agent.wired_to() {
+        Some(target) if target.contains(&config.base_url()) || target.starts_with("slopmax") => {
+            Wiring::Slopmax
+        }
+        Some(target) => Wiring::Elsewhere(target),
+        None => Wiring::Direct,
+    }
+}
+
 /// Launches the agent through the proxy and returns its exit status.
 pub fn run(agent: &dyn Agent, config: &Config, args: &[String]) -> Result<i32> {
     let mut command = agent.command(config, args);

@@ -12,6 +12,8 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::log;
+use crate::paths::Home;
+use crate::pool::Pins;
 use crate::provider::ProviderId;
 use crate::time::{SignedDuration, Timestamp};
 use crate::wire::Dialect;
@@ -315,6 +317,32 @@ impl Store {
             }
         }
     }
+}
+
+/// Makes `account` the first choice for its provider's new sessions, for as
+/// long as it has quota.
+pub fn pin(home: &Home, account: &Account) -> Result<()> {
+    let path = home.pins();
+    let mut pins: Pins = fsx::read_json(&path)?.unwrap_or_default();
+    pins.insert(account.provider, account.id.clone());
+    Ok(fsx::write_json(&path, &pins)?)
+}
+
+/// Lets slopmax choose every provider's accounts again.
+pub fn unpin_all(home: &Home) -> Result<()> {
+    Ok(fsx::write_json(&home.pins(), &Pins::new())?)
+}
+
+/// Forgets `account`, and its pin with it.
+pub fn forget(store: &Store, home: &Home, account: &Account) -> Result<()> {
+    store.remove(&account.id)?;
+    let path = home.pins();
+    let mut pins: Pins = fsx::read_json(&path)?.unwrap_or_default();
+    if pins.get(&account.provider) == Some(&account.id) {
+        pins.remove(&account.provider);
+        fsx::write_json(&path, &pins)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

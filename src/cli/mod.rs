@@ -5,12 +5,13 @@ mod args;
 mod background;
 mod doctor;
 mod init;
+mod status;
 mod term;
 mod usage;
 
 use anyhow::{Context, Result, bail};
 
-use self::accounts::{import, login, own, redeem, remove, set_disabled, status, use_account};
+use self::accounts::{import, login, own, redeem, remove, set_disabled, use_account};
 use self::args::{App, Arg, Choice, Command, Kind, Parsed};
 use self::background::{ensure_running, service, start, stop};
 use crate::account::{Endpoint, Store};
@@ -436,7 +437,7 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
             if args.watch && args.json {
                 bail!("--json cannot be combined with --watch");
             }
-            status(&config, &store, args).await?;
+            status::run(&config, &store, args).await?;
         }
         "login" => {
             let provider: ProviderId = m.get("provider")?;
@@ -526,12 +527,7 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
         }
         "dashboard" => {
             ensure_running(&config).await?;
-            // The key travels in the fragment, which browsers do not send.
-            let url = format!(
-                "{}/slopmax/dashboard#key={}",
-                config.base_url(),
-                config.api_key
-            );
+            let url = config.dashboard_url();
             if !m.flag("print") && auth::callback::open_browser(&url) {
                 println!("Opened the dashboard in your browser.");
             } else {

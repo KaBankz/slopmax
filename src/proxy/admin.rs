@@ -1,5 +1,7 @@
 //! slopmax's own API under `/slopmax/`: status, usage, a live feed of
 //! answered requests, account actions, and the dashboard that uses them.
+//! Account actions call the same functions as the CLI, so both behave
+//! alike.
 //!
 //! Everything but the dashboard page itself needs the slopmax key. The page
 //! carries no data; it reads the key from its URL fragment (`#key=…`),
@@ -21,10 +23,9 @@ use tokio::sync::{broadcast, mpsc};
 use super::{App, authorized, error, json_reply};
 use crate::net::body;
 use crate::net::server::{Request, Response};
-use crate::pool::Pins;
 use crate::provider::credits::Outcome;
 use crate::time::Timestamp;
-use crate::{daemon, fsx, log, summary};
+use crate::{account as accounts, daemon, log, summary};
 
 const DASHBOARD: &str = include_str!("dashboard.html");
 /// How often an idle feed says it is still there.
@@ -53,6 +54,8 @@ pub(super) async fn handle(app: Arc<App>, request: Request) -> Response {
             daemon::poll_all(&app, true).await;
             json_reply(StatusCode::OK, &app.report())
         }
+        // Picks up changes on disk now, then reports.
+        (&Method::POST, ["sync"]) => reload(&app, Ok(())),
         (&Method::POST, ["shutdown"]) => {
             app.shutdown.notify_one();
             json_reply(StatusCode::OK, &json!({ "status": "stopping" }))
@@ -170,28 +173,26 @@ impl HttpBody for Feed {
 }
 
 fn unpin(app: &App) -> Response {
-    let saved = fsx::write_json(&app.home.pins(), &Pins::new());
-    reload(app, saved.map_err(Into::into))
+    reload(app, accounts::unpin_all(&app.home))
 }
 
 /// `POST /slopmax/accounts/<id>/<action>`: enable, disable, use, redeem,
-/// or priority (`?value=N`).
+/// remove, priority (`?value=N`), or label (`?value=name`, empty to clear).
 async fn account(app: &App, id: &str, action: &str, query: &str) -> Response {
     let Some(account) = app.pool.accounts().into_iter().find(|a| a.id == id) else {
         return error(None, StatusCode::NOT_FOUND, "no such account");
     };
     let id = account.id.clone();
+    let value = crate::net::form::decode(query)
+        .into_iter()
+        .find_map(|(k, v)| (k == "value").then_some(v));
     let changed = match action {
         "enable" | "disable" => {
             let disabled = action == "disable";
             app.store.update(&id, |a| a.disabled = disabled).map(|_| ())
         }
         "priority" => {
-            let value = crate::net::form::decode(query)
-                .into_iter()
-                .find(|(k, _)| k == "value")
-                .and_then(|(_, v)| v.parse::<i32>().ok());
-            let Some(priority) = value else {
+            let Some(priority) = value.and_then(|v| v.parse::<i32>().ok()) else {
                 return error(
                     None,
                     StatusCode::BAD_REQUEST,
@@ -200,16 +201,12 @@ async fn account(app: &App, id: &str, action: &str, query: &str) -> Response {
             };
             app.store.update(&id, |a| a.priority = priority).map(|_| ())
         }
-        "use" => {
-            let path = app.home.pins();
-            fsx::read_json::<Pins>(&path)
-                .and_then(|pins| {
-                    let mut pins = pins.unwrap_or_default();
-                    pins.insert(account.provider, id.clone());
-                    fsx::write_json(&path, &pins)
-                })
-                .map_err(Into::into)
+        "label" => {
+            let label = value.filter(|v| !v.trim().is_empty());
+            app.store.update(&id, |a| a.label = label).map(|_| ())
         }
+        "use" => accounts::pin(&app.home, &account),
+        "remove" => accounts::forget(&app.store, &app.home, &account),
         "redeem" => return redeem(app, &account).await,
         _ => return error(None, StatusCode::NOT_FOUND, "no such account action"),
     };

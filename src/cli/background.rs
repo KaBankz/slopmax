@@ -1,84 +1,21 @@
-//! The proxy in the background: talking to it, starting and stopping it,
-//! and the login service.
+//! `start`, `stop`, `service`, and `logs`: the background proxy from the
+//! terminal. The work itself is in [`crate::background`].
 
-use std::process::Stdio;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
+use crate::background::{self, Daemon};
 use crate::config::Config;
-use crate::report::Report;
 use crate::service::Manager;
-use crate::{fsx, net, paths, ui};
-
-/// Talks to a running proxy.
-pub(super) struct Daemon {
-    base: String,
-    key: String,
-    http: net::Client,
-}
-
-impl Daemon {
-    pub(super) fn new(config: &Config) -> Self {
-        let http = net::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .connect_timeout(Duration::from_secs(1))
-            .plain_http()
-            .build();
-        Self {
-            base: config.base_url(),
-            key: config.api_key.clone(),
-            http,
-        }
-    }
-
-    pub(super) async fn is_running(&self) -> bool {
-        self.version().await.is_some()
-    }
-
-    /// The running proxy's version, if one answers on the configured port.
-    pub(super) async fn version(&self) -> Option<String> {
-        let url = format!("{}/healthz", self.base);
-        let body: serde_json::Value = self.http.get(url).send().await.ok()?.json().await.ok()?;
-        if body["service"] != "slopmax" {
-            return None;
-        }
-        body["version"].as_str().map(str::to_owned)
-    }
-
-    pub(super) async fn report(&self, refresh: bool) -> Option<Report> {
-        let url = format!(
-            "{}/slopmax/{}",
-            self.base,
-            if refresh { "refresh" } else { "status" }
-        );
-        let request = if refresh {
-            self.http.post(url)
-        } else {
-            self.http.get(url)
-        };
-        let response = request.bearer_auth(&self.key).send().await.ok()?;
-        response.error_for_status().ok()?.json().await.ok()
-    }
-
-    pub(super) async fn shutdown(&self) -> Result<()> {
-        self.http
-            .post(format!("{}/slopmax/shutdown", self.base))
-            .bearer_auth(&self.key)
-            .send()
-            .await?
-            .error_for_status()?;
-        Ok(())
-    }
-}
+use crate::{paths, ui};
 
 pub(super) async fn start(config: &Config) -> Result<()> {
-    let daemon = Daemon::new(config);
-    if daemon.is_running().await {
+    if Daemon::new(config).is_running().await {
         println!("slopmax is already running on {}", config.base_url());
         return Ok(());
     }
-    launch(config).await?;
+    background::launch(config, &background::current_exe()?).await?;
     println!(
         "slopmax running on {} {}",
         config.base_url(),
@@ -88,33 +25,18 @@ pub(super) async fn start(config: &Config) -> Result<()> {
 }
 
 pub(super) async fn stop(config: &Config) -> Result<()> {
-    let daemon = Daemon::new(config);
-    if !daemon.is_running().await {
+    if background::stop(config).await? {
+        println!("slopmax stopped");
+    } else {
         println!("slopmax is not running");
-        return Ok(());
     }
-    daemon.shutdown().await?;
-    println!("slopmax stopped");
     Ok(())
 }
 
+/// Starts the proxy unless it already runs.
 pub(super) async fn ensure_running(config: &Config) -> Result<()> {
-    if !Daemon::new(config).is_running().await {
-        launch(config).await?;
-    }
+    background::ensure_running(config, &background::current_exe()?).await?;
     Ok(())
-}
-
-/// Starts the proxy: through the service when one is installed, so it stays
-/// supervised, else as a detached process.
-pub(super) async fn launch(config: &Config) -> Result<()> {
-    match Manager::detect().filter(|m| m.status().installed) {
-        Some(manager) => {
-            manager.start()?;
-            wait_until_running(config).await
-        }
-        None => spawn_background(config).await,
-    }
 }
 
 pub(super) async fn service(config: &Config, action: &str) -> Result<()> {
@@ -124,15 +46,8 @@ pub(super) async fn service(config: &Config, action: &str) -> Result<()> {
     )?;
     match action {
         "install" => {
-            let daemon = Daemon::new(config);
-            if daemon.is_running().await {
-                // The service takes over the port.
-                daemon.shutdown().await?;
-                tokio::time::sleep(Duration::from_millis(300)).await;
-            }
-            let exe = std::env::current_exe().context("locating the slopmax binary")?;
-            let file = manager.install(&exe)?;
-            wait_until_running(config).await?;
+            let exe = background::current_exe()?;
+            let file = background::install_service(config, manager, &exe).await?;
             println!(
                 "slopmax now starts at login {}",
                 ui::dim(format!("({})", file.display()))
@@ -171,43 +86,6 @@ pub(super) async fn service(config: &Config, action: &str) -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// Starts `slopmax serve` detached from the terminal, logging to a file.
-async fn spawn_background(config: &Config) -> Result<()> {
-    let exe = std::env::current_exe().context("locating the slopmax binary")?;
-    fsx::private_dir(&paths::home())?;
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(paths::log_file())?;
-    let mut command = std::process::Command::new(exe);
-    command
-        .arg("serve")
-        .stdin(Stdio::null())
-        .stdout(log.try_clone()?)
-        .stderr(log);
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    command.spawn().context("starting the proxy")?;
-    wait_until_running(config).await
-}
-
-async fn wait_until_running(config: &Config) -> Result<()> {
-    let daemon = Daemon::new(config);
-    for _ in 0..50 {
-        if daemon.is_running().await {
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    bail!(
-        "the proxy did not start; see {}",
-        paths::log_file().display()
-    )
 }
 
 /// How much of the log's end is read to find the last lines.

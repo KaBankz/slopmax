@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::account::{Account, Link, Tokens};
+use crate::account::{Account, Link, Store, Tokens};
 use crate::agent::{Agent, ClaudeCode, Codex};
 use crate::auth::jwt;
 use crate::net::Client;
@@ -52,6 +52,31 @@ impl std::str::FromStr for Source {
 pub struct Found {
     pub origin: String,
     pub account: Result<Account>,
+}
+
+/// What became of one found login once saved.
+pub struct Saved {
+    pub origin: String,
+    /// The account and whether it is new, or why the login was skipped.
+    pub account: Result<(Account, bool)>,
+}
+
+/// Saves found logins, merging each into an earlier record of the same
+/// identity. With `own`, slopmax refreshes them itself instead of following
+/// their source's files.
+pub fn save(store: &Store, found: Vec<Found>, own: bool) -> Vec<Saved> {
+    found
+        .into_iter()
+        .map(|item| Saved {
+            origin: item.origin,
+            account: item.account.and_then(|mut account| {
+                if own {
+                    account.link = None;
+                }
+                store.upsert(account)
+            }),
+        })
+        .collect()
 }
 
 /// Collects importable logins from `source`. Missing sources are skipped.

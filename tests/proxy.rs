@@ -1506,6 +1506,54 @@ async fn the_dashboard_api_reports_acts_and_streams() {
     assert_eq!(account(&report, &second)["pinned"], false);
     let missing = act("codex-nope", "disable").send().await.unwrap();
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    let report: Value = act(&first, "label?value=work%20laptop")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(account(&report, &first)["name"], "work laptop");
+    let report: Value = act(&first, "label?value=")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_ne!(account(&report, &first)["name"], "work laptop");
+
+    // Removing an account takes its pin with it, as `slopmax remove` does.
+    act(&second, "use").send().await.unwrap();
+    let report: Value = act(&second, "remove")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let ids: Vec<&Value> = report["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| &a["id"])
+        .collect();
+    assert_eq!(ids, [&Value::from(first.clone())]);
+    let pins = std::fs::read_to_string(h.dir.join("pins.json")).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&pins).unwrap(), json!({}));
+
+    // A change the CLI or app makes on disk shows as soon as the proxy syncs.
+    Store::at(h.dir.join("accounts"))
+        .update(&first, |a| a.priority = 7)
+        .unwrap();
+    let report: Value = admin(Method::POST, "/slopmax/sync")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(account(&report, &first)["priority"], 7);
 
     // The live feed sees each answered request.
     let feed = admin(Method::GET, "/slopmax/events").send().await.unwrap();

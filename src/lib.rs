@@ -4,9 +4,11 @@
 pub mod account;
 pub mod agent;
 pub mod auth;
+pub mod background;
 pub mod cli;
 pub mod config;
 pub mod daemon;
+pub mod doctor;
 pub mod fsx;
 pub mod human;
 pub mod ids;

@@ -246,6 +246,12 @@ impl Config {
         };
         format!("http://{host}:{}", self.listen.port())
     }
+
+    /// The dashboard's address. The key travels in the fragment, which
+    /// browsers never send to a server.
+    pub fn dashboard_url(&self) -> String {
+        format!("{}/slopmax/dashboard#key={}", self.base_url(), self.api_key)
+    }
 }
 
 /// The config written on first run: the generated key, then every other

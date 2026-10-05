@@ -4,14 +4,14 @@
 
 use std::io::IsTerminal;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use super::accounts::login;
-use super::background::{Daemon, launch};
 use super::term;
 use crate::account::Store;
-use crate::agent::{self, AGENTS, Agent};
+use crate::agent::{self, AGENTS, Agent, Wiring};
 use crate::auth::{LoginOptions, callback};
+use crate::background::{self, Daemon};
 use crate::config::Config;
 use crate::import::{self, Source};
 use crate::net::Origins;
@@ -92,9 +92,8 @@ async fn accounts(store: &Store, answers: Answers) -> Result<()> {
             if found == 1 { "" } else { "s" }
         );
         if answers.confirm("Import them?", true)? {
-            for item in cliproxy {
-                if let Ok(account) = item.account {
-                    let (account, _) = store.upsert(account)?;
+            for saved in import::save(store, cliproxy, false) {
+                if let Ok((account, _)) = saved.account {
                     println!("    {} {}", ui::green("+"), ui::bold(account.name()));
                 }
             }
@@ -162,22 +161,17 @@ async fn accounts(store: &Store, answers: Answers) -> Result<()> {
 }
 
 fn wire(config: &Config, agent: &dyn Agent, answers: Answers) -> Result<()> {
-    let target = agent.wired_to();
-    let already = target
-        .as_deref()
-        .is_some_and(|t| t.contains(&config.base_url()) || t.starts_with("slopmax"));
-    if already {
-        println!("  {} already uses slopmax.", agent.title());
-        return Ok(());
-    }
-    let replacing = target
-        .map(|t| {
-            format!(
-                " (it uses {t} now; `slopmax setup {} --undo` restores that)",
-                agent.id()
-            )
-        })
-        .unwrap_or_default();
+    let replacing = match agent::wiring(agent, config) {
+        Wiring::Slopmax => {
+            println!("  {} already uses slopmax.", agent.title());
+            return Ok(());
+        }
+        Wiring::Elsewhere(target) => format!(
+            " (it uses {target} now; `slopmax setup {} --undo` restores that)",
+            agent.id()
+        ),
+        Wiring::Direct => String::new(),
+    };
     let question = format!("Point {} at slopmax?{replacing}", agent.title());
     if answers.confirm(&question, true)? {
         let file = agent::setup(agent, config)?;
@@ -193,20 +187,14 @@ async fn background(config: &Config, answers: Answers) -> Result<()> {
     }
     let manager = Manager::detect();
     let installed = manager.is_some_and(|m| m.status().installed);
+    let exe = background::current_exe()?;
     if let Some(manager) = manager.filter(|_| !installed)
         && answers.confirm("Start slopmax at login?", true)?
     {
-        let daemon = Daemon::new(config);
-        if daemon.is_running().await {
-            daemon.shutdown().await?;
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-        }
-        let exe = std::env::current_exe().context("locating the slopmax binary")?;
-        let file = manager.install(&exe)?;
+        let file = background::install_service(config, manager, &exe).await?;
         println!("    {} {}", ui::green("installed"), ui::dim(file.display()));
     }
-    if !Daemon::new(config).is_running().await {
-        launch(config).await?;
+    if background::ensure_running(config, &exe).await? {
         println!(
             "  The proxy is running on {} {}",
             config.base_url(),
