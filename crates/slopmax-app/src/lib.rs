@@ -34,6 +34,9 @@ const POLL: Duration = Duration::from_secs(2);
 /// How often it rereads what changes rarely: the agents' configs and the
 /// login service.
 const SLOW_POLL: Duration = Duration::from_secs(15);
+/// How long a notice that something worked stays; errors stay until
+/// dismissed.
+const NOTICE_FOR: Duration = Duration::from_secs(6);
 
 /// Everything a window shows, as of the last look.
 #[derive(Debug, Clone)]
@@ -97,6 +100,7 @@ pub enum Step {
 pub struct Notice {
     pub text: String,
     pub error: bool,
+    shown: Instant,
 }
 
 /// The app's state and actions. Dropping it stops its background work.
@@ -429,7 +433,8 @@ impl Shared {
     }
 
     fn tell(&self, text: String, error: bool) {
-        self.update(|s| s.notice = Some(Notice { text, error }));
+        let shown = Instant::now();
+        self.update(|s| s.notice = Some(Notice { text, error, shown }));
     }
 
     /// Asks for a fresh look now; `full` rereads the slow parts too.
@@ -492,6 +497,12 @@ async fn watch_over(shared: Arc<Shared>) {
         };
         shared.update(|s| {
             s.report = report;
+            if s.notice
+                .as_ref()
+                .is_some_and(|n| !n.error && n.shown.elapsed() >= NOTICE_FOR)
+            {
+                s.notice = None;
+            }
             s.proxy = match (running, &s.proxy) {
                 (Some(version), _) => Proxy::Running { version },
                 (None, Proxy::Starting) => Proxy::Starting,

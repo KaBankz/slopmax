@@ -1,11 +1,13 @@
 //! The slopmax desktop app drawn with Slint: a window over slopmax-app's
 //! snapshot, and a menu bar icon showing each pool's use.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use slint::{ComponentHandle, ModelRc, SharedString, Timer, TimerMode, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel};
 use slopmax_app::view::{self, SignInView};
 use slopmax_app::{App, Proxy, Snapshot};
 use slopmax_core::provider::ProviderId;
@@ -14,10 +16,28 @@ use slopmax_core::time::Timestamp;
 
 slint::include_modules!();
 
+/// The window's lists, kept from one redraw to the next and changed in
+/// place, so rows keep their elements: focus, hover, and what a screen
+/// reader is on stay put while the numbers move.
+#[derive(Default)]
+struct Lists {
+    groups: Rc<VecModel<Group>>,
+    rows: RefCell<Vec<Rc<VecModel<Row>>>>,
+    agents: Rc<VecModel<Agent>>,
+}
+
+thread_local! {
+    static LISTS: Lists = Lists::default();
+}
+
 fn main() -> Result<()> {
     let app = Arc::new(App::start()?);
     let window = AppWindow::new()?;
     let tray = Tray::new()?;
+    LISTS.with(|lists| {
+        window.set_groups(ModelRc::from(lists.groups.clone()));
+        window.set_agents(ModelRc::from(lists.agents.clone()));
+    });
     wire(&window, &tray, &app);
 
     // Each change to the snapshot is drawn on the UI thread.
@@ -158,16 +178,29 @@ fn draw(window: &AppWindow, tray: &Tray, snapshot: &Snapshot) {
         .map(|report| view::groups(report, now))
         .unwrap_or_default();
     window.set_has_accounts(!groups.is_empty());
-    window.set_groups(model(groups.iter().map(group)));
-    window.set_agents(model(snapshot.agents.iter().map(|agent| {
-        let (state, connected) = view::agent_line(agent);
-        Agent {
-            id: agent.id.into(),
-            title: agent.title.into(),
-            state: state.into(),
-            connected,
-        }
-    })));
+    LISTS.with(|lists| {
+        let mut rows = lists.rows.borrow_mut();
+        rows.resize_with(groups.len(), Rc::default);
+        let drawn = groups
+            .iter()
+            .zip(rows.iter())
+            .map(|(view, model)| {
+                update_rows(model, view.accounts.iter().map(row).collect());
+                group(view, ModelRc::from(model.clone()))
+            })
+            .collect();
+        update(&lists.groups, drawn);
+        let agents = snapshot.agents.iter().map(|agent| {
+            let (state, connected) = view::agent_line(agent);
+            Agent {
+                id: agent.id.into(),
+                title: agent.title.into(),
+                state: state.into(),
+                connected,
+            }
+        });
+        update(&lists.agents, agents.collect());
+    });
     let (service, can_install) = view::service_line(snapshot.service.as_ref());
     window.set_service_state(service.into());
     window.set_can_install_service(can_install);
@@ -203,12 +236,12 @@ fn draw(window: &AppWindow, tray: &Tray, snapshot: &Snapshot) {
     tray.set_line(line.into());
 }
 
-fn group(group: &view::Group) -> Group {
+fn group(group: &view::Group, rows: ModelRc<Row>) -> Group {
     let pool = group.pool.as_ref();
     Group {
         title: group.title.to_uppercase().into(),
         subscription: group.subscription,
-        rows: model(group.accounts.iter().map(row)),
+        rows,
         pooled: pool.is_some(),
         pool_accounts: pool.map_or(0, |p| p.accounts as i32),
         pool_five_hour: gauge(pool.and_then(|p| p.five_hour.as_ref())),
@@ -262,4 +295,36 @@ fn tone(tone: report::Tone) -> Tone {
 
 fn model<T: Clone + 'static>(items: impl Iterator<Item = T>) -> ModelRc<T> {
     ModelRc::new(VecModel::from(items.collect::<Vec<T>>()))
+}
+
+/// Makes `model` hold `items`, touching only the rows that changed.
+fn update<T: Clone + PartialEq + 'static>(model: &VecModel<T>, items: Vec<T>) {
+    for (i, item) in items.iter().enumerate() {
+        match model.row_data(i) {
+            Some(old) if old == *item => {}
+            Some(_) => model.set_row_data(i, item.clone()),
+            None => model.push(item.clone()),
+        }
+    }
+    while model.row_count() > items.len() {
+        model.remove(model.row_count() - 1);
+    }
+}
+
+/// [`update`] for account rows, keeping a row's notes model while its notes
+/// read the same, so an unchanged row compares equal.
+fn update_rows(model: &VecModel<Row>, rows: Vec<Row>) {
+    let rows = rows
+        .into_iter()
+        .enumerate()
+        .map(|(i, mut row)| {
+            if let Some(old) = model.row_data(i)
+                && old.notes.iter().eq(row.notes.iter())
+            {
+                row.notes = old.notes;
+            }
+            row
+        })
+        .collect();
+    update(model, rows);
 }

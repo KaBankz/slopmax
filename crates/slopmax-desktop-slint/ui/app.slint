@@ -246,25 +246,6 @@ export component AppWindow inherits Window {
                 spacing: 16px;
                 alignment: start;
 
-                if root.notice != "": Rectangle {
-                    border-radius: 8px;
-                    background: root.notice-error ? Colors.bad.transparentize(0.85) : Colors.good.transparentize(0.85);
-                    HorizontalLayout {
-                        padding: 10px;
-                        spacing: 10px;
-                        Text {
-                            text: root.notice;
-                            wrap: word-wrap;
-                            horizontal-stretch: 1;
-                            vertical-alignment: center;
-                        }
-                        Button {
-                            text: "Dismiss";
-                            clicked => { root.dismiss-notice(); }
-                        }
-                    }
-                }
-
                 if root.signing-in: Section {
                     title: root.sign-in-title;
                     Text {
@@ -388,11 +369,13 @@ export component AppWindow inherits Window {
                                 }
                                 Button {
                                     text: row.pinned ? "Pinned" : "Use";
+                                    accessible-label: self.text + " " + row.name;
                                     enabled: !row.pinned && !row.disabled;
                                     clicked => { root.pin(row.id); }
                                 }
                                 Button {
                                     text: row.disabled ? "Enable" : "Disable";
+                                    accessible-label: self.text + " " + row.name;
                                     clicked => { root.set-disabled(row.id, !row.disabled); }
                                 }
                             }
@@ -498,6 +481,7 @@ export component AppWindow inherits Window {
                         }
                         Button {
                             text: agent.connected ? "Disconnect" : "Connect";
+                            accessible-label: self.text + " " + agent.title;
                             clicked => {
                                 if agent.connected { root.disconnect-agent(agent.id); } else { root.connect-agent(agent.id); }
                             }
@@ -527,6 +511,35 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    // How the last action went, floating over the corner so it never moves
+    // what is under the pointer.
+    if root.notice != "": Rectangle {
+        width: min(440px, root.width - 40px);
+        height: toast.preferred-height;
+        x: root.width - self.width - 20px;
+        y: root.height - self.height - 20px;
+        border-radius: 8px;
+        border-width: 1px;
+        border-color: root.notice-error ? Colors.bad : Colors.good;
+        background: Colors.panel;
+        drop-shadow-blur: 14px;
+        drop-shadow-color: #00000030;
+        toast := HorizontalLayout {
+            padding: 12px;
+            spacing: 10px;
+            Text {
+                text: root.notice;
+                wrap: word-wrap;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+            }
+            Button {
+                text: "Dismiss";
+                clicked => { root.dismiss-notice(); }
             }
         }
     }

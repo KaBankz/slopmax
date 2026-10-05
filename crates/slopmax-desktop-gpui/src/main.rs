@@ -219,12 +219,20 @@ impl Main {
         let notice = self.snapshot.notice.as_ref()?;
         let app = self.app.clone();
         let tint = if notice.error { c.bad } else { c.good };
+        // Floats over the corner, so it never moves what is under the pointer.
         Some(
             h_flex()
-                .p_2p5()
+                .absolute()
+                .right(px(20.))
+                .bottom(px(20.))
+                .w(px(440.))
+                .p_3()
                 .gap_2p5()
-                .rounded_md()
-                .bg(tint.opacity(0.15))
+                .rounded_lg()
+                .border_1()
+                .border_color(tint)
+                .bg(c.bg)
+                .shadow_lg()
                 .child(div().flex_1().child(notice.text.clone()))
                 .child(
                     Button::new("dismiss")
@@ -452,6 +460,11 @@ impl Main {
         .child(
             Button::new(SharedString::from(format!("use-{}", row.id)))
                 .label(if row.pinned { "Pinned" } else { "Use" })
+                .accessibility_label(format!(
+                    "{} {}",
+                    if row.pinned { "Pinned" } else { "Use" },
+                    row.name
+                ))
                 .small()
                 .disabled(row.pinned || row.disabled)
                 .on_click(move |_, _, _| pin.pin(&id)),
@@ -459,6 +472,11 @@ impl Main {
         .child(
             Button::new(SharedString::from(format!("toggle-{}", row.id)))
                 .label(if row.disabled { "Enable" } else { "Disable" })
+                .accessibility_label(format!(
+                    "{} {}",
+                    if row.disabled { "Enable" } else { "Disable" },
+                    row.name
+                ))
                 .small()
                 .on_click(move |_, _, _| toggle.set_disabled(&id2, !disabled)),
         )
@@ -489,6 +507,11 @@ impl Main {
                     .child(
                         Button::new(SharedString::from(format!("agent-{id}")))
                             .label(if connected { "Disconnect" } else { "Connect" })
+                            .accessibility_label(format!(
+                                "{} {}",
+                                if connected { "Disconnect" } else { "Connect" },
+                                agent.title
+                            ))
                             .on_click(move |_, _, _| {
                                 if connected {
                                     app.disconnect_agent(id);
@@ -531,6 +554,7 @@ impl Render for Main {
         let c = Colors::of(cx);
         let now = Timestamp::now();
         v_flex()
+            .relative()
             .size_full()
             .bg(c.bg)
             .text_color(c.fg)
@@ -544,13 +568,13 @@ impl Render for Main {
                         .p_5()
                         .gap_4()
                         .overflow_y_scrollbar()
-                        .children(self.notice(&c))
                         .children(self.sign_in(&c))
                         .child(self.accounts(&c, now, cx))
                         .child(self.agents(&c))
                         .child(self.background(&c)),
                 ),
             )
+            .children(self.notice(&c))
     }
 }
 
