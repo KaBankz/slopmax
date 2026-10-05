@@ -21,14 +21,15 @@ tools = { rust = "1.89" }
 run = "cargo check --all-targets --all-features --locked"
 
 [tasks.budget]
-description = "Hold the dependency tree to 70 crates and the binary to 6 MB"
+description = "Hold the binary's dependencies to 70 crates and the binary to 6 MB"
 run = '''
 host=$(rustc -vV | sed -n 's/host: //p')
-crates=$(cargo tree --locked --color never -e normal --target "$host" --prefix none | sed 's/ (\*)//' | sort -u)
+# Third-party crates only: slopmax's own (path) crates are left out.
+crates=$(cargo tree --locked --color never -e normal --target "$host" --prefix none -p slopmax | sed 's/ (\*)//' | grep -v ' (/' | sort -u)
 count=$(printf '%s\n' "$crates" | wc -l | tr -d ' ')
 echo "$count crates for $host (budget 70)"
 [ "$count" -le 70 ] || { printf '%s\n' "$crates"; exit 1; }
-cargo build --release --locked
+cargo build --release --locked -p slopmax
 bytes=$(wc -c < target/release/slopmax | tr -d ' ')
 echo "$bytes bytes (budget 6291456)"
 [ "$bytes" -le 6291456 ]
@@ -41,4 +42,4 @@ run = "scripts/bench.sh"
 
 [tasks.install]
 description = "Install slopmax into ~/.cargo/bin"
-run = "cargo install --path . --locked"
+run = "cargo install --path crates/slopmax --locked"

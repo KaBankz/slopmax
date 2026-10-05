@@ -496,6 +496,51 @@ name = "slopmax"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "bytes",
+ "http",
+ "libc",
+ "mimalloc",
+ "serde_json",
+ "slopmax-core",
+ "tokio",
+]
+
+[[package]]
+name = "slopmax-common"
+version = "0.3.0"
+dependencies = [
+ "base64",
+ "libc",
+ "ring",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "slopmax-core"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "bytes",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "memchr",
+ "serde",
+ "serde_json",
+ "slopmax-common",
+ "slopmax-net",
+ "slopmax-wire",
+ "tokio",
+ "toml_edit",
+]
+
+[[package]]
+name = "slopmax-net"
+version = "0.3.0"
+dependencies = [
  "base64",
  "bytes",
  "http",
@@ -503,17 +548,24 @@ dependencies = [
  "hyper",
  "hyper-rustls",
  "hyper-util",
- "libc",
- "memchr",
- "mimalloc",
  "ring",
  "rustls",
  "rustls-native-certs",
  "serde",
  "serde_json",
+ "slopmax-common",
  "tokio",
- "toml_edit",
  "tower-service",
+]
+
+[[package]]
+name = "slopmax-wire"
+version = "0.3.0"
+dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
+ "slopmax-common",
 ]
 
 [[package]]

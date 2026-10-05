@@ -1,22 +1,30 @@
-[package]
-name = "slopmax"
+[workspace]
+members = ["crates/*"]
+# A plain `cargo build`, `test`, or `clippy` covers the CLI and the
+# libraries; the desktop app is built on its own, as it needs a GUI
+# toolkit and the system libraries under it.
+default-members = [
+  "crates/slopmax",
+  "crates/slopmax-common",
+  "crates/slopmax-core",
+  "crates/slopmax-net",
+  "crates/slopmax-wire",
+]
+resolver = "3"
+
+[workspace.package]
 version = "0.3.0"
 edition = "2024"
 rust-version = "1.89"
-description = "Lightweight multi-account switcher and proxy for Claude Code and Codex"
 license = "MIT"
 repository = "https://github.com/KaBankz/slopmax"
-readme = "README.md"
-keywords = ["claude", "codex", "proxy", "oauth", "cli"]
-categories = ["command-line-utilities"]
 
-[features]
-# mimalloc instead of the platform allocator: more throughput under many
-# concurrent streams, for a proxy shared by many clients, at a few times
-# the memory. The Docker image uses it.
-mimalloc = ["dep:mimalloc"]
+[workspace.dependencies]
+slopmax-common = { path = "crates/slopmax-common" }
+slopmax-core = { path = "crates/slopmax-core" }
+slopmax-net = { path = "crates/slopmax-net" }
+slopmax-wire = { path = "crates/slopmax-wire" }
 
-[dependencies]
 anyhow = "1.0.104"
 base64 = "0.23.1"
 bytes = "1.12.1"
@@ -25,8 +33,9 @@ http-body-util = "0.1.5"
 hyper = { version = "1.11.1", features = ["http1", "client", "server"] }
 hyper-rustls = { version = "0.27.10", default-features = false, features = ["http1", "ring", "tls12"] }
 hyper-util = { version = "0.1.21", features = ["client-legacy", "http1", "tokio"] }
+libc = "0.2.190"
 memchr = "2.8.3"
-mimalloc = { version = "0.1.52", default-features = false, optional = true }
+mimalloc = { version = "0.1.52", default-features = false }
 ring = "0.17.14"
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8.4"
@@ -36,8 +45,11 @@ tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net", "s
 toml_edit = { version = "0.25.15", features = ["serde"] }
 tower-service = "0.3.3"
 
-[target.'cfg(unix)'.dependencies]
-libc = "0.2.190"
+[workspace.lints.rust]
+# Unsafe code lives in two places, each allowed where it is written: the
+# local time offset (slopmax-common) and turning off terminal echo for
+# secrets (the CLI).
+unsafe_code = "deny"
 
 [profile.release]
 lto = "fat"

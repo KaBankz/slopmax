@@ -1,0 +1,35 @@
+[package]
+name = "slopmax"
+description = "Lightweight multi-account switcher and proxy for Claude Code and Codex"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["claude", "codex", "proxy", "oauth", "cli"]
+categories = ["command-line-utilities"]
+
+[features]
+# mimalloc instead of the platform allocator: more throughput under many
+# concurrent streams, for a proxy shared by many clients, at a few times
+# the memory. The Docker image uses it.
+mimalloc = ["dep:mimalloc"]
+
+[dependencies]
+anyhow.workspace = true
+mimalloc = { workspace = true, optional = true }
+serde_json.workspace = true
+slopmax-core.workspace = true
+tokio.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+# For the load-test rig in examples/bench.rs.
+bytes.workspace = true
+http.workspace = true
+
+[lints]
+workspace = true

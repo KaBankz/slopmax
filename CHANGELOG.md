@@ -4,6 +4,21 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Added
+
+- The dashboard's API can rename (`/slopmax/accounts/<id>/label`) and remove (`…/remove`) accounts, and `POST /slopmax/sync` applies changes made on disk at once instead of at the proxy's next check.
+
+### Changed
+
+- The source is a Cargo workspace: the `slopmax` CLI on top of `slopmax-core`, the engine it shares with the coming desktop app, and three small libraries beneath. Installing from source now names the package: `cargo install --locked --git https://github.com/KaBankz/slopmax slopmax`.
+- Removing an account through the dashboard's API also drops its pin, as `slopmax remove` does.
+- Without a running proxy, `slopmax status --refresh` shows a failed usage poll as the account's last error instead of a warning line above the table.
+- The page the browser lands on after signing in says to return to slopmax, not to the terminal.
+
+### Fixed
+
+- In `slopmax init`, the answer to the question after a browser sign-in could be swallowed by input the sign-in kept waiting for.
+
 ## [0.3.0] - 2026-10-04
 
 Agents and quota tools such as T3 Code see the pool as one account, and requests pass through the proxy much faster.

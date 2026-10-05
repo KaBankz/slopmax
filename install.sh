@@ -16,7 +16,7 @@ fail() { say "slopmax install: $*" >&2; exit 1; }
 case "$(uname -s)" in
   Linux) os="unknown-linux-musl" ;;
   Darwin) os="apple-darwin" ;;
-  *) fail "no prebuilt binary for $(uname -s); install with: cargo install --locked --git https://github.com/$repo" ;;
+  *) fail "no prebuilt binary for $(uname -s); install with: cargo install --locked --git https://github.com/$repo slopmax" ;;
 esac
 case "$(uname -m)" in
   x86_64 | amd64) arch="x86_64" ;;

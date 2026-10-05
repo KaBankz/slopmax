@@ -12,7 +12,7 @@ WORKDIR /src
 COPY . .
 # A container usually serves several machines, so it trades some memory for
 # mimalloc's throughput under concurrent streams.
-RUN cargo build --release --locked --features mimalloc
+RUN cargo build --release --locked -p slopmax --features mimalloc
 
 FROM alpine:3
 RUN apk add --no-cache ca-certificates

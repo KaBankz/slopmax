@@ -22,7 +22,7 @@ curl -fsSL https://raw.githubusercontent.com/KaBankz/slopmax/master/install.sh |
 Or build it with Cargo (Rust 1.89 or newer):
 
 ```sh
-cargo install --locked --git https://github.com/KaBankz/slopmax
+cargo install --locked --git https://github.com/KaBankz/slopmax slopmax
 ```
 
 From a checkout, [mise](https://mise.jdx.dev) provides the toolchain: `mise install`, then `mise run install`.
@@ -198,7 +198,7 @@ slopmax key remove laptop
 
 Client keys can use the proxy but not slopmax's own API, and `slopmax doctor` notes when the proxy listens beyond this machine.
 
-A proxy that many clients share can trade memory for throughput by building with mimalloc (`cargo install --locked --git https://github.com/KaBankz/slopmax --features mimalloc`); the Docker image does.
+A proxy that many clients share can trade memory for throughput by building with mimalloc (`cargo install --locked --git https://github.com/KaBankz/slopmax slopmax --features mimalloc`); the Docker image does.
 
 ## Extras
 
@@ -340,7 +340,7 @@ mise run bench     # the latency, throughput, memory, and startup slopmax adds
 mise run build     # optimized release binary
 ```
 
-`tests/proxy.rs` runs the proxy end to end against mock providers. [ARCHITECTURE.md](ARCHITECTURE.md) maps the code, walks through adding a provider, an agent, or an API format, and lists the current numbers.
+`crates/slopmax-core/tests/proxy.rs` runs the proxy end to end against mock providers. [ARCHITECTURE.md](ARCHITECTURE.md) maps the code, walks through adding a provider, an agent, or an API format, and lists the current numbers.
 
 ## License
 
