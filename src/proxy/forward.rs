@@ -29,6 +29,7 @@ use crate::account::Account;
 use crate::agent::{self, Agent};
 use crate::auth;
 use crate::config::ClientKey;
+use crate::human;
 use crate::ledger::Entry;
 use crate::log;
 use crate::net::body::{self, Body};
@@ -39,7 +40,6 @@ use crate::provider::credits::Outcome;
 use crate::provider::{ProviderId, Verdict};
 use crate::route::{self, NoRoute, Step};
 use crate::time::{SignedDuration, Timestamp};
-use crate::ui;
 use crate::wire::ir::{self, Answer, Event, Part};
 use crate::wire::{Dialect, translate};
 
@@ -880,7 +880,7 @@ fn limit_reached(dialect: Dialect, provider: ProviderId, until: Timestamp) -> Re
     let message = format!(
         "slopmax: every {} account is rate limited; the next one frees up in {} (`slopmax status` for details)",
         provider.spec().title,
-        ui::duration(until.duration_since(now))
+        human::duration(until.duration_since(now))
     );
     let (body, extra) = dialect.limit_reached(&message, until, now);
     let mut response = json_reply(StatusCode::TOO_MANY_REQUESTS, &body);

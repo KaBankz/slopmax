@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use crate::account::Account;
 use crate::auth::pkce::Pkce;
-use crate::auth::{self, Grant, LoginOptions, RefreshError, jwt};
+use crate::auth::{self, Grant, LoginEvent, LoginOptions, Prompt, RefreshError, jwt};
 use crate::ids;
 use crate::net::{Client, form};
 use crate::provider::ProviderId;
@@ -54,15 +54,15 @@ pub fn authorize_url(pkce: &Pkce, state: &str) -> String {
 }
 
 /// Signs in through auth.openai.com, in a browser or with a device code.
-pub async fn login(http: &Client, options: LoginOptions) -> Result<Account> {
+pub async fn login(http: &Client, options: LoginOptions, prompt: Prompt) -> Result<Account> {
     if options.device {
-        return device_login(http).await;
+        return device_login(http, &prompt).await;
     }
     let pkce = Pkce::generate();
     let state = ids::token();
     let url = authorize_url(&pkce, &state);
     let redirect = (CALLBACK_PORT, CALLBACK_PATH);
-    let callback = auth::browser_login("ChatGPT", &url, redirect, &state, options).await?;
+    let callback = auth::browser_login("ChatGPT", &url, redirect, &state, options, prompt).await?;
     exchange(http, &callback.code, &pkce.verifier, &redirect_uri()).await
 }
 
@@ -193,7 +193,7 @@ struct DeviceGrant {
 
 /// Logs in with a short code entered at auth.openai.com, for machines
 /// without a browser.
-pub async fn device_login(http: &Client) -> Result<Account> {
+pub async fn device_login(http: &Client, prompt: &Prompt) -> Result<Account> {
     let code: DeviceCode = http
         .post(format!("{ISSUER}/api/accounts/deviceauth/usercode"))
         .json(&json!({ "client_id": CLIENT_ID }))
@@ -210,10 +210,10 @@ pub async fn device_login(http: &Client) -> Result<Account> {
         .unwrap_or(5)
         .max(1);
 
-    eprintln!(
-        "\n  Open {DEVICE_VERIFY_URL}\n  and enter the code: {}\n",
-        code.user_code
-    );
+    prompt.tell(LoginEvent::DeviceCode {
+        url: DEVICE_VERIFY_URL.to_owned(),
+        code: code.user_code.clone(),
+    });
 
     let deadline = tokio::time::Instant::now() + DEVICE_TIMEOUT;
     let grant = loop {

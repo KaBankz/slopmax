@@ -11,7 +11,7 @@ use crate::limits::{self, Window};
 use crate::pool::{AccountState, Pins};
 use crate::provider::ProviderId;
 use crate::time::Timestamp;
-use crate::ui;
+use crate::{human, ui};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Report {
@@ -317,7 +317,7 @@ fn window_cell(window: Option<&Window>, now: Timestamp) -> String {
     let reset = window
         .upcoming_reset(now)
         .filter(|_| used > 0.0)
-        .map(|at| ui::until(at, now))
+        .map(|at| human::until(at, now))
         .unwrap_or_default();
     let cell = format!(
         "{} {} {}",
@@ -338,7 +338,7 @@ fn status_cell(account: &AccountReport, now: Timestamp) -> String {
     } else if let Some(until) = state.limited_until(now) {
         parts.push(ui::yellow(format!(
             "limited · back in {}",
-            ui::until(until, now)
+            human::until(until, now)
         )));
     } else if state.throttled_until.is_some_and(|at| at > now) {
         parts.push(ui::yellow("throttled"));
@@ -370,7 +370,7 @@ fn status_cell(account: &AccountReport, now: Timestamp) -> String {
         parts.push(ui::dim(format!(
             "{} req · {} tok",
             state.usage.requests,
-            ui::compact(state.usage.total_tokens())
+            human::compact(state.usage.total_tokens())
         )));
     }
     if let Some(error) = state
@@ -496,12 +496,5 @@ mod tests {
             ts(0),
         );
         assert!(render(&report, ts(0)).contains("slopmax login claude"));
-    }
-
-    #[test]
-    fn compact_numbers() {
-        assert_eq!(ui::compact(999), "999");
-        assert_eq!(ui::compact(12_345), "12.3k");
-        assert_eq!(ui::compact(1_234_567), "1.2M");
     }
 }

@@ -9,7 +9,7 @@ use crate::account::Store;
 use crate::config::Config;
 use crate::summary::{self, Totals};
 use crate::time::Timestamp;
-use crate::{paths, ui};
+use crate::{human, paths, ui};
 
 /// Prints usage since the start of `range` (`today`, `7d`, `30d`, `all`),
 /// grouped `by` day, model, or account.
@@ -61,10 +61,10 @@ pub fn run(config: &Config, store: &Store, range: &str, by: &str, json: bool) ->
             "{}  {:>6}  {:>8}  {:>8}  {:>10}  {:>11}  {:>9}",
             ui::pad(label, width),
             t.requests,
-            ui::compact(t.input),
-            ui::compact(t.output),
-            ui::compact(t.cache_read),
-            ui::compact(t.cache_write),
+            human::compact(t.input),
+            human::compact(t.output),
+            human::compact(t.cache_read),
+            human::compact(t.cache_write),
             t.cost_label()
         )
     };

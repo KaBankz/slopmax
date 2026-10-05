@@ -2,12 +2,13 @@
 //! CLIProxyAPI's or signing in), points the agents at the proxy, and starts
 //! it at login, asking before each step.
 
-use std::io::{IsTerminal, Write};
+use std::io::IsTerminal;
 
 use anyhow::{Context, Result};
 
 use super::accounts::login;
 use super::background::{Daemon, launch};
+use super::term;
 use crate::account::Store;
 use crate::agent::{self, AGENTS, Agent};
 use crate::auth::{LoginOptions, callback};
@@ -33,15 +34,7 @@ impl Answers {
         if self == Self::Defaults {
             return Ok(default);
         }
-        let hint = if default { "[Y/n]" } else { "[y/N]" };
-        print!("  {question} {} ", ui::dim(hint));
-        std::io::stdout().flush()?;
-        let mut answer = String::new();
-        std::io::stdin().read_line(&mut answer)?;
-        Ok(match answer.trim().to_ascii_lowercase().as_str() {
-            "" => default,
-            answer => matches!(answer, "y" | "yes"),
-        })
+        Ok(term::confirm(&format!("  {question}"), default)?)
     }
 }
 
@@ -156,9 +149,9 @@ async fn accounts(store: &Store, answers: Answers) -> Result<()> {
             // and Claude by pasting the final URL back.
             let headless = !callback::has_browser();
             let options = LoginOptions {
-                device: headless && provider.spec().device_login,
+                device: headless && provider.spec().device_login(),
                 no_browser: headless,
-                endpoint: None,
+                ..LoginOptions::default()
             };
             if let Err(e) = login(store, provider, None, options).await {
                 println!("    {} {e:#}", ui::yellow("sign-in failed:"));

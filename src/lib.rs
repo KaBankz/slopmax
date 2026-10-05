@@ -8,6 +8,7 @@ pub mod cli;
 pub mod config;
 pub mod daemon;
 pub mod fsx;
+pub mod human;
 pub mod ids;
 pub mod import;
 pub mod ledger;

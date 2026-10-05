@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::account::Account;
-use crate::auth::{Grant, LoginOptions, RefreshError};
+use crate::auth::{Grant, LoginOptions, Prompt, RefreshError};
 use crate::limits::{Limits, PoolWindow, Refusal};
 use crate::net::Client;
 use crate::net::client::Response;
@@ -127,8 +127,8 @@ pub struct Spec {
     pub agent_only: Option<&'static str>,
     /// How long before expiry an access token is refreshed.
     pub refresh_lead: SignedDuration,
-    /// Whether `slopmax login --device` is supported.
-    pub device_login: bool,
+    /// What its accounts sign in with.
+    pub credential: Credential,
 }
 
 impl Spec {
@@ -136,6 +136,21 @@ impl Spec {
     pub fn is_subscription(&self) -> bool {
         self.billing == Billing::Subscription
     }
+
+    /// Whether a code can stand in for the browser redirect when signing in.
+    pub fn device_login(&self) -> bool {
+        self.credential == Credential::OAuth { device: true }
+    }
+}
+
+/// What an account signs in with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Credential {
+    /// OAuth in a browser; `device` when a code can stand in for the
+    /// redirect, on machines without a browser.
+    OAuth { device: bool },
+    /// An API key; `optional` for endpoints that may need none.
+    Key { optional: bool },
 }
 
 /// How a provider's accounts are paid for.
@@ -255,11 +270,13 @@ pub trait Provider: Send + Sync {
     /// workspace), so one email in two of them stays two accounts.
     fn identity(&self, account: &Account) -> Option<String>;
 
-    /// Connects an account interactively.
+    /// Connects an account, telling the person signing in what to do
+    /// through `prompt`.
     fn login<'a>(
         &'a self,
         http: &'a Client,
         options: LoginOptions,
+        prompt: Prompt,
     ) -> BoxFuture<'a, Result<Account>>;
 
     /// Redeems a refresh token for new tokens.

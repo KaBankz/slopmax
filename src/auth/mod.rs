@@ -4,13 +4,16 @@ pub mod callback;
 pub mod jwt;
 pub mod pkce;
 
+use std::fmt;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use http::StatusCode;
+use tokio::sync::mpsc;
 
 use crate::account::{Account, Store, Tokens};
 use crate::net::{Client, Origins};
+use crate::provider::ProviderId;
 use crate::time::Timestamp;
 use crate::{import, log};
 
@@ -84,35 +87,127 @@ pub fn http_client(origins: Origins) -> Client {
         .build()
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Default, Clone)]
 pub struct LoginOptions {
     /// Use the device-code flow (Codex only).
     pub device: bool,
-    /// Print the authorize URL instead of opening a browser.
+    /// Ask for authorization without opening a browser.
     pub no_browser: bool,
     /// For a compatible endpoint: where it is and what it serves.
     pub endpoint: Option<crate::account::Endpoint>,
+    /// For API keys and compatible endpoints: the key, which the CLI or app
+    /// asks for before signing in.
+    pub key: Option<String>,
 }
 
-/// The browser half of an authorization-code login: opens (or prints)
-/// `url`, then waits for the redirect to `(port, path)` or a pasted URL.
+impl fmt::Debug for LoginOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LoginOptions")
+            .field("device", &self.device)
+            .field("no_browser", &self.no_browser)
+            .field("endpoint", &self.endpoint)
+            .field("key", &self.key.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
+}
+
+/// What a sign-in tells the person signing in, as it goes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoginEvent {
+    /// Authorize the `title` account at `url`, in the browser `opened` if
+    /// one could be. The browser then redirects to `localhost:port`; with a
+    /// browser on another machine, that final address is pasted back.
+    Authorize {
+        title: &'static str,
+        url: String,
+        opened: bool,
+        port: u16,
+    },
+    /// Enter `code` at `url`: the sign-in for machines without a browser.
+    DeviceCode { url: String, code: String },
+    /// Something to know while waiting, such as a rejected paste.
+    Notice(String),
+}
+
+/// The person's side of a sign-in: where its [`LoginEvent`]s go, and the
+/// redirect addresses pasted by hand. The CLI connects it to the terminal,
+/// the app to its window.
+pub struct Prompt {
+    events: Box<dyn Fn(LoginEvent) + Send + Sync>,
+    pasted: Option<mpsc::UnboundedReceiver<String>>,
+}
+
+impl Prompt {
+    pub fn new(events: impl Fn(LoginEvent) + Send + Sync + 'static) -> Self {
+        Self {
+            events: Box::new(events),
+            pasted: None,
+        }
+    }
+
+    /// Also accepts each line `pasted` delivers as a redirect address.
+    pub fn with_pasted(mut self, pasted: mpsc::UnboundedReceiver<String>) -> Self {
+        self.pasted = Some(pasted);
+        self
+    }
+
+    pub(crate) fn tell(&self, event: LoginEvent) {
+        (self.events)(event);
+    }
+
+    /// The next pasted line, or `None` when nothing more can be pasted.
+    pub(crate) async fn pasted(&mut self) -> Option<String> {
+        match &mut self.pasted {
+            Some(lines) => lines.recv().await,
+            None => None,
+        }
+    }
+}
+
+impl fmt::Debug for Prompt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Prompt")
+            .field("pasted", &self.pasted.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Signs in to `provider` and saves the account, merging it into an earlier
+/// record of the same identity. Returns the account and whether it is new.
+pub async fn connect(
+    store: &Store,
+    provider: ProviderId,
+    label: Option<String>,
+    options: LoginOptions,
+    prompt: Prompt,
+) -> Result<(Account, bool)> {
+    let http = http_client(Origins::default());
+    let mut account = provider.get().login(&http, options, prompt).await?;
+    if label.is_some() {
+        account.label = label;
+    }
+    store.upsert(account)
+}
+
+/// The browser half of an authorization-code login: opens `url` (unless
+/// told not to), then waits for the redirect to `(port, path)` or a pasted
+/// address.
 pub async fn browser_login(
-    title: &str,
+    title: &'static str,
     url: &str,
     (port, path): (u16, &'static str),
     state: &str,
     options: LoginOptions,
+    mut prompt: Prompt,
 ) -> Result<callback::Callback> {
     let opened = !options.no_browser && callback::open_browser(url);
-    eprintln!(
-        "\n  {} your {title} account in the browser:\n\n  {url}\n",
-        if opened { "Opened" } else { "Authorize" }
-    );
-    eprintln!(
-        "  Waiting for the redirect to localhost:{port}. If the browser runs on another\n  \
-         machine, paste the final localhost URL from its address bar here.\n"
-    );
-    callback::receive(port, path, state).await
+    prompt.tell(LoginEvent::Authorize {
+        title,
+        url: url.to_owned(),
+        opened,
+        port,
+    });
+    callback::receive(port, path, state, &mut prompt).await
 }
 
 /// Returns `account` with a usable access token, refreshing it when it is

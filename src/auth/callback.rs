@@ -1,8 +1,8 @@
 //! The browser half of an OAuth authorization-code flow.
 //!
 //! slopmax listens on the provider's registered loopback redirect and, at the
-//! same time, accepts the final redirect URL pasted into the terminal. The
-//! paste path makes logins work on headless machines: authorize in any
+//! same time, accepts the final redirect address pasted into the CLI or app.
+//! The paste path makes logins work on headless machines: authorize in any
 //! browser, then copy the address bar of the (failed) localhost page back.
 
 use std::net::SocketAddr;
@@ -11,10 +11,10 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
 use http::{HeaderValue, StatusCode, header};
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
+use super::{LoginEvent, Prompt};
 use crate::net::server::{self, Request, Response};
 use crate::net::{body, form};
 
@@ -98,25 +98,40 @@ fn parse_query(query: &str) -> Params {
     params
 }
 
-/// Waits for the authorization code, from either the loopback redirect or a
-/// pasted URL, and checks the CSRF `state`.
-pub async fn receive(port: u16, path: &'static str, expected_state: &str) -> Result<Callback> {
-    let (tx, mut rx) = mpsc::channel::<Result<Callback>>(4);
+/// Waits for the authorization code, from either the loopback redirect or an
+/// address pasted into `prompt`, and checks the CSRF `state`.
+pub async fn receive(
+    port: u16,
+    path: &'static str,
+    expected_state: &str,
+    prompt: &mut Prompt,
+) -> Result<Callback> {
+    let (tx, mut redirects) = mpsc::channel::<Result<Callback>>(4);
     let server = match TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port))).await {
-        Ok(listener) => Some(tokio::spawn(serve(listener, path, tx.clone()))),
+        Ok(listener) => Some(tokio::spawn(serve(listener, path, tx))),
         Err(e) => {
-            eprintln!("  (port {port} is busy: {e}; paste the redirect URL instead)");
+            prompt.tell(LoginEvent::Notice(format!(
+                "port {port} is busy ({e}); paste the redirect address instead"
+            )));
             None
         }
     };
-    tokio::spawn(read_pasted(tx));
 
     let result = tokio::time::timeout(LOGIN_TIMEOUT, async {
         loop {
-            match rx.recv().await {
-                Some(Ok(callback)) => return Ok(callback),
-                Some(Err(e)) => eprintln!("  {e:#}; try again"),
-                None => bail!("login input closed"),
+            let attempt = tokio::select! {
+                Some(redirect) = redirects.recv() => redirect,
+                Some(line) = prompt.pasted() => {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    parse_pasted(&line)
+                }
+                else => bail!("port {port} is busy and no redirect address can be pasted"),
+            };
+            match attempt {
+                Ok(callback) => return Ok(callback),
+                Err(e) => prompt.tell(LoginEvent::Notice(format!("{e:#}; try again"))),
             }
         }
     })
@@ -160,18 +175,6 @@ async fn serve(listener: TcpListener, path: &'static str, tx: mpsc::Sender<Resul
     server::serve(listener, handler, std::future::pending()).await;
 }
 
-async fn read_pasted(tx: mpsc::Sender<Result<Callback>>) {
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
-    while let Ok(Some(line)) = lines.next_line().await {
-        if line.trim().is_empty() {
-            continue;
-        }
-        if tx.send(parse_pasted(&line)).await.is_err() {
-            return;
-        }
-    }
-}
-
 /// Whether this machine can show a browser (it has a desktop session).
 pub fn has_browser() -> bool {
     cfg!(any(target_os = "macos", windows))
@@ -202,11 +205,11 @@ pub fn open_browser(url: &str) -> bool {
 
 const SUCCESS_PAGE: &str = "<!doctype html><title>slopmax</title>\
 <body style=\"font-family:system-ui;text-align:center;padding:4em\">\
-<h2>Account connected</h2><p>You can close this tab and return to the terminal.</p>";
+<h2>Account connected</h2><p>You can close this tab and return to slopmax.</p>";
 
 const FAILURE_PAGE: &str = "<!doctype html><title>slopmax</title>\
 <body style=\"font-family:system-ui;text-align:center;padding:4em\">\
-<h2>Authorization failed</h2><p>Check the terminal for details.</p>";
+<h2>Authorization failed</h2><p>slopmax shows what went wrong.</p>";
 
 #[cfg(test)]
 mod tests {

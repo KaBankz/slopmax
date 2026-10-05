@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use anyhow::{Result, bail};
 
-use super::StatusArgs;
 use super::background::Daemon;
+use super::{StatusArgs, term};
 use crate::account::Store;
 use crate::auth::{self, LoginOptions};
 use crate::config::Config;
@@ -15,10 +15,10 @@ use crate::import::{self, Source};
 use crate::net::Origins;
 use crate::pool::{Pins, Pool, State};
 use crate::provider::credits::Outcome;
-use crate::provider::{Billing, ProviderId};
+use crate::provider::{Billing, Credential, ProviderId};
 use crate::report::{self, Report};
 use crate::time::{SignedDuration, Timestamp};
-use crate::{fsx, paths, ui, usage};
+use crate::{fsx, human, paths, ui, usage};
 
 pub(super) async fn status(config: &Config, store: &Store, args: StatusArgs) -> Result<()> {
     let daemon = Daemon::new(config);
@@ -82,21 +82,25 @@ pub(super) async fn login(
     store: &Store,
     provider: ProviderId,
     label: Option<String>,
-    options: LoginOptions,
+    mut options: LoginOptions,
 ) -> Result<()> {
     let spec = provider.spec();
-    if options.device && !spec.device_login {
+    if options.device && !spec.device_login() {
         bail!(
             "--device works for ChatGPT accounts; {} signs in with a browser",
             spec.title
         );
     }
-    let http = auth::http_client(Origins::default());
-    let mut account = provider.get().login(&http, options).await?;
-    if label.is_some() {
-        account.label = label;
+    if let Credential::Key { optional } = spec.credential {
+        let prompt = if optional {
+            "API key (leave empty if it needs none)".to_owned()
+        } else {
+            format!("{} key", spec.title)
+        };
+        options.key = Some(term::read_secret(&prompt)?);
     }
-    let (account, created) = store.upsert(account)?;
+    let (account, created) =
+        auth::connect(store, provider, label, options, term::sign_in()).await?;
     let plan = account
         .plan
         .as_deref()
@@ -286,7 +290,7 @@ pub(super) async fn redeem(config: &Config, store: &Store, query: &str, yes: boo
     let now = Timestamp::now();
     let expiry = next
         .expires_at
-        .map(|at| format!("; the next expires in {}", ui::until(at, now)))
+        .map(|at| format!("; the next expires in {}", human::until(at, now)))
         .unwrap_or_default();
     let s = if available.len() == 1 { "" } else { "s" };
     println!(
@@ -294,7 +298,7 @@ pub(super) async fn redeem(config: &Config, store: &Store, query: &str, yes: boo
         ui::bold(account.name()),
         available.len()
     );
-    if !yes && !confirm("Reset its usage windows now?")? {
+    if !yes && !term::confirm("Reset its usage windows now?", false)? {
         return Ok(());
     }
     match credits.redeem(&http, &account, Some(&next.id)).await? {
@@ -308,15 +312,4 @@ pub(super) async fn redeem(config: &Config, store: &Store, query: &str, yes: boo
         Outcome::AlreadyRedeemed => println!("That credit was already redeemed."),
     }
     Ok(())
-}
-
-fn confirm(question: &str) -> Result<bool> {
-    print!("{question} [y/N] ");
-    std::io::stdout().flush()?;
-    let mut answer = String::new();
-    std::io::stdin().read_line(&mut answer)?;
-    Ok(matches!(
-        answer.trim().to_ascii_lowercase().as_str(),
-        "y" | "yes"
-    ))
 }

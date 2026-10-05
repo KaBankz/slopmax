@@ -7,12 +7,11 @@ use anyhow::{Result, bail};
 use http::{HeaderMap, StatusCode};
 
 use super::keys::{self, KeyHeader};
-use super::{Billing, BoxFuture, Provider, ProviderId, Spec, Verdict};
+use super::{Billing, BoxFuture, Credential, Provider, ProviderId, Spec, Verdict};
 use crate::account::{Account, Endpoint, Tokens};
-use crate::auth::LoginOptions;
+use crate::auth::{LoginOptions, Prompt};
 use crate::net::Client;
 use crate::time::{SignedDuration, Timestamp};
-use crate::ui;
 use crate::wire::Dialect;
 
 pub struct Compat;
@@ -27,7 +26,7 @@ static SPEC: Spec = Spec {
     billing: Billing::Metered { backs: None },
     agent_only: None,
     refresh_lead: SignedDuration::ZERO,
-    device_login: false,
+    credential: Credential::Key { optional: true },
 };
 
 impl Provider for Compat {
@@ -47,12 +46,13 @@ impl Provider for Compat {
         &'a self,
         http: &'a Client,
         options: LoginOptions,
+        _prompt: Prompt,
     ) -> BoxFuture<'a, Result<Account>> {
         Box::pin(async move {
             let Some(mut endpoint) = options.endpoint else {
                 bail!("a compatible endpoint needs its address: --url <base url>");
             };
-            let key = ui::read_secret("API key (leave empty if it needs none)")?;
+            let key = options.key.unwrap_or_default();
             let header = KeyHeader::for_dialect(endpoint.dialect);
             let listed = keys::check(http, &models_url(&endpoint), header, &key).await?;
             if endpoint.models.is_empty() {

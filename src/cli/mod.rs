@@ -5,6 +5,7 @@ mod args;
 mod background;
 mod doctor;
 mod init;
+mod term;
 mod usage;
 
 use anyhow::{Context, Result, bail};
@@ -453,6 +454,7 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
                 device: m.flag("device"),
                 no_browser: m.flag("no-browser"),
                 endpoint,
+                ..LoginOptions::default()
             };
             let label = m.value("label").map(str::to_owned);
             login(&store, provider, label, options).await?;

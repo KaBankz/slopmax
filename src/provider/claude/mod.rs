@@ -7,9 +7,9 @@ pub mod wire;
 use anyhow::Result;
 use http::{HeaderMap, StatusCode};
 
-use super::{Billing, BoxFuture, Provider, Reading, Spec, UsageError, Verdict};
+use super::{Billing, BoxFuture, Credential, Provider, Reading, Spec, UsageError, Verdict};
 use crate::account::Account;
-use crate::auth::{Grant, LoginOptions, RefreshError};
+use crate::auth::{Grant, LoginOptions, Prompt, RefreshError};
 use crate::limits::{Limits, PoolWindow};
 use crate::net::Client;
 use crate::time::{SignedDuration, Timestamp};
@@ -31,7 +31,7 @@ static SPEC: Spec = Spec {
     agent_only: Some("claude"),
     // Access tokens live 8 hours.
     refresh_lead: SignedDuration::from_hours(1),
-    device_login: false,
+    credential: Credential::OAuth { device: false },
 };
 
 impl Provider for Claude {
@@ -50,8 +50,9 @@ impl Provider for Claude {
         &'a self,
         http: &'a Client,
         options: LoginOptions,
+        prompt: Prompt,
     ) -> BoxFuture<'a, Result<Account>> {
-        Box::pin(oauth::login(http, options))
+        Box::pin(oauth::login(http, options, prompt))
     }
 
     fn refresh<'a>(

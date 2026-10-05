@@ -9,11 +9,11 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::account::Account;
+use crate::human;
 use crate::net::Client;
 use crate::pool::AccountState;
 use crate::provider::ProviderId;
 use crate::time::Timestamp;
-use crate::ui;
 
 /// How long a notification command may run before it is killed.
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
@@ -328,7 +328,7 @@ fn back(until: Option<Timestamp>, now: Timestamp) -> String {
 fn when(at: Timestamp, now: Timestamp) -> String {
     let local = at.local_offset();
     let (hour, minute) = at.time_of_day(local);
-    format!("in {} ({hour:02}:{minute:02})", ui::until(at, now))
+    format!("in {} ({hour:02}:{minute:02})", human::until(at, now))
 }
 
 #[cfg(test)]

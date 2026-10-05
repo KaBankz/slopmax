@@ -3,17 +3,17 @@
 //! A key is stored as an access token that never expires. Requests keep the
 //! agent's own headers, with the key in place of the slopmax key.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use serde_json::Value;
 
-use super::{Billing, BoxFuture, Provider, ProviderId, Spec, Verdict, codex};
+use super::{Billing, BoxFuture, Credential, Provider, ProviderId, Spec, Verdict, codex};
 use crate::account::{Account, Tokens};
-use crate::auth::LoginOptions;
+use crate::auth::{LoginOptions, Prompt};
 use crate::net::Client;
 use crate::time::{SignedDuration, Timestamp};
 use crate::wire::Dialect;
-use crate::{limits, log, ui};
+use crate::{limits, log};
 
 /// How a key is presented.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,7 +54,7 @@ static ANTHROPIC_SPEC: Spec = Spec {
     // slopmax serves Claude models to Claude Code only.
     agent_only: Some("claude"),
     refresh_lead: SignedDuration::ZERO,
-    device_login: false,
+    credential: Credential::Key { optional: false },
 };
 
 pub static ANTHROPIC: KeyProvider = KeyProvider {
@@ -74,7 +74,7 @@ static OPENAI_SPEC: Spec = Spec {
     },
     agent_only: None,
     refresh_lead: SignedDuration::ZERO,
-    device_login: false,
+    credential: Credential::Key { optional: false },
 };
 
 pub static OPENAI: KeyProvider = KeyProvider {
@@ -92,7 +92,7 @@ static XAI_SPEC: Spec = Spec {
     billing: Billing::Metered { backs: None },
     agent_only: None,
     refresh_lead: SignedDuration::ZERO,
-    device_login: false,
+    credential: Credential::Key { optional: false },
 };
 
 pub static XAI: KeyProvider = KeyProvider {
@@ -113,13 +113,14 @@ impl Provider for KeyProvider {
     fn login<'a>(
         &'a self,
         http: &'a Client,
-        _options: LoginOptions,
+        options: LoginOptions,
+        _prompt: Prompt,
     ) -> BoxFuture<'a, Result<Account>> {
         Box::pin(async move {
-            let key = ui::read_secret(&format!("{} key", self.spec.title))?;
-            if key.is_empty() {
-                bail!("no key entered");
-            }
+            let key = options
+                .key
+                .filter(|key| !key.is_empty())
+                .with_context(|| format!("no {} key entered", self.spec.title))?;
             let header = KeyHeader::for_dialect(self.spec.dialects[0]);
             check(http, self.models_url, header, &key).await?;
             let tokens = Tokens {

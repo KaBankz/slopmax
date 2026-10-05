@@ -15,7 +15,7 @@ use crate::net::{Origins, server};
 use crate::provider::ProviderId;
 use crate::service::Manager;
 use crate::time::{SignedDuration, Timestamp};
-use crate::{auth, paths, ui};
+use crate::{auth, human, paths, ui};
 
 /// CLIProxyAPI's default port, for spotting it beside slopmax.
 const CLIPROXYAPI_PORT: u16 = 8317;
@@ -391,7 +391,7 @@ async fn network() -> Section {
                             Level::Warn,
                             format!(
                                 "the system clock is off by {}",
-                                ui::duration(SignedDuration::from_secs(skew))
+                                human::duration(SignedDuration::from_secs(skew))
                             ),
                             Some("enable time sync (e.g. `timedatectl set-ntp true`)"),
                         );

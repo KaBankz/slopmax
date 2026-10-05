@@ -6,7 +6,7 @@ use serde_json::json;
 
 use crate::account::Account;
 use crate::auth::pkce::Pkce;
-use crate::auth::{self, Grant, LoginOptions, RefreshError};
+use crate::auth::{self, Grant, LoginOptions, Prompt, RefreshError};
 use crate::net::{Client, form};
 use crate::provider::ProviderId;
 use crate::time::{SignedDuration, Timestamp};
@@ -126,12 +126,12 @@ impl Profile {
 }
 
 /// Signs in through claude.ai.
-pub async fn login(http: &Client, options: LoginOptions) -> Result<Account> {
+pub async fn login(http: &Client, options: LoginOptions, prompt: Prompt) -> Result<Account> {
     let pkce = Pkce::generate();
     let state = ids::token();
     let url = authorize_url(&pkce, &state);
     let redirect = (CALLBACK_PORT, CALLBACK_PATH);
-    let callback = auth::browser_login("Claude", &url, redirect, &state, options).await?;
+    let callback = auth::browser_login("Claude", &url, redirect, &state, options, prompt).await?;
     let state = callback.state.as_deref().unwrap_or(&state);
     exchange(http, &callback.code, state, &pkce).await
 }
