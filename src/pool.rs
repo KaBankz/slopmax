@@ -22,35 +22,12 @@ use crate::config::Strategy;
 use crate::limits::{Limits, PoolWindow, UNKNOWN_SCORE};
 use crate::provider::ProviderId;
 use crate::time::{SignedDuration, Timestamp};
+use crate::wire::Usage;
 
 /// How long to sit out an account after a quota refusal without a reset time.
 pub const DEFAULT_BLOCK: SignedDuration = SignedDuration::from_mins(5);
 /// How long to sit out an account after short-term throttling.
 pub const DEFAULT_THROTTLE: SignedDuration = SignedDuration::from_secs(30);
-
-/// Token counters for requests served by one account.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Usage {
-    pub requests: u64,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cache_read_tokens: u64,
-    pub cache_write_tokens: u64,
-}
-
-impl Usage {
-    pub fn add(&mut self, other: &Usage) {
-        self.requests += other.requests;
-        self.input_tokens += other.input_tokens;
-        self.output_tokens += other.output_tokens;
-        self.cache_read_tokens += other.cache_read_tokens;
-        self.cache_write_tokens += other.cache_write_tokens;
-    }
-
-    pub fn total_tokens(&self) -> u64 {
-        self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_write_tokens
-    }
-}
 
 /// A block that applies to one model only, e.g. an overage-only cap.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

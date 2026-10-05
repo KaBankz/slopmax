@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use serde_json::Value;
 
-use crate::pool::Usage;
+use crate::wire::Usage;
 use crate::wire::ir::{Call, Event, Failure, Stop, ToolKind};
 
 #[derive(Debug, Default)]

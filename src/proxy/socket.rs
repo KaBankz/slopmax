@@ -27,12 +27,13 @@ use crate::log;
 use crate::net::body;
 use crate::net::server::{Request, Response};
 use crate::net::ws::{self, Message, Reader, Writer};
-use crate::pool::{DEFAULT_BLOCK, DEFAULT_THROTTLE, Pick, Usage};
+use crate::pool::{DEFAULT_BLOCK, DEFAULT_THROTTLE, Pick};
 use crate::provider::ProviderId;
 use crate::provider::codex::{limits, wire};
 use crate::route;
 use crate::time::Timestamp;
 use crate::wire::Dialect;
+use crate::wire::Usage;
 
 /// The WebSocket protocol version ChatGPT's endpoint speaks.
 const BETA: &str = "responses_websockets=2026-02-06";

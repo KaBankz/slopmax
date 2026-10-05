@@ -17,7 +17,6 @@ pub mod translate;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::pool::Usage;
 use crate::time::Timestamp;
 
 /// A request and response format.
@@ -31,6 +30,30 @@ pub enum Dialect {
     /// OpenAI Chat Completions (`/v1/chat/completions`), spoken by most
     /// other tools.
     Chat,
+}
+
+/// Token counts: one answer's, or everything an account has served.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Usage {
+    pub requests: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+}
+
+impl Usage {
+    pub fn add(&mut self, other: &Usage) {
+        self.requests += other.requests;
+        self.input_tokens += other.input_tokens;
+        self.output_tokens += other.output_tokens;
+        self.cache_read_tokens += other.cache_read_tokens;
+        self.cache_write_tokens += other.cache_write_tokens;
+    }
+
+    pub fn total_tokens(&self) -> u64 {
+        self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_write_tokens
+    }
 }
 
 /// How a stream opens, judged one event at a time.

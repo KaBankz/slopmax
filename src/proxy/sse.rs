@@ -215,7 +215,7 @@ impl<B> Drop for Tapped<B> {
 mod tests {
     use super::*;
     use crate::net::body::BoxError;
-    use crate::pool::Usage;
+    use crate::wire::Usage;
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 

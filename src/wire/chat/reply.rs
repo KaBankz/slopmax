@@ -4,8 +4,8 @@
 use serde_json::{Value, json};
 
 use crate::ids;
-use crate::pool::Usage;
 use crate::time::Timestamp;
+use crate::wire::Usage;
 use crate::wire::frame;
 use crate::wire::ir::{Answer, Call, Event, Stop, ToolKind};
 
