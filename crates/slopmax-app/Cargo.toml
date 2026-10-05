@@ -1,0 +1,17 @@
+[package]
+name = "slopmax-app"
+description = "The desktop app's state and actions, apart from any UI toolkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+slopmax-core.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

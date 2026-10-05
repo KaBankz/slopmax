@@ -506,6 +506,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "slopmax-app"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "slopmax-core",
+ "tokio",
+]
+
+[[package]]
 name = "slopmax-common"
 version = "0.3.0"
 dependencies = [
