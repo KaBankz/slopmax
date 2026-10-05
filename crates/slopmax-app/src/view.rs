@@ -1,12 +1,17 @@
 //! What a window draws, worked out once for every UI: the accounts grouped
-//! by provider with their gauges and status, and the menu bar's line. The
-//! words come from the core, so they read as `slopmax status` does.
+//! by provider with their gauges and status, the lines about the proxy,
+//! agents, and service, a sign-in's instructions, and the menu bar's line.
+//! Account words come from the core, so they read as `slopmax status` does.
 
+use slopmax_core::agent::Wiring;
 use slopmax_core::human;
 use slopmax_core::limits::Window;
 use slopmax_core::provider::ProviderId;
 use slopmax_core::report::{AccountReport, PoolReport, Report, Tone};
+use slopmax_core::service;
 use slopmax_core::time::Timestamp;
+
+use crate::{AgentStatus, Proxy, SignIn, Snapshot, Step};
 
 /// One provider's accounts.
 #[derive(Debug, Clone, PartialEq)]
@@ -109,6 +114,80 @@ pub fn menu_bar(report: &Report, now: Timestamp) -> String {
         "slopmax".to_owned()
     } else {
         parts.join(" · ")
+    }
+}
+
+/// The header's line about the proxy.
+pub fn proxy_line(snapshot: &Snapshot) -> String {
+    match &snapshot.proxy {
+        Proxy::Checking => "Looking for the proxy…".to_owned(),
+        Proxy::Starting => "Starting the proxy…".to_owned(),
+        Proxy::Running { version } => format!("Running {version} at {}", snapshot.address),
+        Proxy::Stopped => "Stopped: agents cannot reach slopmax".to_owned(),
+    }
+}
+
+/// How an agent is wired, and whether that is through slopmax.
+pub fn agent_line(agent: &AgentStatus) -> (String, bool) {
+    match &agent.wiring {
+        Wiring::Slopmax => ("Goes through slopmax".to_owned(), true),
+        Wiring::Elsewhere(target) => (format!("Goes to {target}"), false),
+        Wiring::Direct => ("Goes straight to its provider".to_owned(), false),
+    }
+}
+
+/// The login service's line, and whether it can be installed.
+pub fn service_line(service: Option<&service::Status>) -> (String, bool) {
+    match service {
+        None => (
+            "Runs while you are signed in to this machine".to_owned(),
+            false,
+        ),
+        Some(s) if s.installed && s.running => ("Starts at login; running".to_owned(), false),
+        Some(s) if s.installed => ("Starts at login; not running now".to_owned(), false),
+        Some(_) => ("Not started at login yet".to_owned(), true),
+    }
+}
+
+/// What a sign-in in progress asks of the person.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignInView {
+    pub title: String,
+    pub detail: String,
+    /// The address to open, to show in full and copy.
+    pub link: Option<String>,
+    /// A device code to enter.
+    pub code: Option<String>,
+    /// Notes while waiting, such as a rejected paste.
+    pub notes: String,
+}
+
+pub fn sign_in(sign_in: &SignIn) -> SignInView {
+    let title = sign_in.provider.spec().title;
+    let (detail, link, code) = match &sign_in.step {
+        Step::Starting => ("Starting…".to_owned(), None, None),
+        Step::Authorize { url, opened: true } => (
+            format!("Finish signing in to {title} in your browser, which opened this address:"),
+            Some(url.clone()),
+            None,
+        ),
+        Step::Authorize { url, opened: false } => (
+            format!("Open this address in a browser and sign in to {title}:"),
+            Some(url.clone()),
+            None,
+        ),
+        Step::DeviceCode { url, code } => (
+            format!("Open {url} and enter this code:"),
+            None,
+            Some(code.clone()),
+        ),
+    };
+    SignInView {
+        title: format!("Signing in to {title}"),
+        detail,
+        link,
+        code,
+        notes: sign_in.notes.join("\n"),
     }
 }
 

@@ -1,0 +1,53 @@
+name: Desktop
+
+# Builds the desktop apps under evaluation (Slint and GPUI) for macOS and
+# Linux, with the CLI each one runs the proxy with, and keeps the binaries
+# so they can be tried on a real desktop. The summary lists their sizes.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - "crates/slopmax-app/**"
+      - "crates/slopmax-desktop-*/**"
+      - "assets/**"
+      - ".github/workflows/desktop.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.ui }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+        ui: [slint, gpui]
+    steps:
+      - uses: actions/checkout@v4
+      - name: System libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfontconfig1-dev libfreetype-dev libxkbcommon-dev \
+            libxkbcommon-x11-dev libwayland-dev libx11-dev libx11-xcb-dev libxcb1-dev \
+            libvulkan-dev libegl1-mesa-dev libgl1-mesa-dev
+      - uses: jdx/mise-action@v5
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.ui }}
+      - run: cargo build --release --locked -p slopmax -p slopmax-desktop-${{ matrix.ui }}
+      - name: Sizes
+        run: |
+          for bin in slopmax slopmax-desktop-${{ matrix.ui }}; do
+            echo "- \`$bin\`: $(wc -c < target/release/$bin | tr -d ' ') bytes" >> "$GITHUB_STEP_SUMMARY"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slopmax-desktop-${{ matrix.ui }}-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            target/release/slopmax
+            target/release/slopmax-desktop-${{ matrix.ui }}
