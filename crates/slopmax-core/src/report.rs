@@ -14,7 +14,7 @@ use crate::net::Origins;
 use crate::pool::{AccountState, Pins, Pool, State};
 use crate::provider::ProviderId;
 use crate::time::{SignedDuration, Timestamp};
-use crate::{fsx, paths, usage};
+use crate::{fsx, human, paths, usage};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Report {
@@ -82,22 +82,88 @@ pub enum Condition {
     Ready,
 }
 
-/// How alarming a window's use is, so every front end colors it alike.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Level {
-    Ok,
-    /// 70% or more.
+impl Condition {
+    /// How it reads, the same in every front end.
+    pub fn describe(&self, now: Timestamp) -> String {
+        match self {
+            Self::SignInNeeded(error) => format!("sign in again ({error})"),
+            Self::Disabled => "disabled".into(),
+            Self::Limited(until) => format!("limited · back in {}", human::until(*until, now)),
+            Self::Throttled => "throttled".into(),
+            Self::Active(1) => "● active · 1 session".into(),
+            Self::Active(sessions) => format!("● active · {sessions} sessions"),
+            Self::Ready => "ready".into(),
+        }
+    }
+
+    pub fn tone(&self) -> Tone {
+        match self {
+            Self::SignInNeeded(_) => Tone::Bad,
+            Self::Disabled => Tone::Muted,
+            Self::Limited(_) | Self::Throttled => Tone::Warn,
+            Self::Active(_) | Self::Ready => Tone::Good,
+        }
+    }
+}
+
+/// How a front end colors a window's use or an account's condition, so
+/// every one colors them alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tone {
+    Good,
+    Muted,
+    /// Worth noticing without being a problem, such as a pin.
+    Accent,
     Warn,
-    /// 90% or more.
     Bad,
 }
 
-impl Level {
-    pub fn of(used: f64) -> Self {
+/// A note beside an account's condition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Note {
+    Pinned,
+    Priority(i32),
+    /// The tool whose copy of the tokens slopmax follows.
+    Follows(String),
+    ResetCredits(u32),
+    /// Requests served, and the tokens they used.
+    Served {
+        requests: u64,
+        tokens: u64,
+    },
+    LastError(String),
+}
+
+impl Note {
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Pinned => "pinned".into(),
+            Self::Priority(priority) => format!("priority {priority}"),
+            Self::Follows(tool) => format!("follows {tool}"),
+            Self::ResetCredits(1) => "1 reset credit".into(),
+            Self::ResetCredits(credits) => format!("{credits} reset credits"),
+            Self::Served { requests, tokens } => {
+                format!("{requests} req · {} tok", human::compact(*tokens))
+            }
+            Self::LastError(error) => format!("last error: {error}"),
+        }
+    }
+
+    pub fn tone(&self) -> Tone {
+        match self {
+            Self::Pinned | Self::ResetCredits(_) => Tone::Accent,
+            _ => Tone::Muted,
+        }
+    }
+}
+
+impl Tone {
+    /// For a window's use: a warning from 70%, bad from 90%.
+    pub fn of_use(used: f64) -> Self {
         match used {
             u if u >= 90.0 => Self::Bad,
             u if u >= 70.0 => Self::Warn,
-            _ => Self::Ok,
+            _ => Self::Good,
         }
     }
 }
@@ -139,11 +205,35 @@ impl AccountReport {
             .filter(|w| w.model.is_some())
     }
 
-    /// The last error worth showing beside the condition, which already
-    /// says when the sign-in failed or the account is limited.
-    pub fn last_error(&self, now: Timestamp) -> Option<&str> {
-        let shown = self.auth_error.is_some() || self.state.limited_until(now).is_some();
-        self.state.last_error.as_deref().filter(|_| !shown)
+    /// The notes beside its condition, in the order front ends show them.
+    pub fn notes(&self, now: Timestamp) -> Vec<Note> {
+        let state = &self.state;
+        let mut notes = Vec::new();
+        if self.pinned {
+            notes.push(Note::Pinned);
+        }
+        if self.priority != 0 {
+            notes.push(Note::Priority(self.priority));
+        }
+        if let Some(tool) = &self.follows {
+            notes.push(Note::Follows(tool.clone()));
+        }
+        if let Some(credits) = state.limits.reset_credits.filter(|n| *n > 0) {
+            notes.push(Note::ResetCredits(credits));
+        }
+        if state.usage.requests > 0 {
+            notes.push(Note::Served {
+                requests: state.usage.requests,
+                tokens: state.usage.total_tokens(),
+            });
+        }
+        // The condition already says when sign-in failed or the account is
+        // limited.
+        let explained = self.auth_error.is_some() || state.limited_until(now).is_some();
+        if let Some(error) = state.last_error.as_ref().filter(|_| !explained) {
+            notes.push(Note::LastError(error.clone()));
+        }
+        notes
     }
 }
 
@@ -315,9 +405,9 @@ mod tests {
     }
 
     #[test]
-    fn levels_turn_at_70_and_90_percent() {
-        assert_eq!(Level::of(69.9), Level::Ok);
-        assert_eq!(Level::of(70.0), Level::Warn);
-        assert_eq!(Level::of(90.0), Level::Bad);
+    fn use_turns_yellow_at_70_and_red_at_90_percent() {
+        assert_eq!(Tone::of_use(69.9), Tone::Good);
+        assert_eq!(Tone::of_use(70.0), Tone::Warn);
+        assert_eq!(Tone::of_use(90.0), Tone::Bad);
     }
 }

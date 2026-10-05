@@ -5,7 +5,7 @@ use std::fmt::Display;
 use std::io::IsTerminal;
 use std::sync::OnceLock;
 
-use slopmax_core::report::Level;
+use slopmax_core::report::Tone;
 
 fn color_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -47,10 +47,17 @@ pub fn cyan(text: impl Display) -> String {
 
 /// Colors `text` by how much of a quota is used.
 pub fn by_level(percent: f64, text: impl Display) -> String {
-    match Level::of(percent) {
-        Level::Bad => red(text),
-        Level::Warn => yellow(text),
-        Level::Ok => green(text),
+    toned(Tone::of_use(percent), text)
+}
+
+/// Colors `text` in a shared tone.
+pub fn toned(tone: Tone, text: impl Display) -> String {
+    match tone {
+        Tone::Good => green(text),
+        Tone::Muted => dim(text),
+        Tone::Accent => cyan(text),
+        Tone::Warn => yellow(text),
+        Tone::Bad => red(text),
     }
 }
 

@@ -15,7 +15,7 @@ use slopmax_core::config::Config;
 use slopmax_core::human;
 use slopmax_core::limits::Window;
 use slopmax_core::provider::ProviderId;
-use slopmax_core::report::{self, AccountReport, Condition, PoolReport, Report};
+use slopmax_core::report::{self, AccountReport, PoolReport, Report};
 use slopmax_core::time::Timestamp;
 
 pub(super) async fn run(config: &Config, store: &Store, args: StatusArgs) -> Result<()> {
@@ -212,46 +212,16 @@ fn window_cell(window: Option<&Window>, now: Timestamp) -> String {
 }
 
 fn status_cell(account: &AccountReport, now: Timestamp) -> String {
-    let state = &account.state;
-    let mut parts = vec![match account.condition(now) {
-        Condition::SignInNeeded(error) => ui::red(format!("re-login needed ({error})")),
-        Condition::Disabled => ui::dim("disabled"),
-        Condition::Limited(until) => {
-            ui::yellow(format!("limited · back in {}", human::until(until, now)))
-        }
-        Condition::Throttled => ui::yellow("throttled"),
-        Condition::Active(sessions) => {
-            let s = if sessions == 1 { "" } else { "s" };
-            ui::green(format!("● active · {sessions} session{s}"))
-        }
-        Condition::Ready => ui::green("ready"),
-    }];
-    if account.pinned {
-        parts.push(ui::cyan("pinned"));
-    }
-    if account.priority != 0 {
-        parts.push(ui::dim(format!("priority {}", account.priority)));
-    }
-    if let Some(tool) = &account.follows {
-        parts.push(ui::dim(format!("follows {tool}")));
-    }
-    if let Some(credits) = state.limits.reset_credits.filter(|n| *n > 0) {
-        parts.push(ui::cyan(format!(
-            "{credits} reset credit{}",
-            if credits == 1 { "" } else { "s" }
-        )));
-    }
-    if state.usage.requests > 0 {
-        parts.push(ui::dim(format!(
-            "{} req · {} tok",
-            state.usage.requests,
-            human::compact(state.usage.total_tokens())
-        )));
-    }
-    if let Some(error) = account.last_error(now) {
-        parts.push(ui::dim(format!("last error: {error}")));
-    }
-    parts.join(ui::dim(" · ").as_str())
+    let condition = account.condition(now);
+    let parts: Vec<String> = std::iter::once(ui::toned(condition.tone(), condition.describe(now)))
+        .chain(
+            account
+                .notes(now)
+                .iter()
+                .map(|note| ui::toned(note.tone(), note.describe())),
+        )
+        .collect();
+    parts.join(&ui::dim(" · "))
 }
 
 #[cfg(test)]
