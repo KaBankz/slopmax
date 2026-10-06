@@ -45,6 +45,8 @@ pub struct Row {
     pub pinned: bool,
     pub disabled: bool,
     pub priority: i32,
+    /// When it last answered: `used 3m ago`.
+    pub last_used: Option<String>,
 }
 
 /// One usage window across a provider's accounts.
@@ -79,6 +81,19 @@ pub struct Gauge {
     /// within the week, `Nov 3` after.
     pub resets_at: Option<String>,
     pub tone: Tone,
+    /// How the use compares with spending the window evenly until it
+    /// resets.
+    pub pace: Option<Pace>,
+}
+
+/// A window's use against an even spend.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pace {
+    /// How far through the window it is, from 0 to 1: where an even spend
+    /// would have reached.
+    pub elapsed: f32,
+    /// `On pace`, `Runs out ~14:10`, or `18% in reserve`.
+    pub label: Label,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,7 +128,12 @@ pub fn groups(report: &Report, now: Timestamp) -> Vec<Group> {
                     }?;
                     Some(Overview {
                         title: slot.title(),
-                        gauge: gauge(window, now),
+                        // Pooled accounts reset at staggered times, so an
+                        // even spend of the pool means nothing.
+                        gauge: Gauge {
+                            pace: None,
+                            ..gauge(window, now)
+                        },
                         shares: accounts.iter().map(|a| share(a, slot, now)).collect(),
                     })
                 })
@@ -309,6 +329,62 @@ pub fn gauge(window: &Window, now: Timestamp) -> Gauge {
         resets_in: reset.map(|at| human::until(at, now)),
         resets_at: reset.map(|at| clock(at, now, at.local_offset())),
         tone: Tone::of_use(used),
+        pace: pace(window, used, now),
+    }
+}
+
+/// How far within an even spend counts as on pace, in points.
+const ON_PACE: f64 = 5.;
+
+/// The window's use against spending it evenly until it resets: nothing
+/// before 3% of it has passed, too soon to say, nor once it is spent.
+fn pace(window: &Window, used: f64, now: Timestamp) -> Option<Pace> {
+    let length = match window.span.as_str() {
+        "5h" => 5 * 3_600,
+        "7d" => 7 * 86_400,
+        "30d" => 30 * 86_400,
+        _ => return None,
+    };
+    let resets = window.upcoming_reset(now)?;
+    let passed = length - resets.duration_since(now).as_secs();
+    let elapsed = passed as f64 / length as f64;
+    if !(0.03..1.).contains(&elapsed) || used >= 100. {
+        return None;
+    }
+    let ahead = used - elapsed * 100.;
+    let label = if ahead.abs() < ON_PACE {
+        Label {
+            text: "On pace".to_owned(),
+            tone: Tone::Muted,
+        }
+    } else if ahead > 0. {
+        // Ahead of an even spend, the same rate fills it before the reset.
+        let rate = used / passed as f64;
+        let out = now + SignedDuration::from_secs(((100. - used) / rate) as i64);
+        Label {
+            text: format!("Runs out ~{}", clock(out, now, out.local_offset())),
+            tone: Tone::Warn,
+        }
+    } else {
+        Label {
+            text: format!("{:.0}% in reserve", -ahead),
+            tone: Tone::Muted,
+        }
+    };
+    Some(Pace {
+        elapsed: elapsed as f32,
+        label,
+    })
+}
+
+/// `used 3m ago`, coarsely.
+fn ago(at: Timestamp, now: Timestamp) -> String {
+    let secs = now.duration_since(at).as_secs().max(0);
+    match secs {
+        0..60 => "used just now".to_owned(),
+        60..3_600 => format!("used {}m ago", secs / 60),
+        3_600..86_400 => format!("used {}h ago", secs / 3_600),
+        _ => format!("used {}d ago", secs / 86_400),
     }
 }
 
@@ -366,6 +442,7 @@ fn row(account: &AccountReport, slots: &[Slot], now: Timestamp) -> Row {
         pinned: account.pinned,
         disabled: account.disabled,
         priority: account.priority,
+        last_used: account.state.last_used.map(|at| ago(at, now)),
     }
 }
 
@@ -510,6 +587,32 @@ mod tests {
         // the next morning lands on Thursday there.
         let west = SignedDuration::from_secs(-5 * 3_600);
         assert_eq!(clock(ts(1_000 + 5 * 3_600), now, west), "Thu 00:16");
+    }
+
+    #[test]
+    fn pace_compares_use_with_an_even_spend() {
+        let now = ts(100_000);
+        // Halfway through a 5-hour window.
+        let half = |used: f64| window("5h", used, 100_000 + 9_000);
+        let label = |used| pace(&half(used), used, now).unwrap().label;
+        assert_eq!(pace(&half(50.), 50., now).unwrap().elapsed, 0.5);
+        assert_eq!(label(52.).text, "On pace");
+        assert_eq!(label(20.).text, "30% in reserve");
+        let ahead = label(70.);
+        assert!(ahead.text.starts_with("Runs out ~"), "{}", ahead.text);
+        assert_eq!(ahead.tone, Tone::Warn);
+        // Too soon to say, and nothing left to pace.
+        assert_eq!(pace(&window("5h", 10., 100_000 + 17_900), 10., now), None);
+        assert_eq!(pace(&half(100.), 100., now), None);
+    }
+
+    #[test]
+    fn last_use_reads_coarsely() {
+        let now = ts(100_000);
+        assert_eq!(ago(ts(99_990), now), "used just now");
+        assert_eq!(ago(ts(100_000 - 180), now), "used 3m ago");
+        assert_eq!(ago(ts(100_000 - 7_300), now), "used 2h ago");
+        assert_eq!(ago(ts(100_000 - 200_000), now), "used 2d ago");
     }
 
     #[test]
