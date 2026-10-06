@@ -343,9 +343,10 @@ fn show(section: Section, cx: &mut App) {
 }
 
 /// Dresses gpui-kit's theme as macOS: AppKit's colors for the window's light
-/// or dark appearance, as macOS 26 and later draw them, the accent color
-/// chosen in System Settings, and the system's 13-point type, which also
-/// brings the controls down to AppKit's heights.
+/// or dark appearance, as macOS 26 and later draw them (the page, its
+/// toolbar and their hairline as a split view's content has them), the
+/// accent color chosen in System Settings, and the system's 13-point type,
+/// which also brings the controls down to AppKit's heights.
 fn macos_theme(window: &mut Window, cx: &mut App) {
     Theme::change(window.appearance(), Some(window), cx);
     let accent = native::system_accent().unwrap_or_else(|| rgb(0x007aff).into());
@@ -359,15 +360,15 @@ fn macos_theme(window: &mut Window, cx: &mut App) {
         theme.shadow = false;
 
         let c = &mut theme.colors;
-        c.background = pick(0xffffffff, 0x1e1e1eff);
+        c.background = pick(0xffffffff, 0x1b1b1bff);
         c.foreground = pick(0x000000d8, 0xffffffd8);
         c.muted_foreground = pick(0x0000007f, 0xffffff8c);
         c.border = pick(0x00000019, 0xffffff19);
         c.muted = pick(0x00000014, 0xffffff19);
-        c.group_box = pick(0x0000000a, 0xffffff0d);
+        c.group_box = pick(0x0000000a, 0xffffff08);
         c.group_box_foreground = c.foreground;
-        c.title_bar = c.background;
-        c.title_bar_border = c.border;
+        c.title_bar = pick(0xffffffff, 0x232323ff);
+        c.title_bar_border = pick(0xe5e5e5ff, 0x2b2b2bff);
         c.popover = pick(0xffffffff, 0x2c2c2cff);
         c.popover_foreground = c.foreground;
         c.input = pick(0x0000001f, 0xffffff1c);
@@ -927,11 +928,11 @@ impl Main {
             )),
             Section::Agents | Section::Settings => tools,
         };
+        // The title bar draws the hairline beneath it.
         TitleBar::new()
             .h(TOOLBAR)
             .pr(px(12.))
-            .bg(c.bg)
-            .border_0()
+            .bg(c.toolbar)
             .child(
                 div()
                     .text_size(px(15.))
@@ -1164,6 +1165,7 @@ fn clear(open: f32) -> f32 {
 #[derive(Clone, Copy)]
 struct Colors {
     bg: Hsla,
+    toolbar: Hsla,
     fg: Hsla,
     muted: Hsla,
     separator: Hsla,
@@ -1185,6 +1187,7 @@ impl Colors {
         let theme = cx.theme();
         Self {
             bg: theme.background,
+            toolbar: theme.title_bar,
             fg: theme.foreground,
             muted: theme.muted_foreground,
             separator: theme.border,
