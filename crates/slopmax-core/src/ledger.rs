@@ -1,5 +1,6 @@
-//! The usage ledger: one JSON line per answered request, in monthly files
-//! (`~/.slopmax/usage/2026-10.jsonl`). `slopmax usage` reads it back.
+//! The usage ledger: one JSON line per request that reached the accounts,
+//! answered or failed, in monthly files (`~/.slopmax/usage/2026-10.jsonl`).
+//! `slopmax usage` reads it back.
 
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
@@ -13,7 +14,7 @@ use crate::provider::ProviderId;
 use crate::time::{SignedDuration, Timestamp};
 use crate::{fsx, log};
 
-/// One answered request.
+/// One request: answered, or failed with the status the agent got.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Entry {
     pub at: Timestamp,
@@ -35,9 +36,35 @@ pub struct Entry {
     /// Milliseconds from the request arriving to the first response byte.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_byte_ms: Option<u64>,
-    /// Accounts tried before one answered.
+    /// Accounts tried: the last one answered, or none did.
     #[serde(default = "one", skip_serializing_if = "is_one")]
     pub attempts: u32,
+    /// The agent that sent it (`claude`, `codex`), or `slopmax` for the
+    /// requests slopmax sends itself to start a window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    /// The agent's session (its conversation), when it names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+}
+
+impl Entry {
+    /// Every token the request moved: input, output, and both kinds of cache.
+    pub fn tokens(&self) -> u64 {
+        self.input + self.output + self.cache_read + self.cache_write
+    }
+
+    /// Whether it ended in an error instead of an answer.
+    pub fn failed(&self) -> bool {
+        self.status >= 400
+    }
+
+    /// Whether it is a request someone made: an answer that moved tokens,
+    /// unlike a failure or an agent's housekeeping (listing models,
+    /// counting tokens).
+    pub fn answered(&self) -> bool {
+        !self.failed() && self.tokens() > 0
+    }
 }
 
 fn one() -> u32 {
@@ -157,6 +184,8 @@ mod tests {
             ms: 900,
             first_byte_ms: Some(300),
             attempts: 1,
+            agent: None,
+            session: None,
         }
     }
 

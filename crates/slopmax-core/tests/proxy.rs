@@ -604,6 +604,8 @@ async fn claude_fails_over_and_forwards_the_request_unchanged() {
     assert_eq!((entry.input, entry.output, entry.cache_read), (10, 25, 90));
     assert_eq!(entry.attempts, 2);
     assert!(entry.first_byte_ms.is_some());
+    assert_eq!(entry.agent.as_deref(), Some("claude"));
+    assert_eq!(entry.session.as_deref(), Some("sess-1"));
 
     // The session is now pinned to the serving account; no retry on the
     // limited one.
@@ -642,6 +644,24 @@ async fn every_account_spent_returns_the_agents_own_limit_error() {
     let before = h.log.lock().unwrap().len();
     assert_eq!(claude_request(&h).send().await.unwrap().status(), 429);
     assert_eq!(h.log.lock().unwrap().len(), before);
+
+    // The ledger counts both as failures: the first after trying both
+    // accounts, the second without trying any.
+    let mut entries = Vec::new();
+    for _ in 0..50 {
+        entries = ledger::read(&h.dir.join("usage"), Timestamp::UNIX_EPOCH);
+        if entries.len() == 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(entries.len(), 2);
+    assert!(entries.iter().all(|e| e.status == 429 && e.tokens() == 0));
+    assert!(entries.iter().all(|e| e.failed() && !e.answered()));
+    assert_eq!(entries[0].attempts, 2);
+    assert!(h.ids.contains(&entries[0].account));
+    assert_eq!(entries[0].agent.as_deref(), Some("claude"));
+    assert_eq!((entries[1].attempts, entries[1].account.as_str()), (0, ""));
 }
 
 #[tokio::test]

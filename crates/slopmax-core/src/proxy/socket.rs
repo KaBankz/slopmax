@@ -139,9 +139,15 @@ pub(super) async fn accept(app: Arc<App>, target: Target, mut request: Request) 
         }
     }
     let upgrading = hyper::upgrade::on(&mut request);
+    let origin = Origin {
+        agent: agent.map(|a| a.id()),
+        session,
+    };
     tokio::spawn(async move {
         match upgrading.await {
-            Ok(client) => relay(app, account, TokioIo::new(client), upstream, moved).await,
+            Ok(client) => {
+                relay(app, account, TokioIo::new(client), upstream, moved, origin).await;
+            }
             Err(e) => log::warn!("websocket upgrade failed: {e}"),
         }
     });
@@ -236,8 +242,21 @@ struct Turn {
     first_byte: Option<Instant>,
 }
 
+/// Who opened the socket, for the usage ledger.
+struct Origin {
+    agent: Option<&'static str>,
+    session: Option<String>,
+}
+
 /// Relays messages both ways until either side closes.
-async fn relay(app: Arc<App>, account: Account, client: Socket, upstream: Socket, moved: bool) {
+async fn relay(
+    app: Arc<App>,
+    account: Account,
+    client: Socket,
+    upstream: Socket,
+    moved: bool,
+    origin: Origin,
+) {
     let (client_read, client_write) = tokio::io::split(client);
     let (upstream_read, upstream_write) = tokio::io::split(upstream);
     let (to_client, mut for_client) = mpsc::channel::<Message>(64);
@@ -275,6 +294,7 @@ async fn relay(app: Arc<App>, account: Account, client: Socket, upstream: Socket
         to_client,
         to_upstream,
         turn,
+        origin,
     ));
     // Either side ending ends the relay; the writers flush what is queued,
     // closes included, once their senders are gone.
@@ -366,6 +386,7 @@ async fn from_upstream(
     to_client: mpsc::Sender<Message>,
     to_upstream: mpsc::Sender<Message>,
     turn: Arc<Mutex<Turn>>,
+    origin: Origin,
 ) {
     let id = account.id.clone();
     loop {
@@ -426,7 +447,7 @@ async fn from_upstream(
                 }
                 "response.completed" | "response.incomplete" | "response.done" => {
                     app.pool.record_success(&id, now);
-                    record(&app, &id, &event, &turn);
+                    record(&app, &id, &event, &turn, &origin);
                 }
                 "response.failed" | "error" => {
                     if let Some(refusal) = refusal(&event, now) {
@@ -485,7 +506,7 @@ fn refusal(event: &Value, now: Timestamp) -> Option<Refusal> {
 }
 
 /// Records a finished turn in the ledger and the account's counters.
-fn record(app: &App, id: &str, event: &Value, turn: &Mutex<Turn>) {
+fn record(app: &App, id: &str, event: &Value, turn: &Mutex<Turn>, origin: &Origin) {
     let turn = std::mem::take(&mut *turn.lock().unwrap_or_else(|p| p.into_inner()));
     let usage = event
         .pointer("/response/usage")
@@ -510,6 +531,8 @@ fn record(app: &App, id: &str, event: &Value, turn: &Mutex<Turn>) {
         ms: millis(Instant::now()),
         first_byte_ms: turn.first_byte.map(millis),
         attempts: 1,
+        agent: origin.agent.map(str::to_owned),
+        session: origin.session.clone(),
     };
     app.broadcast(&entry);
     app.ledger.record(entry);

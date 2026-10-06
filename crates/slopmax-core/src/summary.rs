@@ -156,6 +156,8 @@ mod tests {
             ms: 1,
             first_byte_ms: None,
             attempts: 1,
+            agent: None,
+            session: None,
         }
     }
 

@@ -362,12 +362,67 @@ pub(super) async fn forward(
             };
             tried.push(choice.account.id.clone());
             match attempt(&app, &inbound, step, choice, tried.len()).await {
-                Attempt::Done(response) => return response,
+                Attempt::Done(response) => {
+                    // An error passed back is no answer: the ledger counts it
+                    // as a failure.
+                    if !response.status().is_success() {
+                        let status = response.status();
+                        failed(
+                            &app,
+                            &inbound,
+                            step.provider,
+                            tried.last(),
+                            status,
+                            tried.len(),
+                        );
+                    }
+                    return response;
+                }
                 Attempt::Failed(failure) => last = failure.or(last),
             }
         }
     }
-    give_up(&app, dialect, steps[0].provider, unavailable, last)
+    let provider = last.as_ref().map_or(steps[0].provider, |f| f.provider);
+    let response = give_up(&app, dialect, steps[0].provider, unavailable, last);
+    failed(
+        &app,
+        &inbound,
+        provider,
+        tried.last(),
+        response.status(),
+        tried.len(),
+    );
+    response
+}
+
+/// Records a request that ended without an answer, with the last account
+/// tried (if any was), so the ledger counts failures beside answers.
+fn failed(
+    app: &App,
+    inbound: &Inbound,
+    provider: ProviderId,
+    account: Option<&String>,
+    status: StatusCode,
+    attempts: usize,
+) {
+    let entry = Entry {
+        at: Timestamp::now(),
+        account: account.cloned().unwrap_or_default(),
+        provider,
+        model: inbound.model.clone(),
+        status: status.as_u16(),
+        input: 0,
+        output: 0,
+        cache_read: 0,
+        cache_write: 0,
+        ms: inbound.started.elapsed().as_millis() as u64,
+        first_byte_ms: None,
+        attempts: attempts as u32,
+        agent: inbound.agent.map(|a| a.id().to_owned()),
+        session: inbound.session.clone(),
+    };
+    app.broadcast(&entry);
+    app.ledger.record(entry);
 }
 
 /// Combines why two steps could not serve: the earliest return wins.
@@ -474,6 +529,8 @@ async fn attempt(
                 status,
                 started: inbound.started,
                 attempts: attempts as u32,
+                agent: inbound.agent.map(|a| a.id()),
+                session: inbound.session.clone(),
             };
             let response = match lane {
                 None => stream_back(app, dialect, served, &headers, body),
@@ -707,6 +764,8 @@ struct Served {
     status: StatusCode,
     started: Instant,
     attempts: u32,
+    agent: Option<&'static str>,
+    session: Option<String>,
 }
 
 /// Streams a successful response to the agent as it came.
@@ -841,6 +900,8 @@ fn recorded(
             ms: millis(Instant::now()),
             first_byte_ms: first_byte.map(millis),
             attempts: served.attempts,
+            agent: served.agent.map(str::to_owned),
+            session: served.session,
         };
         pool_app.broadcast(&entry);
         pool_app.ledger.record(entry);

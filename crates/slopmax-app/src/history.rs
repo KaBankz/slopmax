@@ -250,6 +250,8 @@ mod tests {
             ms: 900,
             first_byte_ms: Some(input),
             attempts: 1,
+            agent: None,
+            session: None,
         }
     }
 

@@ -118,6 +118,8 @@ async fn warm(app: &App, account: &Account, model: &str) -> Result<(), String> {
         ms: started.elapsed().as_millis() as u64,
         first_byte_ms: None,
         attempts: 1,
+        agent: Some("slopmax".to_owned()),
+        session: None,
     };
     app.broadcast(&entry);
     app.ledger.record(entry);
