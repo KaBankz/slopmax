@@ -7,10 +7,11 @@
 
 mod usage;
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gpui_kit::component::button::Button;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{self, Input, InputState};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::switch::Switch;
@@ -19,7 +20,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use gpui_tray::{Icon, Tray};
 use slopmax_app::history::Range;
-use slopmax_app::view::{self, Gauge, Group, Label, Overview, Row, Share};
+use slopmax_app::view::{self, Credits, Gauge, Group, Label, Overview, Row, Share};
 use slopmax_app::{App as Slopmax, Proxy, Snapshot};
 use slopmax_core::provider::ProviderId;
 use slopmax_core::report::Tone;
@@ -354,6 +355,10 @@ struct Main {
     range: Range,
     /// When the history was last asked for.
     asked: Option<Instant>,
+    /// The accounts whose reset credits show.
+    credits_open: HashSet<String>,
+    /// The account whose reset credit waits on a second press to redeem.
+    confirming: Option<String>,
     _tasks: [Task<()>; 2],
     _system: [Subscription; 2],
 }
@@ -424,6 +429,8 @@ impl Main {
             page: Page::Accounts,
             range: Range::default(),
             asked: None,
+            credits_open: HashSet::new(),
+            confirming: None,
             _tasks: [follow, tick],
             _system: [appearance, activation],
         }
@@ -654,7 +661,7 @@ impl Main {
             )));
         }
         for group in &groups {
-            body = body.child(self.group(group, c));
+            body = body.child(self.group(group, c, cx));
         }
         body.child(section("Add an account", c).child(self.add(c, cx)))
     }
@@ -751,12 +758,12 @@ impl Main {
     }
 
     /// A provider's accounts: a heading, then a row each.
-    fn group(&self, group: &Group, c: &Colors) -> impl IntoElement {
+    fn group(&self, group: &Group, c: &Colors, cx: &mut Context<Self>) -> impl IntoElement {
         let auto = self.app.clone();
         let pinned = group.accounts.iter().any(|row| row.pinned);
         let mut list = group_box(c);
         for (i, row) in group.accounts.iter().enumerate() {
-            list = list.child(self.row(row, &group.limits, i == 0, c));
+            list = list.child(self.row(row, group, i == 0, c, cx));
         }
         v_flex()
             .gap(px(8.))
@@ -787,10 +794,20 @@ impl Main {
     }
 
     /// An account: its name, plan, and standing, a column for each of its
-    /// usage windows, and its switches.
-    fn row(&self, row: &Row, limits: &[String], first: bool, c: &Colors) -> impl IntoElement {
+    /// usage windows, and its switches; beneath, its reset credits when
+    /// opened.
+    fn row(
+        &self,
+        row: &Row,
+        group: &Group,
+        first: bool,
+        c: &Colors,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let limits = &group.limits;
         let (pin, toggle) = (self.app.clone(), self.app.clone());
         let (id, id2) = (row.id.clone(), row.id.clone());
+        let open = row.credits.is_some() && self.credits_open.contains(&row.id);
         // Out of quota on one window, it waits on that one alone, so the
         // others fade.
         let held = row.limits.iter().flatten().any(|g| g.fraction >= 1.0);
@@ -822,13 +839,18 @@ impl Main {
                                 line.child("·").child(div().flex_shrink_0().child(used))
                             }),
                     )
-                    .when(!row.notes.is_empty(), |name| {
+                    .when(!row.notes.is_empty() || row.credits.is_some(), |name| {
                         name.child(
                             h_flex()
                                 .gap(px(10.))
                                 .overflow_hidden()
                                 .text_size(px(11.))
                                 .text_color(c.muted)
+                                .children(
+                                    row.credits
+                                        .as_ref()
+                                        .map(|credits| disclosure(row, credits, open, c, cx)),
+                                )
                                 // Only the last note gives way, so a long
                                 // error never squeezes the short ones.
                                 .children(row.notes.iter().enumerate().map(|(i, note)| {
@@ -844,11 +866,17 @@ impl Main {
                 limit(title, gauge.as_ref(), faded, c)
             }))
             .when(limits.is_empty(), |line| line.child(div().flex_1()));
-        h_flex()
+        let panel = row
+            .credits
+            .as_ref()
+            .filter(|_| open)
+            .map(|credits| self.credits(row, credits, group.title, c, cx));
+        v_flex()
             .py(px(12.))
+            .gap(px(12.))
             .when(!first, |row| row.border_t_1().border_color(c.separator))
             .child(
-                line.flex_1().child(
+                line.child(
                     h_flex()
                         .flex_shrink_0()
                         .gap(px(12.))
@@ -876,6 +904,131 @@ impl Main {
                         ),
                 ),
             )
+            .children(panel)
+    }
+
+    /// An account's reset credits: when each was granted and expires, what
+    /// redeeming one clears, and the button that does, which asks first.
+    fn credits(
+        &self,
+        row: &Row,
+        credits: &Credits,
+        provider: &str,
+        c: &Colors,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let redeeming = self.snapshot.redeeming.as_deref() == Some(row.id.as_str());
+        let confirming = self.confirming.as_deref() == Some(row.id.as_str());
+        let running = matches!(self.snapshot.proxy, Proxy::Running { .. });
+        let held = credits
+            .held
+            .clone()
+            .or_else(|| (!running).then(|| "Start the proxy to redeem one".to_owned()));
+        let id = row.id.clone();
+        let action = if redeeming {
+            h_flex().child(caption("Redeeming…", c))
+        } else if confirming {
+            let app = self.app.clone();
+            h_flex()
+                .gap(px(8.))
+                .child(div().text_size(px(12.)).child("Redeem one now?"))
+                .child(
+                    push(SharedString::from(format!("keep-{id}")), "Cancel")
+                        .small()
+                        .on_click(cx.listener(|main, _, _, cx| {
+                            main.confirming = None;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    Button::new(SharedString::from(format!("redeem-{id}")))
+                        .label("Redeem")
+                        .primary()
+                        .small()
+                        .accessibility_label(format!("Redeem it now on {}", row.name))
+                        .on_click(cx.listener(move |main, _, _, cx| {
+                            main.confirming = None;
+                            app.redeem(&id);
+                            cx.notify();
+                        })),
+                )
+        } else {
+            h_flex()
+                .gap(px(10.))
+                .children(held.as_deref().map(|why| caption(why, c)))
+                .child(
+                    push(
+                        SharedString::from(format!("ask-redeem-{id}")),
+                        "Redeem one…",
+                    )
+                    .small()
+                    .disabled(held.is_some())
+                    .accessibility_label(format!("Redeem a reset credit on {}…", row.name))
+                    .on_click(cx.listener(move |main, _, _, cx| {
+                        main.confirming = Some(id.clone());
+                        cx.notify();
+                    })),
+                )
+        };
+        let mut panel = v_flex()
+            .p(px(12.))
+            .gap(px(10.))
+            .rounded(px(8.))
+            .bg(c.fg.opacity(0.04))
+            .child(
+                h_flex()
+                    .gap(px(12.))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("Reset credits"),
+                            )
+                            .child(caption(
+                                &format!(
+                                    "Each one resets this account's {} windows at once.",
+                                    credits.clears
+                                ),
+                                c,
+                            )),
+                    )
+                    .child(action),
+            );
+        if credits.credits.is_empty() {
+            panel = panel.child(caption("Listing them…", c));
+        }
+        for credit in &credits.credits {
+            panel = panel.child(
+                h_flex()
+                    .gap(px(8.))
+                    .pt(px(8.))
+                    .border_t_1()
+                    .border_color(c.separator)
+                    .child(dot(match credit.tone {
+                        Tone::Muted => c.muted,
+                        tone => c.tone(tone),
+                    }))
+                    .child(credit.expires.clone())
+                    .children(credit.left.as_ref().map(|left| {
+                        div()
+                            .text_color(match credit.tone {
+                                Tone::Muted => c.muted,
+                                tone => c.tone(tone),
+                            })
+                            .child(left.clone())
+                    }))
+                    .child(div().flex_1())
+                    .children(credit.granted.as_deref().map(|granted| caption(granted, c))),
+            );
+        }
+        panel.children(
+            view::auto_redeem(self.app.config(), provider)
+                .map(|policy| caption(&policy, c).pt(px(2.))),
+        )
     }
 
     fn agents(&self, c: &Colors) -> impl IntoElement {
@@ -1064,6 +1217,38 @@ fn dot(color: Hsla) -> Div {
     div().flex_shrink_0().size(px(7.)).rounded_full().bg(color)
 }
 
+/// The way to an account's reset credits: their count, and a triangle that
+/// turns down while they show.
+fn disclosure(
+    row: &Row,
+    credits: &Credits,
+    open: bool,
+    c: &Colors,
+    cx: &mut Context<Main>,
+) -> impl IntoElement {
+    let id = row.id.clone();
+    h_flex()
+        .id(SharedString::from(format!("credits-{}", row.id)))
+        .flex_shrink_0()
+        .gap(px(4.))
+        .text_color(c.accent)
+        .cursor_pointer()
+        .role(Role::DisclosureTriangle)
+        .aria_label(format!("{} on {}", credits.title, row.name))
+        .aria_expanded(open)
+        .child(credits.title.clone())
+        .child(if open { "▾" } else { "▸" })
+        .on_click(cx.listener(move |main, _, _, cx| {
+            if !main.credits_open.remove(&id) {
+                main.credits_open.insert(id.clone());
+            }
+            if main.confirming.as_ref() == Some(&id) {
+                main.confirming = None;
+            }
+            cx.notify();
+        }))
+}
+
 /// A worded state. Good, warning, and bad ones lead with a dot of their
 /// color, as Mac apps show status, and keep their words readable.
 fn label(label: &Label, c: &Colors) -> Div {
@@ -1114,6 +1299,14 @@ fn overview(groups: &[Group], c: &Colors) -> Option<Div> {
                             .gap(px(20.))
                             .children(group.overview.iter().map(|o| metric(o, c))),
                     )
+                    .children(group.credits.as_deref().map(|credits| {
+                        h_flex()
+                            .gap(px(6.))
+                            .text_size(px(11.))
+                            .text_color(c.accent)
+                            .child("↺")
+                            .child(credits.to_owned())
+                    }))
             })),
     )
 }
