@@ -33,7 +33,6 @@ api_key = "bench"
 listen = "$listen"
 poll_mins = 0
 refresh_tokens = false
-redeem_expiring_credits = false
 EOF
 up() { until curl -fs -o /dev/null "http://$listen/healthz"; do sleep 0.1; done; }
 

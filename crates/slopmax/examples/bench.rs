@@ -12,6 +12,7 @@
 
 use std::net::SocketAddr;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
@@ -66,10 +67,21 @@ async fn upstream(listen: SocketAddr) -> Result<()> {
 }
 
 /// Answers like the providers do: a streamed reply with usage, and the
-/// rate-limit headers slopmax reads.
+/// rate-limit headers slopmax reads; and ChatGPT's reset credits.
 async fn answer(request: Request) -> Response {
     let (parts, incoming) = request.into_parts();
-    let _ = body::read(incoming, usize::MAX).await;
+    let sent = body::read(incoming, usize::MAX).await.unwrap_or_default();
+    let token = parts
+        .headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .trim_start_matches("Bearer ");
+    match (&parts.method, parts.uri.path()) {
+        (&Method::GET, "/wham/rate-limit-reset-credits") => return credit_list(token),
+        (&Method::POST, "/wham/rate-limit-reset-credits/consume") => return consume(&sent),
+        _ => {}
+    }
     let reset = (Timestamp::now() + SignedDuration::from_hours(3)).as_second();
     let (events, headers): (Vec<String>, Vec<(&str, String)>) =
         match (parts.method, parts.uri.path()) {
@@ -114,6 +126,61 @@ async fn answer(request: Request) -> Response {
     for (name, value) in headers {
         map.insert(name, HeaderValue::from_str(&value).expect("ascii"));
     }
+    response
+}
+
+/// The reset credits redeemed so far.
+static REDEEMED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Each ChatGPT account's unspent reset credits: two, granted weeks apart,
+/// the first account's soon to expire. Dated from when the mock started,
+/// so they stay put.
+fn credit_list(token: &str) -> Response {
+    static STARTED: OnceLock<Timestamp> = OnceLock::new();
+    let started = *STARTED.get_or_init(Timestamp::now);
+    let at = |hours: i64| (started + SignedDuration::from_hours(hours)).to_string();
+    // Granted, then expiring, in hours from the start.
+    let dates: &[(i64, i64)] = match token {
+        "bench-codex-0" => &[(-27 * 24 - 5, 2 * 24 + 19), (-6 * 24, 24 * 24)],
+        "bench-codex-1" => &[(-12 * 24, 18 * 24), (-30, 29 * 24 - 6)],
+        _ => &[],
+    };
+    let redeemed = REDEEMED.lock().unwrap_or_else(|p| p.into_inner());
+    let credits: Vec<Value> = dates
+        .iter()
+        .enumerate()
+        .map(|(i, (granted, expires))| (format!("{token}-credit-{i}"), granted, expires))
+        .filter(|(id, _, _)| !redeemed.contains(id))
+        .map(|(id, granted, expires)| {
+            json!({
+                "id": id, "status": "available", "reset_type": "codex_rate_limits",
+                "title": "Rate limit reset", "granted_at": at(*granted), "expires_at": at(*expires),
+            })
+        })
+        .collect();
+    let list = json!({ "available_count": credits.len(), "credits": credits });
+    json_response(&list)
+}
+
+/// Redeems the credit asked for, once.
+fn consume(sent: &[u8]) -> Response {
+    let asked: Value = serde_json::from_slice(sent).unwrap_or_default();
+    let id = asked["credit_id"].as_str().unwrap_or_default().to_owned();
+    let mut redeemed = REDEEMED.lock().unwrap_or_else(|p| p.into_inner());
+    let code = if redeemed.contains(&id) {
+        "already_redeemed"
+    } else {
+        redeemed.push(id);
+        "reset"
+    };
+    json_response(&json!({ "code": code, "windows_reset": 2 }))
+}
+
+fn json_response(value: &Value) -> Response {
+    let mut response = Response::new(body::full(value.to_string()));
+    response
+        .headers_mut()
+        .insert("content-type", HeaderValue::from_static("application/json"));
     response
 }
 
@@ -192,7 +259,6 @@ async fn proxy(listen: SocketAddr, upstream: &str, home: &str) -> Result<()> {
         api_key: "bench".into(),
         refresh_tokens: false,
         poll_mins: 0,
-        redeem_expiring_credits: false,
         ..Config::default()
     };
     let origins = Origins::new([
