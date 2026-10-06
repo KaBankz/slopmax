@@ -71,10 +71,15 @@ looks = {
 }
 served = {"requests": 120, "input_tokens": 900_000, "output_tokens": 80_000,
           "cache_read_tokens": 4_000_000, "cache_write_tokens": 200_000}
+# When each account last answered, in seconds ago: the limited one before
+# its limit, the others lately.
+used = {"claude": [180, 2_460], "codex": [7_500, 720]}
 state = {"accounts": {}}
 for provider, shapes in looks.items():
-    for account, shape in zip([i for i in ids if i.startswith(provider)], shapes):
-        entry = {"limits": {"windows": shape, "observed_at": at(0)}, "usage": served}
+    accounts = [i for i in ids if i.startswith(provider)]
+    for account, shape, ago in zip(accounts, shapes, used[provider]):
+        entry = {"limits": {"windows": shape, "observed_at": at(0)}, "usage": served,
+                 "last_used": at(-ago)}
         if shape[0]["used"] >= 100:
             entry["blocked_until"] = shape[0]["resets_at"]
         if provider == "codex":
@@ -83,15 +88,24 @@ for provider, shapes in looks.items():
 with open(f"{home}/state.json", "w") as f:
     json.dump(state, f, indent=2)
 
-# Thirty days of requests in the ledger, for the app's charts: busier on
-# weekdays and in working hours, mostly cached, growing over the month,
-# with the odd failure.
+# Thirty days of requests in the ledger, for the app's charts, as the proxy
+# writes them: agents' sessions, busier on weekdays and in working hours,
+# mostly cached and growing over the month; the odd answer after a failover
+# and the odd failure; each session opening with a model listing (no
+# tokens, so no request); and a daily warmup on each ChatGPT account.
 import random
 
 random.seed(7)
 models = {"claude": [("claude-opus-5-5", 7), ("claude-sonnet-5-5", 2), ("claude-fable-5-1", 1)],
           "codex": [("gpt-6-sol", 1)]}
 ledger = {}
+
+
+def emit(at, entry):
+    entry = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(at)), **entry}
+    ledger.setdefault(time.strftime("%Y-%m", time.gmtime(at)), []).append((at, entry))
+
+
 clock = time.localtime(now)
 midnight = now - (clock.tm_hour * 3_600 + clock.tm_min * 60 + clock.tm_sec)
 for back in range(29, -1, -1):
@@ -99,23 +113,47 @@ for back in range(29, -1, -1):
     weekday = time.localtime(day + 43_200).tm_wday < 5
     for account in ids:
         provider = "claude" if account.startswith("claude") else "codex"
-        busy = (70 if weekday else 25) * (0.6 + 0.4 * (30 - back) / 30) * random.uniform(0.6, 1.4)
-        for _ in range(int(busy)):
-            at = day + random.randrange(8, 24) * 3_600 + random.randrange(3_600)
+        agent = "claude" if provider == "claude" else "codex"
+        names, weights = zip(*models[provider])
+        if provider == "codex" and day + 7 * 3_600 <= now:
+            emit(day + 7 * 3_600, {"account": account, "provider": provider, "model": "gpt-6-sol",
+                                   "status": 200, "input": 9, "output": 1, "ms": 900, "agent": "slopmax"})
+        busy = int((70 if weekday else 25) * (0.6 + 0.4 * (30 - back) / 30) * random.uniform(0.6, 1.4))
+        while busy > 0:
+            size = min(busy, random.randint(8, 40))
+            busy -= size
+            session = "%016x" % random.getrandbits(64)
+            at = day + random.randrange(8, 23) * 3_600 + random.randrange(3_600)
             if at > now:
                 continue
-            names, weights = zip(*models[provider])
-            ok = random.random() < 0.97
-            entry = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(at)), "account": account,
-                     "provider": provider, "model": random.choices(names, weights)[0],
-                     "status": 200 if ok else random.choice([429, 500]),
-                     "ms": random.randint(1_500, 45_000)}
-            if ok:
-                entry |= {"input": random.randint(20, 900), "output": random.randint(150, 2_500),
-                          "cache_read": random.randint(20_000, 180_000),
-                          "cache_write": random.randint(0, 12_000),
-                          "first_byte_ms": random.randint(350, 1_400) + (300 if provider == "codex" else 0)}
-            ledger.setdefault(time.strftime("%Y-%m", time.gmtime(at)), []).append((at, entry))
+            emit(at, {"account": account, "provider": provider, "status": 200,
+                      "ms": random.randint(80, 400), "agent": agent, "session": session})
+            for _ in range(size):
+                at += random.randint(20, 240)
+                if at > now:
+                    break
+                origin = {"provider": provider, "model": random.choices(names, weights)[0],
+                          "agent": agent, "session": session}
+                roll = random.random()
+                if roll < 0.01:
+                    # Every account spent: no account could be tried.
+                    emit(at, {"account": "", "status": 429, "ms": random.randint(5, 60),
+                              "attempts": 0, **origin})
+                elif roll < 0.02:
+                    # The provider answered with an error.
+                    emit(at, {"account": account, "status": random.choice([500, 529, 400]),
+                              "ms": random.randint(300, 4_000), **origin})
+                else:
+                    entry = {"account": account, "status": 200, **origin,
+                             "input": random.randint(20, 900), "output": random.randint(150, 2_500),
+                             "cache_read": random.randint(20_000, 180_000),
+                             "cache_write": random.randint(0, 12_000),
+                             "ms": random.randint(4_000, 45_000),
+                             "first_byte_ms": random.randint(350, 1_400) + (300 if provider == "codex" else 0)}
+                    if roll > 0.96:
+                        # Another account was limited first.
+                        entry["attempts"] = 2
+                    emit(at, entry)
 os.makedirs(f"{home}/usage", exist_ok=True)
 for month, entries in ledger.items():
     with open(f"{home}/usage/{month}.jsonl", "w") as f:
