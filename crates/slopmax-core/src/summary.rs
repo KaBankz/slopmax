@@ -19,6 +19,8 @@ pub const GROUPS: &[&str] = &["day", "model", "account"];
 /// Totals for one row.
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct Totals {
+    /// Requests answered; failures and agents' housekeeping (listing
+    /// models, counting tokens) are not among them.
     pub requests: u64,
     pub input: u64,
     pub output: u64,
@@ -30,6 +32,9 @@ pub struct Totals {
     /// Requests to models without a price, left out of `cost`.
     #[serde(skip_serializing_if = "is_zero")]
     pub unpriced: u64,
+    /// Requests that ended in an error instead of an answer.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub failed: u64,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -42,7 +47,16 @@ fn micro_dollars<S: serde::Serializer>(cost: &f64, s: S) -> Result<S::Ok, S::Err
 }
 
 impl Totals {
+    /// Counts a ledger row: an answer in every total, a failure as failed,
+    /// and an agent's housekeeping not at all.
     pub fn add(&mut self, entry: &Entry, prices: &BTreeMap<String, Custom>) {
+        if entry.failed() {
+            self.failed += 1;
+            return;
+        }
+        if !entry.answered() {
+            return;
+        }
         let price = entry
             .model
             .as_deref()
@@ -125,7 +139,8 @@ pub fn build(
     };
     let mut rows: BTreeMap<String, Totals> = BTreeMap::new();
     let mut total = Totals::default();
-    for entry in &entries {
+    // An agent's housekeeping makes no row of its own.
+    for entry in entries.iter().filter(|e| e.answered() || e.failed()) {
         rows.entry(key(entry)).or_default().add(entry, prices);
         total.add(entry, prices);
     }
@@ -174,6 +189,22 @@ mod tests {
         let mut priced = Totals::default();
         priced.add(&entry("claude-opus-5-5", 500_000), &prices);
         assert_eq!(priced.cost_label(), "$2.00");
+    }
+
+    #[test]
+    fn requests_are_the_answers_alone() {
+        let prices = BTreeMap::new();
+        let mut totals = Totals::default();
+        totals.add(&entry("claude-opus-5-5", 100), &prices);
+        // An agent listing models or counting tokens moves none.
+        totals.add(&entry("claude-opus-5-5", 0), &prices);
+        let failure = Entry {
+            status: 429,
+            ..entry("claude-opus-5-5", 0)
+        };
+        totals.add(&failure, &prices);
+        assert_eq!((totals.requests, totals.failed, totals.input), (1, 1, 100));
+        assert_eq!(totals.unpriced, 0);
     }
 
     #[test]

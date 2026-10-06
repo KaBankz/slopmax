@@ -36,7 +36,7 @@ pub fn run(config: &Config, store: &Store, range: &str, by: &str, json: bool) ->
         "all" => "all time".to_owned(),
         days => format!("the last {} days", days.trim_end_matches('d')),
     };
-    if total.requests == 0 {
+    if total.requests == 0 && total.failed == 0 {
         println!("No requests recorded for {title}.");
         return Ok(());
     }
@@ -84,6 +84,15 @@ pub fn run(config: &Config, store: &Store, range: &str, by: &str, json: bool) ->
              [prices] in {}.",
             if n == 1 { "" } else { "s" },
             paths::config_file().display()
+        ));
+    }
+    if total.failed > 0 {
+        let n = total.failed;
+        note.push_str(&format!(
+            "\n{n} request{} failed (the provider answered with an error, or no account \
+             could take it) and {} left out.",
+            if n == 1 { "" } else { "s" },
+            if n == 1 { "is" } else { "are" },
         ));
     }
     println!("\n{}", ui::dim(note));
