@@ -457,7 +457,6 @@ fn disclosure(
         .flex_shrink_0()
         .gap(px(4.))
         .text_color(c.accent)
-        .cursor_pointer()
         .role(Role::DisclosureTriangle)
         .aria_label(format!("{} on {}", credits.title, row.name))
         .aria_expanded(open)

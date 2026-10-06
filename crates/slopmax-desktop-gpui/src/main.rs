@@ -1,10 +1,13 @@
 //! The slopmax desktop app drawn with GPUI: a window over slopmax-app's
 //! snapshot, and a menu bar item whose panel shows each pool at a glance.
 //!
-//! It dresses as a Mac app: a sidebar on the system's material between its
-//! pages, SF Symbols, the system's appearance and accent color, AppKit's
-//! colors, type sizes, and control heights, and the standard menus and
-//! shortcuts.
+//! It dresses and behaves as a Mac app: a sidebar on the system's material
+//! that slides away and back (⌃⌘S, or its toolbar button), resizes by its
+//! edge, collapses when dragged narrow, and remembers how it was left;
+//! selection on a press, and the arrow keys, as a source list has them;
+//! SF Symbols; glass toolbar controls; the system's appearance and accent
+//! color; AppKit's colors, type sizes, and control heights; and the
+//! standard menus and shortcuts.
 
 mod accounts;
 mod native;
@@ -22,7 +25,8 @@ use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{self, Input, InputState};
 use gpui_kit::component::native_menu::NativeMenu;
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::{ActiveTheme, Disableable, Sizable, Theme, TitleBar, h_flex, v_flex};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{ActiveTheme, Sizable, Theme, TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use gpui_tray::{Icon, Tray};
@@ -51,9 +55,11 @@ actions!(
         SignInChatGpt,
         ImportLogins,
         AddKey,
-        OpenSettings
+        OpenSettings,
+        ToggleSidebar
     ]
 );
+actions!(sidebar, [SelectPrevious, SelectNext]);
 
 const TRAY_ICON: &[u8] = include_bytes!("../../../assets/tray.svg");
 
@@ -62,8 +68,18 @@ const KEYS: [ProviderId; 3] = [ProviderId::Anthropic, ProviderId::OpenAI, Provid
 
 /// The toolbar's height, a Mac toolbar's.
 const TOOLBAR: Pixels = px(52.);
-/// The sidebar's width.
-const SIDEBAR: Pixels = px(216.);
+/// The sidebar's width at first, and the least and most a drag of its edge
+/// leaves it.
+const SIDEBAR: f32 = 220.;
+const SIDEBAR_MIN: f32 = 180.;
+const SIDEBAR_MAX: f32 = 320.;
+/// Dragged narrower than this, the sidebar hides, as a split view's does.
+const SIDEBAR_COLLAPSE: f32 = 120.;
+/// How long the sidebar takes to slide in or out.
+const SLIDE: Duration = Duration::from_millis(250);
+/// Where the sidebar's toggle sits, past the window's buttons, whether the
+/// sidebar shows or not.
+const TOGGLE_X: f32 = 90.;
 /// How often the charts reread the ledger while they show.
 const HISTORY_EVERY: Duration = Duration::from_secs(60);
 
@@ -145,7 +161,8 @@ fn main() -> anyhow::Result<()> {
             cx.global::<Shared>().app.sign_in(ProviderId::Codex);
         });
         cx.on_action(|_: &ImportLogins, cx| cx.global::<Shared>().app.import());
-        menus(cx);
+        keys(cx);
+        menus(cx, false);
         panel::init(cx);
         let tray = menu_bar_icon(cx)
             .inspect_err(|e| eprintln!("slopmax: no menu bar icon: {e}"))
@@ -162,9 +179,8 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The menus every Mac app has, with their usual shortcuts. Edit's items
-/// reach the focused text field.
-fn menus(cx: &mut App) {
+/// The usual shortcuts, and the sidebar's arrow keys.
+fn keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-h", Hide, None),
@@ -174,7 +190,15 @@ fn menus(cx: &mut App) {
         KeyBinding::new("cmd-r", Refresh, None),
         KeyBinding::new("cmd-o", OpenWindow, None),
         KeyBinding::new("cmd-,", OpenSettings, None),
+        KeyBinding::new("ctrl-cmd-s", ToggleSidebar, None),
+        KeyBinding::new("up", SelectPrevious, Some("Sidebar")),
+        KeyBinding::new("down", SelectNext, Some("Sidebar")),
     ]);
+}
+
+/// The menus every Mac app has. Edit's items reach the focused text field;
+/// View's first item says what it will do to the sidebar.
+fn menus(cx: &mut App, sidebar_hidden: bool) {
     cx.set_menus([
         Menu::new("slopmax").items([
             MenuItem::action("Settings…", OpenSettings),
@@ -203,7 +227,18 @@ fn menus(cx: &mut App) {
             MenuItem::os_action("Paste", input::Paste, OsAction::Paste),
             MenuItem::os_action("Select All", input::SelectAll, OsAction::SelectAll),
         ]),
-        Menu::new("View").items([MenuItem::action("Refresh Usage", Refresh)]),
+        Menu::new("View").items([
+            MenuItem::action(
+                if sidebar_hidden {
+                    "Show Sidebar"
+                } else {
+                    "Hide Sidebar"
+                },
+                ToggleSidebar,
+            ),
+            MenuItem::separator(),
+            MenuItem::action("Refresh Usage", Refresh),
+        ]),
         // AppKit fills a menu named Window with the open windows.
         Menu::new("Window").items([
             MenuItem::action("Minimize", Minimize),
@@ -384,8 +419,61 @@ struct Main {
     credits_open: HashSet<String>,
     /// The account whose reset credit waits on a second press to redeem.
     confirming: Option<String>,
+    sidebar: Sidebar,
+    /// The sidebar's list, which the arrow keys move through while it has
+    /// focus, its selection then drawn in the accent color.
+    sidebar_focus: FocusHandle,
     _tasks: [Task<()>; 2],
     _system: [Subscription; 2],
+}
+
+/// The sidebar as the user leaves it, which the window remembers as a split
+/// view does: its width, whether it hides, and how it last changed.
+#[derive(Debug, Clone, Copy)]
+struct Sidebar {
+    width: f32,
+    hidden: bool,
+    /// The slides so far, so that each plays afresh.
+    slides: usize,
+    /// Whether the latest change slides it: a toggle does; a drag hides it
+    /// at once.
+    sliding: bool,
+    /// A drag of its edge in progress, and the width it began at, which a
+    /// drag that hides the sidebar leaves it to come back at.
+    dragging: bool,
+    dragged_from: f32,
+}
+
+impl Sidebar {
+    fn recall() -> Self {
+        Self {
+            width: native::recall("SidebarWidth").map_or(SIDEBAR, |width| {
+                (width as f32).clamp(SIDEBAR_MIN, SIDEBAR_MAX)
+            }),
+            hidden: native::recall("SidebarHidden").is_some_and(|hidden| hidden != 0.),
+            slides: 0,
+            sliding: false,
+            dragging: false,
+            dragged_from: SIDEBAR,
+        }
+    }
+
+    fn remember(self) {
+        native::remember("SidebarWidth", f64::from(self.width));
+        native::remember("SidebarHidden", if self.hidden { 1. } else { 0. });
+    }
+
+    /// How wide it shows `along` a slide, from 0 to 1.
+    fn open(self, along: f32) -> f32 {
+        let shown = if self.sliding {
+            if self.hidden { 1. - along } else { along }
+        } else if self.hidden {
+            0.
+        } else {
+            1.
+        };
+        self.width * shown
+    }
 }
 
 impl Main {
@@ -438,6 +526,11 @@ impl Main {
                 panel::dismiss(cx);
             }
         });
+        let sidebar = Sidebar::recall();
+        menus(cx, sidebar.hidden);
+        // The sidebar has focus to begin with, as a source list does.
+        let sidebar_focus = cx.focus_handle();
+        window.focus(&sidebar_focus, cx);
         let mut main = Self {
             snapshot: app.snapshot(),
             app,
@@ -450,6 +543,8 @@ impl Main {
             asked_today: None,
             credits_open: HashSet::new(),
             confirming: None,
+            sidebar,
+            sidebar_focus,
             _tasks: [follow, tick],
             _system: [appearance, activation],
         };
@@ -486,6 +581,9 @@ impl Main {
 
     /// Shows `section`, reading what it charts.
     fn go(&mut self, section: Section, cx: &mut Context<Self>) {
+        if self.section == section {
+            return;
+        }
         self.section = section;
         match section {
             Section::Usage | Section::Performance => self.load_history(),
@@ -495,8 +593,84 @@ impl Main {
         cx.notify();
     }
 
-    /// A Mac segmented control, the chosen segment filled with the accent
-    /// color; `choose` takes a press.
+    /// The pages in the sidebar's order: the overview, each provider with
+    /// accounts, the charts, then setup.
+    fn sections(&self, now: Timestamp) -> Vec<Section> {
+        let providers = self
+            .snapshot
+            .report
+            .as_ref()
+            .map(|report| view::groups(report, now))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|group| Section::Provider(group.provider));
+        std::iter::once(Section::Overview)
+            .chain(providers)
+            .chain([
+                Section::Usage,
+                Section::Performance,
+                Section::Agents,
+                Section::Settings,
+            ])
+            .collect()
+    }
+
+    /// Moves the selection `by` pages, as an arrow key does in a source list.
+    fn step(&mut self, by: isize, cx: &mut Context<Self>) {
+        let sections = self.sections(Timestamp::now());
+        let at = sections
+            .iter()
+            .position(|s| *s == self.section)
+            .unwrap_or(0);
+        let next = at.saturating_add_signed(by).min(sections.len() - 1);
+        self.go(sections[next], cx);
+    }
+
+    /// Slides the sidebar away, or back.
+    fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.sidebar.hidden = !self.sidebar.hidden;
+        self.sidebar.slides += 1;
+        self.sidebar.sliding = true;
+        self.sidebar.remember();
+        menus(cx, self.sidebar.hidden);
+        cx.notify();
+    }
+
+    /// Follows a drag of the sidebar's edge: it narrows and widens within its
+    /// bounds, and dragged narrow enough, hides. A move without the button
+    /// held ends a drag whose release fell outside the window.
+    fn drag_sidebar(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
+        if !self.sidebar.dragging {
+            return;
+        }
+        if event.pressed_button != Some(MouseButton::Left) {
+            self.end_drag(cx);
+            return;
+        }
+        let x = event.position.x.as_f32();
+        if x < SIDEBAR_COLLAPSE {
+            self.sidebar.hidden = true;
+            self.sidebar.width = self.sidebar.dragged_from;
+            self.sidebar.dragging = false;
+            self.sidebar.sliding = false;
+            self.sidebar.remember();
+            menus(cx, true);
+        } else {
+            self.sidebar.width = x.clamp(SIDEBAR_MIN, SIDEBAR_MAX);
+        }
+        cx.notify();
+    }
+
+    fn end_drag(&mut self, cx: &mut Context<Self>) {
+        if self.sidebar.dragging {
+            self.sidebar.dragging = false;
+            self.sidebar.remember();
+            cx.notify();
+        }
+    }
+
+    /// A Mac segmented control as macOS 26 draws one: a capsule, the chosen
+    /// segment raised within it; `choose` takes a press.
     fn segmented<T: Copy + PartialEq + 'static>(
         &self,
         id: &str,
@@ -508,29 +682,32 @@ impl Main {
     ) -> Div {
         let mut track = h_flex()
             .flex_shrink_0()
-            .h(rems(2.))
-            .rounded(px(6.))
-            .bg(c.control);
-        let mut after_chosen = true;
+            .h(px(30.))
+            .p(px(2.))
+            .rounded_full()
+            .bg(c.glass)
+            .border_1()
+            .border_color(c.glass_edge);
         for (i, (value, title)) in options.into_iter().enumerate() {
             let selected = value == chosen;
-            // Unchosen neighbors are divided by a short rule.
-            if !selected && !after_chosen {
-                track = track.child(div().w(px(1.)).h(px(12.)).bg(c.fg.opacity(0.3)));
-            }
-            after_chosen = selected;
             track = track.child(
                 div()
                     .id(SharedString::from(format!("{id}-{i}")))
                     .h_full()
-                    .px(px(10.))
+                    .px(px(11.))
                     .flex()
                     .items_center()
-                    .rounded(px(6.))
+                    .rounded_full()
                     .role(Role::RadioButton)
                     .aria_label(title)
                     .aria_selected(selected)
-                    .when(selected, |segment| segment.bg(c.accent).text_color(white()))
+                    .map(|segment| {
+                        if selected {
+                            segment.bg(c.raised).shadow_xs()
+                        } else {
+                            segment.text_color(c.fg.opacity(0.8))
+                        }
+                    })
                     .child(title)
                     .on_click(cx.listener(move |main, _, _, cx| choose(main, value, cx))),
             );
@@ -538,27 +715,34 @@ impl Main {
         track
     }
 
-    /// The sidebar: the pages, the providers among them, on the system's
-    /// sidebar material, under the window's buttons.
-    fn sidebar(&self, c: &Colors, now: Timestamp, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The sidebar, as a source list: the pages in groups, the providers
+    /// among them, under the window's buttons. The window's material shows
+    /// through it.
+    fn sidebar(&self, c: &Colors, now: Timestamp, emphasized: bool, cx: &mut Context<Self>) -> Div {
         let report = self.snapshot.report.as_ref();
         let groups = report.map(|r| view::groups(r, now)).unwrap_or_default();
         let attention = report.map(|r| view::attention(r, now)).unwrap_or_default();
         let mut list = v_flex()
-            .id("sidebar")
+            .id("sidebar-list")
             .size_full()
             .px(px(10.))
             .pb(px(12.))
-            .gap(px(1.))
             .overflow_y_scroll()
-            .child(self.item(Section::Overview, None, None, c, cx))
+            .track_focus(&self.sidebar_focus)
+            .key_context("Sidebar")
+            .on_action(cx.listener(|main, _: &SelectPrevious, _, cx| main.step(-1, cx)))
+            .on_action(cx.listener(|main, _: &SelectNext, _, cx| main.step(1, cx)))
+            .role(Role::List)
+            .aria_label("Sidebar")
+            .child(self.item(Section::Overview, None, None, emphasized, c, cx))
             .child(sidebar_heading("Accounts", c));
         if groups.is_empty() {
             list = list.child(
                 div()
-                    .px(px(8.))
-                    .py(px(4.))
-                    .text_size(px(12.))
+                    .px(px(10.))
+                    .h(px(32.))
+                    .flex()
+                    .items_center()
                     .text_color(c.muted)
                     .child("None yet"),
             );
@@ -583,21 +767,20 @@ impl Main {
                 Section::Provider(group.provider),
                 Some(provider_color(group.provider, c)),
                 Some(trailing),
+                emphasized,
                 c,
                 cx,
             ));
         }
         list = list
             .child(sidebar_heading("Activity", c))
-            .child(self.item(Section::Usage, None, None, c, cx))
-            .child(self.item(Section::Performance, None, None, c, cx))
+            .child(self.item(Section::Usage, None, None, emphasized, c, cx))
+            .child(self.item(Section::Performance, None, None, emphasized, c, cx))
             .child(sidebar_heading("Setup", c))
-            .child(self.item(Section::Agents, None, None, c, cx))
-            .child(self.item(Section::Settings, None, None, c, cx));
+            .child(self.item(Section::Agents, None, None, emphasized, c, cx))
+            .child(self.item(Section::Settings, None, None, emphasized, c, cx));
         v_flex()
-            .w(SIDEBAR)
             .h_full()
-            .flex_shrink_0()
             // Where the window's buttons sit, and a handle to drag it by.
             .child(
                 TitleBar::new()
@@ -609,61 +792,75 @@ impl Main {
     }
 
     /// A row of the sidebar: its symbol, or a provider's color, its title,
-    /// and what trails it.
+    /// and what trails it. A press selects it, as in a source list; the
+    /// selection takes the accent color while the sidebar has focus, and a
+    /// quiet gray otherwise.
     fn item(
         &self,
         section: Section,
         color: Option<Hsla>,
         trailing: Option<AnyElement>,
+        emphasized: bool,
         c: &Colors,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let selected = self.section == section;
+        let lit = selected && emphasized;
+        let ink = if lit { white() } else { c.fg };
+        let slot = div()
+            .size(px(20.))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center();
         let icon = match color {
-            Some(color) => div()
-                .size(px(16.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(div().size(px(9.)).rounded_full().bg(color))
-                .into_any_element(),
-            None => symbols::symbol(
+            Some(color) => slot.child(div().size(px(9.)).rounded_full().bg(color)),
+            None => slot.children(symbols::symbol(
                 section.symbol(),
-                if selected { c.accent } else { c.muted },
-                15.,
+                if lit { white() } else { c.muted },
+                16.,
                 cx,
-            )
-            .map_or_else(
-                || div().size(px(16.)).into_any_element(),
-                |icon| {
-                    div()
-                        .size(px(16.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(icon)
-                        .into_any_element()
-                },
-            ),
+            )),
         };
         h_flex()
             .id(SharedString::from(format!("go-{section:?}")))
-            .h(px(28.))
+            .h(px(32.))
             .px(px(8.))
-            .gap(px(8.))
-            .rounded(px(7.))
-            .when(selected, |row| row.bg(c.fg.opacity(0.1)))
-            .role(Role::Tab)
+            .gap(px(7.))
+            .rounded(px(10.))
+            .text_color(ink)
+            .when(selected, |row| {
+                row.bg(if emphasized {
+                    c.accent
+                } else {
+                    c.fg.opacity(0.1)
+                })
+            })
+            .role(Role::ListItem)
             .aria_label(section.title())
             .aria_selected(selected)
             .child(icon)
             .child(div().flex_1().min_w_0().truncate().child(section.title()))
-            .children(trailing)
+            .children(trailing.map(|trailing| {
+                div()
+                    .when(lit, |trailing| trailing.text_color(white().opacity(0.8)))
+                    .child(trailing)
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |main, _, window, cx| {
+                    window.focus(&main.sidebar_focus, cx);
+                    main.go(section, cx);
+                }),
+            )
+            // What VoiceOver presses.
             .on_click(cx.listener(move |main, _, _, cx| main.go(section, cx)))
     }
 
-    /// The page's toolbar: its title, and what acts on it.
-    fn toolbar(&self, c: &Colors, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The page's toolbar: its title, and what acts on it, as glass
+    /// controls. Its leading padding keeps clear of the window's buttons
+    /// and the sidebar's toggle while the sidebar is narrower than them.
+    fn toolbar(&self, c: &Colors, cx: &mut Context<Self>) -> TitleBar {
         let running = matches!(self.snapshot.proxy, Proxy::Running { .. });
         let tools = h_flex()
             .gap(px(8.))
@@ -675,22 +872,28 @@ impl Main {
                 tools
                     .child(
                         tool("add", "plus", c, cx)
-                            .tooltip("Add an account")
+                            .tooltip(|window, cx| Tooltip::new("Add an account").build(window, cx))
                             .on_click(|event, window, cx| {
+                                // Under the button, as a toolbar's menus open.
+                                let at = point(event.position().x - px(14.), TOOLBAR - px(6.));
                                 NativeMenu::new()
                                     .menu("Sign In with Claude…", Box::new(SignInClaude))
                                     .menu("Sign In with ChatGPT…", Box::new(SignInChatGpt))
                                     .separator()
                                     .menu("Import Logins", Box::new(ImportLogins))
                                     .menu("Add an API Key…", Box::new(AddKey))
-                                    .show(event.position(), window, cx);
+                                    .show(at, window, cx);
                             }),
                     )
                     .child(
                         tool("refresh", "arrow.clockwise", c, cx)
-                            .tooltip("Refresh usage")
-                            .disabled(!running)
-                            .on_click(move |_, _, _| app.refresh()),
+                            .tooltip(|window, cx| Tooltip::new("Refresh usage").build(window, cx))
+                            .when(!running, |button| button.opacity(0.4))
+                            .on_click(move |_, _, _| {
+                                if running {
+                                    app.refresh();
+                                }
+                            }),
                     )
             }
             Section::Usage | Section::Performance => tools.child(self.segmented(
@@ -709,10 +912,9 @@ impl Main {
         };
         TitleBar::new()
             .h(TOOLBAR)
-            .pl(px(20.))
             .pr(px(12.))
             .bg(c.bg)
-            .border_color(c.separator)
+            .border_0()
             .child(
                 div()
                     .text_size(px(15.))
@@ -720,6 +922,34 @@ impl Main {
                     .child(self.section.title()),
             )
             .child(tools)
+    }
+
+    /// The sidebar's toggle, which stays put past the window's buttons
+    /// whether the sidebar shows or not.
+    fn sidebar_toggle(&self, c: &Colors, cx: &mut Context<Self>) -> impl IntoElement {
+        let hidden = self.sidebar.hidden;
+        div()
+            .absolute()
+            .left(px(TOGGLE_X))
+            .top((TOOLBAR - px(30.)) / 2.)
+            .child(
+                tool("toggle-sidebar", "sidebar.left", c, cx)
+                    .aria_label(if hidden {
+                        "Show Sidebar"
+                    } else {
+                        "Hide Sidebar"
+                    })
+                    .tooltip(move |window, cx| {
+                        Tooltip::new(if hidden {
+                            "Show Sidebar"
+                        } else {
+                            "Hide Sidebar"
+                        })
+                        .build(window, cx)
+                    })
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(|main, _, _, cx| main.toggle_sidebar(cx))),
+            )
     }
 
     fn notice(&self, c: &Colors) -> Option<impl IntoElement> {
@@ -800,7 +1030,7 @@ impl Main {
 }
 
 impl Render for Main {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = Colors::of(cx);
         let now = Timestamp::now();
         let page = match self.section {
@@ -811,28 +1041,66 @@ impl Render for Main {
             Section::Agents => self.agents(&c).into_any_element(),
             Section::Settings => self.settings(&c, cx).into_any_element(),
         };
+        let sidebar = self.sidebar;
+        let emphasized = self.sidebar_focus.is_focused(window) && window.is_window_active();
+        // The sidebar keeps its width as it slides, its pane clipping it.
+        let pane = div()
+            .id("sidebar")
+            .h_full()
+            .flex_shrink_0()
+            .overflow_hidden()
+            .child(self.sidebar(&c, now, emphasized, cx).w(px(sidebar.width)));
+        let toolbar = self.toolbar(&c, cx);
+        let (pane, toolbar) = if sidebar.sliding {
+            let slide = || Animation::new(SLIDE).with_easing(ease_in_out);
+            (
+                pane.with_animation(("slide", sidebar.slides), slide(), move |pane, along| {
+                    pane.w(px(sidebar.open(along)))
+                })
+                .into_any_element(),
+                toolbar
+                    .with_animation(("clear", sidebar.slides), slide(), move |bar, along| {
+                        bar.pl(px(clear(sidebar.open(along))))
+                    })
+                    .into_any_element(),
+            )
+        } else {
+            (
+                pane.w(px(sidebar.open(1.))).into_any_element(),
+                toolbar.pl(px(clear(sidebar.open(1.)))).into_any_element(),
+            )
+        };
         h_flex()
             .relative()
             .size_full()
             .text_color(c.fg)
             .on_action(cx.listener(|main, _: &AddKey, _, cx| main.go(Section::Settings, cx)))
-            .child(self.sidebar(&c, now, cx))
+            .on_action(cx.listener(|main, _: &ToggleSidebar, _, cx| main.toggle_sidebar(cx)))
+            // A drag of the sidebar's edge follows the pointer anywhere in
+            // the window.
+            .on_mouse_move(cx.listener(|main, event: &MouseMoveEvent, _, cx| {
+                main.drag_sidebar(event, cx);
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|main, _, _, cx| main.end_drag(cx)),
+            )
+            .when(sidebar.dragging, |root| root.cursor_col_resize())
+            .child(pane)
             .child(
                 v_flex()
                     .flex_1()
                     .min_w_0()
                     .h_full()
                     .bg(c.bg)
-                    .border_l_1()
-                    .border_color(c.separator)
-                    .child(self.toolbar(&c, cx))
+                    .child(toolbar)
                     .child(
                         div().flex_1().min_h_0().child(
                             v_flex()
                                 .id("body")
                                 .size_full()
                                 .px(px(28.))
-                                .pt(px(22.))
+                                .pt(px(14.))
                                 .pb(px(28.))
                                 .gap(px(26.))
                                 .overflow_y_scrollbar()
@@ -841,8 +1109,38 @@ impl Render for Main {
                         ),
                     ),
             )
+            // The sidebar's edge, to drag.
+            .when(!sidebar.hidden, |root| {
+                root.child(
+                    div()
+                        .id("sidebar-edge")
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left(px(sidebar.width - 3.))
+                        .w(px(6.))
+                        .cursor_col_resize()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|main, _, _, cx| {
+                                main.sidebar.dragging = true;
+                                main.sidebar.dragged_from = main.sidebar.width;
+                                main.sidebar.sliding = false;
+                                cx.stop_propagation();
+                                cx.notify();
+                            }),
+                        ),
+                )
+            })
+            .child(self.sidebar_toggle(&c, cx))
             .children(self.notice(&c))
     }
+}
+
+/// The toolbar's leading padding while the sidebar shows `open` points of
+/// itself: clear of the window's buttons and the sidebar's toggle.
+fn clear(open: f32) -> f32 {
+    (TOGGLE_X + 30. + 18. - open).max(20.)
 }
 
 /// The theme's colors this window uses, read once per frame.
@@ -853,13 +1151,16 @@ struct Colors {
     muted: Hsla,
     separator: Hsla,
     group: Hsla,
-    control: Hsla,
     track: Hsla,
     popover: Hsla,
     good: Hsla,
     warn: Hsla,
     bad: Hsla,
     accent: Hsla,
+    /// A toolbar control's glass, its edge, and a segment raised in it.
+    glass: Hsla,
+    glass_edge: Hsla,
+    raised: Hsla,
 }
 
 impl Colors {
@@ -871,13 +1172,19 @@ impl Colors {
             muted: theme.muted_foreground,
             separator: theme.border,
             group: theme.group_box,
-            control: theme.button,
             track: theme.muted,
             popover: theme.popover,
             good: theme.success,
             warn: theme.warning,
             bad: theme.danger,
             accent: theme.primary,
+            glass: theme.foreground.opacity(0.07),
+            glass_edge: theme.foreground.opacity(0.09),
+            raised: if theme.is_dark() {
+                rgba(0xffffff2e).into()
+            } else {
+                white()
+            },
         }
     }
 
@@ -916,12 +1223,26 @@ fn push(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
     Button::new(id).label(label).border_0()
 }
 
-/// A toolbar button showing an SF Symbol.
-fn tool(id: &'static str, symbol: &'static str, c: &Colors, cx: &mut App) -> Button {
-    Button::new(id)
-        .border_0()
-        .px(px(8.))
-        .children(symbols::symbol(symbol, c.fg.opacity(0.75), 15., cx))
+/// A toolbar button as macOS 26 draws one: a glass capsule holding an SF
+/// Symbol.
+fn tool(id: &'static str, symbol: &'static str, c: &Colors, cx: &mut App) -> Stateful<Div> {
+    let (hover, pressed) = (c.fg.opacity(0.12), c.fg.opacity(0.18));
+    div()
+        .id(id)
+        .h(px(30.))
+        .min_w(px(36.))
+        .px(px(9.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .bg(c.glass)
+        .border_1()
+        .border_color(c.glass_edge)
+        .hover(move |button| button.bg(hover))
+        .active(move |button| button.bg(pressed))
+        .role(Role::Button)
+        .children(symbols::symbol(symbol, c.fg.opacity(0.8), 15., cx))
 }
 
 /// A Mac text field: 13-point text, with room for it at a control's height.

@@ -169,7 +169,6 @@ fn pool_card(group: &Group, c: &Colors, cx: &mut Context<Main>) -> Stateful<Div>
         .gap(px(14.))
         .rounded(px(12.))
         .bg(c.group)
-        .cursor_pointer()
         .role(Role::Button)
         .aria_label(format!("{} accounts", group.title))
         .on_click(cx.listener(move |main, _, _, cx| main.go(Section::Provider(provider), cx)))

@@ -1,6 +1,7 @@
 //! What GPUI does not reach of AppKit: the accent color chosen in System
-//! Settings, the menu bar item's glyph and where it sits, and the vibrancy
-//! behind a window, as a sidebar or a menu bar panel has it. Elsewhere each
+//! Settings, the menu bar item's glyph and where it sits, the vibrancy
+//! behind a window, as a sidebar or a menu bar panel has it, and the user's
+//! defaults, where a Mac app keeps how its window was left. Elsewhere each
 //! does nothing.
 
 /// The material behind a window's transparent parts.
@@ -24,9 +25,20 @@ mod mac {
         NSStatusBarButton, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
         NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowOrderingMode, NSWindowStyleMask,
     };
-    use objc2_foundation::NSString;
+    use objc2_foundation::{NSString, NSUserDefaults};
 
     use super::Material;
+
+    pub(crate) fn recall(key: &str) -> Option<f64> {
+        let defaults = NSUserDefaults::standardUserDefaults();
+        let key = NSString::from_str(key);
+        defaults.objectForKey(&key)?;
+        Some(defaults.doubleForKey(&key))
+    }
+
+    pub(crate) fn remember(key: &str, value: f64) {
+        NSUserDefaults::standardUserDefaults().setDouble_forKey(value, &NSString::from_str(key));
+    }
 
     pub(crate) fn system_accent() -> Option<Hsla> {
         let app = NSApplication::sharedApplication(MainThreadMarker::new()?);
@@ -180,7 +192,9 @@ mod mac {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) use mac::{frost, hang, menu_bar_glyph, outside_clicks, status_item, system_accent};
+pub(crate) use mac::{
+    frost, hang, menu_bar_glyph, outside_clicks, recall, remember, status_item, system_accent,
+};
 
 #[cfg(not(target_os = "macos"))]
 mod elsewhere {
@@ -205,9 +219,15 @@ mod elsewhere {
     pub(crate) fn outside_clicks() -> Option<async_channel::Receiver<()>> {
         None
     }
+
+    pub(crate) fn recall(_: &str) -> Option<f64> {
+        None
+    }
+
+    pub(crate) fn remember(_: &str, _: f64) {}
 }
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) use elsewhere::{
-    frost, hang, menu_bar_glyph, outside_clicks, status_item, system_accent,
+    frost, hang, menu_bar_glyph, outside_clicks, recall, remember, status_item, system_accent,
 };
