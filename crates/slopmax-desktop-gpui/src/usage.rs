@@ -1,9 +1,10 @@
-//! The Usage page: what went through slopmax over a range, charted. Tiles
-//! for the totals; tokens by provider as areas; requests as columns and
-//! their API value as a line; what failover saved and what failed; how much
-//! came from cache and what that saved; the models as a ring and the token
-//! mix as one bar; how fast each model writes; which agents sent the work;
-//! when the work happens; how soon answers began; and the accounts ranked.
+//! The Usage and Performance pages, over the range the toolbar picks.
+//! Usage charts what went through slopmax: tokens by provider as areas,
+//! requests as columns and their API value as a line, the models as a ring
+//! and the token mix as one bar, which agents sent the work, when the work
+//! happens, and the accounts ranked. Performance charts how well it went:
+//! what failover saved and what failed, how much came from cache and what
+//! that saved, how fast each model writes, and how soon answers began.
 
 use std::collections::HashMap;
 
@@ -17,7 +18,7 @@ use slopmax_core::human;
 use slopmax_core::provider::ProviderId;
 use slopmax_core::summary::Totals;
 
-use crate::{Colors, bar, caption, dot};
+use crate::{Colors, Main, bar, caption, dot, provider_color};
 
 /// macOS's own colors, which tell series apart in light and dark alike:
 /// blue, purple, pink, cyan, yellow. Orange and green are left out, as
@@ -31,39 +32,95 @@ const MODELS: usize = 5;
 const SPEEDS: usize = 6;
 const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-pub(crate) fn page(history: &History, c: &Colors) -> Div {
-    if history.total.requests == 0 && history.total.failed == 0 {
-        return v_flex()
-            .p(px(32.))
-            .rounded(px(12.))
-            .bg(c.group)
-            .items_center()
-            .child(div().text_color(c.muted).child(match history.range {
-                Range::Today => "Nothing has gone through slopmax today.",
-                _ => "Nothing has gone through slopmax in this range.",
-            }));
+impl Main {
+    /// The Usage page, or with `performance` the Performance page, once the
+    /// ledger is read for the range.
+    pub(crate) fn usage(&self, c: &Colors, performance: bool) -> Div {
+        match self
+            .snapshot
+            .history
+            .as_ref()
+            .filter(|h| h.range == self.range)
+        {
+            None => v_flex().child(caption("Reading the ledger…", c)),
+            Some(history) if history.total.requests == 0 && history.total.failed == 0 => v_flex()
+                .p(px(32.))
+                .rounded(px(12.))
+                .bg(c.group)
+                .items_center()
+                .child(div().text_color(c.muted).child(match history.range {
+                    Range::Today => "Nothing has gone through slopmax today.",
+                    _ => "Nothing has gone through slopmax in this range.",
+                })),
+            Some(history) if performance => self::performance(history, c),
+            Some(history) => page(history, c),
+        }
     }
-    // Every label for a few hours or a week; fewer for a month.
-    let margin = match history.range {
+}
+
+/// Every label for a few hours or a week; fewer for a month.
+fn margin(history: &History) -> usize {
+    match history.range {
         Range::Today => 3,
         Range::Week => 1,
         Range::Month => 5,
-    };
+    }
+}
+
+fn pair(left: Div, right: Div) -> Div {
+    h_flex()
+        .items_stretch()
+        .gap(px(16.))
+        .child(left)
+        .child(right)
+}
+
+fn page(history: &History, c: &Colors) -> Div {
+    let margin = margin(history);
+    let total = &history.total;
     let legend = history
         .providers
         .iter()
         .map(|p| (provider_color(*p, c), p.spec().title.into()))
         .collect();
-    let pair = |left: Div, right: Div| {
-        h_flex()
-            .items_stretch()
-            .gap(px(16.))
-            .child(left)
-            .child(right)
-    };
     v_flex()
         .gap(px(16.))
-        .child(tiles(history, c))
+        .child(tiles(
+            [
+                (
+                    "Tokens",
+                    human::compact(history::tokens(total)),
+                    history
+                        .cached
+                        .map_or_else(String::new, |r| format!("{:.0}% from cache", r * 100.)),
+                ),
+                (
+                    "Requests",
+                    grouped(total.requests),
+                    match history.sessions {
+                        0 => "answered".to_owned(),
+                        n => format!("in {}", count(n, "conversation")),
+                    },
+                ),
+                (
+                    "API value",
+                    priced(total.cost, total),
+                    match total.unpriced {
+                        0 => "at API prices".to_owned(),
+                        n => format!("{} unpriced", count(n, "request")),
+                    },
+                ),
+                (
+                    "A month at this pace",
+                    history.monthly.map_or_else(|| "—".to_owned(), dollars),
+                    match history.range {
+                        Range::Week => "at API prices".to_owned(),
+                        _ => "from a week's use".to_owned(),
+                    },
+                ),
+            ],
+            c,
+        ))
         .child(
             card(c)
                 .child(header("Tokens", legend, c))
@@ -74,23 +131,61 @@ pub(crate) fn page(history: &History, c: &Colors) -> Div {
                 .child(header("Requests", Vec::new(), c))
                 .child(requests(history, margin, c)),
             card(c)
-                .child(
-                    header("API value", Vec::new(), c).children(history.monthly.map(|month| {
-                        caption(&format!("≈ {} a month at this pace", dollars(month)), c)
-                    })),
-                )
+                .child(header("API value", Vec::new(), c))
                 .child(div().h(px(150.)).child(cost(history, margin))),
+        ))
+        .child(pair(models(history, c), mix(history, c)))
+        .child(agents(history, c))
+        .when(history.range != Range::Today, |page| {
+            page.child(activity(history, c))
+        })
+        .child(accounts(history, c))
+}
+
+fn performance(history: &History, c: &Colors) -> Div {
+    let margin = margin(history);
+    let total = &history.total;
+    let answered = total.requests as f64 / (total.requests + total.failed).max(1) as f64 * 100.;
+    v_flex()
+        .gap(px(16.))
+        .child(tiles(
+            [
+                (
+                    "Answered",
+                    format!("{answered:.1}%"),
+                    match total.failed {
+                        0 => "none failed".to_owned(),
+                        n => format!("{} failed", grouped(n)),
+                    },
+                ),
+                (
+                    "Saved by failover",
+                    grouped(history.rescued),
+                    "requests another account took".to_owned(),
+                ),
+                (
+                    "From cache",
+                    history
+                        .cached
+                        .map_or_else(|| "—".to_owned(), |r| format!("{:.0}%", r * 100.)),
+                    format!("saving {}", priced(history.cache_saved, total)),
+                ),
+                (
+                    "First byte",
+                    history
+                        .first_byte
+                        .map_or_else(|| "—".to_owned(), |ms| format!("{:.1}s", ms as f64 / 1e3)),
+                    "the median wait".to_owned(),
+                ),
+            ],
+            c,
         ))
         .child(pair(
             reliability(history, margin, c),
             cache(history, margin, c),
         ))
-        .child(pair(models(history, c), mix(history, c)))
-        .child(pair(speed(history, c), agents(history, c)))
-        .when(history.range != Range::Today, |page| {
-            page.child(activity(history, c))
-        })
-        .child(
+        .child(pair(
+            speed(history, c),
             card(c)
                 .child(header(
                     "Time to first byte",
@@ -98,51 +193,11 @@ pub(crate) fn page(history: &History, c: &Colors) -> Div {
                     c,
                 ))
                 .child(div().h(px(150.)).child(first_byte(history, margin, c))),
-        )
-        .child(accounts(history, c))
+        ))
 }
 
-/// The range's totals, side by side.
-fn tiles(history: &History, c: &Colors) -> Div {
-    let total = &history.total;
-    let tiles = [
-        (
-            "Tokens",
-            human::compact(history::tokens(total)),
-            history
-                .cached
-                .map_or_else(String::new, |r| format!("{:.0}% from cache", r * 100.)),
-        ),
-        (
-            "Requests",
-            grouped(total.requests),
-            match history.sessions {
-                0 => "answered".to_owned(),
-                n => format!("in {}", count(n, "conversation")),
-            },
-        ),
-        (
-            "API value",
-            priced(total.cost, total),
-            match total.unpriced {
-                0 => "at API prices".to_owned(),
-                n => format!("{} unpriced", count(n, "request")),
-            },
-        ),
-        (
-            "Saved by cache",
-            priced(history.cache_saved, total),
-            "compared with no caching".to_owned(),
-        ),
-        (
-            "Saved by failover",
-            grouped(history.rescued),
-            match total.failed {
-                0 => "requests · none failed".to_owned(),
-                n => format!("requests · {} failed", grouped(n)),
-            },
-        ),
-    ];
+/// Totals side by side: each a title, a value, and a note.
+fn tiles<const N: usize>(tiles: [(&str, String, String); N], c: &Colors) -> Div {
     h_flex()
         .items_stretch()
         .rounded(px(12.))
@@ -410,10 +465,8 @@ fn places(step: f64) -> usize {
 }
 
 /// What failover saved and what failed, each hour or day: the saved below,
-/// the failed above.
+/// the failed above. The tiles above give their totals.
 fn reliability(history: &History, margin: usize, c: &Colors) -> Div {
-    let (answered, failed) = (history.total.requests, history.total.failed);
-    let rate = answered as f64 / (answered + failed).max(1) as f64 * 100.;
     let (good, bad) = (c.good, c.bad);
     card(c)
         .child(header(
@@ -421,13 +474,6 @@ fn reliability(history: &History, margin: usize, c: &Colors) -> Div {
             vec![(good, "Saved by failover".into()), (bad, "Failed".into())],
             c,
         ))
-        .child(
-            h_flex()
-                .gap(px(24.))
-                .child(stat("Answered", format!("{rate:.1}%"), c))
-                .child(stat("Saved by failover", grouped(history.rescued), c))
-                .child(stat("Failed", grouped(failed), c)),
-        )
         .child(columns(
             "reliability",
             history,
@@ -440,7 +486,7 @@ fn reliability(history: &History, margin: usize, c: &Colors) -> Div {
                     grouped(b.failed)
                 )
             },
-            94.,
+            132.,
             margin,
             c,
         ))
@@ -477,24 +523,8 @@ fn cache(history: &History, margin: usize, c: &Colors) -> Div {
     .y_tick_format(|v| format!("{v:.0}%"))
     .tooltip_value(|_, _, v| format!("{v:.0}%").into());
     card(c)
-        .child(header("Cache", Vec::new(), c))
-        .child(
-            h_flex()
-                .gap(px(24.))
-                .child(stat(
-                    "Input from cache",
-                    history
-                        .cached
-                        .map_or_else(|| "—".to_owned(), |r| format!("{:.0}%", r * 100.)),
-                    c,
-                ))
-                .child(stat(
-                    "Saved",
-                    priced(history.cache_saved, &history.total),
-                    c,
-                )),
-        )
-        .child(div().h(px(112.)).child(chart))
+        .child(header("Input from cache", Vec::new(), c))
+        .child(div().h(px(150.)).child(chart))
 }
 
 type Wait = (SharedString, f64, f64);
@@ -978,16 +1008,6 @@ fn fade(color: Hsla) -> Background {
     )
 }
 
-/// A provider's color in charts: its brand's.
-fn provider_color(provider: ProviderId, c: &Colors) -> Hsla {
-    match provider {
-        ProviderId::Claude | ProviderId::Anthropic => rgb(0xd97757).into(),
-        ProviderId::Codex | ProviderId::OpenAI => rgb(0x10a37f).into(),
-        ProviderId::Xai => c.muted,
-        _ => c.accent,
-    }
-}
-
 /// An agent's color: its maker's, as for providers.
 fn agent_color(agent: &str, c: &Colors) -> Hsla {
     match agent {
@@ -999,7 +1019,7 @@ fn agent_color(agent: &str, c: &Colors) -> Hsla {
 }
 
 /// `12,345`.
-fn grouped(n: u64) -> String {
+pub(crate) fn grouped(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (i, digit) in digits.chars().enumerate() {
@@ -1030,7 +1050,7 @@ fn dollars(amount: f64) -> String {
 
 /// An amount at API prices for `totals`' requests: `—` when none had a
 /// price, and a trailing `+` when some lacked one.
-fn priced(amount: f64, totals: &Totals) -> String {
+pub(crate) fn priced(amount: f64, totals: &Totals) -> String {
     match totals.unpriced {
         0 => dollars(amount),
         n if n == totals.requests => "—".to_owned(),

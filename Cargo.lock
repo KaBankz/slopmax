@@ -6331,9 +6331,11 @@ dependencies = [
  "block2 0.6.2",
  "gpui-kit",
  "gpui-tray",
+ "image",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
+ "objc2-quartz-core 0.3.2",
  "slopmax-app",
  "slopmax-core",
 ]
