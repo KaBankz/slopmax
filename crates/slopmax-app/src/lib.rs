@@ -5,10 +5,13 @@
 //! in the background and report back through it.
 //!
 //! A UI draws the latest snapshot ([`view`] works out the rows, gauges, and
-//! menu bar line) and calls [`App`]'s methods, none of which block.
+//! menu bar line, [`history`] the charts of past use) and calls [`App`]'s
+//! methods, none of which block.
 
+pub mod history;
 pub mod view;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -54,6 +57,9 @@ pub struct Snapshot {
     pub sign_in: Option<SignIn>,
     /// How the last action went.
     pub notice: Option<Notice>,
+    /// What went through slopmax, once a UI asks with
+    /// [`App::load_history`].
+    pub history: Option<history::History>,
 }
 
 /// The background proxy, as the app last saw it.
@@ -144,6 +150,7 @@ impl App {
             service: None,
             sign_in: None,
             notice: None,
+            history: None,
         });
         let shared = Arc::new(Shared {
             home: Home::current(),
@@ -342,6 +349,36 @@ impl App {
         self.runtime.spawn(async move {
             if let Some(report) = Daemon::new(&shared.config).report(true).await {
                 shared.update(|s| s.report = Some(report));
+            }
+        });
+    }
+
+    /// Reads the ledger over `range` into the snapshot's `history`, off the
+    /// UI's thread. Accounts take the names the last report gave them.
+    pub fn load_history(&self, range: history::Range) {
+        let shared = self.shared.clone();
+        self.runtime.spawn(async move {
+            let names: HashMap<String, String> = shared
+                .snapshot
+                .borrow()
+                .report
+                .iter()
+                .flat_map(|r| &r.accounts)
+                .map(|a| (a.id.clone(), a.name.clone()))
+                .collect();
+            let worker = shared.clone();
+            let loaded = tokio::task::spawn_blocking(move || {
+                history::load(
+                    &worker.home.usage(),
+                    range,
+                    slopmax_core::time::Timestamp::now(),
+                    &worker.config.prices,
+                    &names,
+                )
+            })
+            .await;
+            if let Ok(loaded) = loaded {
+                shared.update(|s| s.history = Some(loaded));
             }
         });
     }
