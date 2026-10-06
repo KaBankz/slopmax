@@ -82,6 +82,45 @@ for provider, shapes in looks.items():
         state["accounts"][account] = entry
 with open(f"{home}/state.json", "w") as f:
     json.dump(state, f, indent=2)
+
+# Thirty days of requests in the ledger, for the app's charts: busier on
+# weekdays and in working hours, mostly cached, growing over the month,
+# with the odd failure.
+import random
+
+random.seed(7)
+models = {"claude": [("claude-opus-5-5", 7), ("claude-sonnet-5-5", 2), ("claude-fable-5-1", 1)],
+          "codex": [("gpt-6-sol", 1)]}
+ledger = {}
+clock = time.localtime(now)
+midnight = now - (clock.tm_hour * 3_600 + clock.tm_min * 60 + clock.tm_sec)
+for back in range(29, -1, -1):
+    day = midnight - back * 86_400
+    weekday = time.localtime(day + 43_200).tm_wday < 5
+    for account in ids:
+        provider = "claude" if account.startswith("claude") else "codex"
+        busy = (70 if weekday else 25) * (0.6 + 0.4 * (30 - back) / 30) * random.uniform(0.6, 1.4)
+        for _ in range(int(busy)):
+            at = day + random.randrange(8, 24) * 3_600 + random.randrange(3_600)
+            if at > now:
+                continue
+            names, weights = zip(*models[provider])
+            ok = random.random() < 0.97
+            entry = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(at)), "account": account,
+                     "provider": provider, "model": random.choices(names, weights)[0],
+                     "status": 200 if ok else random.choice([429, 500]),
+                     "ms": random.randint(1_500, 45_000)}
+            if ok:
+                entry |= {"input": random.randint(20, 900), "output": random.randint(150, 2_500),
+                          "cache_read": random.randint(20_000, 180_000),
+                          "cache_write": random.randint(0, 12_000),
+                          "first_byte_ms": random.randint(350, 1_400) + (300 if provider == "codex" else 0)}
+            ledger.setdefault(time.strftime("%Y-%m", time.gmtime(at)), []).append((at, entry))
+os.makedirs(f"{home}/usage", exist_ok=True)
+for month, entries in ledger.items():
+    with open(f"{home}/usage/{month}.jsonl", "w") as f:
+        for _, entry in sorted(entries, key=lambda e: e[0]):
+            f.write(json.dumps(entry) + "\n")
 EOF
 "$bench" proxy "$listen" "http://$upstream" "$demo"/home 2>"$demo"/proxy.log &
 pids+=($!)
