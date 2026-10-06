@@ -5,8 +5,10 @@
 //! AppKit's colors, type sizes and control heights, a title bar drawn as a
 //! toolbar, and the standard menus and shortcuts.
 
+mod usage;
+
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{self, Input, InputState};
@@ -16,6 +18,7 @@ use gpui_kit::component::{ActiveTheme, Disableable, Sizable, Theme, TitleBar, h_
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use gpui_tray::{Icon, Tray};
+use slopmax_app::history::Range;
 use slopmax_app::view::{self, Gauge, Group, Label, Overview, Row, Share};
 use slopmax_app::{App as Slopmax, Proxy, Snapshot};
 use slopmax_core::provider::ProviderId;
@@ -46,6 +49,15 @@ const KEYS: [ProviderId; 3] = [ProviderId::Anthropic, ProviderId::OpenAI, Provid
 const TOOLBAR: Pixels = px(52.);
 /// The width of an account's name.
 const NAME: Pixels = px(220.);
+/// How often the Usage page rereads the ledger while it shows.
+const HISTORY_EVERY: Duration = Duration::from_secs(60);
+
+/// What the window shows, as the toolbar's switch picks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Page {
+    Accounts,
+    Usage,
+}
 
 /// What the menu bar icon's actions reach.
 struct Shared {
@@ -289,6 +301,7 @@ fn macos_theme(window: &mut Window, cx: &mut App) {
         c.success = pick(0x34c759ff, 0x30d158ff);
         c.warning = pick(0xff8d28ff, 0xff9230ff);
         c.danger = pick(0xff383cff, 0xff4245ff);
+        c.chart_grid = c.border;
     });
 }
 
@@ -337,6 +350,10 @@ struct Main {
     key: Entity<InputState>,
     key_provider: ProviderId,
     paste: Entity<InputState>,
+    page: Page,
+    range: Range,
+    /// When the history was last asked for.
+    asked: Option<Instant>,
     _tasks: [Task<()>; 2],
     _system: [Subscription; 2],
 }
@@ -371,11 +388,20 @@ impl Main {
                 }
             }
         });
-        // Countdowns move every second.
+        // The accounts' countdowns move every second; the Usage page rereads
+        // the ledger now and then.
         let tick = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
-                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                let ticked = this.update(cx, |main, cx| match main.page {
+                    Page::Accounts => cx.notify(),
+                    Page::Usage => {
+                        if main.asked.is_none_or(|at| at.elapsed() >= HISTORY_EVERY) {
+                            main.load_history();
+                        }
+                    }
+                });
+                if ticked.is_err() {
                     break;
                 }
             }
@@ -395,16 +421,84 @@ impl Main {
             key,
             key_provider: ProviderId::Anthropic,
             paste,
+            page: Page::Accounts,
+            range: Range::default(),
+            asked: None,
             _tasks: [follow, tick],
             _system: [appearance, activation],
         }
     }
 
+    fn load_history(&mut self) {
+        self.app.load_history(self.range);
+        self.asked = Some(Instant::now());
+    }
+
+    /// A Mac segmented control, the chosen segment filled with the accent
+    /// color; `choose` takes a press.
+    fn segmented<T: Copy + PartialEq + 'static>(
+        &self,
+        id: &str,
+        options: impl IntoIterator<Item = (T, &'static str)>,
+        chosen: T,
+        choose: fn(&mut Self, T, &mut Context<Self>),
+        c: &Colors,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let mut track = h_flex()
+            .flex_shrink_0()
+            .h(rems(2.))
+            .rounded(px(6.))
+            .bg(c.control);
+        let mut after_chosen = true;
+        for (i, (value, title)) in options.into_iter().enumerate() {
+            let selected = value == chosen;
+            // Unchosen neighbors are divided by a short rule.
+            if !selected && !after_chosen {
+                track = track.child(div().w(px(1.)).h(px(12.)).bg(c.fg.opacity(0.3)));
+            }
+            after_chosen = selected;
+            track = track.child(
+                div()
+                    .id(SharedString::from(format!("{id}-{i}")))
+                    .h_full()
+                    .px(px(10.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(6.))
+                    .role(Role::RadioButton)
+                    .aria_label(title)
+                    .aria_selected(selected)
+                    .when(selected, |segment| segment.bg(c.accent).text_color(white()))
+                    .child(title)
+                    .on_click(cx.listener(move |main, _, _, cx| choose(main, value, cx))),
+            );
+        }
+        track
+    }
+
     /// The title bar, drawn as a Mac toolbar: the title with the proxy's
-    /// state beneath it, and the proxy's commands.
-    fn toolbar(&self, c: &Colors) -> impl IntoElement {
+    /// state beneath it, the switch between pages, and the proxy's commands.
+    fn toolbar(&self, c: &Colors, cx: &mut Context<Self>) -> impl IntoElement {
         let running = matches!(self.snapshot.proxy, Proxy::Running { .. });
         let (app, app2, app3) = (self.app.clone(), self.app.clone(), self.app.clone());
+        let pages = self
+            .segmented(
+                "page",
+                [(Page::Accounts, "Accounts"), (Page::Usage, "Usage")],
+                self.page,
+                |main, page, cx| {
+                    main.page = page;
+                    if page == Page::Usage {
+                        main.load_history();
+                    }
+                    cx.notify();
+                },
+                c,
+                cx,
+            )
+            // A press on a segment is a click, never a window drag.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         TitleBar::new()
             .h(TOOLBAR)
             .pl(px(88.))
@@ -436,9 +530,12 @@ impl Main {
                             .child(div().truncate().child(view::proxy_line(&self.snapshot))),
                     ),
             )
+            // Centered, the title and the commands taking equal sides.
+            .child(pages)
             .child(
                 h_flex()
-                    .flex_shrink_0()
+                    .flex_1()
+                    .justify_end()
                     .gap(px(8.))
                     // A press on a button is a click, never a window drag.
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -603,40 +700,54 @@ impl Main {
             )
     }
 
-    /// The API-key providers as a Mac segmented control, the chosen one
-    /// filled with the accent color.
+    /// The API-key providers to add a key for.
     fn key_providers(&self, c: &Colors, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut track = h_flex()
-            .flex_shrink_0()
-            .h(rems(2.))
-            .rounded(px(6.))
-            .bg(c.control);
-        for (i, provider) in KEYS.into_iter().enumerate() {
-            let selected = provider == self.key_provider;
-            // Unchosen neighbors are divided by a short rule.
-            if i > 0 && !selected && KEYS[i - 1] != self.key_provider {
-                track = track.child(div().w(px(1.)).h(px(12.)).bg(c.fg.opacity(0.3)));
-            }
-            track = track.child(
-                div()
-                    .id(SharedString::from(format!("key-{provider}")))
-                    .h_full()
-                    .px(px(10.))
-                    .flex()
-                    .items_center()
-                    .rounded(px(6.))
-                    .role(Role::RadioButton)
-                    .aria_label(provider.spec().title)
-                    .aria_selected(selected)
-                    .when(selected, |segment| segment.bg(c.accent).text_color(white()))
-                    .child(provider.spec().title)
-                    .on_click(cx.listener(move |main, _, _, cx| {
-                        main.key_provider = provider;
-                        cx.notify();
-                    })),
-            );
-        }
-        track
+        self.segmented(
+            "key",
+            KEYS.map(|provider| (provider, provider.spec().title)),
+            self.key_provider,
+            |main, provider, cx| {
+                main.key_provider = provider;
+                cx.notify();
+            },
+            c,
+            cx,
+        )
+    }
+
+    /// The Usage page: its range, then the charts.
+    fn usage(&self, c: &Colors, cx: &mut Context<Self>) -> impl IntoElement {
+        let history = self
+            .snapshot
+            .history
+            .as_ref()
+            .filter(|h| h.range == self.range);
+        v_flex()
+            .gap(px(16.))
+            .child(
+                h_flex()
+                    .child(heading("Usage", c))
+                    .child(div().flex_1())
+                    .child(self.segmented(
+                        "range",
+                        Range::ALL.map(|range| (range, range.title())),
+                        self.range,
+                        |main, range, cx| {
+                            main.range = range;
+                            main.load_history();
+                            cx.notify();
+                        },
+                        c,
+                        cx,
+                    )),
+            )
+            .child(match history {
+                Some(history) => usage::page(history, c),
+                None => div()
+                    .p(px(32.))
+                    .text_color(c.muted)
+                    .child("Reading the ledger…"),
+            })
     }
 
     /// A provider's accounts: a heading, then a row each.
@@ -838,7 +949,7 @@ impl Render for Main {
             .size_full()
             .bg(c.bg)
             .text_color(c.fg)
-            .child(self.toolbar(&c))
+            .child(self.toolbar(&c, cx))
             .child(
                 div().flex_1().min_h_0().child(
                     v_flex()
@@ -850,9 +961,13 @@ impl Render for Main {
                         .gap(px(22.))
                         .overflow_y_scrollbar()
                         .children(self.sign_in(&c))
-                        .child(self.accounts(&c, now, cx))
-                        .child(self.agents(&c))
-                        .child(self.background(&c)),
+                        .map(|body| match self.page {
+                            Page::Accounts => body
+                                .child(self.accounts(&c, now, cx))
+                                .child(self.agents(&c))
+                                .child(self.background(&c)),
+                            Page::Usage => body.child(self.usage(&c, cx)),
+                        }),
                 ),
             )
             .children(self.notice(&c))
