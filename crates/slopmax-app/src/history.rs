@@ -18,6 +18,9 @@ const MONTHS: [&str; 12] = [
 ];
 /// Answers shorter than this say little about a model's speed.
 const SPEED_MIN_OUTPUT: u64 = 64;
+/// The agent slopmax's own warmups name, which keep a window open at
+/// slopmax's hours rather than do the user's work.
+const WARMUP: &str = "slopmax";
 
 /// The span a history covers, counted in local days.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -66,6 +69,9 @@ pub struct History {
     /// What reading input from cache saved against sending it afresh, in
     /// dollars at API prices.
     pub cache_saved: f64,
+    /// The share of the agents' input read from cache, from 0 to 1, when
+    /// any came in; warmups, which never read it, left out.
+    pub cached: Option<f32>,
     /// The agents' conversations that were answered.
     pub sessions: u64,
     /// The median time to the first byte of an answer, in milliseconds.
@@ -73,7 +79,8 @@ pub struct History {
     /// What a month at this range's pace would be worth at API prices, when
     /// the range says enough about a month.
     pub monthly: Option<f64>,
-    /// Answers by local weekday (Monday first) and hour.
+    /// The agents' answers by local weekday (Monday first) and hour;
+    /// warmups, at slopmax's hours, left out.
     pub activity: [[u64; 24]; 7],
     /// Most tokens first.
     pub models: Vec<Share>,
@@ -101,7 +108,8 @@ pub struct Bucket {
     pub sessions: u64,
     /// What the answers would have cost on the API, in dollars.
     pub cost: f64,
-    /// The share of input read from cache, from 0 to 1, when any came in.
+    /// The share of the agents' input read from cache, from 0 to 1, when
+    /// any came in; warmups left out.
     pub cached: Option<f32>,
     /// The median and 95th percentile time to the first byte, in
     /// milliseconds, when any answer reported one.
@@ -160,6 +168,8 @@ pub fn load(
 #[derive(Default)]
 struct Filling {
     totals: Totals,
+    /// The agents' answers, warmups aside.
+    work: Totals,
     tokens: Vec<u64>,
     rescued: u64,
     sessions: HashSet<String>,
@@ -197,6 +207,7 @@ fn build(
         })
         .collect();
     let mut total = Totals::default();
+    let mut work = Totals::default();
     let mut rescued = 0;
     let mut cache_saved = 0.;
     let mut sessions = HashSet::new();
@@ -256,8 +267,12 @@ fn build(
                 .or_default()
                 .push(speed);
         }
-        let (weekday, hour) = when(entry.at, entry.at.local_offset());
-        activity[weekday][hour] += 1;
+        if entry.agent.as_deref() != Some(WARMUP) {
+            bucket.work.add(entry, prices);
+            work.add(entry, prices);
+            let (weekday, hour) = when(entry.at, entry.at.local_offset());
+            activity[weekday][hour] += 1;
+        }
         models
             .entry((model, entry.provider))
             .or_default()
@@ -278,7 +293,7 @@ fn build(
             rescued: b.rescued,
             sessions: b.sessions.len() as u64,
             cost: b.totals.cost,
-            cached: cached(&b.totals),
+            cached: cached(&b.work),
             first_byte: percentile(&mut b.waits, 50).zip(percentile(&mut b.waits, 95)),
             tokens: b.tokens,
         })
@@ -312,6 +327,7 @@ fn build(
         total,
         rescued,
         cache_saved,
+        cached: cached(&work),
         sessions: sessions.len() as u64,
         first_byte: percentile(&mut waits, 50),
         activity,
@@ -335,7 +351,7 @@ fn agent(id: Option<&str>) -> &'static str {
     match id {
         Some("claude") => "Claude Code",
         Some("codex") => "Codex",
-        Some("slopmax") => "Warmups",
+        Some(WARMUP) => "Warmups",
         _ => "Other",
     }
 }
@@ -528,6 +544,38 @@ mod tests {
         let agents: Vec<&str> = history.agents.iter().map(|a| a.name).collect();
         assert_eq!(agents, ["Claude Code", "Warmups"]);
         assert!(history.monthly.is_some());
+        // The warmup is neither work nor input that missed the cache.
+        let work: u64 = history.activity.iter().flatten().sum();
+        assert_eq!(work, 3);
+        assert_eq!(history.cached, Some(1.));
+        assert_eq!(history.buckets.last().unwrap().cached, Some(1.));
+    }
+
+    #[test]
+    fn an_hour_of_warmups_alone_has_no_cache_rate() {
+        let now = Timestamp::now();
+        let since = summary::since("today", now).unwrap();
+        let warmup = Entry {
+            agent: Some(WARMUP.into()),
+            ..entry(
+                since.max(now - SignedDuration::from_mins(1)),
+                ProviderId::Codex,
+                "gpt-6-sol",
+                9,
+            )
+        };
+        let history = build(
+            &[warmup],
+            Range::Today,
+            since,
+            now,
+            &BTreeMap::new(),
+            &HashMap::new(),
+        );
+        assert_eq!(history.total.requests, 1);
+        assert_eq!(history.buckets.last().unwrap().cached, None);
+        assert_eq!(history.cached, None);
+        assert!(history.activity.iter().flatten().all(|&n| n == 0));
     }
 
     #[test]
