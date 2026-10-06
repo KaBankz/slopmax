@@ -136,21 +136,65 @@ fn front_window(cx: &mut App, command: impl FnOnce(&mut Window)) {
 }
 
 fn menu_bar_icon(cx: &mut App) -> gpui_tray::Result<Tray> {
-    let image = Image::from_bytes(ImageFormat::Svg, TRAY_ICON.to_vec());
-    Tray::builder()
-        .icon(Icon::from_gpui(&image, cx)?)
+    let tray = Tray::builder()
         .title("slopmax")
         .tooltip("slopmax")
         .menu(|_| {
             vec![
                 MenuItem::action("Open slopmax", OpenWindow),
-                MenuItem::action("Refresh usage", Refresh),
+                MenuItem::action("Refresh Usage", Refresh),
                 MenuItem::separator(),
-                MenuItem::action("Quit", Quit),
+                MenuItem::action("Quit slopmax", Quit),
             ]
-        })
-        .build(cx)
+        });
+    // A Mac menu bar wants a template image, which gpui-tray cannot give it:
+    // it sizes an icon by its pixels and keeps its colors. So on a Mac the
+    // app sets the item's image itself; elsewhere the tray takes the icon.
+    if cfg!(target_os = "macos") {
+        let tray = tray.build(cx)?;
+        menu_bar_glyph();
+        Ok(tray)
+    } else {
+        let image = Image::from_bytes(ImageFormat::Svg, TRAY_ICON.to_vec());
+        tray.icon(Icon::from_gpui(&image, cx)?).build(cx)
+    }
 }
+
+/// Gives the menu bar item the system's three rising bars, a template image
+/// that macOS sizes for the menu bar and tints with it, light or dark.
+#[cfg(target_os = "macos")]
+fn menu_bar_glyph() {
+    use objc2::MainThreadMarker;
+    use objc2::rc::Retained;
+    use objc2_app_kit::{NSApplication, NSImage, NSStatusBarButton, NSView};
+    use objc2_foundation::NSString;
+
+    fn set(view: Retained<NSView>, glyph: &NSImage) {
+        match view.downcast::<NSStatusBarButton>() {
+            Ok(button) => button.setImage(Some(glyph)),
+            Err(view) => view.subviews().iter().for_each(|view| set(view, glyph)),
+        }
+    }
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let Some(glyph) = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+        &NSString::from_str("chart.bar.fill"),
+        Some(&NSString::from_str("slopmax")),
+    ) else {
+        return;
+    };
+    // The item's button sits in a status bar window of the app's own.
+    for window in NSApplication::sharedApplication(mtm).windows() {
+        if let Some(content) = window.contentView() {
+            set(content, &glyph);
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn menu_bar_glyph() {}
 
 /// Brings the window forward, opening it again if it was closed.
 fn open_window(cx: &mut App) {

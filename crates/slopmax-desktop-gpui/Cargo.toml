@@ -16,7 +16,8 @@ gpui-tray = { version = "0.1.4", default-features = false, features = ["gpui-kit
 slopmax-app.workspace = true
 slopmax-core.workspace = true
 
-# The system's accent color, which GPUI does not pass on.
+# The system's accent color, which GPUI does not pass on, and the menu bar
+# item's template image, which gpui-tray cannot set.
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
 objc2 = "0.6"
@@ -26,9 +27,21 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
   "objc2-core-foundation",
   "NSAppearance",
   "NSApplication",
+  "NSButton",
   "NSColor",
   "NSColorSpace",
+  "NSControl",
+  "NSImage",
   "NSResponder",
+  "NSStatusBarButton",
+  "NSView",
+  "NSWindow",
+] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSArray",
+  "NSEnumerator",
+  "NSString",
 ] }
 
 [lints]
