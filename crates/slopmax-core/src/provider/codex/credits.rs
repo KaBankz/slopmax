@@ -27,6 +27,8 @@ struct Listed {
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
+    granted_at: Option<String>,
+    #[serde(default)]
     expires_at: Option<String>,
 }
 
@@ -93,6 +95,7 @@ fn available(list: CreditList) -> Vec<Credit> {
         .filter(|c| c.status.is_empty() || c.status.eq_ignore_ascii_case("available"))
         .filter(|c| c.reset_type.as_deref().is_none_or(|t| t == CODEX_RESETS))
         .map(|c| Credit {
+            granted_at: c.granted_at.as_deref().and_then(|t| t.parse().ok()),
             expires_at: c.expires_at.as_deref().and_then(|t| t.parse().ok()),
             id: c.id,
             title: c.title,
@@ -139,7 +142,7 @@ mod tests {
     fn only_codex_window_credits_count() {
         let list: CreditList = serde_json::from_str(
             r#"{"credits": [
-                {"id": "late", "status": "available", "reset_type": "codex_rate_limits", "expires_at": "2026-12-01T00:00:00Z"},
+                {"id": "late", "status": "available", "reset_type": "codex_rate_limits", "granted_at": "2026-11-01T09:30:00Z", "expires_at": "2026-12-01T00:00:00Z"},
                 {"id": "review", "status": "available", "reset_type": "code_review_rate_limits", "expires_at": "2026-10-05T00:00:00Z"},
                 {"id": "spent", "status": "redeemed", "reset_type": "codex_rate_limits", "expires_at": "2026-10-06T00:00:00Z"},
                 {"id": "soon", "status": "available", "reset_type": "codex_rate_limits", "expires_at": "2026-10-07T00:00:00Z"},
@@ -147,7 +150,12 @@ mod tests {
             ]}"#,
         )
         .unwrap();
-        let ids: Vec<String> = available(list).into_iter().map(|c| c.id).collect();
+        let credits = available(list);
+        let ids: Vec<&str> = credits.iter().map(|c| c.id.as_str()).collect();
         assert_eq!(ids, ["soon", "untyped", "late"]);
+        assert_eq!(
+            credits[2].granted_at,
+            Some("2026-11-01T09:30:00Z".parse().unwrap())
+        );
     }
 }

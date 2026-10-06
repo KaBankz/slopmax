@@ -218,8 +218,9 @@ impl AccountReport {
         if let Some(tool) = &self.follows {
             notes.push(Note::Follows(tool.clone()));
         }
-        if let Some(credits) = state.limits.reset_credits.filter(|n| *n > 0) {
-            notes.push(Note::ResetCredits(credits));
+        match state.credits_left(now) {
+            0 => {}
+            credits => notes.push(Note::ResetCredits(credits)),
         }
         if state.usage.requests > 0 {
             notes.push(Note::Served {

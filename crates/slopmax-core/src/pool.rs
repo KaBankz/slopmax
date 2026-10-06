@@ -21,6 +21,7 @@ use crate::account::Account;
 use crate::config::Strategy;
 use crate::limits::{Limits, PoolWindow, UNKNOWN_SCORE};
 use crate::provider::ProviderId;
+use crate::provider::credits::Credit;
 use crate::time::{SignedDuration, Timestamp};
 use crate::wire::Usage;
 
@@ -55,9 +56,41 @@ pub struct AccountState {
     pub last_error: Option<String>,
     #[serde(default)]
     pub usage: Usage,
+    /// Its reset credits as last listed, for providers that grant them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credits: Option<CreditList>,
+}
+
+/// An account's reset credits as listed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CreditList {
+    /// Unspent, soonest-expiring first.
+    pub credits: Vec<Credit>,
+    pub listed_at: Timestamp,
+    /// The count its usage reported when they were listed: a new count
+    /// means one came or went since.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub counted: Option<u32>,
 }
 
 impl AccountState {
+    /// Its reset credits that have not expired: from the list, once there
+    /// is one, else the count its usage reports.
+    pub fn credits_left(&self, now: Timestamp) -> u32 {
+        match &self.credits {
+            Some(_) => self.unexpired_credits(now).count() as u32,
+            None => self.limits.reset_credits.unwrap_or(0),
+        }
+    }
+
+    /// The listed credits that have not expired, soonest-expiring first.
+    pub fn unexpired_credits(&self, now: Timestamp) -> impl Iterator<Item = &Credit> {
+        self.credits
+            .iter()
+            .flat_map(|list| &list.credits)
+            .filter(move |c| c.expires_at.is_none_or(|at| at > now))
+    }
+
     /// When the account can serve `model` again, or `Ok` if it can now.
     fn blocked(&self, model: Option<&str>, now: Timestamp) -> Result<(), Timestamp> {
         let model_block = self
@@ -403,9 +436,22 @@ impl Pool {
         inner.dirty = true;
     }
 
-    /// Records that an account's windows were just reset by a redeemed
-    /// credit: lifts every block and zeroes its usage until the next reading.
-    pub fn record_reset(&self, id: &str, now: Timestamp) {
+    /// Records the account's reset credits as just listed.
+    pub fn record_credits(&self, id: &str, credits: Vec<Credit>, now: Timestamp) {
+        let mut inner = self.lock();
+        let state = inner.states.entry(id.to_owned()).or_default();
+        state.credits = Some(CreditList {
+            credits,
+            listed_at: now,
+            counted: state.limits.reset_credits,
+        });
+        inner.dirty = true;
+    }
+
+    /// Records that an account's windows were just reset by redeeming
+    /// `credit`, or one the provider chose: lifts every block and zeroes its
+    /// usage until the next reading, and takes the credit off its list.
+    pub fn record_reset(&self, id: &str, now: Timestamp, credit: Option<&str>) {
         let mut inner = self.lock();
         let state = inner.states.entry(id.to_owned()).or_default();
         state.blocked_until = None;
@@ -419,6 +465,16 @@ impl Pool {
         state.limits.observed_at = Some(now);
         if let Some(credits) = &mut state.limits.reset_credits {
             *credits = credits.saturating_sub(1);
+        }
+        if let Some(list) = &mut state.credits {
+            match credit.and_then(|id| list.credits.iter().position(|c| c.id == id)) {
+                Some(i) => {
+                    list.credits.remove(i);
+                    list.counted = list.counted.map(|n| n.saturating_sub(1));
+                }
+                // Which one went is unknown, so the list is due again.
+                None => list.counted = None,
+            }
         }
         inner.dirty = true;
     }
@@ -863,5 +919,45 @@ mod tests {
             exclude: &exclude,
         };
         assert_eq!(pool.pick(&req, ts(1000)).unwrap_err().until, Some(ts(5000)));
+    }
+
+    #[test]
+    fn credits_count_from_their_list_and_leave_it_when_redeemed() {
+        let a = account(ProviderId::Codex, "a", 1);
+        let pool = pool(Strategy::FillFirst, &[&a]);
+        let credit = |id: &str, expires: i64| Credit {
+            id: id.into(),
+            title: None,
+            granted_at: Some(ts(0)),
+            expires_at: Some(ts(expires)),
+        };
+        let counted = Limits {
+            reset_credits: Some(2),
+            ..limits(vec![window("5h", 100.0, Some(4000))])
+        };
+        pool.observe(&a.id, counted, ts(1000));
+        // Before a list, the usage's count stands.
+        assert_eq!(pool.state(&a.id).credits_left(ts(1000)), 2);
+        pool.record_credits(
+            &a.id,
+            vec![credit("soon", 2000), credit("later", 9000)],
+            ts(1000),
+        );
+        let state = pool.state(&a.id);
+        assert_eq!(state.credits_left(ts(1000)), 2);
+        // One that has lapsed no longer counts.
+        assert_eq!(state.credits_left(ts(3000)), 1);
+
+        pool.record_reset(&a.id, ts(1500), Some("soon"));
+        let state = pool.state(&a.id);
+        let left: Vec<&str> = state
+            .unexpired_credits(ts(1500))
+            .map(|c| c.id.as_str())
+            .collect();
+        assert_eq!(left, ["later"]);
+        // The list and the count agree still, so nothing asks for a new list.
+        assert_eq!(state.limits.reset_credits, Some(1));
+        assert_eq!(state.credits.unwrap().counted, Some(1));
+        assert_eq!(state.limits.windows[0].used, 0.0);
     }
 }

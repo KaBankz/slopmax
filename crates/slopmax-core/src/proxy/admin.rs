@@ -50,9 +50,11 @@ pub(super) async fn handle(app: Arc<App>, request: Request) -> Response {
     let segments: Vec<&str> = path.trim_start_matches("/slopmax/").split('/').collect();
     match (&method, segments.as_slice()) {
         (&Method::GET, ["status"]) => json_reply(StatusCode::OK, &app.report()),
-        // Polls every account's usage now, then reports.
+        // Polls every account's usage and lists its reset credits now, then
+        // reports.
         (&Method::POST, ["refresh"]) => {
             daemon::poll_all(&app, true).await;
+            daemon::list_credits(&app, true).await;
             json_reply(StatusCode::OK, &app.report())
         }
         // Picks up changes on disk now, then reports.
@@ -177,8 +179,9 @@ fn unpin(app: &App) -> Response {
     reload(app, unpin_all(&app.home))
 }
 
-/// `POST /slopmax/accounts/<id>/<action>`: enable, disable, use, redeem,
-/// remove, priority (`?value=N`), or label (`?value=name`, empty to clear).
+/// `POST /slopmax/accounts/<id>/<action>`: enable, disable, use, redeem (a
+/// reset credit: `?value=<credit id>`, else the soonest to expire), remove,
+/// priority (`?value=N`), or label (`?value=name`, empty to clear).
 async fn account(app: &App, id: &str, action: &str, query: &str) -> Response {
     let Some(account) = app.pool.accounts().into_iter().find(|a| a.id == id) else {
         return error(None, StatusCode::NOT_FOUND, "no such account");
@@ -208,7 +211,7 @@ async fn account(app: &App, id: &str, action: &str, query: &str) -> Response {
         }
         "use" => pin(&app.home, &account),
         "remove" => forget(&app.store, &app.home, &account),
-        "redeem" => return redeem(app, &account).await,
+        "redeem" => return redeem(app, &account, value).await,
         _ => return error(None, StatusCode::NOT_FOUND, "no such account action"),
     };
     reload(app, changed)
@@ -222,7 +225,9 @@ fn reload(app: &App, changed: anyhow::Result<()>) -> Response {
     json_reply(StatusCode::OK, &app.report())
 }
 
-async fn redeem(app: &App, account: &crate::account::Account) -> Response {
+/// Redeems `credit`, or the account's soonest to expire as listed now, and
+/// answers how it went with the report.
+async fn redeem(app: &App, account: &crate::account::Account, credit: Option<String>) -> Response {
     let Some(credits) = account.provider.get().credits() else {
         return error(
             None,
@@ -238,11 +243,35 @@ async fn redeem(app: &App, account: &crate::account::Account) -> Response {
             "the account needs signing in again",
         );
     };
-    match credits.redeem(&app.auth_http, &account, None).await {
+    let credit = match credit {
+        Some(credit) => credit,
+        None => match credits.list(&app.auth_http, &account).await {
+            Ok(listed) => {
+                let soonest = listed.first().map(|c| c.id.clone());
+                app.pool
+                    .record_credits(&account.id, listed, Timestamp::now());
+                match soonest {
+                    Some(credit) => credit,
+                    None => {
+                        return json_reply(
+                            StatusCode::OK,
+                            &json!({ "outcome": Outcome::NoCredit, "report": app.report() }),
+                        );
+                    }
+                }
+            }
+            Err(e) => return error(None, StatusCode::BAD_GATEWAY, &format!("{e:#}")),
+        },
+    };
+    match credits
+        .redeem(&app.auth_http, &account, Some(&credit))
+        .await
+    {
         Ok(outcome) => {
             if outcome == Outcome::Reset {
-                log::info!("{}: redeemed a reset credit from the dashboard", account.id);
-                app.pool.record_reset(&account.id, Timestamp::now());
+                log::info!("{}: redeemed a reset credit on request", account.id);
+                app.pool
+                    .record_reset(&account.id, Timestamp::now(), Some(&credit));
             }
             json_reply(
                 StatusCode::OK,

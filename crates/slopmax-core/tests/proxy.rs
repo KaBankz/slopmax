@@ -21,6 +21,7 @@ use slopmax_core::net::{Client, Origins, ws};
 use slopmax_core::paths::Home;
 use slopmax_core::pool::State as PoolState;
 use slopmax_core::provider::ProviderId;
+use slopmax_core::provider::credits::Credit;
 use slopmax_core::proxy::{self, App};
 use slopmax_core::time::{SignedDuration, Timestamp};
 use slopmax_core::wire::Dialect;
@@ -345,8 +346,10 @@ fn mock_credits(headers: &HeaderMap) -> Response {
     let mut credits =
         vec![json!({ "id": "credit-later", "status": "available", "expires_at": expires(48) })];
     if headers["authorization"] == "Bearer tok-expiring" {
-        credits
-            .push(json!({ "id": "credit-soon", "status": "available", "expires_at": expires(1) }));
+        credits.push(json!({
+            "id": "credit-soon", "status": "available",
+            "granted_at": expires(-29 * 24), "expires_at": expires(1),
+        }));
         credits
             .push(json!({ "id": "credit-spent", "status": "redeemed", "expires_at": expires(0) }));
     }
@@ -843,6 +846,57 @@ async fn credits_about_to_expire_are_redeemed_on_used_accounts() {
     assert_eq!(reset.reset_credits, Some(1));
     assert_eq!(reset.windows[0].used, 0.0);
     assert_eq!(h.app.pool.state(&h.ids[1]).limits.reset_credits, Some(2));
+}
+
+#[tokio::test]
+async fn credits_are_listed_kept_and_redeemed_soonest_first() {
+    let h = harness(ProviderId::Codex, &["tok-expiring", "tok-ok"]).await;
+    observe_usage(&h, &h.ids[0], 30.0);
+    let listings = |h: &Harness| {
+        paths(h)
+            .iter()
+            .filter(|p| *p == "/wham/rate-limit-reset-credits")
+            .count()
+    };
+
+    // Each credit with its dates, soonest to expire first; an account
+    // whose usage counts none is not asked.
+    slopmax_core::daemon::list_credits(&h.app, false).await;
+    assert_eq!(listings(&h), 1);
+    let now = Timestamp::now();
+    let state = h.app.pool.state(&h.ids[0]);
+    let listed: Vec<&Credit> = state.unexpired_credits(now).collect();
+    assert_eq!(listed[0].id, "credit-soon");
+    assert_eq!(listed[1].id, "credit-later");
+    assert!(listed[0].granted_at.is_some_and(|at| at < now));
+    // Not again until the list is due.
+    slopmax_core::daemon::list_credits(&h.app, false).await;
+    assert_eq!(listings(&h), 1);
+
+    // Redeeming without naming a credit spends the soonest to expire.
+    let reply: Value = client()
+        .post(format!("{}/slopmax/accounts/{}/redeem", h.proxy, h.ids[0]))
+        .header("authorization", format!("Bearer {KEY}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(reply["outcome"], "reset");
+    let sent = h.log.lock().unwrap().last().cloned().unwrap();
+    let sent: Value = serde_json::from_slice(&sent.body).unwrap();
+    assert_eq!(sent["credit_id"], "credit-soon");
+    let account = reply["report"]["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == h.ids[0].as_str())
+        .unwrap()
+        .clone();
+    let left = account["state"]["credits"]["credits"].as_array().unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0]["id"], "credit-later");
 }
 
 #[tokio::test]

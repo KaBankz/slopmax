@@ -39,7 +39,6 @@ use crate::net::{Client, Origins};
 use crate::paths::Home;
 use crate::pool::{Pins, Pool, State as PoolState};
 use crate::provider::ProviderId;
-use crate::provider::credits::Credit;
 use crate::report::{self, Report};
 use crate::time::{SignedDuration, Timestamp};
 use crate::wire::Dialect;
@@ -74,8 +73,6 @@ pub struct App {
     codex_model: Mutex<Option<String>>,
     /// When each account was last warmed.
     warmed: Mutex<HashMap<String, Instant>>,
-    /// Each account's reset credits as hub clients last saw them, and when.
-    credit_lists: Mutex<HashMap<String, (Instant, Vec<Credit>)>>,
 }
 
 impl App {
@@ -116,7 +113,6 @@ impl App {
             events: broadcast::channel(256).0,
             codex_model: Mutex::new(codex_model),
             warmed: Default::default(),
-            credit_lists: Default::default(),
         })
     }
 

@@ -10,7 +10,6 @@
 //! readings slopmax already keeps, and refuses everything else.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use http::{HeaderMap, Method, StatusCode};
 use hyper::body::Incoming;
@@ -26,7 +25,7 @@ use crate::net::body;
 use crate::net::server::{Request, Response};
 use crate::provider::ProviderId;
 use crate::provider::credits::{Credit, Outcome};
-use crate::time::Timestamp;
+use crate::time::{SignedDuration, Timestamp};
 use crate::{daemon, log};
 
 const CLAUDE_USAGE: &str = "https://api.anthropic.com/api/oauth/usage";
@@ -35,7 +34,7 @@ const CODEX_CREDITS: &str = "https://chatgpt.com/backend-api/wham/rate-limit-res
 const CODEX_CONSUME: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
 /// How long a credit list is reused. Tools read it on every refresh, and it
 /// changes only when a credit is granted or spent.
-const CREDITS_FRESH: Duration = Duration::from_secs(300);
+const CREDITS_FRESH: SignedDuration = SignedDuration::from_mins(5);
 
 /// A provider's status and body, as `api-call` relays them.
 type Answer = Result<Value, (StatusCode, String)>;
@@ -295,12 +294,16 @@ async fn credit_list(app: &App, account: &Account) -> Answer {
         .await?
         .iter()
         .filter_map(|c| {
-            Some(json!({
+            let mut credit = json!({
                 "id": c.id,
                 "status": "available",
                 "reset_type": "codex_rate_limits",
                 "expires_at": c.expires_at?.to_string(),
-            }))
+            });
+            if let Some(at) = c.granted_at {
+                credit["granted_at"] = json!(at.to_string());
+            }
+            Some(credit)
         })
         .collect();
     Ok(json!({ "credits": credits }))
@@ -310,28 +313,25 @@ async fn credits(app: &App, account: &Account) -> Result<Vec<Credit>, (StatusCod
     let Some(lister) = account.provider.get().credits() else {
         return Ok(Vec::new());
     };
+    let now = Timestamp::now();
+    let state = app.pool.state(&account.id);
     // The usage reading counts them, which saves asking when there are none.
-    if app.pool.state(&account.id).limits.reset_credits == Some(0) {
+    if state.limits.reset_credits == Some(0) {
         return Ok(Vec::new());
     }
-    if let Some((at, credits)) = app
-        .credit_lists
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .get(&account.id)
-        && at.elapsed() < CREDITS_FRESH
+    if state
+        .credits
+        .as_ref()
+        .is_some_and(|list| now.duration_since(list.listed_at) < CREDITS_FRESH)
     {
-        return Ok(credits.clone());
+        return Ok(state.unexpired_credits(now).cloned().collect());
     }
     let ready = app.ready(account).await.ok_or_else(signed_out)?;
     let credits = lister
         .list(&app.auth_http, &ready)
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
-    app.credit_lists
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .insert(account.id.clone(), (Instant::now(), credits.clone()));
+    app.pool.record_credits(&account.id, credits.clone(), now);
     Ok(credits)
 }
 
@@ -357,13 +357,10 @@ async fn consume(app: &App, account: &Account, data: &str) -> Answer {
         .redeem(&app.auth_http, &ready, Some(&credit_id))
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
-    app.credit_lists
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .remove(&account.id);
     if outcome == Outcome::Reset {
         log::info!("{}: redeemed a reset credit for a hub client", account.id);
-        app.pool.record_reset(&account.id, Timestamp::now());
+        app.pool
+            .record_reset(&account.id, Timestamp::now(), Some(&credit_id));
     }
     Ok(json!({ "code": outcome }))
 }

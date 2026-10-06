@@ -723,9 +723,8 @@ async fn rescue(app: &App, provider: ProviderId) -> Option<String> {
         .into_iter()
         .filter_map(|a| {
             let state = app.pool.state(&a.id);
-            let credits = state.limits.reset_credits.unwrap_or(0);
             let until = state.blocked_until.max(state.limits.exhausted_until(now))?;
-            (credits > 0).then_some((a, until))
+            (state.credits_left(now) > 0).then_some((a, until))
         })
         .collect();
     // Free the account that would otherwise stay blocked the longest.
@@ -734,10 +733,18 @@ async fn rescue(app: &App, provider: ProviderId) -> Option<String> {
         let Some(account) = app.ready(&picked).await else {
             continue;
         };
-        match credits.redeem(&app.auth_http, &account, None).await {
+        // The soonest to expire, if the list is known; else the provider
+        // chooses, as listing now would hold up the request.
+        let state = app.pool.state(&account.id);
+        let credit = state.unexpired_credits(now).next().map(|c| c.id.clone());
+        match credits
+            .redeem(&app.auth_http, &account, credit.as_deref())
+            .await
+        {
             Ok(Outcome::Reset) => {
                 log::info!("{}: redeemed a reset credit", account.id);
-                app.pool.record_reset(&account.id, Timestamp::now());
+                app.pool
+                    .record_reset(&account.id, Timestamp::now(), credit.as_deref());
                 return Some(account.id);
             }
             Ok(outcome) => log::info!("{}: reset credit not used ({outcome:?})", account.id),

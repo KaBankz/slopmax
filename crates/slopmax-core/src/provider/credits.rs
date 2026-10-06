@@ -15,10 +15,15 @@ use crate::net::Client;
 use crate::time::Timestamp;
 
 /// One unspent credit.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Credit {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// When the provider granted it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub granted_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<Timestamp>,
 }
 
