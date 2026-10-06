@@ -10,7 +10,7 @@ use slopmax_core::human;
 use slopmax_core::limits::Window;
 use slopmax_core::provider::ProviderId;
 use slopmax_core::provider::credits::Credit;
-use slopmax_core::report::{AccountReport, Note, Report, Tone};
+use slopmax_core::report::{AccountReport, Condition, Note, Report, Tone};
 use slopmax_core::service;
 use slopmax_core::time::{SignedDuration, Timestamp};
 
@@ -139,6 +139,164 @@ pub struct Pace {
 pub struct Label {
     pub text: String,
     pub tone: Tone,
+}
+
+/// How the accounts stand, in a line: what an overview leads with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Status {
+    /// `All 4 accounts are ready`, or `3 of 4 accounts are ready`.
+    pub headline: String,
+    /// What keeps the rest: `1 limited · 1 needs signing in`.
+    pub detail: Option<String>,
+    pub tone: Tone,
+}
+
+pub fn status(report: &Report, now: Timestamp) -> Status {
+    let enabled: Vec<Condition> = report
+        .accounts
+        .iter()
+        .filter(|a| !a.disabled)
+        .map(|a| a.condition(now))
+        .collect();
+    let ready = enabled
+        .iter()
+        .filter(|c| matches!(c, Condition::Ready | Condition::Active(_)))
+        .count();
+    let count = |want: fn(&Condition) -> bool| enabled.iter().filter(|c| want(c)).count();
+    let limited = count(|c| matches!(c, Condition::Limited(_) | Condition::Throttled));
+    let signed_out = count(|c| matches!(c, Condition::SignInNeeded(_)));
+    let off = report.accounts.len() - enabled.len();
+    let headline = match (enabled.len(), ready) {
+        (0, _) if off == 0 => "No accounts yet".to_owned(),
+        (0, _) => "Every account is turned off".to_owned(),
+        (1, 1) => "Your account is ready".to_owned(),
+        (n, r) if r == n => format!("All {n} accounts are ready"),
+        (n, r) => format!("{r} of {n} accounts are ready"),
+    };
+    let mut parts = Vec::new();
+    if limited > 0 {
+        parts.push(format!("{limited} limited"));
+    }
+    match signed_out {
+        0 => {}
+        1 => parts.push("1 needs signing in".to_owned()),
+        n => parts.push(format!("{n} need signing in")),
+    }
+    if off > 0 {
+        parts.push(format!("{off} turned off"));
+    }
+    Status {
+        headline,
+        detail: (!parts.is_empty()).then(|| parts.join(" · ")),
+        tone: if signed_out > 0 {
+            Tone::Bad
+        } else if limited > 0 {
+            Tone::Warn
+        } else {
+            Tone::Good
+        },
+    }
+}
+
+/// What a notice that wants a look offers to do about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Remedy {
+    /// Sign in to the account again.
+    SignIn,
+    /// Redeem one of its reset credits.
+    Redeem,
+    /// Look at the account.
+    Look,
+}
+
+/// Something about an account that wants a look.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attention {
+    pub provider: ProviderId,
+    /// The account's id.
+    pub account: String,
+    pub text: String,
+    pub tone: Tone,
+    pub remedy: Remedy,
+}
+
+/// What wants a look, most pressing first: an account signed out, one
+/// limited that holds a reset credit, a window running out before it
+/// resets, and a reset credit soon to expire. An account merely limited is
+/// slopmax's to work around, and wants nothing.
+pub fn attention(report: &Report, now: Timestamp) -> Vec<Attention> {
+    let mut found = Vec::new();
+    for account in report.accounts.iter().filter(|a| !a.disabled) {
+        let note = |text: String, tone, remedy| Attention {
+            provider: account.provider,
+            account: account.id.clone(),
+            text,
+            tone,
+            remedy,
+        };
+        let credits = account.state.credits_left(now);
+        match account.condition(now) {
+            Condition::SignInNeeded(_) => {
+                found.push(note(
+                    format!("{} needs signing in again", account.name),
+                    Tone::Bad,
+                    Remedy::SignIn,
+                ));
+                continue;
+            }
+            Condition::Limited(until) if credits > 0 => found.push(note(
+                format!(
+                    "{} is limited until {}, and holds {}",
+                    account.name,
+                    clock(until, now, until.local_offset()),
+                    credit_count(credits)
+                ),
+                Tone::Warn,
+                Remedy::Redeem,
+            )),
+            Condition::Limited(_) => continue,
+            _ => {}
+        }
+        for window in account
+            .state
+            .limits
+            .windows
+            .iter()
+            .filter(|w| w.model.is_none())
+        {
+            let used = window.used_at(now);
+            if let Some(pace) = pace(window, used, now).filter(|p| p.label.tone == Tone::Warn) {
+                let title = lowercase_first(&Slot::of_window(window).title());
+                found.push(note(
+                    format!(
+                        "{}'s {title} window {}",
+                        account.name,
+                        lowercase_first(&pace.label.text)
+                    ),
+                    Tone::Warn,
+                    Remedy::Look,
+                ));
+            }
+        }
+        if let Some(at) = account
+            .state
+            .unexpired_credits(now)
+            .find_map(|c| c.expires_at)
+            .filter(|at| at.duration_since(now) < EXPIRING)
+        {
+            found.push(note(
+                format!(
+                    "A reset credit on {} expires {}",
+                    account.name,
+                    clock(at, now, at.local_offset())
+                ),
+                Tone::Warn,
+                Remedy::Redeem,
+            ));
+        }
+    }
+    found.sort_by_key(|a| a.tone != Tone::Bad);
+    found
 }
 
 /// The accounts grouped by provider, in the order requests try them.
@@ -854,6 +1012,56 @@ mod tests {
         assert_eq!(later.expires, "Expires May 10");
         assert_eq!(later.granted.as_deref(), Some("Granted yesterday"));
         assert_eq!(later.tone, Tone::Muted);
+    }
+
+    #[test]
+    fn status_and_attention_say_what_wants_a_look() {
+        let now = ts(10_000);
+        let mut report = report_of(
+            now,
+            vec![
+                ("out@x.dev", vec![window("5h", 10.0, 10_000 + 9_000)]),
+                // Ninety percent used with three of five hours to go.
+                ("busy@x.dev", vec![window("5h", 90.0, 10_000 + 10_800)]),
+                ("calm@x.dev", vec![window("5h", 10.0, 10_000 + 9_000)]),
+            ],
+        );
+        report.accounts[0].auth_error = Some("revoked".into());
+        report.accounts[2].disabled = true;
+        let status = status(&report, now);
+        assert_eq!(status.headline, "1 of 2 accounts are ready");
+        assert_eq!(
+            status.detail.as_deref(),
+            Some("1 needs signing in · 1 turned off")
+        );
+        assert_eq!(status.tone, Tone::Bad);
+
+        let attention = attention(&report, now);
+        let found: Vec<(&str, Remedy)> = attention
+            .iter()
+            .map(|a| (a.text.as_str(), a.remedy))
+            .collect();
+        // The signed-out account first; a turned-off one wants nothing.
+        assert_eq!(
+            found[0],
+            ("out@x.dev needs signing in again", Remedy::SignIn)
+        );
+        assert_eq!(found.len(), 2);
+        assert!(
+            found[1]
+                .0
+                .starts_with("busy@x.dev's 5-hour window runs out ~"),
+            "{}",
+            found[1].0
+        );
+        assert_eq!(found[1].1, Remedy::Look);
+
+        report.accounts.clear();
+        assert_eq!(status_of(&report, now), "No accounts yet");
+    }
+
+    fn status_of(report: &Report, now: Timestamp) -> String {
+        status(report, now).headline
     }
 
     #[test]

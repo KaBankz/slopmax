@@ -61,6 +61,9 @@ pub struct Snapshot {
     /// What went through slopmax, once a UI asks with
     /// [`App::load_history`].
     pub history: Option<history::History>,
+    /// Today's, apart from that, once a UI asks with [`App::load_today`]:
+    /// for summaries that show today whatever range the charts show.
+    pub today: Option<history::History>,
     /// The account a reset credit is being redeemed on.
     pub redeeming: Option<String>,
 }
@@ -154,6 +157,7 @@ impl App {
             sign_in: None,
             notice: None,
             history: None,
+            today: None,
             redeeming: None,
         });
         let shared = Arc::new(Shared {
@@ -402,6 +406,19 @@ impl App {
     /// Reads the ledger over `range` into the snapshot's `history`, off the
     /// UI's thread. Accounts take the names the last report gave them.
     pub fn load_history(&self, range: history::Range) {
+        self.load(range, |s, history| s.history = Some(history));
+    }
+
+    /// Reads today's ledger into the snapshot's `today`.
+    pub fn load_today(&self) {
+        self.load(history::Range::Today, |s, history| s.today = Some(history));
+    }
+
+    fn load(
+        &self,
+        range: history::Range,
+        keep: impl FnOnce(&mut Snapshot, history::History) + Send + 'static,
+    ) {
         let shared = self.shared.clone();
         self.runtime.spawn(async move {
             let names: HashMap<String, String> = shared
@@ -424,7 +441,7 @@ impl App {
             })
             .await;
             if let Ok(loaded) = loaded {
-                shared.update(|s| s.history = Some(loaded));
+                shared.update(|s| keep(s, loaded));
             }
         });
     }
