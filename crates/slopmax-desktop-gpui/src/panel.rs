@@ -24,7 +24,7 @@ use slopmax_core::report::Tone;
 use slopmax_core::time::Timestamp;
 
 use crate::accounts::{resets, segments};
-use crate::native::{self, Material};
+use crate::native;
 use crate::usage::{grouped, priced};
 use crate::{Colors, OpenSettings, OpenWindow, Quit, Section, Shared, provider_color, symbols};
 
@@ -107,10 +107,13 @@ fn open(cx: &mut App) {
     let app = cx.global::<Shared>().app.clone();
     match gpui_kit::open_window(options, cx, |window, cx| {
         crate::macos_theme(window, cx);
-        native::frost(window, Material::Popover, 12.);
+        native::frost(window, 12.);
         cx.new(|cx| Panel::new(app, cx))
     }) {
-        Ok((window, _)) => cx.global_mut::<Shared>().panel = Some(window),
+        Ok((window, _)) => {
+            crate::clear_root(window, cx);
+            cx.global_mut::<Shared>().panel = Some(window);
+        }
         Err(e) => eprintln!("slopmax: could not open the menu bar panel: {e:#}"),
     }
 }

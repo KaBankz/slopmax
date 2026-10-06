@@ -1,33 +1,24 @@
 //! What GPUI does not reach of AppKit: the accent color chosen in System
-//! Settings, the menu bar item's glyph and where it sits, the vibrancy
-//! behind a window, as a sidebar or a menu bar panel has it, and the user's
-//! defaults, where a Mac app keeps how its window was left. Elsewhere each
-//! does nothing.
-
-/// The material behind a window's transparent parts.
-#[derive(Clone, Copy)]
-pub(crate) enum Material {
-    /// A sidebar's, translucent to the desktop behind.
-    Sidebar,
-    /// A popover's, as a menu bar panel has it.
-    Popover,
-}
+//! Settings, the menu bar item's glyph and where it sits, the materials
+//! AppKit puts behind a sidebar and a menu bar panel, Liquid Glass from
+//! macOS 26, and the user's defaults, where a Mac app keeps how its window
+//! was left. Elsewhere each does nothing.
 
 #[cfg(target_os = "macos")]
 mod mac {
     use std::cell::Cell;
 
     use gpui_kit::*;
+    use objc2::MainThreadMarker;
     use objc2::rc::Retained;
-    use objc2::{MainThreadMarker, MainThreadOnly};
+    use objc2::runtime::{AnyClass, NSObjectProtocol};
     use objc2_app_kit::{
-        NSApplication, NSAutoresizingMaskOptions, NSColor, NSColorSpace, NSImage, NSScreen,
-        NSStatusBarButton, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
-        NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowOrderingMode, NSWindowStyleMask,
+        NSApplication, NSAutoresizingMaskOptions, NSColor, NSColorSpace, NSGlassEffectView,
+        NSImage, NSScreen, NSSplitViewController, NSSplitViewItem, NSStatusBarButton, NSView,
+        NSViewController, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState,
+        NSVisualEffectView, NSWindow, NSWindowOrderingMode, NSWindowStyleMask,
     };
     use objc2_foundation::{NSString, NSUserDefaults};
-
-    use super::Material;
 
     pub(crate) fn recall(key: &str) -> Option<f64> {
         let defaults = NSUserDefaults::standardUserDefaults();
@@ -149,58 +140,156 @@ mod mac {
         native.setFrame_display(frame, true);
     }
 
-    pub(crate) fn frost(window: &Window, material: Material, radius: f32) {
+    /// Puts `backdrop` behind GPUI's view, filling the window.
+    fn put_behind(content: &NSView, backdrop: &NSView) {
+        backdrop.setFrame(content.bounds());
+        backdrop.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable
+                | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
+        content.addSubview_positioned_relativeTo(backdrop, NSWindowOrderingMode::Below, None);
+    }
+
+    pub(crate) fn frost(window: &Window, radius: f32) {
         let Some(mtm) = MainThreadMarker::new() else {
             return;
         };
-        let Some(native) = native(window, matches!(material, Material::Popover)) else {
+        let Some(native) = native(window, true) else {
             return;
         };
         let Some(content) = native.contentView() else {
             return;
         };
-        // Once per window.
-        if content
-            .subviews()
-            .iter()
-            .any(|view| view.downcast::<NSVisualEffectView>().is_ok())
-        {
-            return;
-        }
-        let effect =
-            NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), content.bounds());
-        effect.setMaterial(match material {
-            Material::Sidebar => NSVisualEffectMaterial::Sidebar,
-            Material::Popover => NSVisualEffectMaterial::Popover,
-        });
-        effect.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
-        effect.setState(NSVisualEffectState::FollowsWindowActiveState);
-        effect.setAutoresizingMask(
-            NSAutoresizingMaskOptions::ViewWidthSizable
-                | NSAutoresizingMaskOptions::ViewHeightSizable,
-        );
-        if radius > 0. {
+        // Liquid Glass from macOS 26, as a menu or a popover has it; the
+        // popover's vibrancy before.
+        let backdrop: Retained<NSView> = if AnyClass::get(c"NSGlassEffectView").is_some() {
+            let glass = NSGlassEffectView::new(mtm);
+            glass.setCornerRadius(f64::from(radius));
+            Retained::into_super(glass)
+        } else {
+            let effect = NSVisualEffectView::new(mtm);
+            effect.setMaterial(NSVisualEffectMaterial::Popover);
+            effect.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+            effect.setState(NSVisualEffectState::Active);
             effect.setWantsLayer(true);
             if let Some(layer) = effect.layer() {
                 layer.setCornerRadius(f64::from(radius));
                 layer.setMasksToBounds(true);
             }
-        }
-        content.addSubview_positioned_relativeTo(&effect, NSWindowOrderingMode::Below, None);
+            Retained::into_super(effect)
+        };
+        put_behind(&content, &backdrop);
         native.invalidateShadow();
+    }
+
+    /// The material behind GPUI's sidebar, as AppKit draws a sidebar's:
+    /// from macOS 26 its Liquid Glass, a variant of the glass that no public
+    /// API makes, and its vibrancy before. GPUI draws the sidebar over it,
+    /// and the page covers the rest.
+    pub(crate) struct Backdrop {
+        material: Retained<NSView>,
+    }
+
+    impl Backdrop {
+        pub(crate) fn new(window: &Window, width: f32) -> Option<Self> {
+            let mtm = MainThreadMarker::new()?;
+            let native = native(window, false)?;
+            let content = native.contentView()?;
+            let material = sidebar_material(mtm).unwrap_or_else(|| {
+                let effect = NSVisualEffectView::new(mtm);
+                effect.setMaterial(NSVisualEffectMaterial::Sidebar);
+                effect.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+                Retained::into_super(effect)
+            });
+            // As tall as the window, as wide as the sidebar.
+            material.setTranslatesAutoresizingMaskIntoConstraints(true);
+            put_behind(&content, &material);
+            material.setAutoresizingMask(NSAutoresizingMaskOptions::ViewHeightSizable);
+            // The window's own background lies under the glass, as under
+            // AppKit's sidebar, rather than whatever is behind the window.
+            native.setBackgroundColor(Some(&NSColor::windowBackgroundColor()));
+            let backdrop = Self { material };
+            backdrop.set_width(width);
+            Some(backdrop)
+        }
+
+        /// Keeps the material as wide as GPUI's sidebar. As the sidebar
+        /// slides shut the page covers the material, so only a drag needs
+        /// this.
+        pub(crate) fn set_width(&self, width: f32) {
+            let mut frame = self.material.frame();
+            frame.size.width = f64::from(width);
+            self.material.setFrame(frame);
+        }
+    }
+
+    impl Drop for Backdrop {
+        fn drop(&mut self) {
+            self.material.removeFromSuperview();
+        }
+    }
+
+    /// The material AppKit dresses a sidebar in: the view enclosing the
+    /// sidebar of a split view controller laid out for the purpose in a
+    /// window never shown, the rest of which is then dropped. Laid out in
+    /// the window itself, the split view would move the window's buttons.
+    fn sidebar_material(mtm: MainThreadMarker) -> Option<Retained<NSView>> {
+        fn find(
+            view: Retained<NSView>,
+            pane: &NSView,
+            kinds: &[&AnyClass],
+        ) -> Option<Retained<NSView>> {
+            if !pane.isDescendantOf(&view) {
+                return None;
+            }
+            if kinds.iter().any(|kind| view.isKindOfClass(kind)) {
+                return Some(view);
+            }
+            view.subviews()
+                .iter()
+                .find_map(|view| find(view, pane, kinds))
+        }
+        let empty = || {
+            let pane = NSViewController::new(mtm);
+            pane.setView(&NSView::new(mtm));
+            pane
+        };
+        let sidebar = empty();
+        let split = NSSplitViewController::new(mtm);
+        split.addSplitViewItem(&NSSplitViewItem::sidebarWithViewController(&sidebar));
+        split.addSplitViewItem(&NSSplitViewItem::splitViewItemWithViewController(&empty()));
+        let _spare = NSWindow::windowWithContentViewController(&split);
+        let view = split.view();
+        view.layoutSubtreeIfNeeded();
+        let kinds: Vec<&AnyClass> = [c"NSGlassEffectView", c"NSVisualEffectView"]
+            .into_iter()
+            .filter_map(AnyClass::get)
+            .collect();
+        let material = find(view, &sidebar.view(), &kinds)?;
+        material.removeFromSuperview();
+        Some(material)
     }
 }
 
 #[cfg(target_os = "macos")]
 pub(crate) use mac::{
-    frost, hang, menu_bar_glyph, outside_clicks, recall, remember, status_item, system_accent,
+    Backdrop, frost, hang, menu_bar_glyph, outside_clicks, recall, remember, status_item,
+    system_accent,
 };
 
 #[cfg(not(target_os = "macos"))]
 mod elsewhere {
     use gpui_kit::*;
 
-    use super::Material;
+    pub(crate) struct Backdrop;
+
+    impl Backdrop {
+        pub(crate) fn new(_: &Window, _: f32) -> Option<Self> {
+            None
+        }
+
+        pub(crate) fn set_width(&self, _: f32) {}
+    }
 
     pub(crate) fn system_accent() -> Option<Hsla> {
         None
@@ -212,7 +301,7 @@ mod elsewhere {
         None
     }
 
-    pub(crate) fn frost(_: &Window, _: Material, _: f32) {}
+    pub(crate) fn frost(_: &Window, _: f32) {}
 
     pub(crate) fn hang(_: &Window, _: f32) {}
 
@@ -229,5 +318,6 @@ mod elsewhere {
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) use elsewhere::{
-    frost, hang, menu_bar_glyph, outside_clicks, recall, remember, status_item, system_accent,
+    Backdrop, frost, hang, menu_bar_glyph, outside_clicks, recall, remember, status_item,
+    system_accent,
 };

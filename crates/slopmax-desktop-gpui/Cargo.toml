@@ -18,8 +18,9 @@ gpui-tray = { version = "0.1.4", default-features = false, features = ["gpui-kit
 slopmax-app.workspace = true
 slopmax-core.workspace = true
 
-# The system's accent color, which GPUI does not pass on, and the menu bar
-# item's template image, which gpui-tray cannot set.
+# The system's accent color, which GPUI does not pass on, the menu bar
+# item's template image, which gpui-tray cannot set, and the materials AppKit
+# puts behind a sidebar and a menu bar panel.
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
 # Decodes the TIFF that AppKit draws an SF Symbol into.
@@ -37,12 +38,17 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
   "NSControl",
   "NSEvent",
   "NSFontDescriptor",
+  "NSGlassEffectView",
   "NSGraphics",
   "NSImage",
+  "NSLayoutConstraint",
   "NSResponder",
   "NSScreen",
+  "NSSplitViewController",
+  "NSSplitViewItem",
   "NSStatusBarButton",
   "NSView",
+  "NSViewController",
   "NSVisualEffectView",
   "NSWindow",
   "objc2-quartz-core",

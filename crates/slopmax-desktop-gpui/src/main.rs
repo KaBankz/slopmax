@@ -37,8 +37,6 @@ use slopmax_core::provider::ProviderId;
 use slopmax_core::report::Tone;
 use slopmax_core::time::Timestamp;
 
-use crate::native::Material;
-
 actions!(
     slopmax,
     [
@@ -305,10 +303,10 @@ fn open_window(cx: &mut App) {
     };
     match gpui_kit::open_window(options, cx, |window, cx| {
         macos_theme(window, cx);
-        native::frost(window, Material::Sidebar, 0.);
         cx.new(|cx| Main::new(app, window, cx))
     }) {
         Ok((window, main)) => {
+            clear_root(window, cx);
             let shared = cx.global_mut::<Shared>();
             shared.window = Some(window);
             shared.main = Some(main.downgrade());
@@ -316,6 +314,19 @@ fn open_window(cx: &mut App) {
         Err(e) => eprintln!("slopmax: could not open the window: {e:#}"),
     }
     cx.activate(true);
+}
+
+/// Lets the material `native` puts behind `window` show wherever the view
+/// paints nothing, as gpui-kit's root otherwise fills the window with the
+/// theme's background.
+fn clear_root(window: AnyWindowHandle, cx: &mut App) {
+    let _ = window.update(cx, |_, window, cx| {
+        base::Root::update(window, cx, |root, _, cx| {
+            root.style()
+                .refine(&StyleRefinement::default().bg(transparent_black()));
+            cx.notify();
+        });
+    });
 }
 
 /// Brings the window forward at `section`.
@@ -420,6 +431,8 @@ struct Main {
     /// The account whose reset credit waits on a second press to redeem.
     confirming: Option<String>,
     sidebar: Sidebar,
+    /// The material AppKit puts behind a sidebar, behind GPUI's.
+    backdrop: Option<native::Backdrop>,
     /// The sidebar's list, which the arrow keys move through while it has
     /// focus, its selection then drawn in the accent color.
     sidebar_focus: FocusHandle,
@@ -543,6 +556,7 @@ impl Main {
             asked_today: None,
             credits_open: HashSet::new(),
             confirming: None,
+            backdrop: native::Backdrop::new(window, sidebar.width),
             sidebar,
             sidebar_focus,
             _tasks: [follow, tick],
@@ -657,6 +671,9 @@ impl Main {
             menus(cx, true);
         } else {
             self.sidebar.width = x.clamp(SIDEBAR_MIN, SIDEBAR_MAX);
+        }
+        if let Some(backdrop) = &self.backdrop {
+            backdrop.set_width(self.sidebar.width);
         }
         cx.notify();
     }
