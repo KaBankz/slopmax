@@ -16,7 +16,7 @@ use gpui_kit::component::{ActiveTheme, Disableable, Sizable, Theme, TitleBar, h_
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use gpui_tray::{Icon, Tray};
-use slopmax_app::view::{self, Gauge, Group, Label, Row};
+use slopmax_app::view::{self, Gauge, Group, Label, Overview, Row, Share};
 use slopmax_app::{App as Slopmax, Proxy, Snapshot};
 use slopmax_core::provider::ProviderId;
 use slopmax_core::report::Tone;
@@ -44,9 +44,8 @@ const KEYS: [ProviderId; 3] = [ProviderId::Anthropic, ProviderId::OpenAI, Provid
 
 /// The title bar's height, a Mac toolbar's.
 const TOOLBAR: Pixels = px(52.);
-/// The widths of an account's name and of each usage gauge.
-const NAME: Pixels = px(230.);
-const GAUGE: Pixels = px(180.);
+/// The width of an account's name.
+const NAME: Pixels = px(220.);
 
 /// What the menu bar icon's actions reach.
 struct Shared {
@@ -548,26 +547,19 @@ impl Main {
             .as_ref()
             .map(|report| view::groups(report, now))
             .unwrap_or_default();
-        let auto = self.app.clone();
-        let mut section = v_flex().gap(px(8.)).child(
-            h_flex().child(heading("Accounts", c).flex_1()).child(
-                push("unpin-all", "Let slopmax choose")
-                    .small()
-                    .on_click(move |_, _, _| auto.unpin_all()),
-            ),
-        );
+        let mut body = v_flex().gap(px(22.)).children(overview(&groups, c));
         if groups.is_empty() {
-            section = section.child(group_box(c).py(px(10.)).child(
+            body = body.child(section("Accounts", c).child(group_box(c).py(px(10.)).child(
                 div().text_color(c.muted).child(
-                    "No accounts yet. Sign in below, or import the logins Claude Code, Codex, or \
-                     CLIProxyAPI already have.",
+                    "No accounts yet. Sign in below, or import the logins Claude Code, \
+                         Codex, or CLIProxyAPI already have.",
                 ),
-            ));
+            )));
         }
         for group in &groups {
-            section = section.child(self.group(group, c));
+            body = body.child(self.group(group, c));
         }
-        section.child(self.add(c, cx))
+        body.child(section("Add an account", c).child(self.add(c, cx)))
     }
 
     /// Ways to add an account: signing in, importing, or an API key.
@@ -647,128 +639,129 @@ impl Main {
         track
     }
 
+    /// A provider's accounts: a heading, then a row each.
     fn group(&self, group: &Group, c: &Colors) -> impl IntoElement {
-        let mut header = h_flex().pt(px(10.)).pb(px(6.)).gap(px(12.)).child(
-            div()
-                .w(NAME)
-                .flex_shrink_0()
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(group.title),
-        );
-        if group.subscription {
-            header = header
-                .child(caption("5 Hours", c).w(GAUGE).flex_shrink_0())
-                .child(caption("Week", c).w(GAUGE).flex_shrink_0());
+        let auto = self.app.clone();
+        let pinned = group.accounts.iter().any(|row| row.pinned);
+        let mut list = group_box(c);
+        for (i, row) in group.accounts.iter().enumerate() {
+            list = list.child(self.row(row, &group.limits, i == 0, c));
         }
-        let mut list = group_box(c).child(header.child(caption("Status", c).flex_1()));
-        for row in &group.accounts {
-            list = list.child(self.row(row, group.subscription, c));
-        }
-        if let Some(pool) = &group.pool {
-            // The pool reads as a highlighted row, as a Mac list marks one.
-            list = list.child(
+        v_flex()
+            .gap(px(8.))
+            .child(
                 h_flex()
-                    .mx(px(-6.))
-                    .mb(px(6.))
-                    .px(px(6.))
-                    .py(px(8.))
-                    .gap(px(12.))
-                    .rounded(px(6.))
-                    .bg(c.accent.opacity(0.1))
-                    .child(
-                        v_flex()
-                            .w(NAME)
-                            .flex_shrink_0()
-                            .child(div().font_weight(FontWeight::SEMIBOLD).child("Pool"))
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(c.muted)
-                                    .child(format!("{} accounts as one", pool.accounts)),
-                            ),
-                    )
-                    .child(gauge(pool.five_hour.as_ref(), c))
-                    .child(gauge(pool.week.as_ref(), c))
+                    .px(px(4.))
+                    .gap(px(6.))
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child(group.title))
                     .child(
                         div()
-                            .flex_1()
                             .text_color(c.muted)
-                            .child("What the agents see"),
-                    ),
-            );
-        }
-        list
+                            .child(group.accounts.len().to_string()),
+                    )
+                    .child(div().flex_1())
+                    // Only a pin has anything to undo.
+                    .when(pinned, |heading| {
+                        heading.child(
+                            push(
+                                SharedString::from(format!("unpin-{}", group.provider)),
+                                "Let slopmax choose",
+                            )
+                            .small()
+                            .on_click(move |_, _, _| auto.unpin_all()),
+                        )
+                    }),
+            )
+            .child(list)
     }
 
-    fn row(&self, row: &Row, subscription: bool, c: &Colors) -> impl IntoElement {
+    /// An account: its name, plan, and standing, a column for each of its
+    /// usage windows, and its switches.
+    fn row(&self, row: &Row, limits: &[String], first: bool, c: &Colors) -> impl IntoElement {
         let (pin, toggle) = (self.app.clone(), self.app.clone());
         let (id, id2) = (row.id.clone(), row.id.clone());
-        let mut line = h_flex()
-            .py(px(8.))
-            .gap(px(12.))
-            .border_t_1()
-            .border_color(c.separator)
+        // Out of quota on one window, it waits on that one alone, so the
+        // others fade.
+        let held = row.limits.iter().flatten().any(|g| g.fraction >= 1.0);
+        let line = h_flex()
+            .gap(px(20.))
             .child(
                 v_flex()
                     .w(NAME)
                     .flex_shrink_0()
+                    .gap(px(3.))
                     .child(
                         div()
                             .truncate()
+                            .font_weight(FontWeight::MEDIUM)
                             .text_color(if row.disabled { c.muted } else { c.fg })
                             .child(row.name.clone()),
                     )
                     .child(
-                        div()
+                        h_flex()
+                            .min_w_0()
+                            .gap(px(6.))
                             .text_size(px(11.))
                             .text_color(c.muted)
-                            .child(row.plan.clone()),
-                    ),
-            );
-        if subscription {
-            line = line
-                .child(gauge(row.five_hour.as_ref(), c))
-                .child(gauge(row.week.as_ref(), c));
-        }
-        line.child(
-            v_flex()
-                .flex_1()
-                .min_w_0()
-                .gap(px(2.))
-                .child(label(&row.status, c))
-                .child(
-                    h_flex()
-                        .gap(px(10.))
-                        .overflow_hidden()
-                        .text_size(px(11.))
-                        // Only the last note gives way, so a long error
-                        // never squeezes the short ones before it.
-                        .children(row.notes.iter().enumerate().map(|(i, note)| {
-                            label(note, c)
-                                .when(i + 1 < row.notes.len(), |note| note.flex_shrink_0())
-                        })),
-                ),
-        )
-        .child(
-            push(
-                SharedString::from(format!("use-{}", row.id)),
-                if row.pinned { "Pinned" } else { "Use" },
+                            .when(!row.plan.is_empty(), |line| {
+                                line.child(row.plan.clone()).child("·")
+                            })
+                            .child(label(&row.status, c)),
+                    )
+                    .when(!row.notes.is_empty(), |name| {
+                        name.child(
+                            h_flex()
+                                .gap(px(10.))
+                                .overflow_hidden()
+                                .text_size(px(11.))
+                                .text_color(c.muted)
+                                // Only the last note gives way, so a long
+                                // error never squeezes the short ones.
+                                .children(row.notes.iter().enumerate().map(|(i, note)| {
+                                    label(note, c)
+                                        .when(i + 1 < row.notes.len(), |note| note.flex_shrink_0())
+                                })),
+                        )
+                    }),
             )
-            .accessibility_label(format!(
-                "{} {}",
-                if row.pinned { "Pinned" } else { "Use" },
-                row.name
-            ))
-            .small()
-            .disabled(row.pinned || row.disabled)
-            .on_click(move |_, _, _| pin.pin(&id)),
-        )
-        .child(
-            Switch::new(SharedString::from(format!("enabled-{}", row.id)))
-                .checked(!row.disabled)
-                .accessibility_label(format!("Enable {}", row.name))
-                .on_click(move |enabled, _, _| toggle.set_disabled(&id2, !*enabled)),
-        )
+            .children(limits.iter().zip(&row.limits).map(|(title, gauge)| {
+                let faded =
+                    row.disabled || (held && gauge.as_ref().is_some_and(|g| g.fraction < 1.0));
+                limit(title, gauge.as_ref(), faded, c)
+            }))
+            .when(limits.is_empty(), |line| line.child(div().flex_1()));
+        h_flex()
+            .py(px(12.))
+            .when(!first, |row| row.border_t_1().border_color(c.separator))
+            .child(
+                line.flex_1().child(
+                    h_flex()
+                        .flex_shrink_0()
+                        .gap(px(12.))
+                        .child(
+                            push(
+                                SharedString::from(format!("use-{}", row.id)),
+                                if row.pinned { "Pinned" } else { "Use" },
+                            )
+                            .accessibility_label(format!(
+                                "{} {}",
+                                if row.pinned { "Pinned" } else { "Use" },
+                                row.name
+                            ))
+                            .small()
+                            .disabled(row.pinned || row.disabled)
+                            .on_click(move |_, _, _| pin.pin(&id)),
+                        )
+                        .child(
+                            Switch::new(SharedString::from(format!("enabled-{}", row.id)))
+                                .checked(!row.disabled)
+                                .accessibility_label(format!("Enable {}", row.name))
+                                .on_click(move |enabled, _, _| {
+                                    toggle.set_disabled(&id2, !*enabled)
+                                }),
+                        ),
+                ),
+            )
     }
 
     fn agents(&self, c: &Colors) -> impl IntoElement {
@@ -964,32 +957,126 @@ fn label(label: &Label, c: &Colors) -> Div {
     }
 }
 
-fn gauge(gauge: Option<&Gauge>, c: &Colors) -> Div {
-    let cell = h_flex().w(GAUGE).flex_shrink_0().gap(px(8.));
+/// Each subscription's usage windows across its accounts, as agents see
+/// them: one card, a column per provider.
+fn overview(groups: &[Group], c: &Colors) -> Option<Div> {
+    let groups: Vec<&Group> = groups.iter().filter(|g| !g.overview.is_empty()).collect();
+    if groups.is_empty() {
+        return None;
+    }
+    Some(
+        h_flex()
+            .items_stretch()
+            .rounded(px(12.))
+            .bg(c.group)
+            .children(groups.into_iter().enumerate().map(|(i, group)| {
+                let total = group.accounts.len();
+                let noun = if total == 1 { "account" } else { "accounts" };
+                let accounts = if group.working == total {
+                    format!("{total} {noun}")
+                } else {
+                    format!("{} of {total} {noun} working", group.working)
+                };
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .p(px(16.))
+                    .gap(px(14.))
+                    .when(i > 0, |card| card.border_l_1().border_color(c.separator))
+                    .child(
+                        h_flex()
+                            .gap(px(8.))
+                            .child(div().font_weight(FontWeight::SEMIBOLD).child(group.title))
+                            .child(div().flex_1())
+                            .child(caption(&accounts, c)),
+                    )
+                    .child(
+                        h_flex()
+                            .items_start()
+                            .gap(px(20.))
+                            .children(group.overview.iter().map(|o| metric(o, c))),
+                    )
+            })),
+    )
+}
+
+/// A window across the pool: its use, large, over each account's share.
+fn metric(overview: &Overview, c: &Colors) -> Div {
+    v_flex()
+        .flex_1()
+        .min_w_0()
+        .gap(px(6.))
+        .child(caption(&overview.title, c))
+        .child(
+            h_flex()
+                .items_end()
+                .gap(px(4.))
+                .child(
+                    div()
+                        .text_size(px(26.))
+                        .line_height(px(30.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(overview.gauge.percent.clone()),
+                )
+                .child(div().pb(px(4.)).text_color(c.muted).child("used")),
+        )
+        .child(segments(&overview.shares, c))
+        .child(resets(&overview.gauge, c))
+}
+
+/// A segment per account, each filled to its use; an account out of the
+/// pool fades.
+fn segments(shares: &[Share], c: &Colors) -> Div {
+    h_flex().gap(px(3.)).children(shares.iter().map(|share| {
+        bar(share.fraction, c.tone(share.tone), c)
+            .flex_1()
+            .when(share.idle, |bar| bar.opacity(0.35))
+    }))
+}
+
+/// One usage window of an account: its use over a bar, and when it resets.
+fn limit(title: &str, gauge: Option<&Gauge>, faded: bool, c: &Colors) -> Div {
+    let cell = v_flex()
+        .flex_1()
+        .min_w(px(140.))
+        .gap(px(6.))
+        .when(faded, |cell| cell.opacity(0.4));
     let Some(g) = gauge else {
-        return cell.child(div().text_color(c.muted).child("—"));
+        return cell;
     };
     cell.child(
-        div().w(px(96.)).h(px(6.)).rounded_full().bg(c.track).child(
-            div()
-                .h_full()
-                .w(relative(g.fraction))
-                .rounded_full()
-                .bg(c.tone(g.tone)),
-        ),
+        h_flex()
+            .child(caption(title, c))
+            .child(div().flex_1())
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(g.percent.clone()),
+            ),
     )
-    .child(
+    .child(bar(g.fraction, c.tone(g.tone), c))
+    .child(resets(g, c))
+}
+
+fn bar(fraction: f32, color: Hsla, c: &Colors) -> Div {
+    div().h(px(5.)).rounded_full().bg(c.track).child(
         div()
-            .w(px(34.))
-            .flex()
-            .justify_end()
-            .text_size(px(11.))
-            .child(g.percent.clone()),
+            .h_full()
+            .w(relative(fraction))
+            .rounded_full()
+            .bg(color),
     )
-    .child(
-        div()
-            .text_size(px(11.))
-            .text_color(c.muted)
-            .child(g.resets_in.clone().unwrap_or_default()),
-    )
+}
+
+/// `in 1h07m · 22:59`, or that nothing waits to reset.
+fn resets(gauge: &Gauge, c: &Colors) -> Div {
+    let line = h_flex().gap(px(5.)).text_size(px(11.)).text_color(c.muted);
+    match (&gauge.resets_in, &gauge.resets_at) {
+        (Some(left), Some(at)) => line
+            .child(div().text_color(c.fg).child(format!("in {left}")))
+            .child("·")
+            .child(at.clone()),
+        _ => line.child("No reset pending"),
+    }
 }
