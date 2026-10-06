@@ -59,8 +59,14 @@ def windows(five, five_in, week, week_in):
             {"span": "7d", "used": week, "resets_at": at(week_in)}]
 
 
+# A weekly limit on one model, as Claude reports for Fable.
+def fable(used, resets_in):
+    return [{"span": "7d", "model": "Fable", "used": used, "resets_at": at(resets_in)}]
+
+
 looks = {
-    "claude": [windows(82, 7_500, 47, 259_200), windows(12, 14_400, 30, 432_000)],
+    "claude": [windows(82, 7_500, 47, 259_200) + fable(64, 259_200),
+               windows(12, 14_400, 30, 432_000) + fable(18, 432_000)],
     "codex": [windows(100, 4_800, 64, 172_800), windows(35, 10_800, 21, 518_400)],
 }
 served = {"requests": 120, "input_tokens": 900_000, "output_tokens": 80_000,
