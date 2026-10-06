@@ -27,8 +27,8 @@ The workspace is a flat `crates/` directory, each folder named after its crate:
 crates/
   slopmax          the CLI: the `slopmax` binary, its parser, questions, and printing
   slopmax-app      the desktop app apart from any UI toolkit: its state, actions, and what it draws
-  slopmax-desktop-slint, slopmax-desktop-gpui
-                   the two UIs being compared over slopmax-app; one will stay
+  slopmax-desktop-gpui
+                   the desktop app's window and menu bar icon, drawn with GPUI over slopmax-app
   slopmax-core     the engine: accounts, sign-in, the pool, the proxy, and all the CLI and app share
   slopmax-wire     the API formats and translation between them; no I/O
   slopmax-net      HTTP/1.1 client and server on hyper and rustls, and WebSocket frames
@@ -52,7 +52,7 @@ Nothing in the core reads the terminal or prints. Durations and counts come from
 
 `slopmax-app` is the app without a toolkit. `App::start` loads the config, starts the bundled CLI's proxy if none runs, and keeps a `Snapshot` current on its own tokio runtime: the proxy's state, the report (live, or from disk while the proxy is down), how the agents are wired, the login service, a sign-in in progress, and how the last action went. Every action calls the core, then `POST /slopmax/sync` so the proxy applies it at once. `view` turns a snapshot into what a window draws, worded by the core, and the menu bar's line.
 
-A UI subscribes to the snapshot through a tokio `watch` channel, which any executor can await, draws it, and calls `App`'s methods; it holds no logic of its own. The Slint and GPUI crates draw the same window this way, so they differ only in their toolkit. `mise run demo` runs a throwaway proxy with fake accounts to work against.
+A UI subscribes to the snapshot through a tokio `watch` channel, which any executor can await, draws it, and calls `App`'s methods; it holds no logic of its own. The GPUI crate draws the window this way. `mise run demo` runs a throwaway proxy with fake accounts to work against.
 
 ### Modules
 

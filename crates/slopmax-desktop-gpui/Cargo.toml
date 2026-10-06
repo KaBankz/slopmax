@@ -1,6 +1,6 @@
 [package]
 name = "slopmax-desktop-gpui"
-description = "The slopmax desktop app drawn with GPUI, one of the two UIs under evaluation"
+description = "The slopmax desktop app, drawn with GPUI"
 version.workspace = true
 edition.workspace = true
 # What GPUI's snapshot builds with.

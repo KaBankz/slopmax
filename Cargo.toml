@@ -1,8 +1,8 @@
 [workspace]
 members = ["crates/*"]
 # A plain `cargo build`, `test`, or `clippy` covers the CLI and the
-# libraries, the app's included; the desktop UIs are built on their own,
-# as each needs a GUI toolkit and the system libraries under it.
+# libraries, the app's included; the desktop app is built on its own, as it
+# needs a GUI toolkit and the system libraries under it.
 default-members = [
   "crates/slopmax",
   "crates/slopmax-app",

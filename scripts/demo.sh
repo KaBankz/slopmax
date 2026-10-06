@@ -8,7 +8,7 @@
 #   scripts/demo.sh            # prints what to export, runs until Ctrl-C
 #
 # Then, in another shell, export those and run an app or the CLI:
-#   cargo run -p slopmax-desktop-slint
+#   cargo run -p slopmax-desktop-gpui
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
