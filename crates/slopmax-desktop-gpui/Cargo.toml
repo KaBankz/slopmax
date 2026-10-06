@@ -11,6 +11,8 @@ publish = false
 
 [dependencies]
 anyhow.workspace = true
+# Carries clicks outside the app, which AppKit sees, to the menu bar panel.
+async-channel = "2"
 gpui-kit = "0.7"
 gpui-tray = { version = "0.1.4", default-features = false, features = ["gpui-kit"] }
 slopmax-app.workspace = true
@@ -33,10 +35,12 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
   "NSColor",
   "NSColorSpace",
   "NSControl",
+  "NSEvent",
   "NSFontDescriptor",
   "NSGraphics",
   "NSImage",
   "NSResponder",
+  "NSScreen",
   "NSStatusBarButton",
   "NSView",
   "NSVisualEffectView",

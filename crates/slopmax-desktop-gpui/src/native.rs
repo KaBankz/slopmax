@@ -1,12 +1,15 @@
 //! What GPUI does not reach of AppKit: the accent color chosen in System
-//! Settings, the menu bar item's glyph, and the vibrancy behind a window, as
-//! a sidebar has it. Elsewhere each does nothing.
+//! Settings, the menu bar item's glyph and where it sits, and the vibrancy
+//! behind a window, as a sidebar or a menu bar panel has it. Elsewhere each
+//! does nothing.
 
 /// The material behind a window's transparent parts.
 #[derive(Clone, Copy)]
 pub(crate) enum Material {
     /// A sidebar's, translucent to the desktop behind.
     Sidebar,
+    /// A popover's, as a menu bar panel has it.
+    Popover,
 }
 
 #[cfg(target_os = "macos")]
@@ -17,7 +20,7 @@ mod mac {
     use objc2::rc::Retained;
     use objc2::{MainThreadMarker, MainThreadOnly};
     use objc2_app_kit::{
-        NSApplication, NSAutoresizingMaskOptions, NSColor, NSColorSpace, NSImage,
+        NSApplication, NSAutoresizingMaskOptions, NSColor, NSColorSpace, NSImage, NSScreen,
         NSStatusBarButton, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
         NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowOrderingMode, NSWindowStyleMask,
     };
@@ -72,6 +75,23 @@ mod mac {
         }
     }
 
+    pub(crate) fn status_item() -> Option<Bounds<Pixels>> {
+        let mtm = MainThreadMarker::new()?;
+        let (window, _) = status_button(mtm)?;
+        // AppKit counts up from the bottom of the main screen; GPUI down from
+        // its top.
+        let main = NSScreen::screens(mtm).firstObject()?.frame();
+        let top = main.origin.y + main.size.height;
+        let frame = window.frame();
+        Some(Bounds::new(
+            point(
+                px(frame.origin.x as f32),
+                px((top - frame.origin.y - frame.size.height) as f32),
+            ),
+            size(px(frame.size.width as f32), px(frame.size.height as f32)),
+        ))
+    }
+
     /// The AppKit window behind GPUI's `window`: of its kind (a panel for a
     /// popup, else a titled window) and its size, the last opened.
     fn native(window: &Window, panel: bool) -> Option<Retained<NSWindow>> {
@@ -90,11 +110,38 @@ mod mac {
             .last()
     }
 
+    pub(crate) fn outside_clicks() -> Option<async_channel::Receiver<()>> {
+        use objc2_app_kit::{NSEvent, NSEventMask};
+
+        let (clicks, heard) = async_channel::unbounded();
+        let handler = block2::RcBlock::new(move |_| {
+            let _ = clicks.try_send(());
+        });
+        // Kept for the app's life, as removing a monitor takes unsafe code.
+        let monitor = NSEvent::addGlobalMonitorForEventsMatchingMask_handler(
+            NSEventMask::LeftMouseDown | NSEventMask::RightMouseDown | NSEventMask::OtherMouseDown,
+            &handler,
+        )?;
+        std::mem::forget(monitor);
+        Some(heard)
+    }
+
+    pub(crate) fn hang(window: &Window, height: f32) {
+        let Some(native) = native(window, true) else {
+            return;
+        };
+        let mut frame = native.frame();
+        let top = frame.origin.y + frame.size.height;
+        frame.size.height = f64::from(height);
+        frame.origin.y = top - frame.size.height;
+        native.setFrame_display(frame, true);
+    }
+
     pub(crate) fn frost(window: &Window, material: Material, radius: f32) {
         let Some(mtm) = MainThreadMarker::new() else {
             return;
         };
-        let Some(native) = native(window, false) else {
+        let Some(native) = native(window, matches!(material, Material::Popover)) else {
             return;
         };
         let Some(content) = native.contentView() else {
@@ -112,6 +159,7 @@ mod mac {
             NSVisualEffectView::initWithFrame(NSVisualEffectView::alloc(mtm), content.bounds());
         effect.setMaterial(match material {
             Material::Sidebar => NSVisualEffectMaterial::Sidebar,
+            Material::Popover => NSVisualEffectMaterial::Popover,
         });
         effect.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
         effect.setState(NSVisualEffectState::FollowsWindowActiveState);
@@ -132,7 +180,7 @@ mod mac {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) use mac::{frost, menu_bar_glyph, system_accent};
+pub(crate) use mac::{frost, hang, menu_bar_glyph, outside_clicks, status_item, system_accent};
 
 #[cfg(not(target_os = "macos"))]
 mod elsewhere {
@@ -146,8 +194,20 @@ mod elsewhere {
 
     pub(crate) fn menu_bar_glyph() {}
 
+    pub(crate) fn status_item() -> Option<Bounds<Pixels>> {
+        None
+    }
+
     pub(crate) fn frost(_: &Window, _: Material, _: f32) {}
+
+    pub(crate) fn hang(_: &Window, _: f32) {}
+
+    pub(crate) fn outside_clicks() -> Option<async_channel::Receiver<()>> {
+        None
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(crate) use elsewhere::{frost, menu_bar_glyph, system_accent};
+pub(crate) use elsewhere::{
+    frost, hang, menu_bar_glyph, outside_clicks, status_item, system_accent,
+};

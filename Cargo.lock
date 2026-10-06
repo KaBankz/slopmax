@@ -6328,6 +6328,7 @@ name = "slopmax-desktop-gpui"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "async-channel",
  "block2 0.6.2",
  "gpui-kit",
  "gpui-tray",

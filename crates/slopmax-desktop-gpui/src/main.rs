@@ -1,5 +1,5 @@
 //! The slopmax desktop app drawn with GPUI: a window over slopmax-app's
-//! snapshot, and a menu bar icon showing each pool's use.
+//! snapshot, and a menu bar item whose panel shows each pool at a glance.
 //!
 //! It dresses as a Mac app: a sidebar on the system's material between its
 //! pages, SF Symbols, the system's appearance and accent color, AppKit's
@@ -9,6 +9,7 @@
 mod accounts;
 mod native;
 mod overview;
+mod panel;
 mod settings;
 mod symbols;
 mod usage;
@@ -113,14 +114,16 @@ struct Shared {
     window: Option<AnyWindowHandle>,
     /// What the window shows, to turn it to a page.
     main: Option<WeakEntity<Main>>,
+    /// The menu bar panel, while it is open.
+    panel: Option<AnyWindowHandle>,
 }
 
 impl Global for Shared {}
 
 fn main() -> anyhow::Result<()> {
     let app = Arc::new(Slopmax::start()?);
-    // Closing the window leaves the menu bar icon, whose Quit ends the app;
-    // clicking the Dock icon opens the window again.
+    // Closing the window leaves the menu bar item, whose panel quits the
+    // app; clicking the Dock icon opens the window again.
     let application = gpui_kit::application().with_quit_mode(QuitMode::Explicit);
     application.on_reopen(open_window);
     application.run(move |cx| {
@@ -143,6 +146,7 @@ fn main() -> anyhow::Result<()> {
         });
         cx.on_action(|_: &ImportLogins, cx| cx.global::<Shared>().app.import());
         menus(cx);
+        panel::init(cx);
         let tray = menu_bar_icon(cx)
             .inspect_err(|e| eprintln!("slopmax: no menu bar icon: {e}"))
             .ok();
@@ -151,6 +155,7 @@ fn main() -> anyhow::Result<()> {
             tray,
             window: None,
             main: None,
+            panel: None,
         });
         open_window(cx);
     });
@@ -214,18 +219,13 @@ fn front_window(cx: &mut App, command: impl FnOnce(&mut Window)) {
     }
 }
 
+/// The menu bar item: each pool's use as its title, and the panel on a
+/// click.
 fn menu_bar_icon(cx: &mut App) -> gpui_tray::Result<Tray> {
     let tray = Tray::builder()
         .title("slopmax")
         .tooltip("slopmax")
-        .menu(|_| {
-            vec![
-                MenuItem::action("Open slopmax", OpenWindow),
-                MenuItem::action("Refresh Usage", Refresh),
-                MenuItem::separator(),
-                MenuItem::action("Quit slopmax", Quit),
-            ]
-        });
+        .on_activate_with(|_, cx| panel::toggle(cx));
     // A Mac menu bar wants a template image, which gpui-tray cannot give it:
     // it sizes an icon by its pixels and keeps its colors. So on a Mac the
     // app sets the item's image itself; elsewhere the tray takes the icon.
@@ -241,6 +241,7 @@ fn menu_bar_icon(cx: &mut App) -> gpui_tray::Result<Tray> {
 
 /// Brings the window forward, opening it again if it was closed.
 fn open_window(cx: &mut App) {
+    panel::dismiss(cx);
     if let Some(window) = cx.global::<Shared>().window
         && window
             .update(cx, |_, window, _| window.activate_window())
@@ -434,6 +435,7 @@ impl Main {
         let activation = cx.observe_window_activation(window, |_, window, cx| {
             if window.is_window_active() {
                 macos_theme(window, cx);
+                panel::dismiss(cx);
             }
         });
         let mut main = Self {
