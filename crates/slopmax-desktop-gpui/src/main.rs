@@ -817,7 +817,10 @@ impl Main {
                             .when(!row.plan.is_empty(), |line| {
                                 line.child(row.plan.clone()).child("·")
                             })
-                            .child(label(&row.status, c)),
+                            .child(label(&row.status, c))
+                            .when_some(row.last_used.clone(), |line, used| {
+                                line.child("·").child(div().flex_shrink_0().child(used))
+                            }),
                     )
                     .when(!row.notes.is_empty(), |name| {
                         name.child(
@@ -1149,7 +1152,8 @@ fn segments(shares: &[Share], c: &Colors) -> Div {
     }))
 }
 
-/// One usage window of an account: its use over a bar, and when it resets.
+/// One usage window of an account: its use over a bar marked where an even
+/// spend would be, when it resets, and how its pace compares.
 fn limit(title: &str, gauge: Option<&Gauge>, faded: bool, c: &Colors) -> Div {
     let cell = v_flex()
         .flex_1()
@@ -1170,8 +1174,29 @@ fn limit(title: &str, gauge: Option<&Gauge>, faded: bool, c: &Colors) -> Div {
                     .child(g.percent.clone()),
             ),
     )
-    .child(bar(g.fraction, c.tone(g.tone), c))
+    .child(
+        bar(g.fraction, c.tone(g.tone), c).when_some(g.pace.as_ref(), |bar, pace| {
+            bar.relative().child(
+                div()
+                    .absolute()
+                    .left(relative(pace.elapsed))
+                    .top(px(-3.))
+                    .w(px(2.))
+                    .h(px(11.))
+                    .rounded_full()
+                    .bg(c.fg.opacity(0.55)),
+            )
+        }),
+    )
     .child(resets(g, c))
+    .when_some(g.pace.as_ref(), |cell, pace| {
+        cell.child(
+            div()
+                .text_size(px(11.))
+                .text_color(c.tone(pace.label.tone))
+                .child(pace.label.text.clone()),
+        )
+    })
 }
 
 fn bar(fraction: f32, color: Hsla, c: &Colors) -> Div {
