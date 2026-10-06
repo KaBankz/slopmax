@@ -26,6 +26,7 @@ use slopmax_core::import::{self, Source};
 use slopmax_core::net::Origins;
 use slopmax_core::paths::Home;
 use slopmax_core::provider::ProviderId;
+use slopmax_core::provider::credits::Outcome;
 use slopmax_core::report::{self, Report};
 use slopmax_core::service::{self, Manager};
 use tokio::runtime::{Handle, Runtime};
@@ -60,6 +61,8 @@ pub struct Snapshot {
     /// What went through slopmax, once a UI asks with
     /// [`App::load_history`].
     pub history: Option<history::History>,
+    /// The account a reset credit is being redeemed on.
+    pub redeeming: Option<String>,
 }
 
 /// The background proxy, as the app last saw it.
@@ -151,6 +154,7 @@ impl App {
             sign_in: None,
             notice: None,
             history: None,
+            redeeming: None,
         });
         let shared = Arc::new(Shared {
             home: Home::current(),
@@ -181,6 +185,11 @@ impl App {
     /// The app's runtime, for a UI's own background tasks.
     pub fn handle(&self) -> Handle {
         self.runtime.handle().clone()
+    }
+
+    /// The configuration the app and its proxy run with.
+    pub fn config(&self) -> &Config {
+        &self.shared.config
     }
 
     /// Signs in to a subscription in the browser.
@@ -340,6 +349,43 @@ impl App {
                 Err(e) => shared.tell(format!("Could not install the service: {e:#}"), true),
             }
             shared.look_again(true);
+        });
+    }
+
+    /// Redeems a reset credit on account `id`, the soonest to expire, which
+    /// clears its usage windows at once. The running proxy redeems it, so
+    /// it knows at once.
+    pub fn redeem(&self, id: &str) {
+        let shared = self.shared.clone();
+        let id = id.to_owned();
+        shared.update(|s| s.redeeming = Some(id.clone()));
+        self.runtime.spawn(async move {
+            let name = {
+                let snapshot = shared.snapshot.borrow();
+                let account = snapshot
+                    .report
+                    .iter()
+                    .flat_map(|r| &r.accounts)
+                    .find(|a| a.id == id);
+                account.map_or_else(|| id.clone(), |a| a.name.clone())
+            };
+            let result = Daemon::new(&shared.config).redeem(&id).await;
+            shared.update(|s| s.redeeming = None);
+            match result {
+                Ok((outcome, report)) => {
+                    shared.update(|s| s.report = Some(report));
+                    let text = match outcome {
+                        Outcome::Reset => format!("Reset the usage windows on {name}."),
+                        Outcome::NothingToReset => {
+                            format!("{name} had nothing to reset, so its credit was kept.")
+                        }
+                        Outcome::NoCredit => format!("{name} has no reset credit left."),
+                        Outcome::AlreadyRedeemed => "That credit was already redeemed.".to_owned(),
+                    };
+                    shared.tell(text, outcome == Outcome::NoCredit);
+                }
+                Err(e) => shared.tell(format!("Could not redeem a reset credit: {e:#}"), true),
+            }
         });
     }
 

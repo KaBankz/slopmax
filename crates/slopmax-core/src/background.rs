@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 
 use crate::config::Config;
+use crate::provider::credits::Outcome;
 use crate::report::Report;
 use crate::service::Manager;
 use crate::{fsx, net, paths};
@@ -60,6 +61,33 @@ impl Daemon {
     /// next check, and returns its report.
     pub async fn sync(&self) -> Option<Report> {
         self.call("sync", true).await
+    }
+
+    /// Has the running proxy redeem a reset credit on account `id`: the
+    /// soonest to expire. Returns how that went, and the report after.
+    pub async fn redeem(&self, id: &str) -> Result<(Outcome, Report)> {
+        #[derive(serde::Deserialize)]
+        struct Redeemed {
+            outcome: Outcome,
+            report: Report,
+        }
+        let response = self
+            .http
+            .post(format!("{}/slopmax/accounts/{id}/redeem", self.base))
+            .bearer_auth(&self.key)
+            .send()
+            .await
+            .context("the proxy is not running")?;
+        if !response.status().is_success() {
+            let body: serde_json::Value = response.json().await.unwrap_or_default();
+            let message = body["error"]["message"].as_str().unwrap_or("it failed");
+            bail!("{message}");
+        }
+        let redeemed: Redeemed = response
+            .json()
+            .await
+            .context("unexpected answer from the proxy")?;
+        Ok((redeemed.outcome, redeemed.report))
     }
 
     pub async fn shutdown(&self) -> Result<()> {

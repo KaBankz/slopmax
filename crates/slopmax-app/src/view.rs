@@ -4,10 +4,13 @@
 //! Account words come from the core, so they read as `slopmax status` does.
 
 use slopmax_core::agent::Wiring;
+use slopmax_core::config::Config;
+use slopmax_core::daemon::CREDIT_EXPIRY_LEAD;
 use slopmax_core::human;
 use slopmax_core::limits::Window;
 use slopmax_core::provider::ProviderId;
-use slopmax_core::report::{AccountReport, Report, Tone};
+use slopmax_core::provider::credits::Credit;
+use slopmax_core::report::{AccountReport, Note, Report, Tone};
 use slopmax_core::service;
 use slopmax_core::time::{SignedDuration, Timestamp};
 
@@ -29,6 +32,9 @@ pub struct Group {
     pub overview: Vec<Overview>,
     /// How many working accounts the overview reads as one.
     pub working: usize,
+    /// Its accounts' reset credits, and when the next expires: `4 reset
+    /// credits · the next expires in 2d23h`.
+    pub credits: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -47,7 +53,40 @@ pub struct Row {
     pub priority: i32,
     /// When it last answered: `used 3m ago`.
     pub last_used: Option<String>,
+    /// Its reset credits, when it has any.
+    pub credits: Option<Credits>,
 }
+
+/// An account's reset credits, each of which clears its usage windows at
+/// once.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Credits {
+    /// `2 reset credits`.
+    pub title: String,
+    /// Soonest to expire first; empty until slopmax has listed them.
+    pub credits: Vec<CreditLine>,
+    /// The windows one clears: `5-hour and weekly`.
+    pub clears: String,
+    /// Why none can be redeemed now: nothing to reset yet, or the account
+    /// is off or signed out.
+    pub held: Option<String>,
+}
+
+/// One reset credit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreditLine {
+    /// `Expires Oct 9`, or that it does not.
+    pub expires: String,
+    /// `in 2d23h`.
+    pub left: Option<String>,
+    /// `Granted Sep 21`, when the provider says.
+    pub granted: Option<String>,
+    /// A warning once it expires within [`EXPIRING`].
+    pub tone: Tone,
+}
+
+/// How soon a credit's expiry is worth a warning.
+const EXPIRING: SignedDuration = SignedDuration::from_hours(72);
 
 /// One usage window across a provider's accounts.
 #[derive(Debug, Clone, PartialEq)]
@@ -149,6 +188,7 @@ pub fn groups(report: &Report, now: Timestamp) -> Vec<Group> {
                     || accounts.iter().filter(|a| serving(a)).count(),
                     |pool| pool.accounts,
                 ),
+                credits: pool_credits(&accounts, now),
             })
         })
         .collect()
@@ -210,6 +250,124 @@ fn slots(accounts: &[&AccountReport]) -> Vec<Slot> {
     slots.sort();
     slots.dedup();
     slots
+}
+
+/// A provider's reset credits across its accounts, and the next to expire.
+fn pool_credits(accounts: &[&AccountReport], now: Timestamp) -> Option<String> {
+    let total: u32 = accounts.iter().map(|a| a.state.credits_left(now)).sum();
+    if total == 0 {
+        return None;
+    }
+    let next = accounts
+        .iter()
+        .flat_map(|a| a.state.unexpired_credits(now))
+        .filter_map(|c| c.expires_at)
+        .min();
+    let count = credit_count(total);
+    Some(match next {
+        Some(at) => format!("{count} · the next expires in {}", human::until(at, now)),
+        None => count,
+    })
+}
+
+fn credit_count(n: u32) -> String {
+    match n {
+        1 => "1 reset credit".to_owned(),
+        n => format!("{n} reset credits"),
+    }
+}
+
+/// The account's reset credits, for a provider that grants them.
+fn credits(account: &AccountReport, now: Timestamp) -> Option<Credits> {
+    let state = &account.state;
+    let left = state.credits_left(now);
+    if left == 0 || account.provider.get().credits().is_none() {
+        return None;
+    }
+    let windows: Vec<&Window> = state
+        .limits
+        .windows
+        .iter()
+        .filter(|w| w.model.is_none())
+        .collect();
+    let clears: Vec<String> = windows
+        .iter()
+        .map(|w| lowercase_first(&Slot::of_window(w).title()))
+        .collect();
+    let held = if account.auth_error.is_some() {
+        Some("Sign in again to redeem one")
+    } else if account.disabled {
+        Some("Turn it on to redeem one")
+    } else if windows.iter().all(|w| w.used_at(now) <= 0.0) {
+        Some("Nothing to reset yet")
+    } else {
+        None
+    };
+    Some(Credits {
+        title: credit_count(left),
+        credits: state
+            .unexpired_credits(now)
+            .map(|c| credit_line(c, now))
+            .collect(),
+        clears: listed(&clears),
+        held: held.map(str::to_owned),
+    })
+}
+
+fn credit_line(credit: &Credit, now: Timestamp) -> CreditLine {
+    let expires = credit.expires_at;
+    CreditLine {
+        expires: match expires {
+            Some(at) => format!("Expires {}", clock(at, now, at.local_offset())),
+            None => "Does not expire".to_owned(),
+        },
+        left: expires.map(|at| format!("in {}", human::until(at, now))),
+        granted: credit
+            .granted_at
+            .map(|at| format!("Granted {}", day(at, now, at.local_offset()))),
+        tone: match expires {
+            Some(at) if at.duration_since(now) < EXPIRING => Tone::Warn,
+            _ => Tone::Muted,
+        },
+    }
+}
+
+/// When slopmax redeems `provider`'s reset credits by itself, as `config`
+/// has it, if it does.
+pub fn auto_redeem(config: &Config, provider: &str) -> Option<String> {
+    let lead = CREDIT_EXPIRY_LEAD.as_secs() / 3_600;
+    match (config.redeem_when_exhausted, config.redeem_expiring_credits) {
+        (true, true) => Some(format!(
+            "slopmax redeems one by itself when every {provider} account is spent, \
+             and {lead} hours before one would expire unused."
+        )),
+        (false, true) => Some(format!(
+            "slopmax redeems one by itself {lead} hours before it would expire unused, \
+             if the account has quota to reset."
+        )),
+        (true, false) => Some(format!(
+            "slopmax redeems one by itself when every {provider} account is spent."
+        )),
+        (false, false) => None,
+    }
+}
+
+/// `a`, `a and b`, or `a, b, and c`.
+fn listed(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [first, second] => format!("{first} and {second}"),
+        [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
+    }
+}
+
+fn lowercase_first(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_lowercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
 
 fn serving(account: &AccountReport) -> bool {
@@ -393,6 +551,20 @@ const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
+/// The day `at` fell on, on a clock `offset` east of UTC: `today`,
+/// `yesterday`, or `Sep 21`.
+fn day(at: Timestamp, now: Timestamp, offset: SignedDuration) -> String {
+    let day = |t: Timestamp| (t.as_second() + offset.as_secs()).div_euclid(86_400);
+    match day(now) - day(at) {
+        0 => "today".to_owned(),
+        1 => "yesterday".to_owned(),
+        _ => {
+            let (_, month, date) = at.date(offset);
+            format!("{} {date}", MONTHS[month as usize - 1])
+        }
+    }
+}
+
 /// When `at` comes on a clock `offset` east of UTC: `22:59` on `now`'s day,
 /// `Wed 20:27` within the week, `Nov 3` after.
 fn clock(at: Timestamp, now: Timestamp, offset: SignedDuration) -> String {
@@ -431,9 +603,11 @@ fn row(account: &AccountReport, slots: &[Slot], now: Timestamp) -> Row {
             text: condition.describe(now),
             tone: condition.tone(),
         },
+        // Reset credits show apart, where they can be redeemed.
         notes: account
             .notes(now)
             .iter()
+            .filter(|note| !matches!(note, Note::ResetCredits(_)))
             .map(|note| Label {
                 text: note.describe(),
                 tone: note.tone(),
@@ -443,6 +617,7 @@ fn row(account: &AccountReport, slots: &[Slot], now: Timestamp) -> Row {
         disabled: account.disabled,
         priority: account.priority,
         last_used: account.state.last_used.map(|at| ago(at, now)),
+        credits: credits(account, now),
     }
 }
 
@@ -453,7 +628,7 @@ mod tests {
     use slopmax_core::account::{Account, Tokens};
     use slopmax_core::config::Strategy;
     use slopmax_core::limits::Limits;
-    use slopmax_core::pool::{AccountState, Pins};
+    use slopmax_core::pool::{AccountState, CreditList, Pins};
     use slopmax_core::report::build;
 
     use super::*;
@@ -613,6 +788,72 @@ mod tests {
         assert_eq!(ago(ts(100_000 - 180), now), "used 3m ago");
         assert_eq!(ago(ts(100_000 - 7_300), now), "used 2h ago");
         assert_eq!(ago(ts(100_000 - 200_000), now), "used 2d ago");
+    }
+
+    #[test]
+    fn reset_credits_show_their_dates_and_what_they_clear() {
+        // Midday, so the dates hold on any local clock.
+        let day = 86_400;
+        let noon = |n: i64| n * day + day / 2;
+        let now = ts(noon(100));
+        let mut account = Account::new(ProviderId::Codex, Tokens::default());
+        account.email = Some("c@x.dev".into());
+        account.account_id = Some("c".into());
+        account.assign_id();
+        let credit = |id: &str, granted: i64, expires: i64| Credit {
+            id: id.into(),
+            title: None,
+            granted_at: Some(ts(granted)),
+            expires_at: Some(ts(expires)),
+        };
+        let state = AccountState {
+            limits: Limits {
+                windows: vec![
+                    window("5h", 100.0, noon(100) + 3_600),
+                    window("7d", 64.0, noon(102)),
+                ],
+                observed_at: Some(now),
+                reset_credits: Some(2),
+            },
+            credits: Some(CreditList {
+                credits: vec![
+                    credit("soon", noon(71), noon(102)),
+                    credit("later", noon(99), noon(129)),
+                ],
+                listed_at: now,
+                counted: Some(2),
+            }),
+            ..AccountState::default()
+        };
+        let report = build(
+            vec![account],
+            |_| state.clone(),
+            &Pins::new(),
+            &HashMap::new(),
+            Strategy::FillFirst,
+            true,
+            now,
+        );
+        let chatgpt = &groups(&report, now)[0];
+        assert_eq!(
+            chatgpt.credits.as_deref(),
+            Some("2 reset credits · the next expires in 2d0h")
+        );
+        let row = &chatgpt.accounts[0];
+        // Shown apart from the notes, where they can be redeemed.
+        assert!(row.notes.iter().all(|n| !n.text.contains("reset")));
+        let credits = row.credits.as_ref().unwrap();
+        assert_eq!(credits.title, "2 reset credits");
+        assert_eq!(credits.clears, "5-hour and weekly");
+        assert_eq!(credits.held, None);
+        let soon = &credits.credits[0];
+        assert_eq!(soon.left.as_deref(), Some("in 2d0h"));
+        assert_eq!(soon.granted.as_deref(), Some("Granted Mar 13"));
+        assert_eq!(soon.tone, Tone::Warn);
+        let later = &credits.credits[1];
+        assert_eq!(later.expires, "Expires May 10");
+        assert_eq!(later.granted.as_deref(), Some("Granted yesterday"));
+        assert_eq!(later.tone, Tone::Muted);
     }
 
     #[test]
