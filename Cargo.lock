@@ -7888,8 +7888,11 @@ name = "slopmax-desktop-gpui"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "block2 0.6.2",
  "gpui-kit",
  "gpui-tray",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
  "slopmax-app",
  "slopmax-core",
 ]
