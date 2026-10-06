@@ -1,13 +1,14 @@
 //! The ledger as a window charts it: what went through slopmax over a
-//! range, hour by hour or day by day, by provider, model, and account, and
-//! how soon answers began. Worked out once for every UI, as `view` is for
-//! the accounts.
+//! range, hour by hour or day by day; by provider, model, account, and
+//! agent; what failover saved and what failed; what caching saved; how soon
+//! answers began and how fast they came; and when the work happens. Worked
+//! out once for every UI, as `view` is for the accounts.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use slopmax_core::ledger::{self, Entry};
-use slopmax_core::pricing::Custom;
+use slopmax_core::pricing::{self, Custom};
 use slopmax_core::provider::ProviderId;
 use slopmax_core::summary::{self, Totals};
 use slopmax_core::time::{SignedDuration, Timestamp};
@@ -15,6 +16,8 @@ use slopmax_core::time::{SignedDuration, Timestamp};
 const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
+/// Answers shorter than this say little about a model's speed.
+const SPEED_MIN_OUTPUT: u64 = 64;
 
 /// The span a history covers, counted in local days.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -52,18 +55,35 @@ pub struct History {
     pub range: Range,
     /// Hours for today, days otherwise, oldest first, empty ones included.
     pub buckets: Vec<Bucket>,
-    /// The providers that served requests, in the order each bucket lists
-    /// its tokens.
+    /// The providers that answered, in the order each bucket lists its
+    /// tokens.
     pub providers: Vec<ProviderId>,
+    /// The answers' totals, failures counted apart.
     pub total: Totals,
-    /// Requests that ended in an error status.
-    pub failed: u64,
+    /// Answers that came from another account after the first could not
+    /// give one: the requests failover saved.
+    pub rescued: u64,
+    /// What reading input from cache saved against sending it afresh, in
+    /// dollars at API prices.
+    pub cache_saved: f64,
+    /// The agents' conversations that were answered.
+    pub sessions: u64,
     /// The median time to the first byte of an answer, in milliseconds.
     pub first_byte: Option<u64>,
+    /// What a month at this range's pace would be worth at API prices, when
+    /// the range says enough about a month.
+    pub monthly: Option<f64>,
+    /// Answers by local weekday (Monday first) and hour.
+    pub activity: [[u64; 24]; 7],
     /// Most tokens first.
     pub models: Vec<Share>,
-    /// Most tokens first.
+    /// Most tokens first; an account that only failed comes last.
     pub accounts: Vec<Share>,
+    /// Claude Code, Codex, slopmax's own warmups, or other agents; most
+    /// tokens first.
+    pub agents: Vec<Part>,
+    /// Each model's median output speed, fastest first.
+    pub speeds: Vec<Speed>,
 }
 
 /// One hour or day.
@@ -71,13 +91,20 @@ pub struct History {
 pub struct Bucket {
     /// `09:00`, or `Oct 3`.
     pub label: String,
-    /// Tokens served by each of `History::providers`, in that order.
+    /// Tokens answered by each of `History::providers`, in that order.
     pub tokens: Vec<u64>,
     pub requests: u64,
-    /// What the requests would have cost on the API, in dollars.
+    pub failed: u64,
+    /// Answers that needed another account.
+    pub rescued: u64,
+    /// The agents' conversations answered.
+    pub sessions: u64,
+    /// What the answers would have cost on the API, in dollars.
     pub cost: f64,
+    /// The share of input read from cache, from 0 to 1, when any came in.
+    pub cached: Option<f32>,
     /// The median and 95th percentile time to the first byte, in
-    /// milliseconds, when any request reported one.
+    /// milliseconds, when any answer reported one.
     pub first_byte: Option<(u64, u64)>,
 }
 
@@ -89,9 +116,31 @@ pub struct Share {
     pub totals: Totals,
 }
 
+/// An agent's part of the range.
+#[derive(Debug, Clone)]
+pub struct Part {
+    pub name: &'static str,
+    pub totals: Totals,
+}
+
+/// How fast a model writes, once it has begun.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Speed {
+    pub model: String,
+    pub provider: ProviderId,
+    /// Output tokens a second, the median over its answers.
+    pub tokens_per_second: f64,
+}
+
 /// Every token a request moved: input, output, and both kinds of cache.
 pub fn tokens(totals: &Totals) -> u64 {
     totals.input + totals.output + totals.cache_read + totals.cache_write
+}
+
+/// The share of input read from cache, from 0 to 1, when any came in.
+pub fn cached(totals: &Totals) -> Option<f32> {
+    let input = totals.input + totals.cache_read + totals.cache_write;
+    (input > 0).then(|| totals.cache_read as f32 / input as f32)
 }
 
 /// Reads the ledger in `dir` over `range`. `names` gives accounts their
@@ -105,6 +154,16 @@ pub fn load(
 ) -> History {
     let since = summary::since(range.key(), now).unwrap_or(now);
     build(&ledger::read(dir, since), range, since, now, prices, names)
+}
+
+/// One bucket while it fills.
+#[derive(Default)]
+struct Filling {
+    totals: Totals,
+    tokens: Vec<u64>,
+    rescued: u64,
+    sessions: HashSet<String>,
+    waits: Vec<u64>,
 }
 
 fn build(
@@ -128,45 +187,83 @@ fn build(
     };
     let providers: Vec<ProviderId> = ProviderId::ALL
         .into_iter()
-        .filter(|p| entries.iter().any(|e| e.provider == *p))
+        .filter(|p| entries.iter().any(|e| e.provider == *p && e.answered()))
         .collect();
 
-    let mut buckets: Vec<(Totals, Vec<u64>, Vec<u64>)> =
-        vec![(Totals::default(), vec![0; providers.len()], Vec::new()); count];
+    let mut buckets: Vec<Filling> = (0..count)
+        .map(|_| Filling {
+            tokens: vec![0; providers.len()],
+            ..Filling::default()
+        })
+        .collect();
     let mut total = Totals::default();
-    let mut failed = 0;
+    let mut rescued = 0;
+    let mut cache_saved = 0.;
+    let mut sessions = HashSet::new();
     let mut waits = Vec::new();
+    let mut activity = [[0; 24]; 7];
     let mut models: BTreeMap<(String, ProviderId), Totals> = BTreeMap::new();
     let mut accounts: BTreeMap<(String, ProviderId), Totals> = BTreeMap::new();
+    let mut agents: BTreeMap<&'static str, Totals> = BTreeMap::new();
+    let mut speeds: BTreeMap<(String, ProviderId), Vec<f64>> = BTreeMap::new();
     for entry in entries {
-        let Some((totals, by_provider, bucket_waits)) = buckets.get_mut(slot(entry.at)) else {
+        let Some(bucket) = buckets.get_mut(slot(entry.at)) else {
             continue;
         };
-        totals.add(entry, prices);
-        let mut one = Totals::default();
-        one.add(entry, prices);
+        bucket.totals.add(entry, prices);
+        total.add(entry, prices);
+        // A failure counts against the account it reached, if any.
+        if !entry.account.is_empty() && (entry.answered() || entry.failed()) {
+            let account = names
+                .get(&entry.account)
+                .cloned()
+                .unwrap_or_else(|| entry.account.clone());
+            accounts
+                .entry((account, entry.provider))
+                .or_default()
+                .add(entry, prices);
+        }
+        if !entry.answered() {
+            continue;
+        }
         if let Some(i) = providers.iter().position(|p| *p == entry.provider) {
-            by_provider[i] += tokens(&one);
+            bucket.tokens[i] += entry.tokens();
+        }
+        if entry.attempts > 1 {
+            bucket.rescued += 1;
+            rescued += 1;
         }
         if let Some(ms) = entry.first_byte_ms {
-            bucket_waits.push(ms);
+            bucket.waits.push(ms);
             waits.push(ms);
         }
-        total.add(entry, prices);
-        if entry.status >= 400 {
-            failed += 1;
+        // An agent's conversation; slopmax's warmups have none.
+        if let Some(session) = &entry.session {
+            bucket.sessions.insert(session.clone());
+            sessions.insert(session.clone());
         }
         let model = entry.model.clone().unwrap_or_else(|| "unknown".into());
+        if let Some(price) = entry
+            .model
+            .as_deref()
+            .and_then(|m| pricing::price(m, prices))
+        {
+            cache_saved += entry.cache_read as f64 * (price.input - price.cache_read) / 1e6;
+        }
+        if let Some(speed) = speed(entry) {
+            speeds
+                .entry((model.clone(), entry.provider))
+                .or_default()
+                .push(speed);
+        }
+        let (weekday, hour) = when(entry.at, entry.at.local_offset());
+        activity[weekday][hour] += 1;
         models
             .entry((model, entry.provider))
             .or_default()
             .add(entry, prices);
-        let account = names
-            .get(&entry.account)
-            .cloned()
-            .unwrap_or_else(|| entry.account.clone());
-        accounts
-            .entry((account, entry.provider))
+        agents
+            .entry(agent(entry.agent.as_deref()))
             .or_default()
             .add(entry, prices);
     }
@@ -174,24 +271,83 @@ fn build(
     let buckets = buckets
         .into_iter()
         .enumerate()
-        .map(|(i, (totals, tokens, mut waits))| Bucket {
+        .map(|(i, mut b)| Bucket {
             label: label(range, since, i),
-            tokens,
-            requests: totals.requests,
-            cost: totals.cost,
-            first_byte: percentile(&mut waits, 50).zip(percentile(&mut waits, 95)),
+            requests: b.totals.requests,
+            failed: b.totals.failed,
+            rescued: b.rescued,
+            sessions: b.sessions.len() as u64,
+            cost: b.totals.cost,
+            cached: cached(&b.totals),
+            first_byte: percentile(&mut b.waits, 50).zip(percentile(&mut b.waits, 95)),
+            tokens: b.tokens,
         })
         .collect();
+    let mut agents: Vec<Part> = agents
+        .into_iter()
+        .map(|(name, totals)| Part { name, totals })
+        .collect();
+    agents.sort_by_key(|a| std::cmp::Reverse(tokens(&a.totals)));
+    let mut speeds: Vec<Speed> = speeds
+        .into_iter()
+        .filter_map(|((model, provider), mut each)| {
+            each.sort_by(f64::total_cmp);
+            let median = *each.get(each.len() / 2)?;
+            Some(Speed {
+                model,
+                provider,
+                tokens_per_second: median,
+            })
+        })
+        .collect();
+    speeds.sort_by(|a, b| b.tokens_per_second.total_cmp(&a.tokens_per_second));
     History {
         range,
         buckets,
         providers,
+        monthly: match range {
+            Range::Week => Some(total.cost * 30. / 7.),
+            _ => None,
+        },
         total,
-        failed,
+        rescued,
+        cache_saved,
+        sessions: sessions.len() as u64,
         first_byte: percentile(&mut waits, 50),
+        activity,
         models: ranked(models),
         accounts: ranked(accounts),
+        agents,
+        speeds,
     }
+}
+
+/// How fast an answer came once it began, in output tokens a second, when
+/// it was long enough to say.
+fn speed(entry: &Entry) -> Option<f64> {
+    let writing = entry.ms.checked_sub(entry.first_byte_ms?)?;
+    (entry.output >= SPEED_MIN_OUTPUT && writing > 0)
+        .then(|| entry.output as f64 * 1e3 / writing as f64)
+}
+
+/// An agent as people know it.
+fn agent(id: Option<&str>) -> &'static str {
+    match id {
+        Some("claude") => "Claude Code",
+        Some("codex") => "Codex",
+        Some("slopmax") => "Warmups",
+        _ => "Other",
+    }
+}
+
+/// The weekday (Monday first) and hour of `at`, on a clock `offset` east of
+/// UTC.
+fn when(at: Timestamp, offset: SignedDuration) -> (usize, usize) {
+    let local = at.as_second() + offset.as_secs();
+    // The first day, January 1st 1970, was a Thursday.
+    let weekday = (local.div_euclid(86_400) + 3).rem_euclid(7) as usize;
+    let hour = (local.rem_euclid(86_400) / 3_600) as usize;
+    (weekday, hour)
 }
 
 /// `09:00` for an hour of today, `Oct 3` for a day.
@@ -215,6 +371,7 @@ fn percentile(values: &mut [u64], p: usize) -> Option<u64> {
     Some(values[(values.len() * p / 100).min(values.len() - 1)])
 }
 
+/// Most tokens first; what moved none (an account that only failed) last.
 fn ranked(groups: BTreeMap<(String, ProviderId), Totals>) -> Vec<Share> {
     let mut shares: Vec<Share> = groups
         .into_iter()
@@ -224,7 +381,7 @@ fn ranked(groups: BTreeMap<(String, ProviderId), Totals>) -> Vec<Share> {
             totals,
         })
         .collect();
-    shares.sort_by_key(|s| std::cmp::Reverse(tokens(&s.totals)));
+    shares.sort_by_key(|s| std::cmp::Reverse((tokens(&s.totals), s.totals.failed)));
     shares
 }
 
@@ -283,6 +440,94 @@ mod tests {
         assert_eq!(history.models[0].name, "claude-opus-5-5");
         assert_eq!(history.accounts[0].name, "me@x.dev");
         assert_eq!(history.accounts[1].name, "codex-1");
+        let week: u64 = history.activity.iter().flatten().sum();
+        assert_eq!(week, 3);
+    }
+
+    #[test]
+    fn failover_failures_and_housekeeping_count_apart() {
+        let now = Timestamp::now();
+        let since = summary::since("today", now).unwrap();
+        let at = since.max(now - SignedDuration::from_mins(1));
+        let rescued = Entry {
+            attempts: 2,
+            ..entry(at, ProviderId::Claude, "claude-opus-5-5", 100)
+        };
+        let failed = Entry {
+            status: 429,
+            input: 0,
+            output: 0,
+            first_byte_ms: None,
+            ..entry(at, ProviderId::Claude, "claude-opus-5-5", 0)
+        };
+        // Spent before any account could be tried.
+        let refused = Entry {
+            account: String::new(),
+            ..failed.clone()
+        };
+        // An agent listing models.
+        let listing = Entry {
+            model: None,
+            input: 0,
+            output: 0,
+            ..entry(at, ProviderId::Claude, "-", 0)
+        };
+        let entries = [rescued, failed, refused, listing];
+        let history = build(
+            &entries,
+            Range::Today,
+            since,
+            now,
+            &BTreeMap::new(),
+            &HashMap::new(),
+        );
+        assert_eq!((history.total.requests, history.total.failed), (1, 2));
+        assert_eq!(history.rescued, 1);
+        let bucket = history.buckets.last().unwrap();
+        assert_eq!((bucket.requests, bucket.failed, bucket.rescued), (1, 2, 1));
+        // The account the failure reached counts it; no account, no row.
+        assert_eq!(history.accounts.len(), 1);
+        assert_eq!(history.accounts[0].totals.failed, 1);
+        assert_eq!(history.models.len(), 1);
+    }
+
+    #[test]
+    fn caching_speed_sessions_and_agents() {
+        let now = Timestamp::now();
+        let since = summary::since("7d", now).unwrap();
+        let at = now - SignedDuration::from_mins(1);
+        let prices = BTreeMap::from([(
+            "m".to_owned(),
+            Custom {
+                input: 10.,
+                output: 0.,
+                cache_read: Some(1.),
+                cache_write: None,
+            },
+        )]);
+        let answer = |session: &str| Entry {
+            cache_read: 1_000_000,
+            output: 1_000,
+            ms: 11_000,
+            first_byte_ms: Some(1_000),
+            agent: Some("claude".into()),
+            session: Some(session.into()),
+            ..entry(at, ProviderId::Claude, "m", 0)
+        };
+        let warmup = Entry {
+            agent: Some("slopmax".into()),
+            ..entry(at, ProviderId::Codex, "gpt-6-sol", 5)
+        };
+        let entries = [answer("a"), answer("a"), answer("b"), warmup];
+        let history = build(&entries, Range::Week, since, now, &prices, &HashMap::new());
+        // Three million tokens read from cache at $1 instead of $10.
+        assert!((history.cache_saved - 27.).abs() < 1e-9);
+        assert_eq!(history.sessions, 2);
+        assert_eq!(history.speeds[0].model, "m");
+        assert!((history.speeds[0].tokens_per_second - 100.).abs() < 1e-9);
+        let agents: Vec<&str> = history.agents.iter().map(|a| a.name).collect();
+        assert_eq!(agents, ["Claude Code", "Warmups"]);
+        assert!(history.monthly.is_some());
     }
 
     #[test]
@@ -303,6 +548,17 @@ mod tests {
             ["00:00", "01:00", "02:00", "03:00", "04:00", "05:00"]
         );
         assert!(history.providers.is_empty());
+    }
+
+    #[test]
+    fn work_falls_on_the_local_weekday_and_hour() {
+        // 1970-01-01 00:16:40 UTC, a Thursday.
+        assert_eq!(when(ts(1_000), SignedDuration::ZERO), (3, 0));
+        // Five hours west it is still Wednesday evening.
+        assert_eq!(
+            when(ts(1_000), SignedDuration::from_secs(-5 * 3_600)),
+            (2, 19)
+        );
     }
 
     #[test]

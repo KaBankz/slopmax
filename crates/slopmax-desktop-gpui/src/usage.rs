@@ -98,7 +98,7 @@ fn tiles(history: &History, c: &Colors) -> Div {
         (
             "Requests",
             grouped(total.requests),
-            match history.failed {
+            match history.total.failed {
                 0 => "none failed".to_owned(),
                 n => format!("{} failed", grouped(n)),
             },
