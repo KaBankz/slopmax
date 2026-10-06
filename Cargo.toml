@@ -53,6 +53,13 @@ tower-service = "0.3.3"
 # secrets (the CLI).
 unsafe_code = "deny"
 
+# A desktop UI lays out and draws every frame on the CPU: unoptimized, a GPUI
+# frame takes 50-110 ms, optimized under 5. Dependencies build optimized once
+# and stay cached, so only a clean build is slower; slopmax's own crates
+# still rebuild as fast.
+[profile.dev.package."*"]
+opt-level = 2
+
 [profile.release]
 lto = "fat"
 codegen-units = 1
