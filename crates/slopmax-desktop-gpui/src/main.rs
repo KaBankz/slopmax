@@ -66,6 +66,9 @@ const KEYS: [ProviderId; 3] = [ProviderId::Anthropic, ProviderId::OpenAI, Provid
 
 /// The toolbar's height, a Mac toolbar's.
 const TOOLBAR: Pixels = px(52.);
+/// A toolbar control's height, and a toolbar button's width, as macOS 26
+/// has them.
+const TOOL: Pixels = px(36.);
 /// The sidebar's width at first, and the least and most a drag of its edge
 /// leaves it.
 const SIDEBAR: f32 = 220.;
@@ -687,8 +690,8 @@ impl Main {
         }
     }
 
-    /// A Mac segmented control as macOS 26 draws one: a capsule, the chosen
-    /// segment raised within it; `choose` takes a press.
+    /// A Mac segmented control as macOS 26 draws one in a toolbar: a capsule
+    /// of glass, the chosen segment a pill within it; `choose` takes a press.
     fn segmented<T: Copy + PartialEq + 'static>(
         &self,
         id: &str,
@@ -698,14 +701,7 @@ impl Main {
         c: &Colors,
         cx: &mut Context<Self>,
     ) -> Div {
-        let mut track = h_flex()
-            .flex_shrink_0()
-            .h(px(30.))
-            .p(px(2.))
-            .rounded_full()
-            .bg(c.glass)
-            .border_1()
-            .border_color(c.glass_edge);
+        let mut track = glass(h_flex().flex_shrink_0().h(px(30.)).p(px(2.)), c);
         for (i, (value, title)) in options.into_iter().enumerate() {
             let selected = value == chosen;
             track = track.child(
@@ -719,13 +715,7 @@ impl Main {
                     .role(Role::RadioButton)
                     .aria_label(title)
                     .aria_selected(selected)
-                    .map(|segment| {
-                        if selected {
-                            segment.bg(c.raised).shadow_xs()
-                        } else {
-                            segment.text_color(c.fg.opacity(0.8))
-                        }
-                    })
+                    .when(selected, |segment| segment.bg(c.raised))
                     .child(title)
                     .on_click(cx.listener(move |main, _, _, cx| choose(main, value, cx))),
             );
@@ -914,18 +904,21 @@ impl Main {
                             }),
                     )
             }
-            Section::Usage | Section::Performance => tools.child(self.segmented(
-                "range",
-                Range::ALL.map(|range| (range, range.title())),
-                self.range,
-                |main, range, cx| {
-                    main.range = range;
-                    main.load_history();
-                    cx.notify();
-                },
-                c,
-                cx,
-            )),
+            Section::Usage | Section::Performance => tools.child(
+                self.segmented(
+                    "range",
+                    Range::ALL.map(|range| (range, range.title())),
+                    self.range,
+                    |main, range, cx| {
+                        main.range = range;
+                        main.load_history();
+                        cx.notify();
+                    },
+                    c,
+                    cx,
+                )
+                .h(TOOL),
+            ),
             Section::Agents | Section::Settings => tools,
         };
         // The title bar draws the hairline beneath it.
@@ -949,7 +942,7 @@ impl Main {
         div()
             .absolute()
             .left(px(TOGGLE_X))
-            .top((TOOLBAR - px(30.)) / 2.)
+            .top((TOOLBAR - TOOL) / 2.)
             .child(
                 tool("toggle-sidebar", "sidebar.left", c, cx)
                     .aria_label(if hidden {
@@ -1158,7 +1151,7 @@ impl Render for Main {
 /// The toolbar's leading padding while the sidebar shows `open` points of
 /// itself: clear of the window's buttons and the sidebar's toggle.
 fn clear(open: f32) -> f32 {
-    (TOGGLE_X + 30. + 18. - open).max(20.)
+    (TOGGLE_X + TOOL.as_f32() + 12. - open).max(20.)
 }
 
 /// The theme's colors this window uses, read once per frame.
@@ -1176,15 +1169,17 @@ struct Colors {
     warn: Hsla,
     bad: Hsla,
     accent: Hsla,
-    /// A toolbar control's glass, its edge, and a segment raised in it.
+    /// A toolbar control's glass, its rim, and a segment chosen in it.
     glass: Hsla,
     glass_edge: Hsla,
     raised: Hsla,
+    dark: bool,
 }
 
 impl Colors {
     fn of(cx: &App) -> Self {
         let theme = cx.theme();
+        let dark = theme.is_dark();
         Self {
             bg: theme.background,
             toolbar: theme.title_bar,
@@ -1198,13 +1193,12 @@ impl Colors {
             warn: theme.warning,
             bad: theme.danger,
             accent: theme.primary,
-            glass: theme.foreground.opacity(0.07),
-            glass_edge: theme.foreground.opacity(0.09),
-            raised: if theme.is_dark() {
-                rgba(0xffffff2e).into()
-            } else {
-                white()
-            },
+            // Lighter than the toolbar and the sidebar it sits on, as macOS
+            // 26 draws a toolbar's controls, and opaque over its shadow.
+            glass: rgb(if dark { 0x424242 } else { 0xffffff }).into(),
+            glass_edge: rgba(if dark { 0xffffff1a } else { 0x00000017 }).into(),
+            raised: rgba(if dark { 0xffffff1f } else { 0x0000001a }).into(),
+            dark,
         }
     }
 
@@ -1243,26 +1237,44 @@ fn push(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
     Button::new(id).label(label).border_0()
 }
 
-/// A toolbar button as macOS 26 draws one: a glass capsule holding an SF
-/// Symbol.
+/// A toolbar button as macOS 26 draws one: an SF Symbol on a circle of
+/// glass.
 fn tool(id: &'static str, symbol: &'static str, c: &Colors, cx: &mut App) -> Stateful<Div> {
-    let (hover, pressed) = (c.fg.opacity(0.12), c.fg.opacity(0.18));
-    div()
-        .id(id)
-        .h(px(30.))
-        .min_w(px(36.))
-        .px(px(9.))
+    let (ink, hover, pressed) = if c.dark {
+        (white(), rgb(0x4c4c4c), rgb(0x575757))
+    } else {
+        (black(), rgb(0xf2f2f2), rgb(0xe6e6e6))
+    };
+    glass(div().id(id).size(TOOL), c)
         .flex()
         .items_center()
         .justify_center()
-        .rounded_full()
-        .bg(c.glass)
-        .border_1()
-        .border_color(c.glass_edge)
         .hover(move |button| button.bg(hover))
         .active(move |button| button.bg(pressed))
         .role(Role::Button)
-        .children(symbols::symbol(symbol, c.fg.opacity(0.8), 15., cx))
+        .children(symbols::symbol(symbol, ink, 21., cx))
+}
+
+/// Dresses `control` in a toolbar control's glass, as macOS 26 draws it: a
+/// capsule lighter than what it sits on, lit along its top in dark and
+/// rimmed in light, over a soft shadow.
+fn glass<E: Styled>(control: E, c: &Colors) -> E {
+    let shadow = BoxShadow::new(
+        px(0.),
+        px(0.5),
+        black().opacity(if c.dark { 0.5 } else { 0.08 }),
+    )
+    .blur_radius(px(1.5));
+    let control = control
+        .rounded_full()
+        .bg(c.glass)
+        .border_color(c.glass_edge)
+        .shadow(vec![shadow]);
+    if c.dark {
+        control.border_t_1()
+    } else {
+        control.border_1()
+    }
 }
 
 /// A Mac text field: 13-point text, with room for it at a control's height.
