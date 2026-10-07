@@ -1,9 +1,8 @@
 //! The menu bar panel: what slopmax's menu bar item opens, as iStat Menus
-//! and CodexBar open theirs, on the system's popover material. How the
-//! accounts stand; each subscription's windows across its pool, the
+//! and CodexBar open theirs. A card in slopmax's design: how the accounts
+//! and the proxy stand; each subscription's windows across its pool, the
 //! accounts that want a look, and its reset credits; today's work in
-//! brief; and the way into the window. A provider, or today, opens its
-//! page.
+//! brief; and the way into the window. A pool, or today, opens its page.
 //!
 //! It hangs under the item and fits its content. As a popover does, it
 //! closes on a click anywhere else, when the window comes forward, or on
@@ -13,7 +12,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui_kit::component::{h_flex, v_flex};
+use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::{Disableable, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use slopmax_app::history::History;
@@ -25,16 +26,16 @@ use slopmax_core::time::Timestamp;
 
 use crate::accounts::{resets, segments};
 use crate::native;
-use crate::theme::Colors;
-use crate::ui::{dot, icon};
+use crate::overview::provider_mark;
+use crate::theme::{Colors, DISPLAY};
+use crate::ui::{self, caption, dot, figure, icon, logo, pill};
 use crate::usage::{grouped, priced};
 use crate::{OpenSettings, OpenWindow, Quit, Section, Shared};
-use gpui_kit::assets::IconName;
 
 actions!(panel, [ClosePanel]);
 
 /// The panel's width, a little wider than a menu's.
-const WIDTH: f32 = 340.;
+const WIDTH: f32 = 360.;
 /// How often today's work is read again while the panel shows.
 const TODAY_EVERY: Duration = Duration::from_secs(60);
 
@@ -90,7 +91,7 @@ fn open(cx: &mut App) {
     let x = (anchor.x - width / 2.)
         .max(area.left() + px(8.))
         .min(area.right() - width - px(8.));
-    let origin = point(x - area.origin.x, anchor.y - area.origin.y + px(5.));
+    let origin = point(x - area.origin.x, anchor.y - area.origin.y + px(6.));
     let options = WindowOptions {
         titlebar: None,
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
@@ -104,6 +105,8 @@ fn open(cx: &mut App) {
         is_resizable: false,
         is_minimizable: false,
         display_id,
+        // The card's rounded corners, with nothing past them.
+        window_background: WindowBackgroundAppearance::Transparent,
         ..WindowOptions::default()
     };
     let app = cx.global::<Shared>().app.clone();
@@ -111,9 +114,24 @@ fn open(cx: &mut App) {
         crate::theme::apply(window, cx);
         cx.new(|cx| Panel::new(app, cx))
     }) {
-        Ok((window, _)) => cx.global_mut::<Shared>().panel = Some(window),
+        Ok((window, _)) => {
+            clear_root(window, cx);
+            cx.global_mut::<Shared>().panel = Some(window);
+        }
         Err(e) => eprintln!("slopmax: could not open the menu bar panel: {e:#}"),
     }
+}
+
+/// Leaves the panel's corners clear, as gpui-kit's root otherwise fills
+/// the window with the theme's background.
+fn clear_root(window: AnyWindowHandle, cx: &mut App) {
+    let _ = window.update(cx, |_, window, cx| {
+        base::Root::update(window, cx, |root, _, cx| {
+            root.style()
+                .refine(&StyleRefinement::default().bg(transparent_black()));
+            cx.notify();
+        });
+    });
 }
 
 /// Closes the panel and brings the window forward at `section`.
@@ -183,7 +201,7 @@ impl Panel {
         }
     }
 
-    /// The panel's title, how the accounts and the proxy stand, and a
+    /// slopmax's mark and name, how the accounts and the proxy stand, and a
     /// refresh.
     fn header(&self, status: Option<&Status>, c: &Colors) -> Div {
         let running = matches!(self.snapshot.proxy, Proxy::Running { .. });
@@ -198,39 +216,36 @@ impl Panel {
         let app = self.app.clone();
         h_flex()
             .gap(px(10.))
+            .child(logo(30., c))
             .child(
                 v_flex()
                     .flex_1()
                     .min_w_0()
-                    .gap(px(2.))
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child("slopmax"))
+                    .child(
+                        div()
+                            .font_family(DISPLAY)
+                            .text_size(px(15.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child("slopmax"),
+                    )
                     .child(
                         h_flex()
                             .gap(px(6.))
-                            .text_size(px(11.))
+                            .text_size(px(ui::TINY + 0.5))
                             .text_color(c.muted)
-                            .child(dot(c.tone(tone)))
+                            .child(dot(c.tone(tone)).size(px(6.)))
                             .child(div().truncate().child(line)),
                     ),
             )
             .child(
-                div()
-                    .id("refresh")
-                    .size(px(26.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(6.))
-                    .hover(|button| button.bg(c.fg.opacity(0.08)))
-                    .role(Role::Button)
-                    .aria_label("Refresh usage")
-                    .when(!running, |button| button.opacity(0.4))
-                    .child(icon(IconName::RefreshCw, 14., c.fg.opacity(0.75)))
-                    .on_click(move |_, _, _| {
-                        if running {
-                            app.refresh();
-                        }
-                    }),
+                Button::new("refresh")
+                    .icon(IconName::RefreshCw)
+                    .ghost()
+                    .small()
+                    .tooltip("Refresh usage")
+                    .accessibility_label("Refresh usage")
+                    .disabled(!running)
+                    .on_click(move |_, _, _| app.refresh()),
             )
     }
 }
@@ -245,55 +260,91 @@ impl Render for Panel {
         let this = cx.entity().downgrade();
         let mut body = v_flex()
             .w_full()
-            .px(px(14.))
-            .pt(px(12.))
-            .pb(px(6.))
+            .p(px(12.))
             .gap(px(10.))
             .text_color(c.fg)
-            .child(self.header(status.as_ref(), &c));
+            .child(
+                div()
+                    .px(px(4.))
+                    .pt(px(2.))
+                    .child(self.header(status.as_ref(), &c)),
+            );
         let pools: Vec<&Group> = groups.iter().filter(|g| !g.overview.is_empty()).collect();
         if pools.is_empty() {
-            body = body.child(divider(&c)).child(
-                div()
-                    .text_size(px(12.))
+            body = body.child(
+                well(&c)
+                    .text_size(px(ui::SMALL))
                     .text_color(c.muted)
                     .child("No accounts yet. Open slopmax to add one."),
             );
         }
         for group in pools {
-            body = body.child(divider(&c)).child(pool(group, &c));
+            body = body.child(pool(group, &c));
         }
         if let Some(today) = self.snapshot.today.as_ref() {
-            body = body.child(divider(&c)).child(today_section(today, &c));
+            body = body.child(today_section(today, &c));
         }
-        body = body.child(divider(&c)).child(
+        body = body.child(
             v_flex()
-                .gap(px(1.))
-                .child(command("open", "Open slopmax", "⌘O", &c, |cx| {
-                    dismiss(cx);
-                    cx.dispatch_action(&OpenWindow);
-                }))
-                .child(command("settings", "Settings…", "⌘,", &c, |cx| {
-                    dismiss(cx);
-                    cx.dispatch_action(&OpenSettings);
-                }))
-                .child(command("quit", "Quit slopmax", "⌘Q", &c, |cx| {
-                    cx.dispatch_action(&Quit);
-                })),
+                .pt(px(6.))
+                .border_t_1()
+                .border_color(c.separator)
+                .child(command(
+                    "open",
+                    IconName::LayoutDashboard,
+                    "Open slopmax",
+                    "⌘O",
+                    &c,
+                    |cx| {
+                        dismiss(cx);
+                        cx.dispatch_action(&OpenWindow);
+                    },
+                ))
+                .child(command(
+                    "settings",
+                    IconName::Settings,
+                    "Settings…",
+                    "⌘,",
+                    &c,
+                    |cx| {
+                        dismiss(cx);
+                        cx.dispatch_action(&OpenSettings);
+                    },
+                ))
+                .child(command(
+                    "quit",
+                    IconName::Power,
+                    "Quit slopmax",
+                    "⌘Q",
+                    &c,
+                    |cx| {
+                        cx.dispatch_action(&Quit);
+                    },
+                )),
         );
         div()
             .key_context("Panel")
             .on_action(|_: &ClosePanel, _, cx| dismiss(cx))
             .size_full()
+            .rounded(px(14.))
+            .border_1()
+            .border_color(c.border)
+            .bg(c.surface)
             .text_size(px(13.))
+            .overflow_hidden()
             .child(body.on_children_prepainted(move |children, window, cx| {
                 let (Some(first), Some(last)) = (children.first(), children.last()) else {
                     return;
                 };
-                let height = last.bottom() - first.top() + px(18.);
+                let height = last.bottom() - first.top() + px(26.);
                 let _ = this.update(cx, |panel, _| panel.fit(height, window));
             }))
     }
+}
+
+/// An inset well of the panel.
+fn well(c: &Colors) -> Div {
+    v_flex().p(px(12.)).gap(px(10.)).rounded(px(10.)).bg(c.well)
 }
 
 /// A subscription: its windows across the pool, the accounts that want a
@@ -310,51 +361,50 @@ fn pool(group: &Group, c: &Colors) -> impl IntoElement {
         .iter()
         .filter(|r| matches!(r.status.tone, Tone::Warn | Tone::Bad))
         .collect();
-    let credits = group.credits.as_deref().map(|credits| {
-        h_flex()
-            .gap(px(6.))
-            .text_size(px(11.))
-            .text_color(c.muted)
-            .child(icon(IconName::RotateCcw, 11., c.muted))
-            .child(credits.to_owned())
-    });
-    v_flex()
+    let edge = c.provider(provider).opacity(0.45);
+    well(c)
         .id(SharedString::from(format!("pool-{provider}")))
-        .gap(px(9.))
-        .mx(px(-6.))
-        .px(px(6.))
-        .py(px(4.))
-        .rounded(px(8.))
-        .hover(|section| section.bg(c.fg.opacity(0.05)))
+        .border_1()
+        .border_color(transparent_black())
+        .cursor_pointer()
+        .hover(move |well| well.border_color(edge))
         .role(Role::Button)
         .aria_label(format!("{} accounts", group.title))
         .on_click(move |_, _, cx| go(Section::Provider(provider), cx))
         .child(
             h_flex()
-                .gap(px(7.))
-                .child(div().size(px(8.)).rounded_full().bg(c.provider(provider)))
-                .child(div().font_weight(FontWeight::SEMIBOLD).child(group.title))
-                .child(div().flex_1())
+                .gap(px(8.))
+                .child(
+                    provider_mark(provider, c)
+                        .size(px(22.))
+                        .rounded(px(6.))
+                        .text_size(px(11.)),
+                )
                 .child(
                     div()
-                        .text_size(px(11.))
-                        .text_color(c.muted)
-                        .child(format!("{ready} of {} ready", enabled.len())),
-                ),
+                        .flex_1()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(group.title),
+                )
+                .child(pill(
+                    format!("{ready} of {} ready", enabled.len()),
+                    if ready == enabled.len() {
+                        c.good
+                    } else {
+                        c.warn
+                    },
+                    c,
+                )),
         )
         .children(group.overview.iter().map(|overview| {
             v_flex()
-                .gap(px(5.))
+                .gap(px(6.))
                 .child(
                     h_flex()
-                        .text_size(px(12.))
-                        .child(overview.title.clone())
-                        .child(div().flex_1())
-                        .child(
-                            div()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(format!("{} used", overview.gauge.percent)),
-                        ),
+                        .items_end()
+                        .gap(px(4.))
+                        .child(caption(&overview.title, c).flex_1())
+                        .child(figure(overview.gauge.percent.clone(), 14., c)),
                 )
                 .child(segments(&overview.shares, provider, c))
                 .child(resets(&overview.gauge, c))
@@ -362,8 +412,8 @@ fn pool(group: &Group, c: &Colors) -> impl IntoElement {
         .children(troubled.into_iter().map(|row| {
             h_flex()
                 .gap(px(6.))
-                .text_size(px(11.))
-                .child(dot(c.tone(row.status.tone)))
+                .text_size(px(ui::TINY + 0.5))
+                .child(dot(c.tone(row.status.tone)).size(px(6.)))
                 .child(div().flex_shrink_0().child(row.name.clone()))
                 .child(
                     div()
@@ -373,7 +423,14 @@ fn pool(group: &Group, c: &Colors) -> impl IntoElement {
                         .child(row.status.text.clone()),
                 )
         }))
-        .children(credits)
+        .children(group.credits.as_deref().map(|credits| {
+            h_flex()
+                .gap(px(6.))
+                .text_size(px(ui::TINY + 0.5))
+                .text_color(c.muted)
+                .child(icon(IconName::RotateCcw, 12., c.accent))
+                .child(credits.to_owned())
+        }))
 }
 
 /// Today's totals over its hours; a click opens the Usage page.
@@ -387,55 +444,56 @@ fn today_section(today: &History, c: &Colors) -> impl IntoElement {
         .max()
         .unwrap_or(0)
         .max(1) as f32;
-    let chevron = icon(IconName::ChevronRight, 12., c.muted);
-    v_flex()
+    let brand = c.brand(180.);
+    let accent = c.accent.opacity(0.45);
+    well(c)
         .id("today")
-        .gap(px(7.))
-        .mx(px(-6.))
-        .px(px(6.))
-        .py(px(4.))
-        .rounded(px(8.))
-        .hover(|section| section.bg(c.fg.opacity(0.05)))
+        .border_1()
+        .border_color(transparent_black())
+        .cursor_pointer()
+        .hover(move |well| well.border_color(accent))
         .role(Role::Button)
         .aria_label("Today's usage")
         .on_click(|_, _, cx| go(Section::Usage, cx))
         .child(
             h_flex()
-                .child(div().font_weight(FontWeight::SEMIBOLD).child("Today"))
-                .child(div().flex_1())
-                .child(chevron),
+                .child(
+                    div()
+                        .flex_1()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Today"),
+                )
+                .child(icon(IconName::ChevronRight, 14., c.faint)),
         )
-        .child(
-            div()
-                .text_size(px(12.))
-                .text_color(c.muted)
-                .child(if quiet {
-                    "Nothing has gone through slopmax yet.".to_owned()
-                } else {
-                    format!(
-                        "{} requests · {} tokens · {}",
-                        grouped(total.requests),
-                        human::compact(slopmax_app::history::tokens(total)),
-                        priced(total.cost, total)
-                    )
-                }),
-        )
+        .child(caption(
+            if quiet {
+                "Nothing has gone through slopmax yet.".to_owned()
+            } else {
+                format!(
+                    "{} requests · {} tokens · {}",
+                    grouped(total.requests),
+                    human::compact(slopmax_app::history::tokens(total)),
+                    priced(total.cost, total)
+                )
+            },
+            c,
+        ))
         .when(!quiet, |section| {
             section.child(
                 h_flex()
-                    .h(px(28.))
+                    .h(px(34.))
                     .items_end()
                     .gap(px(2.))
                     .children((0..24).map(|hour| {
                         let requests = today.buckets.get(hour).map_or(0, |b| b.requests);
-                        let column = div().flex_1().rounded(px(1.5));
+                        let column = div().flex_1().rounded(px(2.));
                         if requests > 0 {
                             column
                                 .h(relative(requests as f32 / most))
-                                .min_h(px(2.))
-                                .bg(c.accent.opacity(0.8))
+                                .min_h(px(3.))
+                                .bg(brand)
                         } else {
-                            column.h(px(2.)).bg(c.track)
+                            column.h(px(3.)).bg(c.track)
                         }
                     })),
             )
@@ -446,27 +504,30 @@ fn today_section(today: &History, c: &Colors) -> impl IntoElement {
 /// pointer, its shortcut at the right.
 fn command(
     id: &'static str,
+    name: IconName,
     title: &'static str,
     shortcut: &'static str,
     c: &Colors,
     run: impl Fn(&mut App) + 'static,
 ) -> impl IntoElement {
-    let accent = c.accent;
+    let hover = c.hover;
     h_flex()
         .id(id)
-        .h(px(24.))
-        .mx(px(-6.))
+        .h(px(30.))
         .px(px(8.))
-        .rounded(px(5.))
-        .text_size(px(13.))
-        .hover(move |row| row.bg(accent).text_color(white()))
+        .gap(px(10.))
+        .rounded(px(7.))
+        .cursor_pointer()
+        .hover(move |row| row.bg(hover))
         .role(Role::MenuItem)
         .aria_label(title)
+        .child(icon(name, 15., c.muted))
         .child(div().flex_1().child(title))
-        .child(div().text_color(c.muted).child(shortcut))
+        .child(
+            div()
+                .text_size(px(ui::SMALL))
+                .text_color(c.faint)
+                .child(shortcut),
+        )
         .on_click(move |_, _, cx| run(cx))
-}
-
-fn divider(c: &Colors) -> Div {
-    div().h(px(1.)).bg(c.separator)
 }
