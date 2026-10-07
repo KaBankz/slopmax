@@ -25,8 +25,11 @@ use slopmax_core::time::Timestamp;
 
 use crate::accounts::{resets, segments};
 use crate::native;
+use crate::theme::Colors;
+use crate::ui::{dot, icon};
 use crate::usage::{grouped, priced};
-use crate::{Colors, OpenSettings, OpenWindow, Quit, Section, Shared, provider_color, symbols};
+use crate::{OpenSettings, OpenWindow, Quit, Section, Shared};
+use gpui_kit::assets::IconName;
 
 actions!(panel, [ClosePanel]);
 
@@ -101,19 +104,14 @@ fn open(cx: &mut App) {
         is_resizable: false,
         is_minimizable: false,
         display_id,
-        window_background: WindowBackgroundAppearance::Transparent,
         ..WindowOptions::default()
     };
     let app = cx.global::<Shared>().app.clone();
     match gpui_kit::open_window(options, cx, |window, cx| {
-        crate::macos_theme(window, cx);
-        native::frost(window, 12.);
+        crate::theme::apply(window, cx);
         cx.new(|cx| Panel::new(app, cx))
     }) {
-        Ok((window, _)) => {
-            crate::clear_root(window, cx);
-            cx.global_mut::<Shared>().panel = Some(window);
-        }
+        Ok((window, _)) => cx.global_mut::<Shared>().panel = Some(window),
         Err(e) => eprintln!("slopmax: could not open the menu bar panel: {e:#}"),
     }
 }
@@ -187,7 +185,7 @@ impl Panel {
 
     /// The panel's title, how the accounts and the proxy stand, and a
     /// refresh.
-    fn header(&self, status: Option<&Status>, c: &Colors, cx: &mut Context<Self>) -> Div {
+    fn header(&self, status: Option<&Status>, c: &Colors) -> Div {
         let running = matches!(self.snapshot.proxy, Proxy::Running { .. });
         let (line, tone) = match (&self.snapshot.proxy, status) {
             (Proxy::Running { .. }, Some(status)) => (status.headline.clone(), status.tone),
@@ -211,7 +209,7 @@ impl Panel {
                             .gap(px(6.))
                             .text_size(px(11.))
                             .text_color(c.muted)
-                            .child(crate::dot(c.tone(tone)))
+                            .child(dot(c.tone(tone)))
                             .child(div().truncate().child(line)),
                     ),
             )
@@ -227,12 +225,7 @@ impl Panel {
                     .role(Role::Button)
                     .aria_label("Refresh usage")
                     .when(!running, |button| button.opacity(0.4))
-                    .children(symbols::symbol(
-                        "arrow.clockwise",
-                        c.fg.opacity(0.75),
-                        14.,
-                        cx,
-                    ))
+                    .child(icon(IconName::RefreshCw, 14., c.fg.opacity(0.75)))
                     .on_click(move |_, _, _| {
                         if running {
                             app.refresh();
@@ -257,7 +250,7 @@ impl Render for Panel {
             .pb(px(6.))
             .gap(px(10.))
             .text_color(c.fg)
-            .child(self.header(status.as_ref(), &c, cx));
+            .child(self.header(status.as_ref(), &c));
         let pools: Vec<&Group> = groups.iter().filter(|g| !g.overview.is_empty()).collect();
         if pools.is_empty() {
             body = body.child(divider(&c)).child(
@@ -268,10 +261,10 @@ impl Render for Panel {
             );
         }
         for group in pools {
-            body = body.child(divider(&c)).child(pool(group, &c, cx));
+            body = body.child(divider(&c)).child(pool(group, &c));
         }
         if let Some(today) = self.snapshot.today.as_ref() {
-            body = body.child(divider(&c)).child(today_section(today, &c, cx));
+            body = body.child(divider(&c)).child(today_section(today, &c));
         }
         body = body.child(divider(&c)).child(
             v_flex()
@@ -305,7 +298,7 @@ impl Render for Panel {
 
 /// A subscription: its windows across the pool, the accounts that want a
 /// look, and its reset credits. A click opens its page.
-fn pool(group: &Group, c: &Colors, cx: &mut Context<Panel>) -> impl IntoElement {
+fn pool(group: &Group, c: &Colors) -> impl IntoElement {
     let provider = group.provider;
     let enabled: Vec<_> = group.accounts.iter().filter(|r| !r.disabled).collect();
     let ready = enabled
@@ -322,7 +315,7 @@ fn pool(group: &Group, c: &Colors, cx: &mut Context<Panel>) -> impl IntoElement 
             .gap(px(6.))
             .text_size(px(11.))
             .text_color(c.muted)
-            .children(symbols::symbol("arrow.counterclockwise", c.muted, 11., cx))
+            .child(icon(IconName::RotateCcw, 11., c.muted))
             .child(credits.to_owned())
     });
     v_flex()
@@ -339,12 +332,7 @@ fn pool(group: &Group, c: &Colors, cx: &mut Context<Panel>) -> impl IntoElement 
         .child(
             h_flex()
                 .gap(px(7.))
-                .child(
-                    div()
-                        .size(px(8.))
-                        .rounded_full()
-                        .bg(provider_color(provider, c)),
-                )
+                .child(div().size(px(8.)).rounded_full().bg(c.provider(provider)))
                 .child(div().font_weight(FontWeight::SEMIBOLD).child(group.title))
                 .child(div().flex_1())
                 .child(
@@ -375,7 +363,7 @@ fn pool(group: &Group, c: &Colors, cx: &mut Context<Panel>) -> impl IntoElement 
             h_flex()
                 .gap(px(6.))
                 .text_size(px(11.))
-                .child(crate::dot(c.tone(row.status.tone)))
+                .child(dot(c.tone(row.status.tone)))
                 .child(div().flex_shrink_0().child(row.name.clone()))
                 .child(
                     div()
@@ -389,7 +377,7 @@ fn pool(group: &Group, c: &Colors, cx: &mut Context<Panel>) -> impl IntoElement 
 }
 
 /// Today's totals over its hours; a click opens the Usage page.
-fn today_section(today: &History, c: &Colors, cx: &mut Context<Panel>) -> impl IntoElement {
+fn today_section(today: &History, c: &Colors) -> impl IntoElement {
     let total = &today.total;
     let quiet = total.requests == 0 && total.failed == 0;
     let most = today
@@ -399,7 +387,7 @@ fn today_section(today: &History, c: &Colors, cx: &mut Context<Panel>) -> impl I
         .max()
         .unwrap_or(0)
         .max(1) as f32;
-    let chevron = symbols::symbol("chevron.right", c.muted, 10., cx);
+    let chevron = icon(IconName::ChevronRight, 12., c.muted);
     v_flex()
         .id("today")
         .gap(px(7.))
@@ -415,7 +403,7 @@ fn today_section(today: &History, c: &Colors, cx: &mut Context<Panel>) -> impl I
             h_flex()
                 .child(div().font_weight(FontWeight::SEMIBOLD).child("Today"))
                 .child(div().flex_1())
-                .children(chevron),
+                .child(chevron),
         )
         .child(
             div()

@@ -1,6 +1,7 @@
-//! A provider's page: its pool's windows across the accounts, then each
-//! account with its windows, standing, switches, and reset credits.
+//! A provider's page: its pool's windows across the accounts, large, then
+//! each account with its windows, standing, switches, and reset credits.
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable, Sizable, h_flex, v_flex};
@@ -12,10 +13,16 @@ use slopmax_core::provider::ProviderId;
 use slopmax_core::report::Tone;
 use slopmax_core::time::Timestamp;
 
-use crate::{Colors, Main, bar, caption, dot, group_box, label, push, section};
+use crate::overview::provider_mark;
+use crate::theme::Colors;
+use crate::ui::{
+    self, avatar, caption, card, card_header, dot, figure, gauge, icon, icon_tile, label, pill,
+    status,
+};
+use crate::{Main, push};
 
 /// The width of an account's name and standing.
-const NAME: Pixels = px(210.);
+const NAME: Pixels = px(220.);
 
 impl Main {
     pub(crate) fn provider(
@@ -32,37 +39,38 @@ impl Main {
             .map(|report| view::groups(report, now))
             .unwrap_or_default();
         let Some(group) = groups.into_iter().find(|g| g.provider == provider) else {
-            return v_flex().child(caption(
-                &format!(
-                    "No {} accounts. Add one with + in the toolbar.",
-                    provider.spec().title
-                ),
+            return v_flex().child(ui::empty(
+                IconName::Users,
+                &format!("No {} accounts", provider.spec().title),
+                "Add one with Add account, above.",
                 c,
             ));
         };
         let auto = self.app.clone();
         let pinned = group.accounts.iter().any(|row| row.pinned);
-        let mut list = group_box(c);
+        let mut list = v_flex();
         for (i, row) in group.accounts.iter().enumerate() {
             list = list.child(self.row(row, &group, i == 0, c, cx));
         }
+        let noun = if group.accounts.len() == 1 {
+            "account"
+        } else {
+            "accounts"
+        };
         v_flex()
-            .gap(px(26.))
+            .gap(px(20.))
             .children((!group.overview.is_empty()).then(|| pool(&group, c)))
             .child(
-                v_flex()
-                    .gap(px(8.))
+                card(c)
+                    .gap(px(4.))
                     .child(
-                        h_flex()
-                            .px(px(4.))
-                            .gap(px(6.))
-                            .child(div().font_weight(FontWeight::SEMIBOLD).child("Accounts"))
-                            .child(div().flex_1())
+                        card_header("Accounts", c)
+                            .child(pill(format!("{} {noun}", group.accounts.len()), c.muted, c))
                             // Only a pin has anything to undo.
                             .when(pinned, |heading| {
                                 heading.child(
                                     push("unpin", "Let slopmax choose")
-                                        .small()
+                                        .icon(IconName::Sparkles)
                                         .on_click(move |_, _, _| auto.unpin_all()),
                                 )
                             }),
@@ -89,16 +97,21 @@ impl Main {
         // Out of quota on one window, it waits on that one alone, so the
         // others fade.
         let held = row.limits.iter().flatten().any(|g| g.fraction >= 1.0);
-        let line = h_flex()
-            .gap(px(20.))
+        let color = c.provider(group.provider);
+        let name = h_flex()
+            .w(NAME)
+            .flex_shrink_0()
+            .gap(px(12.))
+            .child(avatar(&row.name, color, c).when(row.disabled, |a| a.opacity(0.5)))
             .child(
                 v_flex()
-                    .w(NAME)
-                    .flex_shrink_0()
-                    .gap(px(3.))
+                    .flex_1()
+                    .min_w_0()
+                    .gap(px(5.))
                     .child(
                         div()
                             .truncate()
+                            .text_size(px(13.5))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(if row.disabled { c.muted } else { c.fg })
                             .child(row.name.clone()),
@@ -107,81 +120,81 @@ impl Main {
                         h_flex()
                             .min_w_0()
                             .gap(px(6.))
-                            .text_size(px(11.))
-                            .text_color(c.muted)
+                            .child(status(&row.status, c))
                             .when(!row.plan.is_empty(), |line| {
-                                line.child(row.plan.clone()).child("·")
-                            })
-                            .child(label(&row.status, c))
-                            .when_some(row.last_used.clone(), |line, used| {
-                                line.child("·").child(div().flex_shrink_0().child(used))
+                                line.child(pill(row.plan.clone(), c.violet, c))
                             }),
                     )
-                    .when(!row.notes.is_empty() || row.credits.is_some(), |name| {
-                        name.child(
-                            h_flex()
-                                .gap(px(10.))
-                                .overflow_hidden()
-                                .text_size(px(11.))
-                                .text_color(c.muted)
-                                .children(
-                                    row.credits
-                                        .as_ref()
-                                        .map(|credits| disclosure(row, credits, open, c, cx)),
-                                )
-                                // Only the last note gives way, so a long
-                                // error never squeezes the short ones.
-                                .children(row.notes.iter().enumerate().map(|(i, note)| {
-                                    label(note, c)
-                                        .when(i + 1 < row.notes.len(), |note| note.flex_shrink_0())
-                                })),
-                        )
+                    .when_some(row.last_used.clone(), |name, used| {
+                        name.child(caption(used, c).text_size(px(ui::TINY)))
                     }),
-            )
+            );
+        let line = h_flex()
+            .items_start()
+            .gap(px(16.))
+            .child(name)
             .children(limits.iter().zip(&row.limits).map(|(title, gauge)| {
                 let faded =
                     row.disabled || (held && gauge.as_ref().is_some_and(|g| g.fraction < 1.0));
                 limit(title, gauge.as_ref(), group.provider, faded, c)
             }))
-            .when(limits.is_empty(), |line| line.child(div().flex_1()));
+            .when(limits.is_empty(), |line| line.child(div().flex_1()))
+            .child(
+                h_flex()
+                    .flex_shrink_0()
+                    .gap(px(12.))
+                    .child(if row.pinned {
+                        pill("Pinned", c.accent, c)
+                            .h(px(26.))
+                            .px(px(10.))
+                            .child(icon(IconName::Pin, 12., ui::ink(c.accent, c)))
+                            .into_any_element()
+                    } else {
+                        Button::new(SharedString::from(format!("use-{}", row.id)))
+                            .label("Use")
+                            .accessibility_label(format!("Use {}", row.name))
+                            .outline()
+                            .small()
+                            .disabled(row.disabled)
+                            .on_click(move |_, _, _| pin.pin(&id))
+                            .into_any_element()
+                    })
+                    .child(
+                        Switch::new(SharedString::from(format!("enabled-{}", row.id)))
+                            .checked(!row.disabled)
+                            .accessibility_label(format!("Enable {}", row.name))
+                            .on_click(move |enabled, _, _| toggle.set_disabled(&id2, !*enabled)),
+                    ),
+            );
+        let notes = (!row.notes.is_empty() || row.credits.is_some()).then(|| {
+            h_flex()
+                .pl(px(44.))
+                .gap(px(14.))
+                .overflow_hidden()
+                .text_size(px(ui::SMALL))
+                .text_color(c.muted)
+                .children(
+                    row.credits
+                        .as_ref()
+                        .map(|credits| disclosure(row, credits, open, c, cx)),
+                )
+                // Only the last note gives way, so a long error never
+                // squeezes the short ones.
+                .children(row.notes.iter().enumerate().map(|(i, note)| {
+                    label(note, c).when(i + 1 < row.notes.len(), |note| note.flex_shrink_0())
+                }))
+        });
         let panel = row
             .credits
             .as_ref()
             .filter(|_| open)
             .map(|credits| self.credits(row, credits, group.title, c, cx));
         v_flex()
-            .py(px(12.))
+            .py(px(16.))
             .gap(px(12.))
             .when(!first, |row| row.border_t_1().border_color(c.separator))
-            .child(
-                line.child(
-                    h_flex()
-                        .flex_shrink_0()
-                        .gap(px(12.))
-                        .child(
-                            push(
-                                SharedString::from(format!("use-{}", row.id)),
-                                if row.pinned { "Pinned" } else { "Use" },
-                            )
-                            .accessibility_label(format!(
-                                "{} {}",
-                                if row.pinned { "Pinned" } else { "Use" },
-                                row.name
-                            ))
-                            .small()
-                            .disabled(row.pinned || row.disabled)
-                            .on_click(move |_, _, _| pin.pin(&id)),
-                        )
-                        .child(
-                            Switch::new(SharedString::from(format!("enabled-{}", row.id)))
-                                .checked(!row.disabled)
-                                .accessibility_label(format!("Enable {}", row.name))
-                                .on_click(move |enabled, _, _| {
-                                    toggle.set_disabled(&id2, !*enabled)
-                                }),
-                        ),
-                ),
-            )
+            .child(line)
+            .children(notes)
             .children(panel)
     }
 
@@ -209,18 +222,24 @@ impl Main {
             let app = self.app.clone();
             h_flex()
                 .gap(px(8.))
-                .child(div().text_size(px(12.)).child("Redeem one now?"))
                 .child(
-                    push(SharedString::from(format!("keep-{id}")), "Cancel")
-                        .small()
-                        .on_click(cx.listener(|main, _, _, cx| {
+                    div()
+                        .text_size(px(12.5))
+                        .font_weight(FontWeight::MEDIUM)
+                        .child("Redeem one now?"),
+                )
+                .child(
+                    push(SharedString::from(format!("keep-{id}")), "Cancel").on_click(cx.listener(
+                        |main, _, _, cx| {
                             main.confirming = None;
                             cx.notify();
-                        })),
+                        },
+                    )),
                 )
                 .child(
                     Button::new(SharedString::from(format!("redeem-{id}")))
                         .label("Redeem")
+                        .icon(IconName::RotateCcw)
                         .primary()
                         .small()
                         .accessibility_label(format!("Redeem it now on {}", row.name))
@@ -239,7 +258,7 @@ impl Main {
                         SharedString::from(format!("ask-redeem-{id}")),
                         "Redeem one…",
                     )
-                    .small()
+                    .icon(IconName::RotateCcw)
                     .disabled(held.is_some())
                     .accessibility_label(format!("Redeem a reset credit on {}…", row.name))
                     .on_click(cx.listener(move |main, _, _, cx| {
@@ -249,13 +268,17 @@ impl Main {
                 )
         };
         let mut panel = v_flex()
-            .p(px(12.))
-            .gap(px(10.))
-            .rounded(px(8.))
-            .bg(c.fg.opacity(0.04))
+            .ml(px(44.))
+            .p(px(16.))
+            .gap(px(12.))
+            .rounded(px(12.))
+            .bg(c.well)
+            .border_1()
+            .border_color(c.border)
             .child(
                 h_flex()
                     .gap(px(12.))
+                    .child(icon_tile(IconName::RotateCcw, c.accent, 30., c))
                     .child(
                         v_flex()
                             .flex_1()
@@ -267,7 +290,7 @@ impl Main {
                                     .child("Reset credits"),
                             )
                             .child(caption(
-                                &format!(
+                                format!(
                                     "Each one resets this account's {} windows at once.",
                                     credits.clears
                                 ),
@@ -286,17 +309,18 @@ impl Main {
             };
             panel = panel.child(
                 h_flex()
-                    .gap(px(8.))
-                    .pt(px(8.))
+                    .gap(px(10.))
+                    .pt(px(10.))
                     .border_t_1()
                     .border_color(c.separator)
+                    .text_size(px(12.5))
                     .child(dot(color))
                     .child(credit.expires.clone())
                     .children(
                         credit
                             .left
                             .as_ref()
-                            .map(|left| div().text_color(color).child(left.clone())),
+                            .map(|left| pill(left.clone(), color, c)),
                     )
                     .child(div().flex_1())
                     .children(credit.granted.as_deref().map(|granted| caption(granted, c))),
@@ -304,7 +328,7 @@ impl Main {
         }
         panel.children(
             view::auto_redeem(self.app.config(), provider)
-                .map(|policy| caption(&policy, c).pt(px(2.))),
+                .map(|policy| caption(policy, c).pt(px(2.))),
         )
     }
 }
@@ -322,52 +346,62 @@ fn pool(group: &Group, c: &Colors) -> impl IntoElement {
             group.working
         )
     };
-    section("Pool", c).child(
-        v_flex()
-            .p(px(16.))
-            .gap(px(14.))
-            .rounded(px(12.))
-            .bg(c.group)
-            .child(
-                h_flex()
-                    .items_start()
-                    .gap(px(24.))
-                    .children(group.overview.iter().map(|o| metric(o, group.provider, c))),
-            )
-            .child(
-                h_flex()
-                    .gap(px(8.))
-                    .child(caption(&accounts, c))
-                    .child(div().flex_1())
-                    .children(group.credits.as_deref().map(|credits| {
-                        div()
-                            .text_size(px(11.))
-                            .text_color(c.accent)
-                            .child(format!("↺ {credits}"))
-                    })),
-            ),
-    )
+    card(c)
+        .p(px(24.))
+        .gap(px(22.))
+        .child(
+            h_flex()
+                .gap(px(12.))
+                .child(provider_mark(group.provider, c))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .text_size(px(ui::HEADING + 1.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(format!("{} pool", group.title)),
+                        )
+                        .child(caption(accounts, c)),
+                )
+                .children(
+                    group
+                        .credits
+                        .as_deref()
+                        .map(|credits| pill(credits.to_owned(), c.accent, c)),
+                ),
+        )
+        .child(
+            h_flex()
+                .flex_wrap()
+                .items_start()
+                .gap(px(32.))
+                .children(group.overview.iter().map(|o| metric(o, group.provider, c))),
+        )
 }
 
 /// A window across the pool: its use, large, over each account's share.
 fn metric(overview: &Overview, provider: ProviderId, c: &Colors) -> Div {
     v_flex()
         .flex_1()
-        .min_w_0()
-        .gap(px(6.))
-        .child(caption(&overview.title, c))
+        .min_w(px(260.))
+        .gap(px(10.))
+        .child(caption(overview.title.clone(), c).text_size(px(12.5)))
         .child(
             h_flex()
                 .items_end()
-                .gap(px(4.))
-                .child(
-                    div()
-                        .text_size(px(26.))
-                        .line_height(px(30.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(overview.gauge.percent.clone()),
-                )
-                .child(div().pb(px(4.)).text_color(c.muted).child("used")),
+                .gap(px(6.))
+                .child(figure(overview.gauge.percent.clone(), 34., c))
+                .child(caption("used", c).pb(px(5.)))
+                .child(div().flex_1())
+                .children(
+                    overview
+                        .gauge
+                        .pace
+                        .as_ref()
+                        .map(|pace| pill(pace.label.text.clone(), c.tone(pace.label.tone), c)),
+                ),
         )
         .child(segments(&overview.shares, provider, c))
         .child(resets(&overview.gauge, c))
@@ -376,8 +410,8 @@ fn metric(overview: &Overview, provider: ProviderId, c: &Colors) -> Div {
 /// A segment per account, each filled to its use; an account out of the
 /// pool fades.
 pub(crate) fn segments(shares: &[Share], provider: ProviderId, c: &Colors) -> Div {
-    h_flex().gap(px(3.)).children(shares.iter().map(|share| {
-        bar(share.fraction, c.gauge(share.tone, provider), c)
+    h_flex().gap(px(4.)).children(shares.iter().map(|share| {
+        gauge(share.fraction, c.gauge(share.tone, provider), c)
             .flex_1()
             .when(share.idle, |bar| bar.opacity(0.35))
     }))
@@ -388,61 +422,82 @@ pub(crate) fn segments(shares: &[Share], provider: ProviderId, c: &Colors) -> Di
 fn limit(title: &str, gauge: Option<&Gauge>, provider: ProviderId, faded: bool, c: &Colors) -> Div {
     let cell = v_flex()
         .flex_1()
-        .min_w(px(140.))
-        .gap(px(6.))
+        .min_w(px(120.))
+        .gap(px(7.))
         .when(faded, |cell| cell.opacity(0.4));
     let Some(g) = gauge else {
         return cell;
     };
     cell.child(
-        h_flex()
-            .child(caption(title, c))
-            .child(div().flex_1())
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(g.percent.clone()),
-            ),
+        h_flex().child(caption(title, c).flex_1()).child(
+            div()
+                .text_size(px(12.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .font_features(crate::theme::tabular())
+                .child(g.percent.clone()),
+        ),
     )
     .child(
-        bar(g.fraction, c.gauge(g.tone, provider), c).when_some(g.pace.as_ref(), |bar, pace| {
-            bar.relative().child(
-                div()
-                    .absolute()
-                    .left(relative(pace.elapsed))
-                    .top(px(-3.))
-                    .w(px(2.))
-                    .h(px(11.))
-                    .rounded_full()
-                    .bg(c.fg.opacity(0.55)),
-            )
-        }),
+        ui::gauge(g.fraction, c.gauge(g.tone, provider), c).when_some(
+            g.pace.as_ref(),
+            |bar, pace| {
+                bar.relative().child(
+                    div()
+                        .absolute()
+                        .left(relative(pace.elapsed))
+                        .top(px(-3.))
+                        .w(px(2.))
+                        .h(px(14.))
+                        .rounded_full()
+                        .bg(c.fg.opacity(0.6)),
+                )
+            },
+        ),
     )
-    .child(resets(g, c))
+    .child(resets_soon(g, c))
     .when_some(g.pace.as_ref(), |cell, pace| {
         cell.child(
             div()
-                .text_size(px(11.))
+                .text_size(px(ui::TINY))
                 .text_color(c.tone(pace.label.tone))
                 .child(pace.label.text.clone()),
         )
     })
 }
 
-/// `in 1h07m · 22:59`, or that nothing waits to reset.
+/// `Resets in 1h07m · 22:59`, or that nothing waits to reset.
 pub(crate) fn resets(gauge: &Gauge, c: &Colors) -> Div {
-    let line = h_flex().gap(px(5.)).text_size(px(11.)).text_color(c.muted);
+    let line = h_flex()
+        .gap(px(6.))
+        .text_size(px(ui::TINY + 0.5))
+        .text_color(c.muted)
+        .child(icon(IconName::Clock, 12., c.faint));
     match (&gauge.resets_in, &gauge.resets_at) {
         (Some(left), Some(at)) => line
-            .child(div().text_color(c.fg).child(format!("in {left}")))
-            .child("·")
+            .child(div().text_color(c.fg).child(format!("Resets in {left}")))
+            .child(div().text_color(c.faint).child("·"))
             .child(at.clone()),
         _ => line.child("No reset pending"),
     }
 }
 
-/// The way to an account's reset credits: their count, and a triangle that
+/// `1h07m · 22:59`, as a narrow column has room for.
+fn resets_soon(gauge: &Gauge, c: &Colors) -> Div {
+    let line = h_flex()
+        .gap(px(5.))
+        .text_size(px(ui::TINY))
+        .text_color(c.muted)
+        .child(icon(IconName::Clock, 11., c.faint));
+    match (&gauge.resets_in, &gauge.resets_at) {
+        (Some(left), Some(at)) => line
+            .child(div().text_color(c.fg).child(left.clone()))
+            .child(div().text_color(c.faint).child("·"))
+            .child(div().truncate().child(at.clone())),
+        _ => line.child("No reset"),
+    }
+}
+
+/// The way to an account's reset credits: their count, and a chevron that
 /// turns down while they show.
 fn disclosure(
     row: &Row,
@@ -452,16 +507,28 @@ fn disclosure(
     cx: &mut Context<Main>,
 ) -> impl IntoElement {
     let id = row.id.clone();
+    let accent = c.accent;
     h_flex()
         .id(SharedString::from(format!("credits-{}", row.id)))
         .flex_shrink_0()
-        .gap(px(4.))
-        .text_color(c.accent)
+        .gap(px(5.))
+        .text_color(accent)
+        .font_weight(FontWeight::MEDIUM)
+        .cursor_pointer()
         .role(Role::DisclosureTriangle)
         .aria_label(format!("{} on {}", credits.title, row.name))
         .aria_expanded(open)
+        .child(icon(IconName::RotateCcw, 13., accent))
         .child(credits.title.clone())
-        .child(if open { "▾" } else { "▸" })
+        .child(icon(
+            if open {
+                IconName::ChevronDown
+            } else {
+                IconName::ChevronRight
+            },
+            13.,
+            accent,
+        ))
         .on_click(cx.listener(move |main, _, _, cx| {
             if !main.credits_open.remove(&id) {
                 main.credits_open.insert(id.clone());

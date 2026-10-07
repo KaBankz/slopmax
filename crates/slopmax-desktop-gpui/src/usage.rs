@@ -18,7 +18,9 @@ use slopmax_core::human;
 use slopmax_core::provider::ProviderId;
 use slopmax_core::summary::Totals;
 
-use crate::{Colors, Main, bar, caption, dot, provider_color};
+use crate::Main;
+use crate::theme::Colors;
+use crate::ui::{caption, dot, gauge as bar};
 
 /// macOS's own colors, which tell series apart in light and dark alike:
 /// blue, purple, pink, cyan, yellow. Orange and green are left out, as
@@ -45,8 +47,10 @@ impl Main {
             None => v_flex().child(caption("Reading the ledger…", c)),
             Some(history) if history.total.requests == 0 && history.total.failed == 0 => v_flex()
                 .p(px(32.))
-                .rounded(px(12.))
-                .bg(c.group)
+                .rounded(px(14.))
+                .bg(c.surface)
+                .border_1()
+                .border_color(c.border)
                 .items_center()
                 .child(div().text_color(c.muted).child(match history.range {
                     Range::Today => "Nothing has gone through slopmax today.",
@@ -81,7 +85,7 @@ fn page(history: &History, c: &Colors) -> Div {
     let legend = history
         .providers
         .iter()
-        .map(|p| (provider_color(*p, c), p.spec().title.into()))
+        .map(|p| (c.provider(*p), p.spec().title.into()))
         .collect();
     v_flex()
         .gap(px(16.))
@@ -200,8 +204,10 @@ fn performance(history: &History, c: &Colors) -> Div {
 fn tiles<const N: usize>(tiles: [(&str, String, String); N], c: &Colors) -> Div {
     h_flex()
         .items_stretch()
-        .rounded(px(12.))
-        .bg(c.group)
+        .rounded(px(14.))
+        .bg(c.surface)
+        .border_1()
+        .border_color(c.border)
         .children(
             tiles
                 .into_iter()
@@ -252,7 +258,7 @@ fn tokens(history: &History, margin: usize, c: &Colors) -> AreaChart<Bucket, Sha
     .y_tick_format(|v| human::compact(v.round() as u64).replace(".0", ""))
     .tooltip_value(|_, _, v| human::compact(v.max(0.) as u64).into());
     for (i, &provider) in history.providers.iter().enumerate() {
-        let color = provider_color(provider, c);
+        let color = c.provider(provider);
         chart = chart
             .y(move |b: &Bucket| b.tokens[i] as f64)
             .stroke(color)
@@ -751,7 +757,7 @@ fn speed(history: &History, c: &Colors) -> Div {
             card.child(caption("No answers long enough to time yet.", c))
         })
         .children(history.speeds.iter().take(SPEEDS).map(|s| {
-            let color = provider_color(s.provider, c);
+            let color = c.provider(s.provider);
             h_flex()
                 .gap(px(12.))
                 .child(
@@ -857,7 +863,7 @@ fn activity(history: &History, c: &Colors) -> Div {
         .child(
             header("When you work", Vec::new(), c)
                 .children(busiest.map(|(day, hour)| {
-                    caption(&format!("Busiest: {} {hour:02}:00", WEEKDAYS[day]), c)
+                    caption(format!("Busiest: {} {hour:02}:00", WEEKDAYS[day]), c)
                 }))
                 .child(legend),
         )
@@ -951,7 +957,7 @@ fn accounts(history: &History, c: &Colors) -> Div {
 }
 
 fn account(share: &Share, fraction: f32, c: &Colors) -> Div {
-    let color = provider_color(share.provider, c);
+    let color = c.provider(share.provider);
     h_flex()
         .gap(px(16.))
         .py(px(6.))
@@ -968,15 +974,9 @@ fn account(share: &Share, fraction: f32, c: &Colors) -> Div {
         .child(div().flex_1().child(bar(fraction, color, c)))
 }
 
-/// A rounded panel on the group fill.
+/// A card of the page, sharing its row with another.
 fn card(c: &Colors) -> Div {
-    v_flex()
-        .flex_1()
-        .min_w_0()
-        .p(px(16.))
-        .gap(px(12.))
-        .rounded(px(12.))
-        .bg(c.group)
+    crate::ui::card(c).flex_1()
 }
 
 /// A chart's title, with its series named on the right.
@@ -1011,8 +1011,8 @@ fn fade(color: Hsla) -> Background {
 /// An agent's color: its maker's, as for providers.
 fn agent_color(agent: &str, c: &Colors) -> Hsla {
     match agent {
-        "Claude Code" => provider_color(ProviderId::Claude, c),
-        "Codex" => provider_color(ProviderId::Codex, c),
+        "Claude Code" => c.provider(ProviderId::Claude),
+        "Codex" => c.provider(ProviderId::Codex),
         "Warmups" => c.muted,
         _ => c.accent,
     }

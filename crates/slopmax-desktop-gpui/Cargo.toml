@@ -15,56 +15,37 @@ anyhow.workspace = true
 async-channel = "2"
 gpui-kit = "0.7"
 gpui-tray = { version = "0.1.4", default-features = false, features = ["gpui-kit"] }
+# The window's settings, kept in slopmax's home on every system.
+serde.workspace = true
+serde_json.workspace = true
 slopmax-app.workspace = true
 slopmax-core.workspace = true
 
-# The system's accent color, which GPUI does not pass on, the menu bar
-# item's template image, which gpui-tray cannot set, and the materials AppKit
-# puts behind a sidebar and a menu bar panel.
+# What GPUI does not reach of AppKit: where the menu bar item sits, its
+# template image, which gpui-tray cannot set, and clicks in other apps.
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
-# Decodes the TIFF that AppKit draws an SF Symbol into.
-image = { version = "0.25", default-features = false, features = ["tiff"] }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = [
   "std",
   "block2",
   "objc2-core-foundation",
-  "NSAppearance",
   "NSApplication",
   "NSButton",
-  "NSColor",
-  "NSColorSpace",
   "NSControl",
   "NSEvent",
-  "NSFontDescriptor",
-  "NSGlassEffectView",
-  "NSGraphics",
   "NSImage",
-  "NSLayoutConstraint",
   "NSResponder",
   "NSScreen",
-  "NSSplitViewController",
-  "NSSplitViewItem",
   "NSStatusBarButton",
   "NSView",
-  "NSViewController",
-  "NSVisualEffectView",
   "NSWindow",
-  "objc2-quartz-core",
-] }
-objc2-quartz-core = { version = "0.3", default-features = false, features = [
-  "std",
-  "objc2-core-foundation",
-  "CALayer",
 ] }
 objc2-foundation = { version = "0.3", default-features = false, features = [
   "std",
   "NSArray",
-  "NSData",
   "NSEnumerator",
   "NSString",
-  "NSUserDefaults",
 ] }
 
 [lints]

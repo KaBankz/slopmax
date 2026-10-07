@@ -1,41 +1,45 @@
 //! The slopmax desktop app drawn with GPUI: a window over slopmax-app's
 //! snapshot, and a menu bar item whose panel shows each pool at a glance.
 //!
-//! It dresses and behaves as a Mac app: a sidebar on the system's material
-//! that slides away and back (⌃⌘S, or its toolbar button), resizes by its
-//! edge, collapses when dragged narrow, and remembers how it was left;
-//! selection on a press, and the arrow keys, as a source list has them;
-//! SF Symbols; glass toolbar controls; the system's appearance and accent
-//! color; AppKit's colors, type sizes, and control heights; and the
-//! standard menus and shortcuts.
+//! It wears slopmax's own design on every system, in gpui-kit's components:
+//! its light and dark themes, the Inter typeface, and Lucide's icons. Its
+//! sidebar slides away and back (⌃⌘S, or its button), resizes by its edge,
+//! hides when dragged narrow, and is left as the user leaves it.
 
 mod accounts;
+mod assets;
 mod native;
 mod overview;
 mod panel;
+mod prefs;
 mod settings;
-mod symbols;
+mod theme;
+mod ui;
 mod usage;
 
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gpui_kit::component::button::Button;
+use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{self, Input, InputState};
-use gpui_kit::component::native_menu::NativeMenu;
+use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme, Sizable, Theme, TitleBar, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Disableable, Sizable, TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use gpui_tray::{Icon, Tray};
 use slopmax_app::history::Range;
-use slopmax_app::view::{self, Label};
+use slopmax_app::view;
 use slopmax_app::{App as Slopmax, Proxy, Snapshot};
 use slopmax_core::provider::ProviderId;
 use slopmax_core::report::Tone;
 use slopmax_core::time::Timestamp;
+
+use crate::prefs::Prefs;
+use crate::theme::{Colors, DISPLAY};
+use crate::ui::{caption, card, dot, icon, logo, segmented};
 
 actions!(
     slopmax,
@@ -64,23 +68,22 @@ const TRAY_ICON: &[u8] = include_bytes!("../../../assets/tray.svg");
 /// The API-key providers, in the order the key row offers them.
 const KEYS: [ProviderId; 3] = [ProviderId::Anthropic, ProviderId::OpenAI, ProviderId::Xai];
 
-/// The toolbar's height, a Mac toolbar's.
-const TOOLBAR: Pixels = px(52.);
-/// A toolbar control's height, and a toolbar button's width, as macOS 26
-/// has them.
-const TOOL: Pixels = px(36.);
+/// The height of the strip across the window's top: the sidebar's brand and
+/// the page's title and tools.
+const HEADER: Pixels = px(56.);
+/// Where the window's own buttons leave room on a Mac, and elsewhere.
+const LEAD: f32 = if cfg!(target_os = "macos") { 84. } else { 16. };
 /// The sidebar's width at first, and the least and most a drag of its edge
 /// leaves it.
-const SIDEBAR: f32 = 220.;
-const SIDEBAR_MIN: f32 = 180.;
-const SIDEBAR_MAX: f32 = 320.;
-/// Dragged narrower than this, the sidebar hides, as a split view's does.
-const SIDEBAR_COLLAPSE: f32 = 120.;
+const SIDEBAR: f32 = 236.;
+const SIDEBAR_MIN: f32 = 200.;
+const SIDEBAR_MAX: f32 = 340.;
+/// Dragged narrower than this, the sidebar hides.
+const SIDEBAR_COLLAPSE: f32 = 130.;
 /// How long the sidebar takes to slide in or out.
 const SLIDE: Duration = Duration::from_millis(250);
-/// Where the sidebar's toggle sits, past the window's buttons, whether the
-/// sidebar shows or not.
-const TOGGLE_X: f32 = 90.;
+/// The page's margin from the window's edges.
+const MARGIN: f32 = 28.;
 /// How often the charts reread the ledger while they show.
 const HISTORY_EVERY: Duration = Duration::from_secs(60);
 
@@ -111,15 +114,15 @@ impl Section {
         }
     }
 
-    /// Its SF Symbol in the sidebar; a provider shows its color instead.
-    fn symbol(self) -> &'static str {
+    /// Its icon in the sidebar; a provider shows its color instead.
+    fn icon(self) -> IconName {
         match self {
-            Self::Overview => "gauge.with.dots.needle.50percent",
-            Self::Provider(_) => "person.2",
-            Self::Usage => "chart.bar.xaxis",
-            Self::Performance => "bolt.horizontal",
-            Self::Agents => "powerplug",
-            Self::Settings => "gearshape",
+            Self::Overview => IconName::LayoutDashboard,
+            Self::Provider(_) => IconName::Users,
+            Self::Usage => IconName::ChartColumn,
+            Self::Performance => IconName::Zap,
+            Self::Agents => IconName::Bot,
+            Self::Settings => IconName::Settings,
         }
     }
 }
@@ -141,12 +144,17 @@ fn main() -> anyhow::Result<()> {
     let app = Arc::new(Slopmax::start()?);
     // Closing the window leaves the menu bar item, whose panel quits the
     // app; clicking the Dock icon opens the window again.
-    let application = gpui_kit::application().with_quit_mode(QuitMode::Explicit);
+    let application = gpui_kit::application()
+        .with_assets(assets::AppAssets)
+        .with_quit_mode(QuitMode::Explicit);
     application.on_reopen(open_window);
     application.run(move |cx| {
         gpui_kit::init(cx);
+        cx.set_global(Prefs::load());
+        theme::init(cx);
         cx.on_action(|_: &OpenWindow, cx| open_window(cx));
         cx.on_action(|_: &OpenSettings, cx| show(Section::Settings, cx));
+        cx.on_action(|_: &AddKey, cx| show(Section::Settings, cx));
         cx.on_action(|_: &Refresh, cx| cx.global::<Shared>().app.refresh());
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.on_action(|_: &Hide, cx| cx.hide());
@@ -163,7 +171,7 @@ fn main() -> anyhow::Result<()> {
         });
         cx.on_action(|_: &ImportLogins, cx| cx.global::<Shared>().app.import());
         keys(cx);
-        menus(cx, false);
+        menus(cx, cx.global::<Prefs>().sidebar_hidden);
         panel::init(cx);
         let tray = menu_bar_icon(cx)
             .inspect_err(|e| eprintln!("slopmax: no menu bar icon: {e}"))
@@ -197,8 +205,8 @@ fn keys(cx: &mut App) {
     ]);
 }
 
-/// The menus every Mac app has. Edit's items reach the focused text field;
-/// View's first item says what it will do to the sidebar.
+/// The app's menus. Edit's items reach the focused text field; View's
+/// first item says what it will do to the sidebar.
 fn menus(cx: &mut App, sidebar_hidden: bool) {
     cx.set_menus([
         Menu::new("slopmax").items([
@@ -216,6 +224,7 @@ fn menus(cx: &mut App, sidebar_hidden: bool) {
             MenuItem::action("Sign In with Claude…", SignInClaude),
             MenuItem::action("Sign In with ChatGPT…", SignInChatGpt),
             MenuItem::action("Import Logins", ImportLogins),
+            MenuItem::action("Add an API Key…", AddKey),
             MenuItem::separator(),
             MenuItem::action("Close Window", CloseWindow),
         ]),
@@ -240,7 +249,6 @@ fn menus(cx: &mut App, sidebar_hidden: bool) {
             MenuItem::separator(),
             MenuItem::action("Refresh Usage", Refresh),
         ]),
-        // AppKit fills a menu named Window with the open windows.
         Menu::new("Window").items([
             MenuItem::action("Minimize", Minimize),
             MenuItem::action("Zoom", Zoom),
@@ -264,7 +272,7 @@ fn menu_bar_icon(cx: &mut App) -> gpui_tray::Result<Tray> {
         .on_activate_with(|_, cx| panel::toggle(cx));
     // A Mac menu bar wants a template image, which gpui-tray cannot give it:
     // it sizes an icon by its pixels and keeps its colors. So on a Mac the
-    // app sets the item's image itself; elsewhere the tray takes the icon.
+    // app sets the item's image itself; elsewhere the tray takes the mark.
     if cfg!(target_os = "macos") {
         let tray = tray.build(cx)?;
         native::menu_bar_glyph();
@@ -290,26 +298,23 @@ fn open_window(cx: &mut App) {
     let options = WindowOptions {
         titlebar: Some(TitlebarOptions {
             title: Some("slopmax".into()),
-            // Centered in the toolbar's height, at the sidebar's top.
-            traffic_light_position: Some(point(px(20.), px(19.))),
+            // Centered in the header's height.
+            traffic_light_position: Some(point(px(18.), (HEADER - px(14.)) / 2.)),
             ..TitleBar::title_bar_options()
         }),
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
             None,
-            size(px(1080.), px(760.)),
+            size(px(1160.), px(800.)),
             cx,
         ))),
-        window_min_size: Some(size(px(860.), px(520.))),
-        // The sidebar shows the material behind; the page paints its own.
-        window_background: WindowBackgroundAppearance::Transparent,
+        window_min_size: Some(size(px(880.), px(560.))),
         ..TitleBar::window_options()
     };
     match gpui_kit::open_window(options, cx, |window, cx| {
-        macos_theme(window, cx);
+        theme::apply(window, cx);
         cx.new(|cx| Main::new(app, window, cx))
     }) {
         Ok((window, main)) => {
-            clear_root(window, cx);
             let shared = cx.global_mut::<Shared>();
             shared.window = Some(window);
             shared.main = Some(main.downgrade());
@@ -317,19 +322,6 @@ fn open_window(cx: &mut App) {
         Err(e) => eprintln!("slopmax: could not open the window: {e:#}"),
     }
     cx.activate(true);
-}
-
-/// Lets the material `native` puts behind `window` show wherever the view
-/// paints nothing, as gpui-kit's root otherwise fills the window with the
-/// theme's background.
-fn clear_root(window: AnyWindowHandle, cx: &mut App) {
-    let _ = window.update(cx, |_, window, cx| {
-        base::Root::update(window, cx, |root, _, cx| {
-            root.style()
-                .refine(&StyleRefinement::default().bg(transparent_black()));
-            cx.notify();
-        });
-    });
 }
 
 /// Brings the window forward at `section`.
@@ -342,79 +334,6 @@ fn show(section: Section, cx: &mut App) {
         .and_then(WeakEntity::upgrade)
     {
         main.update(cx, |main, cx| main.go(section, cx));
-    }
-}
-
-/// Dresses gpui-kit's theme as macOS: AppKit's colors for the window's light
-/// or dark appearance, as macOS 26 and later draw them (the page, its
-/// toolbar and their hairline as a split view's content has them), the
-/// accent color chosen in System Settings, and the system's 13-point type,
-/// which also brings the controls down to AppKit's heights.
-fn macos_theme(window: &mut Window, cx: &mut App) {
-    Theme::change(window.appearance(), Some(window), cx);
-    let accent = native::system_accent().unwrap_or_else(|| rgb(0x007aff).into());
-    Theme::update(cx, |theme| {
-        let dark = theme.is_dark();
-        let pick =
-            |light: u32, dark_: u32| -> Hsla { rgba(if dark { dark_ } else { light }).into() };
-        theme.font_size = px(13.);
-        theme.radius = px(6.);
-        theme.radius_lg = px(10.);
-        theme.shadow = false;
-
-        let c = &mut theme.colors;
-        c.background = pick(0xffffffff, 0x1b1b1bff);
-        c.foreground = pick(0x000000d8, 0xffffffd8);
-        c.muted_foreground = pick(0x0000007f, 0xffffff8c);
-        c.border = pick(0x00000019, 0xffffff19);
-        c.muted = pick(0x00000014, 0xffffff19);
-        c.group_box = pick(0x0000000a, 0xffffff08);
-        c.group_box_foreground = c.foreground;
-        c.title_bar = pick(0xffffffff, 0x232323ff);
-        c.title_bar_border = pick(0xe5e5e5ff, 0x2b2b2bff);
-        c.popover = pick(0xffffffff, 0x2c2c2cff);
-        c.popover_foreground = c.foreground;
-        c.input = pick(0x0000001f, 0xffffff1c);
-        c.accent = pick(0x0000000a, 0xffffff14);
-        c.accent_foreground = c.foreground;
-
-        c.button = pick(0x00000010, 0xffffff1b);
-        c.button_hover = pick(0x00000018, 0xffffff24);
-        c.button_active = pick(0x00000024, 0xffffff30);
-        c.button_foreground = c.foreground;
-        c.secondary = c.button;
-        c.secondary_hover = c.button_hover;
-        c.secondary_active = c.button_active;
-        c.secondary_foreground = c.foreground;
-
-        let (hover, active) = (shade(accent, 0.05), shade(accent, -0.06));
-        c.primary = accent;
-        c.primary_hover = hover;
-        c.primary_active = active;
-        c.primary_foreground = white();
-        c.button_primary = accent;
-        c.button_primary_hover = hover;
-        c.button_primary_active = active;
-        c.button_primary_foreground = white();
-        c.ring = accent.opacity(0.5);
-        c.selection = accent.opacity(0.3);
-        c.caret = accent;
-        c.link = pick(0x0068daff, 0x419cffff);
-
-        c.switch = pick(0x00000014, 0xffffff1f);
-        c.switch_thumb = pick(0xffffffff, 0xe8e8e8ff);
-        c.success = pick(0x34c759ff, 0x30d158ff);
-        c.warning = pick(0xff8d28ff, 0xff9230ff);
-        c.danger = pick(0xff383cff, 0xff4245ff);
-        c.chart_grid = c.border;
-    });
-}
-
-/// `color`, lighter by `by` (darker when negative).
-fn shade(color: Hsla, by: f32) -> Hsla {
-    Hsla {
-        l: (color.l + by).clamp(0., 1.),
-        ..color
     }
 }
 
@@ -435,17 +354,15 @@ struct Main {
     /// The account whose reset credit waits on a second press to redeem.
     confirming: Option<String>,
     sidebar: Sidebar,
-    /// The material AppKit puts behind a sidebar, behind GPUI's.
-    backdrop: Option<native::Backdrop>,
     /// The sidebar's list, which the arrow keys move through while it has
-    /// focus, its selection then drawn in the accent color.
+    /// focus.
     sidebar_focus: FocusHandle,
     _tasks: [Task<()>; 2],
     _system: [Subscription; 2],
 }
 
-/// The sidebar as the user leaves it, which the window remembers as a split
-/// view does: its width, whether it hides, and how it last changed.
+/// The sidebar as the user leaves it: its width, whether it hides, and how
+/// it last changed.
 #[derive(Debug, Clone, Copy)]
 struct Sidebar {
     width: f32,
@@ -462,12 +379,10 @@ struct Sidebar {
 }
 
 impl Sidebar {
-    fn recall() -> Self {
+    fn recall(prefs: &Prefs) -> Self {
         Self {
-            width: native::recall("SidebarWidth").map_or(SIDEBAR, |width| {
-                (width as f32).clamp(SIDEBAR_MIN, SIDEBAR_MAX)
-            }),
-            hidden: native::recall("SidebarHidden").is_some_and(|hidden| hidden != 0.),
+            width: prefs.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX),
+            hidden: prefs.sidebar_hidden,
             slides: 0,
             sliding: false,
             dragging: false,
@@ -475,9 +390,11 @@ impl Sidebar {
         }
     }
 
-    fn remember(self) {
-        native::remember("SidebarWidth", f64::from(self.width));
-        native::remember("SidebarHidden", if self.hidden { 1. } else { 0. });
+    fn remember(self, cx: &mut App) {
+        let prefs = cx.global_mut::<Prefs>();
+        prefs.sidebar_width = self.width;
+        prefs.sidebar_hidden = self.hidden;
+        prefs.save();
     }
 
     /// How wide it shows `along` a slide, from 0 to 1.
@@ -497,7 +414,7 @@ impl Main {
     fn new(app: Arc<Slopmax>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let key = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("API key")
+                .placeholder("Paste an API key")
                 .masked(true)
         });
         let paste = cx.new(|cx| {
@@ -533,19 +450,18 @@ impl Main {
                 }
             }
         });
-        // The window turns light or dark with the system, and takes up a new
-        // accent color when it comes forward from System Settings.
+        // The window turns light or dark with the system, when the user
+        // leaves it to the system.
         let appearance =
-            cx.observe_window_appearance(window, |_, window, cx| macos_theme(window, cx));
+            cx.observe_window_appearance(window, |_, window, cx| theme::apply(window, cx));
         let activation = cx.observe_window_activation(window, |_, window, cx| {
             if window.is_window_active() {
-                macos_theme(window, cx);
                 panel::dismiss(cx);
             }
         });
-        let sidebar = Sidebar::recall();
-        menus(cx, sidebar.hidden);
-        // The sidebar has focus to begin with, as a source list does.
+        let sidebar = Sidebar::recall(cx.global::<Prefs>());
+        // The sidebar has focus to begin with, so the arrow keys move
+        // through its pages.
         let sidebar_focus = cx.focus_handle();
         window.focus(&sidebar_focus, cx);
         let mut main = Self {
@@ -560,7 +476,6 @@ impl Main {
             asked_today: None,
             credits_open: HashSet::new(),
             confirming: None,
-            backdrop: native::Backdrop::new(window, sidebar.width),
             sidebar,
             sidebar_focus,
             _tasks: [follow, tick],
@@ -633,7 +548,7 @@ impl Main {
             .collect()
     }
 
-    /// Moves the selection `by` pages, as an arrow key does in a source list.
+    /// Moves the selection `by` pages, as an arrow key does in a list.
     fn step(&mut self, by: isize, cx: &mut Context<Self>) {
         let sections = self.sections(Timestamp::now());
         let at = sections
@@ -649,7 +564,7 @@ impl Main {
         self.sidebar.hidden = !self.sidebar.hidden;
         self.sidebar.slides += 1;
         self.sidebar.sliding = true;
-        self.sidebar.remember();
+        self.sidebar.remember(cx);
         menus(cx, self.sidebar.hidden);
         cx.notify();
     }
@@ -671,13 +586,10 @@ impl Main {
             self.sidebar.width = self.sidebar.dragged_from;
             self.sidebar.dragging = false;
             self.sidebar.sliding = false;
-            self.sidebar.remember();
+            self.sidebar.remember(cx);
             menus(cx, true);
         } else {
             self.sidebar.width = x.clamp(SIDEBAR_MIN, SIDEBAR_MAX);
-        }
-        if let Some(backdrop) = &self.backdrop {
-            backdrop.set_width(self.sidebar.width);
         }
         cx.notify();
     }
@@ -685,48 +597,14 @@ impl Main {
     fn end_drag(&mut self, cx: &mut Context<Self>) {
         if self.sidebar.dragging {
             self.sidebar.dragging = false;
-            self.sidebar.remember();
+            self.sidebar.remember(cx);
             cx.notify();
         }
     }
 
-    /// A Mac segmented control as macOS 26 draws one in a toolbar: a capsule
-    /// of glass, the chosen segment a pill within it; `choose` takes a press.
-    fn segmented<T: Copy + PartialEq + 'static>(
-        &self,
-        id: &str,
-        options: impl IntoIterator<Item = (T, &'static str)>,
-        chosen: T,
-        choose: fn(&mut Self, T, &mut Context<Self>),
-        c: &Colors,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let mut track = glass(h_flex().flex_shrink_0().h(px(30.)).p(px(2.)), c);
-        for (i, (value, title)) in options.into_iter().enumerate() {
-            let selected = value == chosen;
-            track = track.child(
-                div()
-                    .id(SharedString::from(format!("{id}-{i}")))
-                    .h_full()
-                    .px(px(11.))
-                    .flex()
-                    .items_center()
-                    .rounded_full()
-                    .role(Role::RadioButton)
-                    .aria_label(title)
-                    .aria_selected(selected)
-                    .when(selected, |segment| segment.bg(c.raised))
-                    .child(title)
-                    .on_click(cx.listener(move |main, _, _, cx| choose(main, value, cx))),
-            );
-        }
-        track
-    }
-
-    /// The sidebar, as a source list: the pages in groups, the providers
-    /// among them, under the window's buttons. The window's material shows
-    /// through it.
-    fn sidebar(&self, c: &Colors, now: Timestamp, emphasized: bool, cx: &mut Context<Self>) -> Div {
+    /// The sidebar: slopmax's mark, the pages in groups with each provider
+    /// among them, and how the proxy stands at its foot.
+    fn sidebar(&self, c: &Colors, now: Timestamp, cx: &mut Context<Self>) -> Div {
         let report = self.snapshot.report.as_ref();
         let groups = report.map(|r| view::groups(r, now)).unwrap_or_default();
         let attention = report.map(|r| view::attention(r, now)).unwrap_or_default();
@@ -735,6 +613,7 @@ impl Main {
             .size_full()
             .px(px(10.))
             .pb(px(12.))
+            .gap(px(2.))
             .overflow_y_scroll()
             .track_focus(&self.sidebar_focus)
             .key_context("Sidebar")
@@ -742,7 +621,7 @@ impl Main {
             .on_action(cx.listener(|main, _: &SelectNext, _, cx| main.step(1, cx)))
             .role(Role::List)
             .aria_label("Sidebar")
-            .child(self.item(Section::Overview, None, None, emphasized, c, cx))
+            .child(self.item(Section::Overview, None, None, c, cx))
             .child(sidebar_heading("Accounts", c));
         if groups.is_empty() {
             list = list.child(
@@ -751,7 +630,8 @@ impl Main {
                     .h(px(32.))
                     .flex()
                     .items_center()
-                    .text_color(c.muted)
+                    .text_size(px(12.5))
+                    .text_color(c.faint)
                     .child("None yet"),
             );
         }
@@ -766,94 +646,108 @@ impl Main {
             let trailing = match alert {
                 Some(tone) => dot(c.tone(tone)).into_any_element(),
                 None => div()
-                    .text_size(px(12.))
-                    .text_color(c.muted)
+                    .text_size(px(11.5))
+                    .text_color(c.faint)
                     .child(group.accounts.len().to_string())
                     .into_any_element(),
             };
             list = list.child(self.item(
                 Section::Provider(group.provider),
-                Some(provider_color(group.provider, c)),
+                Some(c.provider(group.provider)),
                 Some(trailing),
-                emphasized,
                 c,
                 cx,
             ));
         }
         list = list
             .child(sidebar_heading("Activity", c))
-            .child(self.item(Section::Usage, None, None, emphasized, c, cx))
-            .child(self.item(Section::Performance, None, None, emphasized, c, cx))
+            .child(self.item(Section::Usage, None, None, c, cx))
+            .child(self.item(Section::Performance, None, None, c, cx))
             .child(sidebar_heading("Setup", c))
-            .child(self.item(Section::Agents, None, None, emphasized, c, cx))
-            .child(self.item(Section::Settings, None, None, emphasized, c, cx));
+            .child(self.item(Section::Agents, None, None, c, cx))
+            .child(self.item(Section::Settings, None, None, c, cx));
         v_flex()
             .h_full()
-            // Where the window's buttons sit, and a handle to drag it by.
+            .bg(c.sidebar)
+            .border_r_1()
+            .border_color(c.border)
             .child(
-                TitleBar::new()
-                    .h(TOOLBAR)
-                    .bg(transparent_black())
-                    .border_0(),
+                // Where the window's buttons sit on a Mac, and a strip to
+                // drag the window by.
+                ui::drag_region("sidebar-header")
+                    .h(HEADER)
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .pl(px(LEAD))
+                    .pr(px(10.))
+                    .gap(px(9.))
+                    .child(logo(24., c))
+                    .child(
+                        div()
+                            .flex_1()
+                            .font_family(DISPLAY)
+                            .text_size(px(16.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c.fg)
+                            .child("slopmax"),
+                    )
+                    .child(self.sidebar_toggle(true, cx)),
             )
             .child(div().flex_1().min_h_0().child(list))
+            .child(self.proxy_status(c, cx))
     }
 
-    /// A row of the sidebar: its symbol, or a provider's color, its title,
-    /// and what trails it. A press selects it, as in a source list; the
-    /// selection takes the accent color while the sidebar has focus, and a
-    /// quiet gray otherwise.
+    /// A row of the sidebar: its icon, or a provider's color, its title,
+    /// and what trails it. A press chooses it.
     fn item(
         &self,
         section: Section,
         color: Option<Hsla>,
         trailing: Option<AnyElement>,
-        emphasized: bool,
         c: &Colors,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let selected = self.section == section;
-        let lit = selected && emphasized;
-        let ink = if lit { white() } else { c.fg };
         let slot = div()
-            .size(px(20.))
+            .size(px(18.))
             .flex_shrink_0()
             .flex()
             .items_center()
             .justify_center();
-        let icon = match color {
-            Some(color) => slot.child(div().size(px(9.)).rounded_full().bg(color)),
-            None => slot.children(symbols::symbol(
-                section.symbol(),
-                if lit { white() } else { c.muted },
+        let leading = match color {
+            Some(color) => slot.child(div().size(px(8.)).rounded_full().bg(color)),
+            None => slot.child(icon(
+                section.icon(),
                 16.,
-                cx,
+                if selected { c.accent } else { c.muted },
             )),
         };
+        let (hover, fg) = (c.hover, c.fg);
         h_flex()
             .id(SharedString::from(format!("go-{section:?}")))
             .h(px(32.))
-            .px(px(8.))
-            .gap(px(7.))
-            .rounded(px(10.))
-            .text_color(ink)
-            .when(selected, |row| {
-                row.bg(if emphasized {
-                    c.accent
+            .px(px(10.))
+            .gap(px(10.))
+            .rounded(px(8.))
+            .text_size(px(13.))
+            .map(|row| {
+                if selected {
+                    row.bg(c.selected)
+                        .text_color(c.fg)
+                        .font_weight(FontWeight::MEDIUM)
                 } else {
-                    c.fg.opacity(0.1)
-                })
+                    row.text_color(cx.theme().sidebar_foreground)
+                        .cursor_pointer()
+                        .hover(move |row| row.bg(hover).text_color(fg))
+                }
             })
             .role(Role::ListItem)
             .aria_label(section.title())
             .aria_selected(selected)
-            .child(icon)
+            .child(leading)
             .child(div().flex_1().min_w_0().truncate().child(section.title()))
-            .children(trailing.map(|trailing| {
-                div()
-                    .when(lit, |trailing| trailing.text_color(white().opacity(0.8)))
-                    .child(trailing)
-            }))
+            .children(trailing)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |main, _, window, cx| {
@@ -861,14 +755,94 @@ impl Main {
                     main.go(section, cx);
                 }),
             )
-            // What VoiceOver presses.
+            // What a screen reader presses.
             .on_click(cx.listener(move |main, _, _, cx| main.go(section, cx)))
     }
 
-    /// The page's toolbar: its title, and what acts on it, as glass
-    /// controls. Its leading padding keeps clear of the window's buttons
-    /// and the sidebar's toggle while the sidebar is narrower than them.
-    fn toolbar(&self, c: &Colors, cx: &mut Context<Self>) -> TitleBar {
+    /// How the proxy stands, at the sidebar's foot; a click opens Settings.
+    fn proxy_status(&self, c: &Colors, cx: &mut Context<Self>) -> impl IntoElement {
+        let (state, color) = match &self.snapshot.proxy {
+            Proxy::Running { version } => (format!("Proxy running · {version}"), c.good),
+            Proxy::Starting => ("Proxy starting…".to_owned(), c.warn),
+            Proxy::Checking => ("Looking for the proxy…".to_owned(), c.muted),
+            Proxy::Stopped => ("Proxy stopped".to_owned(), c.bad),
+        };
+        let (hover, surface) = (c.hover, c.surface);
+        div().p(px(10.)).child(
+            h_flex()
+                .id("proxy-status")
+                .gap(px(10.))
+                .px(px(10.))
+                .py(px(8.))
+                .rounded(px(10.))
+                .border_1()
+                .border_color(c.border)
+                .bg(surface)
+                .cursor_pointer()
+                .hover(move |row| row.bg(hover))
+                .role(Role::Button)
+                .aria_label(state.clone())
+                .child(
+                    div()
+                        .size(px(8.))
+                        .flex_shrink_0()
+                        .rounded_full()
+                        .bg(color)
+                        .shadow(vec![
+                            BoxShadow::new(px(0.), px(0.), color.opacity(0.6)).blur_radius(px(6.)),
+                        ]),
+                )
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(12.))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(c.fg)
+                                .child(state),
+                        )
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(11.))
+                                .text_color(c.faint)
+                                .child(self.snapshot.address.clone()),
+                        ),
+                )
+                .on_click(cx.listener(|main, _, _, cx| main.go(Section::Settings, cx))),
+        )
+    }
+
+    /// The sidebar's toggle: in the sidebar's header while it shows, and in
+    /// the page's while it hides.
+    fn sidebar_toggle(&self, shown: bool, cx: &mut Context<Self>) -> impl IntoElement {
+        let tip = if shown {
+            "Hide Sidebar"
+        } else {
+            "Show Sidebar"
+        };
+        Button::new(if shown {
+            "hide-sidebar"
+        } else {
+            "show-sidebar"
+        })
+        .icon(if shown {
+            IconName::PanelLeftClose
+        } else {
+            IconName::PanelLeftOpen
+        })
+        .ghost()
+        .small()
+        .tooltip(tip)
+        .accessibility_label(tip)
+        .on_click(cx.listener(|main, _, _, cx| main.toggle_sidebar(cx)))
+    }
+
+    /// The page's header: its title, and what acts on it.
+    fn header(&self, c: &Colors, cx: &mut Context<Self>) -> TitleBar {
         let running = matches!(self.snapshot.proxy, Proxy::Running { .. });
         let tools = h_flex()
             .gap(px(8.))
@@ -879,93 +853,91 @@ impl Main {
                 let app = self.app.clone();
                 tools
                     .child(
-                        tool("add", "plus", c, cx)
-                            .tooltip(|window, cx| Tooltip::new("Add an account").build(window, cx))
-                            .on_click(|event, window, cx| {
-                                // Under the button, as a toolbar's menus open.
-                                let at = point(event.position().x - px(14.), TOOLBAR - px(6.));
-                                NativeMenu::new()
-                                    .menu("Sign In with Claude…", Box::new(SignInClaude))
-                                    .menu("Sign In with ChatGPT…", Box::new(SignInChatGpt))
-                                    .separator()
-                                    .menu("Import Logins", Box::new(ImportLogins))
-                                    .menu("Add an API Key…", Box::new(AddKey))
-                                    .show(at, window, cx);
-                            }),
+                        Button::new("refresh")
+                            .icon(IconName::RefreshCw)
+                            .ghost()
+                            .small()
+                            .tooltip("Refresh usage")
+                            .accessibility_label("Refresh usage")
+                            .disabled(!running)
+                            .on_click(move |_, _, _| app.refresh()),
                     )
                     .child(
-                        tool("refresh", "arrow.clockwise", c, cx)
-                            .tooltip(|window, cx| Tooltip::new("Refresh usage").build(window, cx))
-                            .when(!running, |button| button.opacity(0.4))
-                            .on_click(move |_, _, _| {
-                                if running {
-                                    app.refresh();
-                                }
+                        Button::new("add")
+                            .icon(IconName::Plus)
+                            .label("Add account")
+                            .primary()
+                            .small()
+                            .dropdown_menu_with_anchor(Anchor::TopRight, |menu, _, _| {
+                                menu.menu_with_icon(
+                                    "Sign in with Claude…",
+                                    IconName::LogIn,
+                                    Box::new(SignInClaude),
+                                )
+                                .menu_with_icon(
+                                    "Sign in with ChatGPT…",
+                                    IconName::LogIn,
+                                    Box::new(SignInChatGpt),
+                                )
+                                .separator()
+                                .menu_with_icon(
+                                    "Import logins",
+                                    IconName::Download,
+                                    Box::new(ImportLogins),
+                                )
+                                .menu_with_icon(
+                                    "Add an API key…",
+                                    IconName::KeyRound,
+                                    Box::new(AddKey),
+                                )
                             }),
                     )
             }
-            Section::Usage | Section::Performance => tools.child(
-                self.segmented(
-                    "range",
-                    Range::ALL.map(|range| (range, range.title())),
-                    self.range,
-                    |main, range, cx| {
-                        main.range = range;
-                        main.load_history();
-                        cx.notify();
-                    },
-                    c,
-                    cx,
-                )
-                .h(TOOL),
-            ),
+            Section::Usage | Section::Performance => tools.child(segmented(
+                "range",
+                Range::ALL.map(|range| (range, range.title())),
+                self.range,
+                |main: &mut Self, range, cx| {
+                    main.range = range;
+                    main.load_history();
+                    cx.notify();
+                },
+                c,
+                cx,
+            )),
             Section::Agents | Section::Settings => tools,
         };
-        // The title bar draws the hairline beneath it.
         TitleBar::new()
-            .h(TOOLBAR)
-            .pr(px(12.))
-            .bg(c.toolbar)
+            .h(HEADER)
+            .pr(px(16.))
+            .bg(c.bg)
+            .border_0()
             .child(
-                div()
-                    .text_size(px(15.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(self.section.title()),
+                h_flex()
+                    .gap(px(10.))
+                    .when(self.sidebar.hidden, |title| {
+                        title.child(self.sidebar_toggle(false, cx))
+                    })
+                    .child(
+                        div()
+                            .font_family(DISPLAY)
+                            .text_size(px(ui::TITLE))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c.fg)
+                            .child(self.section.title()),
+                    ),
             )
             .child(tools)
-    }
-
-    /// The sidebar's toggle, which stays put past the window's buttons
-    /// whether the sidebar shows or not.
-    fn sidebar_toggle(&self, c: &Colors, cx: &mut Context<Self>) -> impl IntoElement {
-        let hidden = self.sidebar.hidden;
-        div()
-            .absolute()
-            .left(px(TOGGLE_X))
-            .top((TOOLBAR - TOOL) / 2.)
-            .child(
-                tool("toggle-sidebar", "sidebar.left", c, cx)
-                    .aria_label(if hidden {
-                        "Show Sidebar"
-                    } else {
-                        "Hide Sidebar"
-                    })
-                    .tooltip(move |window, cx| {
-                        Tooltip::new(if hidden {
-                            "Show Sidebar"
-                        } else {
-                            "Hide Sidebar"
-                        })
-                        .build(window, cx)
-                    })
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(|main, _, _, cx| main.toggle_sidebar(cx))),
-            )
     }
 
     fn notice(&self, c: &Colors) -> Option<impl IntoElement> {
         let notice = self.snapshot.notice.as_ref()?;
         let app = self.app.clone();
+        let (name, color) = if notice.error {
+            (IconName::CircleX, c.bad)
+        } else {
+            (IconName::CircleCheck, c.good)
+        };
         // Floats over the corner, so it never moves what is under the pointer.
         Some(
             h_flex()
@@ -974,17 +946,28 @@ impl Main {
                 .bottom(px(20.))
                 .w(px(420.))
                 .p(px(12.))
-                .gap(px(10.))
+                .pl(px(14.))
+                .gap(px(12.))
                 .rounded(px(12.))
                 .border_1()
-                .border_color(c.separator)
+                .border_color(c.border)
                 .bg(c.popover)
                 .shadow_lg()
-                .child(dot(if notice.error { c.bad } else { c.good }))
-                .child(div().flex_1().child(notice.text.clone()))
+                .child(icon(name, 18., color))
                 .child(
-                    push("dismiss", "Dismiss")
-                        .small()
+                    div()
+                        .flex_1()
+                        .text_size(px(12.5))
+                        .text_color(c.fg)
+                        .child(notice.text.clone()),
+                )
+                .child(
+                    Button::new("dismiss")
+                        .icon(IconName::Close)
+                        .ghost()
+                        .xsmall()
+                        .tooltip("Dismiss")
+                        .accessibility_label("Dismiss")
                         .on_click(move |_, _, _| app.dismiss_notice()),
                 ),
         )
@@ -996,29 +979,65 @@ impl Main {
         let sign_in = view::sign_in(self.snapshot.sign_in.as_ref()?);
         let (app, cancel) = (self.app.clone(), self.app.clone());
         let paste = self.paste.clone();
-        let mut body = group_box(c).py(px(12.)).gap(px(10.)).child(sign_in.detail);
+        let mut body = card(c).border_color(c.accent.opacity(0.5)).child(
+            h_flex()
+                .gap(px(12.))
+                .child(ui::icon_tile(IconName::LogIn, c.accent, 32., c))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .text_size(px(ui::HEADING))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(sign_in.title.clone()),
+                        )
+                        .child(caption(sign_in.detail.clone(), c)),
+                )
+                .child(push("cancel-sign-in", "Cancel").on_click(move |_, _, _| {
+                    cancel.cancel_sign_in();
+                })),
+        );
         if let Some(code) = sign_in.code {
             body = body.child(
                 div()
-                    .text_size(px(22.))
-                    .font_weight(FontWeight::BOLD)
+                    .px(px(16.))
+                    .py(px(10.))
+                    .rounded(px(10.))
+                    .bg(c.well)
+                    .font_family(DISPLAY)
+                    .text_size(px(26.))
+                    .font_weight(FontWeight::SEMIBOLD)
                     .child(code),
             );
         }
         if let Some(link) = sign_in.link {
             let (open, copy) = (link.clone(), link.clone());
             body = body
-                .child(div().text_size(px(11.)).text_color(c.muted).child(link))
+                .child(
+                    div()
+                        .text_size(px(ui::TINY))
+                        .text_color(c.muted)
+                        .truncate()
+                        .child(link),
+                )
                 .child(
                     h_flex()
                         .gap(px(8.))
                         .child(
                             push("open-link", "Open again")
+                                .icon(IconName::ExternalLink)
                                 .on_click(move |_, _, cx| cx.open_url(&open)),
                         )
-                        .child(push("copy-link", "Copy").on_click(move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
-                        })),
+                        .child(
+                            push("copy-link", "Copy link")
+                                .icon(IconName::Copy)
+                                .on_click(move |_, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
+                                }),
+                        ),
                 )
                 .child(
                     h_flex()
@@ -1032,11 +1051,15 @@ impl Main {
                 );
         }
         if !sign_in.notes.is_empty() {
-            body = body.child(h_flex().gap(px(6.)).child(dot(c.warn)).child(sign_in.notes));
+            body = body.child(
+                h_flex()
+                    .gap(px(8.))
+                    .text_size(px(ui::SMALL))
+                    .child(icon(IconName::TriangleAlert, 14., c.warn))
+                    .child(sign_in.notes),
+            );
         }
-        Some(section(&sign_in.title, c).child(body.child(h_flex().child(
-            push("cancel-sign-in", "Cancel").on_click(move |_, _, _| cancel.cancel_sign_in()),
-        ))))
+        Some(body)
     }
 }
 
@@ -1052,40 +1075,29 @@ impl Render for Main {
             Section::Agents => self.agents(&c).into_any_element(),
             Section::Settings => self.settings(&c, cx).into_any_element(),
         };
+        let _ = window;
         let sidebar = self.sidebar;
-        let emphasized = self.sidebar_focus.is_focused(window) && window.is_window_active();
         // The sidebar keeps its width as it slides, its pane clipping it.
         let pane = div()
             .id("sidebar")
             .h_full()
             .flex_shrink_0()
             .overflow_hidden()
-            .child(self.sidebar(&c, now, emphasized, cx).w(px(sidebar.width)));
-        let toolbar = self.toolbar(&c, cx);
-        let (pane, toolbar) = if sidebar.sliding {
-            let slide = || Animation::new(SLIDE).with_easing(ease_in_out);
-            (
-                pane.with_animation(("slide", sidebar.slides), slide(), move |pane, along| {
-                    pane.w(px(sidebar.open(along)))
-                })
-                .into_any_element(),
-                toolbar
-                    .with_animation(("clear", sidebar.slides), slide(), move |bar, along| {
-                        bar.pl(px(clear(sidebar.open(along))))
-                    })
-                    .into_any_element(),
-            )
+            .child(self.sidebar(&c, now, cx).w(px(sidebar.width)));
+        let pane = if sidebar.sliding {
+            let slide = Animation::new(SLIDE).with_easing(ease_in_out);
+            pane.with_animation(("slide", sidebar.slides), slide, move |pane, along| {
+                pane.w(px(sidebar.open(along)))
+            })
+            .into_any_element()
         } else {
-            (
-                pane.w(px(sidebar.open(1.))).into_any_element(),
-                toolbar.pl(px(clear(sidebar.open(1.)))).into_any_element(),
-            )
+            pane.w(px(sidebar.open(1.))).into_any_element()
         };
         h_flex()
             .relative()
             .size_full()
+            .bg(c.bg)
             .text_color(c.fg)
-            .on_action(cx.listener(|main, _: &AddKey, _, cx| main.go(Section::Settings, cx)))
             .on_action(cx.listener(|main, _: &ToggleSidebar, _, cx| main.toggle_sidebar(cx)))
             // A drag of the sidebar's edge follows the pointer anywhere in
             // the window.
@@ -1103,17 +1115,19 @@ impl Render for Main {
                     .flex_1()
                     .min_w_0()
                     .h_full()
-                    .bg(c.bg)
-                    .child(toolbar)
+                    .child(
+                        self.header(&c, cx)
+                            .pl(px(if sidebar.hidden { LEAD } else { MARGIN })),
+                    )
                     .child(
                         div().flex_1().min_h_0().child(
                             v_flex()
                                 .id("body")
                                 .size_full()
-                                .px(px(28.))
-                                .pt(px(14.))
-                                .pb(px(28.))
-                                .gap(px(26.))
+                                .px(px(MARGIN))
+                                .pt(px(6.))
+                                .pb(px(32.))
+                                .gap(px(24.))
                                 .overflow_y_scrollbar()
                                 .children(self.sign_in(&c))
                                 .child(page),
@@ -1143,205 +1157,28 @@ impl Render for Main {
                         ),
                 )
             })
-            .child(self.sidebar_toggle(&c, cx))
             .children(self.notice(&c))
     }
 }
 
-/// The toolbar's leading padding while the sidebar shows `open` points of
-/// itself: clear of the window's buttons and the sidebar's toggle.
-fn clear(open: f32) -> f32 {
-    (TOGGLE_X + TOOL.as_f32() + 12. - open).max(20.)
-}
-
-/// The theme's colors this window uses, read once per frame.
-#[derive(Clone, Copy)]
-struct Colors {
-    bg: Hsla,
-    toolbar: Hsla,
-    fg: Hsla,
-    muted: Hsla,
-    separator: Hsla,
-    group: Hsla,
-    track: Hsla,
-    popover: Hsla,
-    good: Hsla,
-    warn: Hsla,
-    bad: Hsla,
-    accent: Hsla,
-    /// A toolbar control's glass, its rim, and a segment chosen in it.
-    glass: Hsla,
-    glass_edge: Hsla,
-    raised: Hsla,
-    dark: bool,
-}
-
-impl Colors {
-    fn of(cx: &App) -> Self {
-        let theme = cx.theme();
-        let dark = theme.is_dark();
-        Self {
-            bg: theme.background,
-            toolbar: theme.title_bar,
-            fg: theme.foreground,
-            muted: theme.muted_foreground,
-            separator: theme.border,
-            group: theme.group_box,
-            track: theme.muted,
-            popover: theme.popover,
-            good: theme.success,
-            warn: theme.warning,
-            bad: theme.danger,
-            accent: theme.primary,
-            // Lighter than the toolbar and the sidebar it sits on, as macOS
-            // 26 draws a toolbar's controls, and opaque over its shadow.
-            glass: rgb(if dark { 0x424242 } else { 0xffffff }).into(),
-            glass_edge: rgba(if dark { 0xffffff1a } else { 0x00000017 }).into(),
-            raised: rgba(if dark { 0xffffff1f } else { 0x0000001a }).into(),
-            dark,
-        }
-    }
-
-    fn tone(&self, tone: Tone) -> Hsla {
-        match tone {
-            Tone::Good => self.good,
-            Tone::Muted => self.muted,
-            Tone::Accent => self.accent,
-            Tone::Warn => self.warn,
-            Tone::Bad => self.bad,
-        }
-    }
-
-    /// A gauge's color: its provider's while it has room, and the warning
-    /// and bad colors only as it runs short.
-    fn gauge(&self, tone: Tone, provider: ProviderId) -> Hsla {
-        match tone {
-            Tone::Good | Tone::Muted | Tone::Accent => provider_color(provider, self),
-            tone => self.tone(tone),
-        }
-    }
-}
-
-/// A provider's color, on every page and chart: its brand's.
-fn provider_color(provider: ProviderId, c: &Colors) -> Hsla {
-    match provider {
-        ProviderId::Claude | ProviderId::Anthropic => rgb(0xd97757).into(),
-        ProviderId::Codex | ProviderId::OpenAI => rgb(0x10a37f).into(),
-        ProviderId::Xai => c.muted,
-        _ => c.accent,
-    }
-}
-
-/// A Mac push button: a gray rounded rectangle without a border.
+/// A button for a secondary action.
 fn push(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
-    Button::new(id).label(label).border_0()
+    Button::new(id).label(label).small()
 }
 
-/// A toolbar button as macOS 26 draws one: an SF Symbol on a circle of
-/// glass.
-fn tool(id: &'static str, symbol: &'static str, c: &Colors, cx: &mut App) -> Stateful<Div> {
-    let (ink, hover, pressed) = if c.dark {
-        (white(), rgb(0x4c4c4c), rgb(0x575757))
-    } else {
-        (black(), rgb(0xf2f2f2), rgb(0xe6e6e6))
-    };
-    glass(div().id(id).size(TOOL), c)
-        .flex()
-        .items_center()
-        .justify_center()
-        .hover(move |button| button.bg(hover))
-        .active(move |button| button.bg(pressed))
-        .role(Role::Button)
-        .children(symbols::symbol(symbol, ink, 21., cx))
-}
-
-/// Dresses `control` in a toolbar control's glass, as macOS 26 draws it: a
-/// capsule lighter than what it sits on, lit along its top in dark and
-/// rimmed in light, over a soft shadow.
-fn glass<E: Styled>(control: E, c: &Colors) -> E {
-    let shadow = BoxShadow::new(
-        px(0.),
-        px(0.5),
-        black().opacity(if c.dark { 0.5 } else { 0.08 }),
-    )
-    .blur_radius(px(1.5));
-    let control = control
-        .rounded_full()
-        .bg(c.glass)
-        .border_color(c.glass_edge)
-        .shadow(vec![shadow]);
-    if c.dark {
-        control.border_t_1()
-    } else {
-        control.border_1()
-    }
-}
-
-/// A Mac text field: 13-point text, with room for it at a control's height.
+/// A text field.
 fn field(state: &Entity<InputState>) -> Input {
-    Input::new(state).py(px(3.)).text_size(px(13.))
-}
-
-/// A part of a page as System Settings draws one: a heading over its
-/// content.
-fn section(title: &str, c: &Colors) -> Div {
-    v_flex().gap(px(8.)).child(heading(title, c))
-}
-
-fn heading(text: &str, c: &Colors) -> Div {
-    div()
-        .px(px(4.))
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(c.fg)
-        .child(text.to_string())
+    Input::new(state).small()
 }
 
 /// A group's title in the sidebar.
 fn sidebar_heading(title: &str, c: &Colors) -> Div {
     div()
-        .px(px(8.))
-        .pt(px(14.))
-        .pb(px(4.))
+        .px(px(10.))
+        .pt(px(18.))
+        .pb(px(6.))
         .text_size(px(11.))
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(c.muted)
+        .text_color(c.faint)
         .child(title.to_string())
-}
-
-/// Rows grouped on a faint, rounded fill.
-fn group_box(c: &Colors) -> Div {
-    v_flex().px(px(12.)).rounded(px(10.)).bg(c.group)
-}
-
-fn caption(text: &str, c: &Colors) -> Div {
-    div()
-        .text_size(px(11.))
-        .text_color(c.muted)
-        .child(text.to_string())
-}
-
-fn dot(color: Hsla) -> Div {
-    div().flex_shrink_0().size(px(7.)).rounded_full().bg(color)
-}
-
-/// A worded state. Good, warning, and bad ones lead with a dot of their
-/// color, as Mac apps show status, and keep their words readable.
-fn label(label: &Label, c: &Colors) -> Div {
-    let text = div().min_w_0().truncate().child(label.text.clone());
-    let line = h_flex().min_w_0().gap(px(6.));
-    match label.tone {
-        Tone::Muted | Tone::Accent => line.text_color(c.tone(label.tone)).child(text),
-        tone => line.child(dot(c.tone(tone))).child(text),
-    }
-}
-
-/// A gauge's bar, filled to `fraction`.
-fn bar(fraction: f32, color: Hsla, c: &Colors) -> Div {
-    div().h(px(5.)).rounded_full().bg(c.track).child(
-        div()
-            .h_full()
-            .w(relative(fraction))
-            .rounded_full()
-            .bg(color),
-    )
 }

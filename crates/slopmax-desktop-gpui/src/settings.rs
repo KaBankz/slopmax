@@ -13,7 +13,10 @@ use slopmax_core::daemon::CREDIT_EXPIRY_LEAD;
 use slopmax_core::provider::ProviderId;
 use slopmax_core::report::Tone;
 
-use crate::{Colors, KEYS, Main, caption, dot, field, group_box, label, push, section};
+use crate::prefs::{Appearance, Prefs};
+use crate::theme::{self, Colors};
+use crate::ui::{caption, dot, label, section};
+use crate::{KEYS, Main, field, push};
 
 /// The width of a form row's title.
 const TITLE: Pixels = px(190.);
@@ -77,6 +80,7 @@ impl Main {
     pub(crate) fn settings(&self, c: &Colors, cx: &mut Context<Self>) -> Div {
         v_flex()
             .gap(px(26.))
+            .child(appearance(c, cx))
             .child(self.proxy(c))
             .child(self.adding(c, cx))
             .child(redeeming(self.app.config(), c))
@@ -195,11 +199,11 @@ impl Main {
                     "API key",
                     h_flex()
                         .gap(px(8.))
-                        .child(self.segmented(
+                        .child(crate::ui::segmented(
                             "key",
                             KEYS.map(|provider| (provider, provider.spec().title)),
                             self.key_provider,
-                            |main, provider, cx| {
+                            |main: &mut Main, provider, cx| {
                                 main.key_provider = provider;
                                 cx.notify();
                             },
@@ -223,6 +227,30 @@ impl Main {
                 )),
         )
     }
+}
+
+/// Light or dark, or as the system has it.
+fn appearance(c: &Colors, cx: &mut Context<Main>) -> impl IntoElement {
+    let chosen = cx.global::<Prefs>().appearance;
+    section("Appearance", c).child(group_box(c).child(row(
+        "Theme",
+        crate::ui::segmented(
+            "appearance",
+            Appearance::ALL.map(|appearance| (appearance, appearance.title())),
+            chosen,
+            |_: &mut Main, appearance, cx| {
+                let prefs = cx.global_mut::<Prefs>();
+                prefs.appearance = appearance;
+                prefs.save();
+                theme::refresh(cx);
+            },
+            c,
+            cx,
+        ),
+        None,
+        true,
+        c,
+    )))
 }
 
 /// When slopmax redeems a reset credit by itself, as its configuration has
@@ -285,4 +313,9 @@ fn row(
         .child(div().w(TITLE).flex_shrink_0().child(title.to_owned()))
         .child(div().flex_1().min_w_0().child(value))
         .children(control)
+}
+
+/// Rows grouped on a card.
+fn group_box(c: &Colors) -> Div {
+    crate::ui::card(c).py(px(4.)).gap(px(0.))
 }
