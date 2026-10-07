@@ -33,7 +33,6 @@ impl Main {
             let verb = if connected { "Disconnect" } else { "Connect" };
             let button = push(SharedString::from(format!("agent-{id}")), verb)
                 .accessibility_label(format!("{verb} {}", agent.title))
-                .map(|button| if connected { button } else { button.primary() })
                 .on_click(move |_, _, _| {
                     if connected {
                         app.disconnect_agent(id);
