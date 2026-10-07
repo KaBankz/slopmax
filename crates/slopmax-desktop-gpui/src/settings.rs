@@ -124,14 +124,13 @@ impl Main {
                     h_flex()
                         .gap(px(8.))
                         .child(
-                            div()
-                                .px(px(8.))
-                                .py(px(3.))
+                            h_flex()
+                                .h(px(ui::CONTROL))
+                                .px(px(10.))
                                 .rounded(px(6.))
                                 .bg(c.well)
                                 .border_1()
                                 .border_color(c.border)
-                                .text_size(px(ui::SMALL))
                                 .font_features(tabular())
                                 .child(address),
                         )

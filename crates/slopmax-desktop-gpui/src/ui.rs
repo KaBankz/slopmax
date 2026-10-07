@@ -54,7 +54,9 @@ pub(crate) fn tool(id: impl Into<ElementId>, icon: IconName, tip: &'static str) 
 
 /// A text field as tall as every control, its words at body size.
 pub(crate) fn field(state: &Entity<InputState>) -> Input {
-    Input::new(state).large().h(px(CONTROL)).px(px(10.)).py_0()
+    let field = Input::new(state).large().px(px(10.)).py_0();
+    // The field's own `h` sizes a field of many lines alone.
+    Styled::h(field, px(CONTROL))
 }
 
 /// A Lucide icon, `size` points square, in `color`.
@@ -294,7 +296,7 @@ pub(crate) fn segmented<V: 'static, T: Copy + PartialEq + 'static>(
     };
     let mut track = h_flex()
         .flex_shrink_0()
-        .h(px(28.))
+        .h(px(CONTROL))
         .p(px(2.))
         .gap(px(2.))
         .rounded(px(7.))
