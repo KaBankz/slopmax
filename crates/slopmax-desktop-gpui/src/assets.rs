@@ -10,15 +10,13 @@ use gpui_kit::{AssetSource, Result, SharedString};
 gpui_kit::assets::icon_assets!(
     Extra,
     [
-        Activity,
         ArrowUpRight,
         BadgeCheck,
         ChartColumn,
-        CircleGauge,
         Clock,
         Coins,
+        Download,
         Hash,
-        Hourglass,
         KeyRound,
         Layers,
         LogIn,

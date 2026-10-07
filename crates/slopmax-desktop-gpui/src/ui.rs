@@ -362,15 +362,19 @@ pub(crate) fn segmented<V: 'static, T: Copy + PartialEq + 'static>(
     track
 }
 
-/// A strip the window is dragged by, as by its title bar, and on a Mac
-/// zoomed by a double click.
+/// A strip the window is dragged by, as by its title bar, and zoomed by a
+/// double click. Windows answers both itself, from the strip's area.
 pub(crate) fn drag_region(id: &'static str) -> Stateful<Div> {
     div()
         .id(id)
         .window_control_area(WindowControlArea::Drag)
         .on_mouse_down(MouseButton::Left, |event, window, _| {
-            if event.click_count == 2 && cfg!(target_os = "macos") {
-                window.titlebar_double_click();
+            if event.click_count == 2 {
+                if cfg!(target_os = "macos") {
+                    window.titlebar_double_click();
+                } else if cfg!(target_os = "linux") {
+                    window.zoom_window();
+                }
             }
         })
         .on_mouse_move(|event, window, _| {
