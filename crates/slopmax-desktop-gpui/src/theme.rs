@@ -1,8 +1,11 @@
 //! slopmax's look, the same on every system: its own light and dark themes
-//! over gpui-kit's components, in slopmax's pink; the Inter typeface,
-//! bundled so text sets the same everywhere; and the colors the pages draw
-//! with beyond the theme's: surfaces, text in three strengths, each
-//! provider's color, and the brand's gradient.
+//! over gpui-kit's components, and IBM Plex Sans, bundled so text sets the
+//! same everywhere.
+//!
+//! The palette is restrained. Neutrals carry the window; a primary action
+//! inverts the foreground. Color appears only where it says something: a
+//! window running short, a provider's identity in a small dot, a series in
+//! a chart. slopmax's pink marks its logo and keyboard focus, nothing else.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -17,23 +20,17 @@ use crate::prefs::{Appearance, Prefs};
 const THEMES: &str = include_str!("../assets/themes/slopmax.json");
 const LIGHT: &str = "slopmax Light";
 const DARK: &str = "slopmax Dark";
-const FONTS: [&[u8]; 5] = [
-    include_bytes!("../assets/fonts/Inter-Regular.ttf"),
-    include_bytes!("../assets/fonts/Inter-Medium.ttf"),
-    include_bytes!("../assets/fonts/Inter-SemiBold.ttf"),
-    include_bytes!("../assets/fonts/Inter-Bold.ttf"),
-    include_bytes!("../assets/fonts/InterDisplay-SemiBold.ttf"),
+const FONTS: [&[u8]; 3] = [
+    include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf"),
+    include_bytes!("../assets/fonts/IBMPlexSans-Medium.ttf"),
+    include_bytes!("../assets/fonts/IBMPlexSans-SemiBold.ttf"),
 ];
-
-/// The family large numbers and titles set in: Inter's cut for display
-/// sizes, drawn tighter.
-pub(crate) const DISPLAY: &str = "Inter Display";
 
 /// Loads the typeface and slopmax's themes, once, before a window opens.
 pub(crate) fn init(cx: &mut App) {
     let fonts = FONTS.iter().map(|font| Cow::Borrowed(*font)).collect();
     if let Err(e) = cx.text_system().add_fonts(fonts) {
-        eprintln!("slopmax: could not load Inter: {e:#}");
+        eprintln!("slopmax: could not load IBM Plex Sans: {e:#}");
     }
     if let Err(e) = ThemeRegistry::global_mut(cx).load_themes_from_str(THEMES) {
         eprintln!("slopmax: could not load its themes: {e:#}");
@@ -73,7 +70,8 @@ fn change(system: WindowAppearance, cx: &mut App) {
     Theme::change(mode, None, cx);
 }
 
-/// Inter's figures all of one width, so numbers that change keep still.
+/// Figures all of one width, so numbers that change keep still and
+/// columns of them align.
 pub(crate) fn tabular() -> FontFeatures {
     FontFeatures(Arc::new(vec![("tnum".into(), 1)]))
 }
@@ -82,29 +80,27 @@ pub(crate) fn tabular() -> FontFeatures {
 #[derive(Clone, Copy)]
 pub(crate) struct Colors {
     pub(crate) dark: bool,
-    /// The page behind everything, and the sidebar beside it.
+    /// The page, and the sidebar beside it, a shade apart.
     pub(crate) bg: Hsla,
     pub(crate) sidebar: Hsla,
-    /// A card, and a well or a hover within one.
-    pub(crate) surface: Hsla,
+    /// An inset area: an opened row, a value to copy.
     pub(crate) well: Hsla,
-    /// A card's edge, and a rule within one.
+    /// A panel's edge, and the rule between its rows.
     pub(crate) border: Hsla,
     pub(crate) separator: Hsla,
     /// Text: primary, secondary, and faint.
     pub(crate) fg: Hsla,
     pub(crate) muted: Hsla,
     pub(crate) faint: Hsla,
-    /// An empty gauge.
+    /// A meter: its empty track, and its fill while it has room.
     pub(crate) track: Hsla,
+    pub(crate) meter: Hsla,
     pub(crate) popover: Hsla,
-    /// slopmax's pink, and the violet its gradient runs to.
+    /// slopmax's pink: its logo and keyboard focus.
     pub(crate) accent: Hsla,
-    pub(crate) violet: Hsla,
     pub(crate) good: Hsla,
     pub(crate) warn: Hsla,
     pub(crate) bad: Hsla,
-    pub(crate) info: Hsla,
     /// A row under the pointer, and a chosen one.
     pub(crate) hover: Hsla,
     pub(crate) selected: Hsla,
@@ -120,68 +116,63 @@ impl Colors {
             dark,
             bg: theme.background,
             sidebar: theme.sidebar,
-            surface: pick(0xffffffff, 0x121218ff),
-            well: pick(0xf4f4f7ff, 0x18181fff),
-            border: pick(0xe7e7edff, 0x1f1f28ff),
-            separator: pick(0xeeeef3ff, 0x1c1c24ff),
+            well: pick(0xf7f7f8ff, 0x212124ff),
+            border: theme.border,
+            separator: pick(0xefeff1ff, 0x26262aff),
             fg: theme.foreground,
             muted: theme.muted_foreground,
-            faint: pick(0x9a9aa8ff, 0x5c5c6bff),
-            track: pick(0xececf1ff, 0x1f1f28ff),
+            faint: pick(0xa2a2aaff, 0x6a6a72ff),
+            track: pick(0xebebeeff, 0x2c2c31ff),
+            meter: pick(0x5a5a62ff, 0xa8a8b0ff),
             popover: theme.popover,
-            accent: theme.primary,
-            violet: pick(0x8b5cf6ff, 0xa78bfaff),
+            accent: rgb(0xd63370).into(),
             good: theme.success,
             warn: theme.warning,
             bad: theme.danger,
-            info: theme.info,
             hover: pick(0x0000000a, 0xffffff0a),
-            selected: pick(0x0000000f, 0xffffff12),
+            selected: pick(0x00000010, 0xffffff12),
         }
     }
 
+    /// A status's color: quiet unless it is a warning or a fault.
     pub(crate) fn tone(&self, tone: Tone) -> Hsla {
         match tone {
             Tone::Good => self.good,
-            Tone::Muted => self.muted,
-            Tone::Accent => self.accent,
+            Tone::Muted | Tone::Accent => self.muted,
             Tone::Warn => self.warn,
             Tone::Bad => self.bad,
         }
     }
 
-    /// A gauge's color: its provider's while it has room, and the warning
-    /// and bad colors only as it runs short.
-    pub(crate) fn gauge(&self, tone: Tone, provider: ProviderId) -> Hsla {
+    /// A meter's fill: neutral while the window has room, the warning and
+    /// fault colors only as it runs short.
+    pub(crate) fn fill(&self, tone: Tone) -> Hsla {
         match tone {
-            Tone::Good | Tone::Muted | Tone::Accent => self.provider(provider),
-            tone => self.tone(tone),
+            Tone::Warn => self.warn,
+            Tone::Bad => self.bad,
+            _ => self.meter,
         }
     }
 
-    /// A provider's color, on every page and chart: its brand's.
+    /// A provider's identity, muted, for the small dot by its name and its
+    /// series in a chart.
     pub(crate) fn provider(&self, provider: ProviderId) -> Hsla {
         let pick =
             |light: u32, dark: u32| -> Hsla { rgb(if self.dark { dark } else { light }).into() };
         match provider {
-            ProviderId::Claude | ProviderId::Anthropic => pick(0xd97757, 0xe8875f),
-            ProviderId::Codex | ProviderId::OpenAI => pick(0x10a37f, 0x2fc48d),
-            ProviderId::Xai => pick(0x52525b, 0xd4d4dc),
-            _ => self.violet,
+            ProviderId::Claude | ProviderId::Anthropic => pick(0xc4775a, 0xd08a6e),
+            ProviderId::Codex | ProviderId::OpenAI => pick(0x3c9a78, 0x57ae8d),
+            _ => self.muted,
         }
     }
 
-    /// slopmax's gradient, pink to violet, at `angle` degrees.
-    pub(crate) fn brand(&self, angle: f32) -> Background {
-        linear_gradient(
-            angle,
-            linear_color_stop(self.accent, 0.),
-            linear_color_stop(self.violet, 1.),
-        )
-    }
-
-    /// `color` washed over the surface, for a chip or an icon's tile.
-    pub(crate) fn tint(&self, color: Hsla) -> Hsla {
-        color.opacity(if self.dark { 0.16 } else { 0.12 })
+    /// The `i`th of a chart's neutral series, strongest first.
+    pub(crate) fn series(&self, i: usize) -> Hsla {
+        let ramp: [u32; 4] = if self.dark {
+            [0xe6e6e8, 0x9b9ba3, 0x6a6a72, 0x45454b]
+        } else {
+            [0x1d1d1f, 0x76767e, 0xa9a9b0, 0xd2d2d7]
+        };
+        rgb(ramp[i.min(ramp.len() - 1)]).into()
     }
 }

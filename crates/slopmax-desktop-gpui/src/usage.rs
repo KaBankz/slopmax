@@ -1,39 +1,35 @@
-//! The Usage and Performance pages, over the range the toolbar picks.
-//! Usage charts what went through slopmax: tokens by provider as areas,
-//! requests as columns and their API value as a line, the models as a ring
-//! and the token mix as one bar, which agents sent the work, when the work
-//! happens, and the accounts ranked. Performance charts how well it went:
-//! what failover saved and what failed, how much came from cache and what
-//! that saved, how fast each model writes, and how soon answers began.
+//! The Usage and Performance pages, over the range the header picks.
+//! Usage charts what went through slopmax: tokens by provider, requests and
+//! their API value, the models ranked and the token mix, which agents sent
+//! the work, when the work happens, and the accounts ranked. Performance
+//! charts how well it went: what failover saved and what failed, how much
+//! came from cache, how fast each model writes, and how soon answers began.
+//!
+//! The charts keep to neutrals. A provider's own color tells providers
+//! apart, and red marks what failed; nothing else is colored.
 
-use std::collections::HashMap;
-
-use gpui_kit::assets::IconName;
-use gpui_kit::component::chart::{AreaChart, PieChart};
+use gpui_kit::component::chart::AreaChart;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use slopmax_app::history::{self, Bucket, History, Range, Share};
+use slopmax_app::history::{self, Bucket, History, Range};
 use slopmax_core::human;
 use slopmax_core::provider::ProviderId;
 use slopmax_core::summary::Totals;
 
 use crate::Main;
-use crate::theme::Colors;
-use crate::theme::tabular;
-use crate::ui::{self, caption, dot, gauge as bar};
+use crate::theme::{Colors, tabular};
+use crate::ui::{self, caption, dot, figure, legend, meter, panel, section, stat, stats, swatch};
 
-/// slopmax's chart colors, which tell series apart in light and dark
-/// alike: violet, sky, pink, teal, yellow. Orange and green are left out,
-/// as Claude's and ChatGPT's everywhere on the page.
-const PALETTE: [u32; 5] = [0x8b5cf6, 0x0ea5e9, 0xec4899, 0x14b8a6, 0xeab308];
 /// The width left of a column chart for its counts.
 const GUTTER: f32 = 32.;
-/// The models the ring names; the rest share a slice.
+/// The models ranked by name; the rest share a row.
 const MODELS: usize = 5;
 /// The models whose speed is drawn.
 const SPEEDS: usize = 6;
+/// The width of a ranked row's name.
+const NAME: f32 = 160.;
 const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 impl Main {
@@ -47,14 +43,12 @@ impl Main {
             .filter(|h| h.range == self.range)
         {
             None => v_flex().child(ui::empty(
-                IconName::ChartColumn,
                 "Reading the ledger…",
                 "Every request slopmax answers is counted here.",
                 c,
             )),
             Some(history) if history.total.requests == 0 && history.total.failed == 0 => v_flex()
                 .child(ui::empty(
-                    IconName::ChartColumn,
                     match history.range {
                         Range::Today => "Nothing yet today",
                         _ => "Nothing in this range",
@@ -77,82 +71,85 @@ fn margin(history: &History) -> usize {
     }
 }
 
-/// Two cards side by side, one over the other when the window is narrow.
+/// Two sections side by side, one over the other when the window is
+/// narrow.
 fn pair(left: Div, right: Div) -> Div {
     h_flex()
         .flex_wrap()
         .items_stretch()
-        .gap(px(16.))
-        .child(left.min_w(px(340.)))
-        .child(right.min_w(px(340.)))
+        .gap(px(24.))
+        .child(left.flex_1().min_w(px(320.)))
+        .child(right.flex_1().min_w(px(320.)))
+}
+
+/// A panel holding a chart, filling its section's height beside another.
+fn chart(content: impl IntoElement, c: &Colors) -> Div {
+    panel(c).flex_1().p(px(16.)).child(content)
 }
 
 fn page(history: &History, c: &Colors) -> Div {
     let margin = margin(history);
     let total = &history.total;
-    let legend = history
-        .providers
-        .iter()
-        .map(|p| (c.provider(*p), p.spec().title.into()))
-        .collect();
+    let providers = legend(
+        history
+            .providers
+            .iter()
+            .map(|p| (c.provider(*p), p.spec().title)),
+        c,
+    );
     v_flex()
-        .gap(px(16.))
-        .child(tiles(
+        .gap(px(32.))
+        .child(panel(c).child(stats(
             [
-                (
-                    IconName::Layers,
-                    c.violet,
+                stat(
                     "Tokens",
                     human::compact(history::tokens(total)),
-                    history
-                        .cached
-                        .map_or_else(String::new, |r| format!("{:.0}% from cache", r * 100.)),
+                    history.cached.map_or_else(
+                        || "no cache reads".to_owned(),
+                        |r| format!("{:.0}% from cache", r * 100.),
+                    ),
+                    c,
                 ),
-                (
-                    IconName::Hash,
-                    c.accent,
+                stat(
                     "Requests",
                     grouped(total.requests),
                     match history.sessions {
                         0 => "answered".to_owned(),
                         n => format!("in {}", count(n, "conversation")),
                     },
+                    c,
                 ),
-                (
-                    IconName::Coins,
-                    c.info,
+                stat(
                     "API value",
                     priced(total.cost, total),
                     match total.unpriced {
                         0 => "at API prices".to_owned(),
                         n => format!("{} unpriced", count(n, "request")),
                     },
+                    c,
                 ),
-                (
-                    IconName::Timer,
-                    c.good,
+                stat(
                     "A month at this pace",
                     history.monthly.map_or_else(|| "—".to_owned(), dollars),
                     match history.range {
                         Range::Week => "at API prices".to_owned(),
                         _ => "from a week's use".to_owned(),
                     },
+                    c,
                 ),
             ],
             c,
-        ))
+        )))
         .child(
-            card(c)
-                .child(header("Tokens", legend, c))
-                .child(div().h(px(210.)).child(tokens(history, margin, c))),
+            section("Tokens", Some(providers.into_any_element()), c).child(chart(
+                div().h(px(220.)).child(tokens(history, margin, c)),
+                c,
+            )),
         )
         .child(pair(
-            card(c)
-                .child(header("Requests", Vec::new(), c))
-                .child(requests(history, margin, c)),
-            card(c)
-                .child(header("API value", Vec::new(), c))
-                .child(div().h(px(150.)).child(cost(history, margin, c))),
+            section("Requests", None, c).child(chart(requests(history, margin, c), c)),
+            section("API value", None, c)
+                .child(chart(div().h(px(150.)).child(cost(history, margin, c)), c)),
         ))
         .child(pair(models(history, c), mix(history, c)))
         .child(agents(history, c))
@@ -167,79 +164,68 @@ fn performance(history: &History, c: &Colors) -> Div {
     let total = &history.total;
     let answered = total.requests as f64 / (total.requests + total.failed).max(1) as f64 * 100.;
     v_flex()
-        .gap(px(16.))
-        .child(tiles(
-            [
-                (
-                    IconName::BadgeCheck,
-                    c.good,
-                    "Answered",
-                    format!("{answered:.1}%"),
-                    match total.failed {
-                        0 => "none failed".to_owned(),
-                        n => format!("{} failed", grouped(n)),
-                    },
-                ),
-                (
-                    IconName::Zap,
-                    c.warn,
-                    "Saved by failover",
-                    grouped(history.rescued),
-                    "taken by another account".to_owned(),
-                ),
-                (
-                    IconName::Layers,
-                    c.violet,
-                    "From cache",
-                    history
-                        .cached
-                        .map_or_else(|| "—".to_owned(), |r| format!("{:.0}%", r * 100.)),
-                    format!("saving {}", priced(history.cache_saved, total)),
-                ),
-                (
-                    IconName::Timer,
-                    c.info,
-                    "First byte",
-                    history
-                        .first_byte
-                        .map_or_else(|| "—".to_owned(), |ms| format!("{:.1}s", ms as f64 / 1e3)),
-                    "the median wait".to_owned(),
-                ),
-            ],
-            c,
-        ))
+        .gap(px(32.))
+        .child(
+            panel(c).child(stats(
+                [
+                    stat(
+                        "Answered",
+                        format!("{answered:.1}%"),
+                        match total.failed {
+                            0 => "none failed".to_owned(),
+                            n => format!("{} failed", grouped(n)),
+                        },
+                        c,
+                    ),
+                    stat(
+                        "Saved by failover",
+                        grouped(history.rescued),
+                        "taken by another account",
+                        c,
+                    ),
+                    stat(
+                        "From cache",
+                        history
+                            .cached
+                            .map_or_else(|| "—".to_owned(), |r| format!("{:.0}%", r * 100.)),
+                        format!("saving {}", priced(history.cache_saved, total)),
+                        c,
+                    ),
+                    stat(
+                        "First byte",
+                        history.first_byte.map_or_else(
+                            || "—".to_owned(),
+                            |ms| format!("{:.1}s", ms as f64 / 1e3),
+                        ),
+                        "the median wait",
+                        c,
+                    ),
+                ],
+                c,
+            )),
+        )
         .child(pair(
             reliability(history, margin, c),
             cache(history, margin, c),
         ))
         .child(pair(
             speed(history, c),
-            card(c)
-                .child(header(
-                    "Time to first byte",
-                    vec![(c.accent, "Median".into()), (c.warn, "Slowest 5%".into())],
-                    c,
-                ))
-                .child(div().h(px(150.)).child(first_byte(history, margin, c))),
+            section(
+                "Time to first byte",
+                Some(
+                    legend([(c.meter, "Median"), (c.series(2), "Slowest 5%")], c)
+                        .into_any_element(),
+                ),
+                c,
+            )
+            .child(chart(
+                div().h(px(150.)).child(first_byte(history, margin, c)),
+                c,
+            )),
         ))
 }
 
-/// Totals side by side, each a card: what it counts beside its icon, its
-/// value, and a note.
-fn tiles<const N: usize>(tiles: [(IconName, Hsla, &str, String, String); N], c: &Colors) -> Div {
-    h_flex()
-        .flex_wrap()
-        .gap(px(16.))
-        .children(tiles.into_iter().map(|(name, color, title, value, note)| {
-            ui::card(c)
-                .flex_1()
-                .min_w(px(190.))
-                .p(px(18.))
-                .child(ui::stat(name, color, title, value, note, c))
-        }))
-}
-
-/// Tokens over the range, an area per provider.
+/// Tokens over the range, an area per provider in its color.
 fn tokens(history: &History, margin: usize, c: &Colors) -> AreaChart<Bucket, SharedString, f64> {
     let chart = AreaChart::new(history.buckets.clone())
         .id("tokens")
@@ -259,7 +245,7 @@ fn tokens(history: &History, margin: usize, c: &Colors) -> AreaChart<Bucket, Sha
     .y_domain(0., top)
     .y_padding(0., 0.)
     .tick_margin(margin)
-    .grid_dashed(true)
+    .grid_dashed(false)
     .y_axis(true)
     .y_tick_count(ticks)
     .y_tick_format(|v| human::compact(v.round() as u64).replace(".0", ""))
@@ -269,21 +255,20 @@ fn tokens(history: &History, margin: usize, c: &Colors) -> AreaChart<Bucket, Sha
         chart = chart
             .y(move |b: &Bucket| b.tokens[i] as f64)
             .stroke(color)
-            .fill(fade(color))
+            .fill(color.opacity(0.08))
             .name(provider.spec().title);
     }
     chart
 }
 
-/// Requests over the range, a column each hour or day, in slopmax's
-/// gradient.
+/// Requests over the range, a column each hour or day.
 fn requests(history: &History, margin: usize, c: &Colors) -> Div {
-    let fill = c.brand(180.);
+    let fill = c.meter;
     columns(
         "requests",
         history,
-        |b| vec![(b.requests, fill)],
-        |b| format!("{} · {}", b.label, count(b.requests, "request")),
+        |b| vec![(b.requests, fill.into())],
+        |b| format!("{}\n{}", b.label, count(b.requests, "request")),
         132.,
         margin,
         c,
@@ -304,8 +289,8 @@ fn cost(history: &History, margin: usize, c: &Colors) -> AreaChart<Bucket, Share
         .id("cost")
         .x(|b: &Bucket| SharedString::from(b.label.clone()))
         .y(|b: &Bucket| b.cost)
-        .stroke(c.violet)
-        .fill(fade(c.violet))
+        .stroke(c.meter)
+        .fill(c.meter.opacity(0.1))
         .name("API value");
     if smooth(history) {
         chart.natural()
@@ -315,7 +300,7 @@ fn cost(history: &History, margin: usize, c: &Colors) -> AreaChart<Bucket, Share
     .y_domain(0., top)
     .y_padding(0., 0.)
     .tick_margin(margin)
-    .grid_dashed(true)
+    .grid_dashed(false)
     .y_axis(true)
     .y_tick_count(ticks)
     .y_tick_format(move |v| format!("${v:.cents$}"))
@@ -351,25 +336,19 @@ fn columns(
         .map(|i| top * i as f64 / (ticks - 1) as f64)
         .collect();
     let y = |value: f64| px(height * (1. - (value / top) as f32));
-    let hover = c.track.opacity(0.5);
+    let hover = c.hover;
     let plot = div()
         .relative()
         .flex_1()
         .h(px(height))
         .children(rows.iter().map(|&value| {
-            let line = div()
+            div()
                 .absolute()
                 .left_0()
                 .right_0()
                 .top(y(value))
                 .border_t_1()
-                .border_color(c.separator);
-            // The baseline solid, the rest dashed.
-            if value > 0. {
-                line.border_dashed()
-            } else {
-                line
-            }
+                .border_color(c.separator)
         }))
         .child(
             h_flex().absolute().inset_0().items_end().children(
@@ -414,8 +393,9 @@ fn columns(
         .w(px(GUTTER))
         .flex_shrink_0()
         .h(px(height))
-        .text_size(px(10.))
+        .text_size(px(11.))
         .text_color(c.muted)
+        .font_features(tabular())
         .children(rows.iter().map(|&value| {
             div()
                 .absolute()
@@ -426,7 +406,7 @@ fn columns(
     let names = h_flex()
         .h(px(18.))
         .pl(px(GUTTER))
-        .text_size(px(10.))
+        .text_size(px(11.))
         .text_color(c.muted)
         .children(history.buckets.iter().enumerate().map(|(i, b)| {
             // The hours or days the charts label too.
@@ -479,22 +459,22 @@ fn places(step: f64) -> usize {
 }
 
 /// What failover saved and what failed, each hour or day: the saved below,
-/// the failed above. The tiles above give their totals.
+/// the failed above. The totals above give their sums.
 fn reliability(history: &History, margin: usize, c: &Colors) -> Div {
-    let (good, bad) = (c.good, c.bad);
-    card(c)
-        .child(header(
-            "Reliability",
-            vec![(good, "Saved by failover".into()), (bad, "Failed".into())],
-            c,
-        ))
-        .child(columns(
+    let (saved, failed) = (c.meter, c.bad);
+    section(
+        "Reliability",
+        Some(legend([(saved, "Saved by failover"), (failed, "Failed")], c).into_any_element()),
+        c,
+    )
+    .child(chart(
+        columns(
             "reliability",
             history,
-            |b| vec![(b.rescued, good.into()), (b.failed, bad.into())],
+            |b| vec![(b.rescued, saved.into()), (b.failed, failed.into())],
             |b| {
                 format!(
-                    "{} · {} saved by failover · {} failed",
+                    "{}\n{} saved by failover\n{} failed",
                     b.label,
                     grouped(b.rescued),
                     grouped(b.failed)
@@ -503,48 +483,47 @@ fn reliability(history: &History, margin: usize, c: &Colors) -> Div {
             132.,
             margin,
             c,
-        ))
+        ),
+        c,
+    ))
 }
 
 type Share100 = (SharedString, f64);
 
-/// How much input came from cache each hour or day, and what that saved.
+/// How much input came from cache each hour or day.
 fn cache(history: &History, margin: usize, c: &Colors) -> Div {
-    let color: Hsla = rgb(PALETTE[3]).into();
     let rates: Vec<Share100> = history
         .buckets
         .iter()
         .filter_map(|b| Some((b.label.clone().into(), f64::from(b.cached?) * 100.)))
         .collect();
-    let chart = AreaChart::new(rates)
+    let line = AreaChart::new(rates)
         .id("cache")
         .x(|r: &Share100| r.0.clone())
         .y(|r: &Share100| r.1)
-        .stroke(color)
-        .fill(fade(color))
+        .stroke(c.meter)
+        .fill(c.meter.opacity(0.1))
         .name("From cache");
-    let chart = if smooth(history) {
-        chart.natural()
+    let line = if smooth(history) {
+        line.natural()
     } else {
-        chart.linear()
+        line.linear()
     }
     .y_domain(0., 100.)
     .y_padding(0., 0.)
     .tick_margin(margin)
-    .grid_dashed(true)
+    .grid_dashed(false)
     .y_axis(true)
     .y_tick_count(3)
     .y_tick_format(|v| format!("{v:.0}%"))
     .tooltip_value(|_, _, v| format!("{v:.0}%").into());
-    card(c)
-        .child(header("Input from cache", Vec::new(), c))
-        .child(div().h(px(150.)).child(chart))
+    section("Input from cache", None, c).child(chart(div().h(px(150.)).child(line), c))
 }
 
 type Wait = (SharedString, f64, f64);
 
 /// How soon answers began, in seconds, over the hours or days that had
-/// any: the median shaded, the slowest twentieth a line above it.
+/// any: the median shaded, the slowest twentieth a fainter line.
 fn first_byte(history: &History, margin: usize, c: &Colors) -> AreaChart<Wait, SharedString, f64> {
     let waits: Vec<Wait> = history
         .buckets
@@ -565,42 +544,52 @@ fn first_byte(history: &History, margin: usize, c: &Colors) -> AreaChart<Wait, S
         .id("first-byte")
         .x(|w: &Wait| w.0.clone())
         .y(|w: &Wait| w.1)
-        .stroke(c.accent)
-        .fill(fade(c.accent))
+        .stroke(c.meter)
+        .fill(c.meter.opacity(0.1))
         .name("Median")
         .y(|w: &Wait| w.2)
-        .stroke(c.warn)
+        .stroke(c.series(2))
         .fill(transparent_black())
         .name("Slowest 5%")
         .natural()
         .y_domain(0., top)
         .y_padding(0., 0.)
         .tick_margin(margin)
-        .grid_dashed(true)
+        .grid_dashed(false)
         .y_axis(true)
         .y_tick_count(ticks)
         .y_tick_format(move |v| format!("{v:.places$}s"))
         .tooltip_value(|_, _, v| format!("{v:.2}s").into())
 }
 
-#[derive(Clone)]
-struct Slice {
-    name: SharedString,
-    tokens: u64,
-    color: Hsla,
+/// A number at the right of a fixed column, in even figures.
+fn cell(text: impl Into<SharedString>, width: f32) -> Div {
+    div()
+        .w(px(width))
+        .flex_shrink_0()
+        .flex()
+        .justify_end()
+        .font_features(tabular())
+        .child(text.into())
 }
 
-/// Tokens by model, as a ring beside its legend.
+/// A ranked row's name, after a dot of its maker's color if it has one.
+fn name(text: impl Into<SharedString>, color: Option<Hsla>) -> Div {
+    h_flex()
+        .w(px(NAME))
+        .flex_shrink_0()
+        .gap(px(8.))
+        .children(color.map(dot))
+        .child(div().min_w_0().truncate().child(text.into()))
+}
+
+/// Tokens by model, ranked, the rest as one.
 fn models(history: &History, c: &Colors) -> Div {
-    let named = &history.models[..history.models.len().min(MODELS)];
-    let colors = model_colors(named.iter().map(|share| share.name.as_str()));
-    let mut slices: Vec<Slice> = named
+    let mut ranked: Vec<(String, u64)> = history
+        .models
         .iter()
-        .map(|share| Slice {
-            name: share.name.clone().into(),
-            tokens: history::tokens(&share.totals),
-            color: rgb(colors[share.name.as_str()]).into(),
-        })
+        .take(MODELS)
+        .map(|share| (share.name.clone(), history::tokens(&share.totals)))
         .collect();
     let rest: u64 = history
         .models
@@ -609,147 +598,97 @@ fn models(history: &History, c: &Colors) -> Div {
         .map(|s| history::tokens(&s.totals))
         .sum();
     if rest > 0 {
-        slices.push(Slice {
-            name: "Other".into(),
-            tokens: rest,
-            color: c.muted,
-        });
+        ranked.push(("Other".to_owned(), rest));
     }
-    let total = slices.iter().map(|s| s.tokens).sum::<u64>().max(1) as f64;
-    let ring = PieChart::new(slices.clone())
-        .id("models")
-        .value(|s: &Slice| s.tokens as f32)
-        .color(|s: &Slice| s.color)
-        .inner_radius(46.)
-        .outer_radius(70.)
-        .pad_angle(0.03)
-        .tooltip_name(|s: &Slice| s.name.clone())
-        .tooltip_value(|s: &Slice, _, share| {
-            format!("{} · {share:.0}%", human::compact(s.tokens)).into()
-        });
-    card(c).child(header("Models", Vec::new(), c)).child(
-        h_flex()
-            .gap(px(20.))
-            .child(div().flex_shrink_0().size(px(150.)).child(ring))
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap(px(8.))
-                    .children(slices.iter().map(|s| {
-                        h_flex()
-                            .gap(px(8.))
-                            .child(dot(s.color))
-                            .child(div().flex_1().min_w_0().truncate().child(s.name.clone()))
-                            .child(
-                                div()
-                                    .text_color(c.muted)
-                                    .child(format!("{:.0}%", s.tokens as f64 / total * 100.0)),
-                            )
-                    })),
-            ),
-    )
-}
-
-/// Each model's color: the one its name picks, so that it keeps it from
-/// range to range, or the next free when another model picked it too.
-fn model_colors<'a>(names: impl Iterator<Item = &'a str>) -> HashMap<&'a str, u32> {
-    // Picked in the names' order, which no range changes.
-    let mut names: Vec<&str> = names.collect();
-    names.sort_unstable();
-    let mut taken = [false; PALETTE.len()];
-    let mut colors = HashMap::new();
-    for name in names {
-        // FNV-1a.
-        let hash = name.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
-            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
-        });
-        let first = (hash % PALETTE.len() as u64) as usize;
-        let i = (first..first + PALETTE.len())
-            .map(|i| i % PALETTE.len())
-            .find(|&i| !taken[i])
-            .unwrap_or(first);
-        taken[i] = true;
-        colors.insert(name, PALETTE[i]);
-    }
-    colors
+    let total = ranked.iter().map(|(_, n)| n).sum::<u64>().max(1) as f32;
+    let most = ranked.iter().map(|(_, n)| *n).max().unwrap_or(0).max(1) as f32;
+    section("Models", None, c).child(panel(c).flex_1().p(px(16.)).gap(px(12.)).children(
+        ranked.into_iter().map(|(model, tokens)| {
+            h_flex()
+                .gap(px(12.))
+                .child(name(model, None))
+                .child(
+                    div()
+                        .flex_1()
+                        .child(meter(tokens as f32 / most, c.meter, c)),
+                )
+                .child(
+                    cell(format!("{:.0}%", tokens as f32 / total * 100.), 40.).text_color(c.muted),
+                )
+                .child(cell(human::compact(tokens), 56.))
+        }),
+    ))
 }
 
 /// What the tokens were: input, cache read, cache write, and output, as one
-/// bar and a legend.
+/// bar in shades of the text's color, and what one request carries.
 fn mix(history: &History, c: &Colors) -> Div {
     let total = &history.total;
     let parts = [
-        ("Input", total.input, PALETTE[0]),
-        ("Cache read", total.cache_read, PALETTE[3]),
-        ("Cache write", total.cache_write, PALETTE[1]),
-        ("Output", total.output, PALETTE[2]),
+        ("Input", total.input),
+        ("Cache read", total.cache_read),
+        ("Cache write", total.cache_write),
+        ("Output", total.output),
     ];
     let sum = history::tokens(total).max(1) as f32;
-    let legend = |part: &(&'static str, u64, u32)| {
-        let (title, tokens, color) = *part;
+    let key = |i: usize| {
+        let (title, tokens) = parts[i];
         h_flex()
             .flex_1()
             .min_w_0()
             .gap(px(8.))
-            .child(dot(rgb(color).into()))
-            .child(div().flex_1().child(title))
-            .child(
-                div()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(human::compact(tokens)),
-            )
+            .child(swatch(c.series(i)))
+            .child(div().flex_1().text_color(c.muted).child(title))
+            .child(div().font_features(tabular()).child(human::compact(tokens)))
     };
-    card(c)
-        .child(header("Token mix", Vec::new(), c))
-        .child(
-            // Each part takes its share; the smallest still shows.
-            h_flex().h(px(12.)).gap(px(2.)).children(
-                parts
-                    .iter()
-                    .filter(|(_, tokens, _)| *tokens > 0)
-                    .map(|(_, tokens, color)| {
-                        div()
-                            .h_full()
-                            .flex_basis(relative(*tokens as f32 / sum))
-                            .flex_shrink(1.)
-                            .min_w(px(3.))
-                            .rounded(px(3.))
-                            .bg(rgb(*color))
-                    }),
-            ),
-        )
-        .child(
-            v_flex()
-                .gap(px(10.))
-                .child(
-                    h_flex()
-                        .gap(px(24.))
-                        .child(legend(&parts[0]))
-                        .child(legend(&parts[1])),
-                )
-                .child(
-                    h_flex()
-                        .gap(px(24.))
-                        .child(legend(&parts[2]))
-                        .child(legend(&parts[3])),
+    // What one request carries, on average: its context, cached or not,
+    // and what the model wrote back.
+    let requests = total.requests.max(1);
+    let context = (total.input + total.cache_read + total.cache_write) / requests;
+    let per = |title: &str, value: u64| {
+        v_flex()
+            .flex_1()
+            .gap(px(4.))
+            .child(caption(title, c))
+            .child(figure(human::compact(value), ui::HEADING, c))
+    };
+    section("Token mix", None, c).child(
+        panel(c)
+            .flex_1()
+            .p(px(16.))
+            .gap(px(16.))
+            .child(
+                // Each part takes its share; the smallest still shows.
+                h_flex().h(px(8.)).gap(px(2.)).children(
+                    parts
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, (_, tokens))| *tokens > 0)
+                        .map(|(i, (_, tokens))| {
+                            div()
+                                .h_full()
+                                .flex_basis(relative(*tokens as f32 / sum))
+                                .flex_shrink(1.)
+                                .min_w(px(3.))
+                                .rounded(px(2.))
+                                .bg(c.series(i))
+                        }),
                 ),
-        )
-        .child(div().h(px(1.)).bg(c.separator))
-        .child({
-            // What one request carries, on average: its context, cached or
-            // not, and what the model wrote back.
-            let requests = total.requests.max(1);
-            let context = (total.input + total.cache_read + total.cache_write) / requests;
-            h_flex()
-                .gap(px(24.))
-                .child(stat("Context per request", human::compact(context), c))
-                .child(stat(
-                    "Output per request",
-                    human::compact(total.output / requests),
-                    c,
-                ))
-        })
+            )
+            .child(
+                v_flex()
+                    .gap(px(10.))
+                    .child(h_flex().gap(px(24.)).child(key(0)).child(key(1)))
+                    .child(h_flex().gap(px(24.)).child(key(2)).child(key(3))),
+            )
+            .child(div().h(px(1.)).bg(c.separator))
+            .child(
+                h_flex()
+                    .gap(px(24.))
+                    .child(per("Context per request", context))
+                    .child(per("Output per request", total.output / requests)),
+            ),
+    )
 }
 
 /// How fast each model writes once it has begun, fastest first.
@@ -759,35 +698,26 @@ fn speed(history: &History, c: &Colors) -> Div {
         .first()
         .map_or(1., |s| s.tokens_per_second)
         .max(1.);
-    card(c)
-        .child(header("Output speed", Vec::new(), c))
-        .when(history.speeds.is_empty(), |card| {
-            card.child(caption("No answers long enough to time yet.", c))
-        })
-        .children(history.speeds.iter().take(SPEEDS).map(|s| {
-            let color = c.provider(s.provider);
-            h_flex()
-                .gap(px(12.))
-                .child(
-                    div()
-                        .w(px(150.))
-                        .flex_shrink_0()
-                        .truncate()
-                        .child(s.model.clone()),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .child(bar((s.tokens_per_second / fastest) as f32, color, c)),
-                )
-                .child(
-                    div()
-                        .w(px(72.))
-                        .flex()
-                        .justify_end()
-                        .child(format!("{:.0} tok/s", s.tokens_per_second)),
-                )
-        }))
+    section("Output speed", None, c).child(
+        panel(c)
+            .flex_1()
+            .p(px(16.))
+            .gap(px(12.))
+            .when(history.speeds.is_empty(), |list| {
+                list.child(caption("No answers long enough to time yet.", c))
+            })
+            .children(history.speeds.iter().take(SPEEDS).map(|s| {
+                h_flex()
+                    .gap(px(12.))
+                    .child(name(s.model.clone(), Some(c.provider(s.provider))))
+                    .child(div().flex_1().child(meter(
+                        (s.tokens_per_second / fastest) as f32,
+                        c.meter,
+                        c,
+                    )))
+                    .child(cell(format!("{:.0} tok/s", s.tokens_per_second), 80.))
+            })),
+    )
 }
 
 /// Which agents sent the work, by tokens.
@@ -799,42 +729,25 @@ fn agents(history: &History, c: &Colors) -> Div {
         .max()
         .unwrap_or(0)
         .max(1) as f32;
-    card(c)
-        .child(header("Agents", Vec::new(), c))
-        .children(history.agents.iter().map(|part| {
-            let color = agent_color(part.name, c);
+    section("Agents", None, c).child(panel(c).p(px(16.)).gap(px(12.)).children(
+        history.agents.iter().map(|part| {
             let tokens = history::tokens(&part.totals);
             h_flex()
                 .gap(px(12.))
-                .child(
-                    h_flex()
-                        .w(px(110.))
-                        .flex_shrink_0()
-                        .gap(px(8.))
-                        .child(dot(color))
-                        .child(part.name),
-                )
-                .child(div().flex_1().child(bar(tokens as f32 / most, color, c)))
+                .child(name(part.name, Some(agent_color(part.name, c))))
                 .child(
                     div()
-                        .w(px(56.))
-                        .flex()
-                        .justify_end()
-                        .child(human::compact(tokens)),
+                        .flex_1()
+                        .child(meter(tokens as f32 / most, c.meter, c)),
                 )
-                .child(
-                    div()
-                        .w(px(84.))
-                        .flex()
-                        .justify_end()
-                        .text_color(c.muted)
-                        .child(format!("{} req", grouped(part.totals.requests))),
-                )
-        }))
+                .child(cell(human::compact(tokens), 56.))
+                .child(cell(count(part.totals.requests, "request"), 112.).text_color(c.muted))
+        }),
+    ))
 }
 
 /// When the work happens: answers by weekday and hour, the busier the
-/// stronger.
+/// darker.
 fn activity(history: &History, c: &Colors) -> Div {
     let most = history
         .activity
@@ -847,72 +760,63 @@ fn activity(history: &History, c: &Colors) -> Div {
         .flat_map(|day| (0..24).map(move |hour| (day, hour)))
         .max_by_key(|&(day, hour)| history.activity[day][hour])
         .filter(|_| most > 0);
+    let ink = c.fg;
     let shade = |n: u64| {
         if n == 0 {
             c.track
         } else {
-            c.accent
-                .opacity(0.18 + 0.82 * n as f32 / most.max(1) as f32)
+            ink.opacity(0.12 + 0.68 * n as f32 / most.max(1) as f32)
         }
     };
-    let legend = h_flex()
+    let scale = h_flex()
         .gap(px(4.))
-        .text_size(px(11.))
+        .text_size(px(ui::SMALL))
         .text_color(c.muted)
         .child("Less")
-        .children([0.18, 0.45, 0.72, 1.].map(|strength| {
+        .children([0.12, 0.35, 0.58, 0.8].map(|strength| {
             div()
                 .size(px(10.))
                 .rounded(px(2.))
-                .bg(c.accent.opacity(strength))
+                .bg(ink.opacity(strength))
         }))
         .child("More");
-    card(c)
-        .child(
-            header("When you work", Vec::new(), c)
-                .children(busiest.map(|(day, hour)| {
-                    caption(format!("Busiest: {} {hour:02}:00", WEEKDAYS[day]), c)
-                }))
-                .child(legend),
-        )
-        .child(
-            v_flex()
-                .gap(px(3.))
-                .children(WEEKDAYS.iter().zip(&history.activity).map(|(day, hours)| {
-                    h_flex()
-                        .gap(px(3.))
-                        .child(caption(day, c).w(px(32.)).flex_shrink_0())
-                        .children(
-                            hours
-                                .iter()
-                                .map(|&n| div().flex_1().h(px(16.)).rounded(px(3.)).bg(shade(n))),
-                        )
-                })),
-        )
-        .child(
-            h_flex()
-                .gap(px(3.))
-                .child(div().w(px(32.)).flex_shrink_0())
-                .children((0..24).map(|hour| {
-                    caption(
-                        &if hour % 6 == 0 {
-                            format!("{hour:02}")
-                        } else {
-                            String::new()
-                        },
-                        c,
+    let trailing =
+        h_flex()
+            .gap(px(20.))
+            .children(busiest.map(|(day, hour)| {
+                caption(format!("Busiest at {hour:02}:00 on {}", WEEKDAYS[day]), c)
+            }))
+            .child(scale);
+    section("When you work", Some(trailing.into_any_element()), c).child(
+        panel(c)
+            .p(px(16.))
+            .gap(px(3.))
+            .children(WEEKDAYS.iter().zip(&history.activity).map(|(day, hours)| {
+                h_flex()
+                    .gap(px(3.))
+                    .child(caption(day, c).w(px(36.)).flex_shrink_0())
+                    .children(
+                        hours
+                            .iter()
+                            .map(|&n| div().flex_1().h(px(16.)).rounded(px(2.)).bg(shade(n))),
                     )
-                    .flex_1()
-                })),
-        )
-}
-
-fn stat(title: &str, value: String, c: &Colors) -> Div {
-    v_flex()
-        .flex_1()
-        .gap(px(4.))
-        .child(caption(title, c))
-        .child(ui::figure(value, 20., c))
+            }))
+            .child(
+                h_flex()
+                    .pt(px(4.))
+                    .gap(px(3.))
+                    .text_size(px(11.))
+                    .text_color(c.faint)
+                    .font_features(tabular())
+                    .child(div().w(px(36.)).flex_shrink_0())
+                    .children((0..24).map(|hour| {
+                        div()
+                            .flex_1()
+                            .whitespace_nowrap()
+                            .when(hour % 6 == 0, |cell| cell.child(format!("{hour:02}:00")))
+                    })),
+            ),
+    )
 }
 
 /// The accounts ranked by tokens, each with its share drawn.
@@ -924,24 +828,23 @@ fn accounts(history: &History, c: &Colors) -> Div {
         .max()
         .unwrap_or(0)
         .max(1) as f32;
+    const WIDTHS: [f32; 4] = [64., 72., 56., 76.];
     let numbers = |cells: [String; 4]| {
-        h_flex()
-            .flex_shrink_0()
-            .gap(px(16.))
-            .font_features(tabular())
-            .children(
-                cells
-                    .into_iter()
-                    .zip([64., 72., 56., 76.])
-                    .map(|(cell, width)| div().w(px(width)).flex().justify_end().child(cell)),
-            )
+        h_flex().flex_shrink_0().gap(px(16.)).children(
+            cells
+                .into_iter()
+                .zip(WIDTHS)
+                .map(|(text, width)| cell(text, width)),
+        )
     };
-    let mut list = card(c).child(header("Accounts", Vec::new(), c)).child(
+    let mut table = panel(c).child(
         h_flex()
+            .px(px(16.))
+            .py(px(8.))
             .gap(px(16.))
-            .text_size(px(11.))
+            .text_size(px(ui::SMALL))
             .text_color(c.muted)
-            .child(div().w(px(240.)).flex_shrink_0().child("Account"))
+            .child(div().w(px(220.)).flex_shrink_0().child("Account"))
             .child(div().flex_1().child("Share"))
             .child(numbers(
                 ["Tokens", "Requests", "Failed", "API value"].map(str::to_owned),
@@ -953,66 +856,35 @@ fn accounts(history: &History, c: &Colors) -> Div {
             0 => "—".to_owned(),
             n => grouped(n),
         };
-        list = list.child(account(share, tokens as f32 / most, c).child(numbers([
-            human::compact(tokens),
-            grouped(share.totals.requests),
-            failed,
-            priced(share.totals.cost, &share.totals),
-        ])));
+        table = table.child(
+            h_flex()
+                .px(px(16.))
+                .py(px(10.))
+                .gap(px(16.))
+                .border_t_1()
+                .border_color(c.separator)
+                .child(
+                    h_flex()
+                        .w(px(220.))
+                        .flex_shrink_0()
+                        .gap(px(8.))
+                        .child(dot(c.provider(share.provider)))
+                        .child(div().min_w_0().truncate().child(share.name.clone())),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .child(meter(tokens as f32 / most, c.meter, c)),
+                )
+                .child(numbers([
+                    human::compact(tokens),
+                    grouped(share.totals.requests),
+                    failed,
+                    priced(share.totals.cost, &share.totals),
+                ])),
+        );
     }
-    list
-}
-
-fn account(share: &Share, fraction: f32, c: &Colors) -> Div {
-    let color = c.provider(share.provider);
-    h_flex()
-        .gap(px(16.))
-        .py(px(6.))
-        .border_t_1()
-        .border_color(c.separator)
-        .child(
-            h_flex()
-                .w(px(240.))
-                .flex_shrink_0()
-                .gap(px(8.))
-                .child(dot(color))
-                .child(div().min_w_0().truncate().child(share.name.clone())),
-        )
-        .child(div().flex_1().child(bar(fraction, color, c)))
-}
-
-/// A card of the page, sharing its row with another.
-fn card(c: &Colors) -> Div {
-    crate::ui::card(c).flex_1()
-}
-
-/// A chart's title, with its series named on the right.
-fn header(title: &str, legend: Vec<(Hsla, SharedString)>, c: &Colors) -> Div {
-    h_flex()
-        .gap(px(12.))
-        .child(
-            div()
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(title.to_owned()),
-        )
-        .child(div().flex_1())
-        .children(legend.into_iter().map(|(color, name)| {
-            h_flex()
-                .gap(px(5.))
-                .text_size(px(11.))
-                .text_color(c.muted)
-                .child(dot(color))
-                .child(name)
-        }))
-}
-
-/// An area's fill: its color, fading to nothing at the bottom.
-fn fade(color: Hsla) -> Background {
-    linear_gradient(
-        180.,
-        linear_color_stop(color.opacity(0.35), 0.),
-        linear_color_stop(color.opacity(0.), 1.),
-    )
+    section("Accounts", None, c).child(table)
 }
 
 /// An agent's color: its maker's, as for providers.
@@ -1020,8 +892,8 @@ fn agent_color(agent: &str, c: &Colors) -> Hsla {
     match agent {
         "Claude Code" => c.provider(ProviderId::Claude),
         "Codex" => c.provider(ProviderId::Codex),
-        "Warmups" => c.muted,
-        _ => c.accent,
+        "Warmups" => c.faint,
+        _ => c.muted,
     }
 }
 
@@ -1068,7 +940,7 @@ pub(crate) fn priced(amount: f64, totals: &Totals) -> String {
 #[cfg(test)]
 mod tests {
     // Not the glob, which brings GPUI's own `test` attribute.
-    use super::{PALETTE, axis, model_colors, places};
+    use super::{axis, places};
 
     #[test]
     fn axes_end_on_round_values() {
@@ -1081,19 +953,6 @@ mod tests {
         // Counts step by whole numbers, however few.
         assert_eq!(axis(2., 1.), (3., 4));
         assert_eq!(axis(0., 1.), (3., 4));
-    }
-
-    #[test]
-    fn a_model_keeps_its_color_whatever_its_rank() {
-        let week = model_colors(["opus", "gpt", "sonnet", "fable"].into_iter());
-        let today = model_colors(["fable", "sonnet", "opus", "gpt"].into_iter());
-        assert_eq!(week, today);
-        // No two share one.
-        let mut colors: Vec<u32> = week.values().copied().collect();
-        colors.sort_unstable();
-        colors.dedup();
-        assert_eq!(colors.len(), 4);
-        assert!(colors.iter().all(|c| PALETTE.contains(c)));
     }
 
     #[test]

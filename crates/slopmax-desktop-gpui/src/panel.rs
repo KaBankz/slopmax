@@ -1,13 +1,14 @@
 //! The menu bar panel: what slopmax's menu bar item opens, as iStat Menus
-//! and CodexBar open theirs. A card in slopmax's design: how the accounts
-//! and the proxy stand; each subscription's windows across its pool, the
-//! accounts that want a look, and its reset credits; today's work in
-//! brief; and the way into the window. A pool, or today, opens its page.
+//! and CodexBar open theirs. One quiet card, its parts divided by
+//! hairlines: how the accounts and the proxy stand; each subscription's
+//! windows across its pool, the accounts that want a look, and its reset
+//! credits; today's work in brief; and the way into the window. A pool, or
+//! today, opens its page.
 //!
-//! It hangs under the item and fits its content. As a popover does, it
-//! closes on a click anywhere else, when the window comes forward, or on
-//! Escape; not merely on losing focus, which the app in front may take
-//! back.
+//! It hangs under the item and fits its content, and opens at once, as a
+//! menu does, since it is opened so often. As a popover does, it closes on
+//! a click anywhere else, when the window comes forward, or on Escape; not
+//! merely on losing focus, which the app in front may take back.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,18 +25,18 @@ use slopmax_core::human;
 use slopmax_core::report::Tone;
 use slopmax_core::time::Timestamp;
 
-use crate::accounts::{resets, segments};
 use crate::native;
-use crate::overview::provider_mark;
-use crate::theme::{Colors, DISPLAY};
-use crate::ui::{self, caption, dot, figure, icon, logo, pill};
+use crate::theme::{Colors, tabular};
+use crate::ui::{self, caption, dot, logo, resets, segments};
 use crate::usage::{grouped, priced};
 use crate::{OpenSettings, OpenWindow, Quit, Section, Shared};
 
 actions!(panel, [ClosePanel]);
 
 /// The panel's width, a little wider than a menu's.
-const WIDTH: f32 = 360.;
+const WIDTH: f32 = 340.;
+/// The width of a window's title, beside its meter.
+const TITLE: f32 = 56.;
 /// How often today's work is read again while the panel shows.
 const TODAY_EVERY: Duration = Duration::from_secs(60);
 
@@ -215,25 +216,22 @@ impl Panel {
         };
         let app = self.app.clone();
         h_flex()
+            .px(px(14.))
+            .pt(px(12.))
+            .pb(px(10.))
             .gap(px(10.))
-            .child(logo(30., c))
+            .child(logo(22., c))
             .child(
                 v_flex()
                     .flex_1()
                     .min_w_0()
-                    .child(
-                        div()
-                            .font_family(DISPLAY)
-                            .text_size(px(15.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("slopmax"),
-                    )
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child("slopmax"))
                     .child(
                         h_flex()
                             .gap(px(6.))
-                            .text_size(px(ui::TINY + 0.5))
+                            .text_size(px(ui::SMALL))
                             .text_color(c.muted)
-                            .child(dot(c.tone(tone)).size(px(6.)))
+                            .child(dot(c.tone(tone)))
                             .child(div().truncate().child(line)),
                     ),
             )
@@ -260,19 +258,12 @@ impl Render for Panel {
         let this = cx.entity().downgrade();
         let mut body = v_flex()
             .w_full()
-            .p(px(12.))
-            .gap(px(10.))
             .text_color(c.fg)
-            .child(
-                div()
-                    .px(px(4.))
-                    .pt(px(2.))
-                    .child(self.header(status.as_ref(), &c)),
-            );
+            .child(self.header(status.as_ref(), &c));
         let pools: Vec<&Group> = groups.iter().filter(|g| !g.overview.is_empty()).collect();
         if pools.is_empty() {
             body = body.child(
-                well(&c)
+                part(&c)
                     .text_size(px(ui::SMALL))
                     .text_color(c.muted)
                     .child("No accounts yet. Open slopmax to add one."),
@@ -286,65 +277,50 @@ impl Render for Panel {
         }
         body = body.child(
             v_flex()
-                .pt(px(6.))
+                .p(px(6.))
                 .border_t_1()
                 .border_color(c.separator)
-                .child(command(
-                    "open",
-                    IconName::LayoutDashboard,
-                    "Open slopmax",
-                    "⌘O",
-                    &c,
-                    |cx| {
-                        dismiss(cx);
-                        cx.dispatch_action(&OpenWindow);
-                    },
-                ))
-                .child(command(
-                    "settings",
-                    IconName::Settings,
-                    "Settings…",
-                    "⌘,",
-                    &c,
-                    |cx| {
-                        dismiss(cx);
-                        cx.dispatch_action(&OpenSettings);
-                    },
-                ))
-                .child(command(
-                    "quit",
-                    IconName::Power,
-                    "Quit slopmax",
-                    "⌘Q",
-                    &c,
-                    |cx| {
-                        cx.dispatch_action(&Quit);
-                    },
-                )),
+                .child(command("open", "Open slopmax", "⌘O", &c, |cx| {
+                    dismiss(cx);
+                    cx.dispatch_action(&OpenWindow);
+                }))
+                .child(command("settings", "Settings…", "⌘,", &c, |cx| {
+                    dismiss(cx);
+                    cx.dispatch_action(&OpenSettings);
+                }))
+                .child(command("quit", "Quit slopmax", "⌘Q", &c, |cx| {
+                    cx.dispatch_action(&Quit);
+                })),
         );
         div()
             .key_context("Panel")
             .on_action(|_: &ClosePanel, _, cx| dismiss(cx))
             .size_full()
-            .rounded(px(14.))
+            .rounded(px(10.))
             .border_1()
             .border_color(c.border)
-            .bg(c.surface)
-            .text_size(px(13.))
+            .bg(c.popover)
+            .text_size(px(ui::BODY))
             .overflow_hidden()
             .child(body.on_children_prepainted(move |children, window, cx| {
                 let (Some(first), Some(last)) = (children.first(), children.last()) else {
                     return;
                 };
-                let height = last.bottom() - first.top() + px(26.);
+                // The card's border, above and below.
+                let height = last.bottom() - first.top() + px(2.);
                 let _ = this.update(cx, |panel, _| panel.fit(height, window));
             }))
     }
 }
 
-/// An inset well of the panel.
-fn well(c: &Colors) -> Div {
-    v_flex().p(px(12.)).gap(px(10.)).rounded(px(10.)).bg(c.well)
+/// A part of the panel, ruled from the one above.
+fn part(c: &Colors) -> Div {
+    v_flex()
+        .px(px(14.))
+        .py(px(10.))
+        .gap(px(8.))
+        .border_t_1()
+        .border_color(c.separator)
 }
 
 /// A subscription: its windows across the pool, the accounts that want a
@@ -361,59 +337,63 @@ fn pool(group: &Group, c: &Colors) -> impl IntoElement {
         .iter()
         .filter(|r| matches!(r.status.tone, Tone::Warn | Tone::Bad))
         .collect();
-    let edge = c.provider(provider).opacity(0.45);
-    well(c)
+    let hover = c.hover;
+    part(c)
         .id(SharedString::from(format!("pool-{provider}")))
-        .border_1()
-        .border_color(transparent_black())
         .cursor_pointer()
-        .hover(move |well| well.border_color(edge))
+        .hover(move |part| part.bg(hover))
         .role(Role::Button)
         .aria_label(format!("{} accounts", group.title))
         .on_click(move |_, _, cx| go(Section::Provider(provider), cx))
         .child(
             h_flex()
                 .gap(px(8.))
-                .child(
-                    provider_mark(provider, c)
-                        .size(px(22.))
-                        .rounded(px(6.))
-                        .text_size(px(11.)),
-                )
+                .child(dot(c.provider(provider)))
                 .child(
                     div()
                         .flex_1()
-                        .font_weight(FontWeight::SEMIBOLD)
+                        .font_weight(FontWeight::MEDIUM)
                         .child(group.title),
                 )
-                .child(pill(
-                    format!("{ready} of {} ready", enabled.len()),
-                    if ready == enabled.len() {
-                        c.good
-                    } else {
-                        c.warn
-                    },
-                    c,
-                )),
+                .child(caption(format!("{ready} of {} ready", enabled.len()), c)),
         )
         .children(group.overview.iter().map(|overview| {
             v_flex()
-                .gap(px(6.))
+                .gap(px(4.))
                 .child(
                     h_flex()
-                        .items_end()
-                        .gap(px(4.))
-                        .child(caption(&overview.title, c).flex_1())
-                        .child(figure(overview.gauge.percent.clone(), 14., c)),
+                        .gap(px(10.))
+                        .child(
+                            caption(overview.title.clone(), c)
+                                .w(px(TITLE))
+                                .flex_shrink_0()
+                                .truncate(),
+                        )
+                        .child(segments(&overview.shares, c).flex_1())
+                        .child(
+                            div()
+                                .w(px(34.))
+                                .flex_shrink_0()
+                                .flex()
+                                .justify_end()
+                                .text_size(px(ui::SMALL))
+                                .font_weight(FontWeight::MEDIUM)
+                                .font_features(tabular())
+                                .child(overview.gauge.percent.clone()),
+                        ),
                 )
-                .child(segments(&overview.shares, provider, c))
-                .child(resets(&overview.gauge, c))
+                .child(
+                    caption(resets(&overview.gauge), c)
+                        .pl(px(TITLE + 10.))
+                        .text_size(px(11.5))
+                        .text_color(c.faint),
+                )
         }))
         .children(troubled.into_iter().map(|row| {
             h_flex()
                 .gap(px(6.))
-                .text_size(px(ui::TINY + 0.5))
-                .child(dot(c.tone(row.status.tone)).size(px(6.)))
+                .text_size(px(ui::SMALL))
+                .child(dot(c.tone(row.status.tone)))
                 .child(div().flex_shrink_0().child(row.name.clone()))
                 .child(
                     div()
@@ -423,14 +403,12 @@ fn pool(group: &Group, c: &Colors) -> impl IntoElement {
                         .child(row.status.text.clone()),
                 )
         }))
-        .children(group.credits.as_deref().map(|credits| {
-            h_flex()
-                .gap(px(6.))
-                .text_size(px(ui::TINY + 0.5))
-                .text_color(c.muted)
-                .child(icon(IconName::RotateCcw, 12., c.accent))
-                .child(credits.to_owned())
-        }))
+        .children(
+            group
+                .credits
+                .as_deref()
+                .map(|credits| caption(credits.replace(" · ", ", "), c)),
+        )
 }
 
 /// Today's totals over its hours; a click opens the Usage page.
@@ -444,56 +422,56 @@ fn today_section(today: &History, c: &Colors) -> impl IntoElement {
         .max()
         .unwrap_or(0)
         .max(1) as f32;
-    let brand = c.brand(180.);
-    let accent = c.accent.opacity(0.45);
-    well(c)
+    let value = priced(total.cost, total);
+    let mut brief = vec![format!(
+        "{} tokens",
+        human::compact(slopmax_app::history::tokens(total))
+    )];
+    if value != "—" {
+        brief.push(format!("{value} at API prices"));
+    }
+    let hover = c.hover;
+    part(c)
         .id("today")
-        .border_1()
-        .border_color(transparent_black())
         .cursor_pointer()
-        .hover(move |well| well.border_color(accent))
+        .hover(move |part| part.bg(hover))
         .role(Role::Button)
         .aria_label("Today's usage")
         .on_click(|_, _, cx| go(Section::Usage, cx))
         .child(
             h_flex()
+                .gap(px(8.))
                 .child(
                     div()
                         .flex_1()
-                        .font_weight(FontWeight::SEMIBOLD)
+                        .font_weight(FontWeight::MEDIUM)
                         .child("Today"),
                 )
-                .child(icon(IconName::ChevronRight, 14., c.faint)),
+                .child(caption(
+                    if quiet {
+                        "Nothing yet".to_owned()
+                    } else {
+                        format!("{} requests", grouped(total.requests))
+                    },
+                    c,
+                )),
         )
-        .child(caption(
-            if quiet {
-                "Nothing has gone through slopmax yet.".to_owned()
-            } else {
-                format!(
-                    "{} requests · {} tokens · {}",
-                    grouped(total.requests),
-                    human::compact(slopmax_app::history::tokens(total)),
-                    priced(total.cost, total)
-                )
-            },
-            c,
-        ))
         .when(!quiet, |section| {
-            section.child(
+            section.child(caption(brief.join(", "), c)).child(
                 h_flex()
-                    .h(px(34.))
+                    .h(px(28.))
                     .items_end()
                     .gap(px(2.))
                     .children((0..24).map(|hour| {
                         let requests = today.buckets.get(hour).map_or(0, |b| b.requests);
-                        let column = div().flex_1().rounded(px(2.));
+                        let column = div().flex_1().rounded(px(1.5));
                         if requests > 0 {
                             column
                                 .h(relative(requests as f32 / most))
-                                .min_h(px(3.))
-                                .bg(brand)
+                                .min_h(px(2.))
+                                .bg(c.meter)
                         } else {
-                            column.h(px(3.)).bg(c.track)
+                            column.h(px(2.)).bg(c.track)
                         }
                     })),
             )
@@ -504,7 +482,6 @@ fn today_section(today: &History, c: &Colors) -> impl IntoElement {
 /// pointer, its shortcut at the right.
 fn command(
     id: &'static str,
-    name: IconName,
     title: &'static str,
     shortcut: &'static str,
     c: &Colors,
@@ -513,15 +490,14 @@ fn command(
     let hover = c.hover;
     h_flex()
         .id(id)
-        .h(px(30.))
+        .h(px(28.))
         .px(px(8.))
         .gap(px(10.))
-        .rounded(px(7.))
+        .rounded(px(6.))
         .cursor_pointer()
         .hover(move |row| row.bg(hover))
         .role(Role::MenuItem)
         .aria_label(title)
-        .child(icon(name, 15., c.muted))
         .child(div().flex_1().child(title))
         .child(
             div()

@@ -2,12 +2,14 @@
 //! snapshot, and a menu bar item whose panel shows each pool at a glance.
 //!
 //! It wears slopmax's own design on every system, in gpui-kit's components:
-//! its light and dark themes, the Inter typeface, and Lucide's icons. Its
-//! sidebar slides away and back (⌃⌘S, or its button), resizes by its edge,
-//! hides when dragged narrow, and is left as the user leaves it.
+//! quiet light and dark themes, IBM Plex Sans, and Lucide's icons. Its
+//! sidebar slides away and back from its button, at once from ⌃⌘S or the
+//! View menu, resizes by its edge, hides when dragged narrow, and is left
+//! as the user leaves it.
 
 mod accounts;
 mod assets;
+mod motion;
 mod native;
 mod overview;
 mod panel;
@@ -38,8 +40,8 @@ use slopmax_core::report::Tone;
 use slopmax_core::time::Timestamp;
 
 use crate::prefs::Prefs;
-use crate::theme::{Colors, DISPLAY};
-use crate::ui::{caption, card, dot, icon, logo, segmented};
+use crate::theme::Colors;
+use crate::ui::{caption, dot, icon, logo, panel, segmented};
 
 actions!(
     slopmax,
@@ -68,22 +70,20 @@ const TRAY_ICON: &[u8] = include_bytes!("../../../assets/tray.svg");
 /// The API-key providers, in the order the key row offers them.
 const KEYS: [ProviderId; 3] = [ProviderId::Anthropic, ProviderId::OpenAI, ProviderId::Xai];
 
-/// The height of the strip across the window's top: the sidebar's brand and
+/// The height of the strip across the window's top: the sidebar's mark and
 /// the page's title and tools.
-const HEADER: Pixels = px(56.);
+const HEADER: Pixels = px(52.);
 /// Where the window's own buttons leave room on a Mac, and elsewhere.
 const LEAD: f32 = if cfg!(target_os = "macos") { 84. } else { 16. };
 /// The sidebar's width at first, and the least and most a drag of its edge
 /// leaves it.
-const SIDEBAR: f32 = 236.;
-const SIDEBAR_MIN: f32 = 200.;
+const SIDEBAR: f32 = 220.;
+const SIDEBAR_MIN: f32 = 190.;
 const SIDEBAR_MAX: f32 = 340.;
 /// Dragged narrower than this, the sidebar hides.
 const SIDEBAR_COLLAPSE: f32 = 130.;
-/// How long the sidebar takes to slide in or out.
-const SLIDE: Duration = Duration::from_millis(250);
 /// The page's margin from the window's edges.
-const MARGIN: f32 = 28.;
+const MARGIN: f32 = 32.;
 /// How often the charts reread the ledger while they show.
 const HISTORY_EVERY: Duration = Duration::from_secs(60);
 
@@ -559,11 +559,13 @@ impl Main {
         self.go(sections[next], cx);
     }
 
-    /// Slides the sidebar away, or back.
-    fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+    /// Hides the sidebar, or shows it again: sliding when its button is
+    /// pressed, and at once from the keyboard or a menu, as often as those
+    /// are used.
+    fn toggle_sidebar(&mut self, slide: bool, cx: &mut Context<Self>) {
         self.sidebar.hidden = !self.sidebar.hidden;
         self.sidebar.slides += 1;
-        self.sidebar.sliding = true;
+        self.sidebar.sliding = slide;
         self.sidebar.remember(cx);
         menus(cx, self.sidebar.hidden);
         cx.notify();
@@ -611,9 +613,9 @@ impl Main {
         let mut list = v_flex()
             .id("sidebar-list")
             .size_full()
-            .px(px(10.))
+            .px(px(8.))
             .pb(px(12.))
-            .gap(px(2.))
+            .gap(px(1.))
             .overflow_y_scroll()
             .track_focus(&self.sidebar_focus)
             .key_context("Sidebar")
@@ -627,10 +629,10 @@ impl Main {
             list = list.child(
                 div()
                     .px(px(10.))
-                    .h(px(32.))
+                    .h(px(30.))
                     .flex()
                     .items_center()
-                    .text_size(px(12.5))
+                    .text_size(px(ui::BODY))
                     .text_color(c.faint)
                     .child("None yet"),
             );
@@ -646,7 +648,8 @@ impl Main {
             let trailing = match alert {
                 Some(tone) => dot(c.tone(tone)).into_any_element(),
                 None => div()
-                    .text_size(px(11.5))
+                    .font_features(theme::tabular())
+                    .text_size(px(ui::SMALL))
                     .text_color(c.faint)
                     .child(group.accounts.len().to_string())
                     .into_any_element(),
@@ -680,14 +683,13 @@ impl Main {
                     .flex()
                     .items_center()
                     .pl(px(LEAD))
-                    .pr(px(10.))
-                    .gap(px(9.))
-                    .child(logo(24., c))
+                    .pr(px(8.))
+                    .gap(px(8.))
+                    .child(logo(18., c))
                     .child(
                         div()
                             .flex_1()
-                            .font_family(DISPLAY)
-                            .text_size(px(16.))
+                            .text_size(px(14.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(c.fg)
                             .child("slopmax"),
@@ -698,8 +700,8 @@ impl Main {
             .child(self.proxy_status(c, cx))
     }
 
-    /// A row of the sidebar: its icon, or a provider's color, its title,
-    /// and what trails it. A press chooses it.
+    /// A row of the sidebar: its icon, or a provider's dot, its title, and
+    /// what trails it. A press chooses it.
     fn item(
         &self,
         section: Section,
@@ -710,27 +712,27 @@ impl Main {
     ) -> impl IntoElement {
         let selected = self.section == section;
         let slot = div()
-            .size(px(18.))
+            .size(px(16.))
             .flex_shrink_0()
             .flex()
             .items_center()
             .justify_center();
         let leading = match color {
-            Some(color) => slot.child(div().size(px(8.)).rounded_full().bg(color)),
+            Some(color) => slot.child(dot(color).size(px(7.))),
             None => slot.child(icon(
                 section.icon(),
-                16.,
-                if selected { c.accent } else { c.muted },
+                15.,
+                if selected { c.fg } else { c.muted },
             )),
         };
         let (hover, fg) = (c.hover, c.fg);
         h_flex()
             .id(SharedString::from(format!("go-{section:?}")))
-            .h(px(32.))
+            .h(px(30.))
             .px(px(10.))
             .gap(px(10.))
-            .rounded(px(8.))
-            .text_size(px(13.))
+            .rounded(px(6.))
+            .text_size(px(ui::BODY))
             .map(|row| {
                 if selected {
                     row.bg(c.selected)
@@ -762,58 +764,50 @@ impl Main {
     /// How the proxy stands, at the sidebar's foot; a click opens Settings.
     fn proxy_status(&self, c: &Colors, cx: &mut Context<Self>) -> impl IntoElement {
         let (state, color) = match &self.snapshot.proxy {
-            Proxy::Running { version } => (format!("Proxy running · {version}"), c.good),
-            Proxy::Starting => ("Proxy starting…".to_owned(), c.warn),
+            Proxy::Running { version } => (format!("Running {version}"), c.good),
+            Proxy::Starting => ("Starting…".to_owned(), c.warn),
             Proxy::Checking => ("Looking for the proxy…".to_owned(), c.muted),
-            Proxy::Stopped => ("Proxy stopped".to_owned(), c.bad),
+            Proxy::Stopped => ("Stopped".to_owned(), c.bad),
         };
-        let (hover, surface) = (c.hover, c.surface);
-        div().p(px(10.)).child(
-            h_flex()
-                .id("proxy-status")
-                .gap(px(10.))
-                .px(px(10.))
-                .py(px(8.))
-                .rounded(px(10.))
-                .border_1()
-                .border_color(c.border)
-                .bg(surface)
-                .cursor_pointer()
-                .hover(move |row| row.bg(hover))
-                .role(Role::Button)
-                .aria_label(state.clone())
-                .child(
-                    div()
-                        .size(px(8.))
-                        .flex_shrink_0()
-                        .rounded_full()
-                        .bg(color)
-                        .shadow(vec![
-                            BoxShadow::new(px(0.), px(0.), color.opacity(0.6)).blur_radius(px(6.)),
-                        ]),
-                )
-                .child(
-                    v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .child(
-                            div()
-                                .truncate()
-                                .text_size(px(12.))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(c.fg)
-                                .child(state),
-                        )
-                        .child(
-                            div()
-                                .truncate()
-                                .text_size(px(11.))
-                                .text_color(c.faint)
-                                .child(self.snapshot.address.clone()),
-                        ),
-                )
-                .on_click(cx.listener(|main, _, _, cx| main.go(Section::Settings, cx))),
-        )
+        let hover = c.hover;
+        div()
+            .px(px(8.))
+            .py(px(10.))
+            .border_t_1()
+            .border_color(c.border)
+            .child(
+                h_flex()
+                    .id("proxy-status")
+                    .gap(px(10.))
+                    .px(px(10.))
+                    .py(px(6.))
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .hover(move |row| row.bg(hover))
+                    .role(Role::Button)
+                    .aria_label(format!("Proxy: {state}"))
+                    .child(dot(color))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(ui::SMALL))
+                                    .text_color(c.fg)
+                                    .child(state),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(11.5))
+                                    .text_color(c.faint)
+                                    .child(self.snapshot.address.clone()),
+                            ),
+                    )
+                    .on_click(cx.listener(|main, _, _, cx| main.go(Section::Settings, cx))),
+            )
     }
 
     /// The sidebar's toggle: in the sidebar's header while it shows, and in
@@ -829,23 +823,19 @@ impl Main {
         } else {
             "show-sidebar"
         })
-        .icon(if shown {
-            IconName::PanelLeftClose
-        } else {
-            IconName::PanelLeftOpen
-        })
+        .icon(IconName::PanelLeft)
         .ghost()
         .small()
         .tooltip(tip)
         .accessibility_label(tip)
-        .on_click(cx.listener(|main, _, _, cx| main.toggle_sidebar(cx)))
+        .on_click(cx.listener(|main, _, _, cx| main.toggle_sidebar(true, cx)))
     }
 
     /// The page's header: its title, and what acts on it.
     fn header(&self, c: &Colors, cx: &mut Context<Self>) -> TitleBar {
         let running = matches!(self.snapshot.proxy, Proxy::Running { .. });
         let tools = h_flex()
-            .gap(px(8.))
+            .gap(px(6.))
             // A press on a control is a click, never a window drag.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         let tools = match self.section {
@@ -869,27 +859,11 @@ impl Main {
                             .primary()
                             .small()
                             .dropdown_menu_with_anchor(Anchor::TopRight, |menu, _, _| {
-                                menu.menu_with_icon(
-                                    "Sign in with Claude…",
-                                    IconName::LogIn,
-                                    Box::new(SignInClaude),
-                                )
-                                .menu_with_icon(
-                                    "Sign in with ChatGPT…",
-                                    IconName::LogIn,
-                                    Box::new(SignInChatGpt),
-                                )
-                                .separator()
-                                .menu_with_icon(
-                                    "Import logins",
-                                    IconName::Download,
-                                    Box::new(ImportLogins),
-                                )
-                                .menu_with_icon(
-                                    "Add an API key…",
-                                    IconName::KeyRound,
-                                    Box::new(AddKey),
-                                )
+                                menu.menu("Sign in with Claude…", Box::new(SignInClaude))
+                                    .menu("Sign in with ChatGPT…", Box::new(SignInChatGpt))
+                                    .separator()
+                                    .menu("Import logins", Box::new(ImportLogins))
+                                    .menu("Add an API key…", Box::new(AddKey))
                             }),
                     )
             }
@@ -914,13 +888,12 @@ impl Main {
             .border_0()
             .child(
                 h_flex()
-                    .gap(px(10.))
+                    .gap(px(8.))
                     .when(self.sidebar.hidden, |title| {
                         title.child(self.sidebar_toggle(false, cx))
                     })
                     .child(
                         div()
-                            .font_family(DISPLAY)
                             .text_size(px(ui::TITLE))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(c.fg)
@@ -930,6 +903,8 @@ impl Main {
             .child(tools)
     }
 
+    /// What slopmax last reports, at the window's foot: it rises into place
+    /// as it arrives, and leaves at once when dismissed.
     fn notice(&self, c: &Colors) -> Option<impl IntoElement> {
         let notice = self.snapshot.notice.as_ref()?;
         let app = self.app.clone();
@@ -938,39 +913,49 @@ impl Main {
         } else {
             (IconName::CircleCheck, c.good)
         };
+        // A new notice rises afresh; the same one stays where it is.
+        let key = SharedString::from(format!("notice-{}", notice.text));
         // Floats over the corner, so it never moves what is under the pointer.
-        Some(
-            h_flex()
-                .absolute()
-                .right(px(20.))
-                .bottom(px(20.))
-                .w(px(420.))
-                .p(px(12.))
-                .pl(px(14.))
-                .gap(px(12.))
-                .rounded(px(12.))
-                .border_1()
-                .border_color(c.border)
-                .bg(c.popover)
-                .shadow_lg()
-                .child(icon(name, 18., color))
-                .child(
-                    div()
-                        .flex_1()
-                        .text_size(px(12.5))
-                        .text_color(c.fg)
-                        .child(notice.text.clone()),
+        let toast = h_flex()
+            .absolute()
+            .right(px(20.))
+            .w(px(400.))
+            .p(px(10.))
+            .pl(px(14.))
+            .gap(px(10.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(c.border)
+            .bg(c.popover)
+            .shadow(vec![
+                BoxShadow::new(
+                    px(0.),
+                    px(8.),
+                    black().opacity(if c.dark { 0.4 } else { 0.08 }),
                 )
-                .child(
-                    Button::new("dismiss")
-                        .icon(IconName::Close)
-                        .ghost()
-                        .xsmall()
-                        .tooltip("Dismiss")
-                        .accessibility_label("Dismiss")
-                        .on_click(move |_, _, _| app.dismiss_notice()),
-                ),
-        )
+                .blur_radius(px(24.)),
+            ])
+            .child(icon(name, 16., color))
+            .child(
+                div()
+                    .flex_1()
+                    .text_size(px(ui::BODY))
+                    .text_color(c.fg)
+                    .child(notice.text.clone()),
+            )
+            .child(
+                Button::new("dismiss")
+                    .icon(IconName::Close)
+                    .ghost()
+                    .xsmall()
+                    .tooltip("Dismiss")
+                    .accessibility_label("Dismiss")
+                    .on_click(move |_, _, _| app.dismiss_notice()),
+            );
+        let rise = Animation::new(motion::APPEAR).with_easing(motion::ease_out);
+        Some(toast.with_animation(key, rise, |toast, along| {
+            toast.bottom(px(20. - 8. * (1. - along))).opacity(along)
+        }))
     }
 
     /// A sign-in in progress: what to do in the browser, or the code to
@@ -979,10 +964,9 @@ impl Main {
         let sign_in = view::sign_in(self.snapshot.sign_in.as_ref()?);
         let (app, cancel) = (self.app.clone(), self.app.clone());
         let paste = self.paste.clone();
-        let mut body = card(c).border_color(c.accent.opacity(0.5)).child(
+        let mut body = panel(c).p(px(16.)).gap(px(12.)).child(
             h_flex()
                 .gap(px(12.))
-                .child(ui::icon_tile(IconName::LogIn, c.accent, 32., c))
                 .child(
                     v_flex()
                         .flex_1()
@@ -990,7 +974,6 @@ impl Main {
                         .gap(px(2.))
                         .child(
                             div()
-                                .text_size(px(ui::HEADING))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(sign_in.title.clone()),
                         )
@@ -1003,12 +986,12 @@ impl Main {
         if let Some(code) = sign_in.code {
             body = body.child(
                 div()
-                    .px(px(16.))
-                    .py(px(10.))
-                    .rounded(px(10.))
+                    .px(px(14.))
+                    .py(px(8.))
+                    .rounded(px(6.))
                     .bg(c.well)
-                    .font_family(DISPLAY)
-                    .text_size(px(26.))
+                    .font_features(theme::tabular())
+                    .text_size(px(ui::TITLE))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(code),
             );
@@ -1016,28 +999,16 @@ impl Main {
         if let Some(link) = sign_in.link {
             let (open, copy) = (link.clone(), link.clone());
             body = body
-                .child(
-                    div()
-                        .text_size(px(ui::TINY))
-                        .text_color(c.muted)
-                        .truncate()
-                        .child(link),
-                )
+                .child(caption(link, c).truncate())
                 .child(
                     h_flex()
                         .gap(px(8.))
-                        .child(
-                            push("open-link", "Open again")
-                                .icon(IconName::ExternalLink)
-                                .on_click(move |_, _, cx| cx.open_url(&open)),
-                        )
-                        .child(
-                            push("copy-link", "Copy link")
-                                .icon(IconName::Copy)
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
-                                }),
-                        ),
+                        .child(push("open-link", "Open again").on_click(move |_, _, cx| {
+                            cx.open_url(&open);
+                        }))
+                        .child(push("copy-link", "Copy link").on_click(move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
+                        })),
                 )
                 .child(
                     h_flex()
@@ -1055,7 +1026,8 @@ impl Main {
                 h_flex()
                     .gap(px(8.))
                     .text_size(px(ui::SMALL))
-                    .child(icon(IconName::TriangleAlert, 14., c.warn))
+                    .text_color(c.warn)
+                    .child(dot(c.warn))
                     .child(sign_in.notes),
             );
         }
@@ -1085,7 +1057,7 @@ impl Render for Main {
             .overflow_hidden()
             .child(self.sidebar(&c, now, cx).w(px(sidebar.width)));
         let pane = if sidebar.sliding {
-            let slide = Animation::new(SLIDE).with_easing(ease_in_out);
+            let slide = Animation::new(motion::SLIDE).with_easing(motion::ease_in_out);
             pane.with_animation(("slide", sidebar.slides), slide, move |pane, along| {
                 pane.w(px(sidebar.open(along)))
             })
@@ -1098,7 +1070,9 @@ impl Render for Main {
             .size_full()
             .bg(c.bg)
             .text_color(c.fg)
-            .on_action(cx.listener(|main, _: &ToggleSidebar, _, cx| main.toggle_sidebar(cx)))
+            .on_action(cx.listener(|main, _: &ToggleSidebar, _, cx| {
+                main.toggle_sidebar(false, cx);
+            }))
             // A drag of the sidebar's edge follows the pointer anywhere in
             // the window.
             .on_mouse_move(cx.listener(|main, event: &MouseMoveEvent, _, cx| {
@@ -1125,9 +1099,9 @@ impl Render for Main {
                                 .id("body")
                                 .size_full()
                                 .px(px(MARGIN))
-                                .pt(px(6.))
-                                .pb(px(32.))
-                                .gap(px(24.))
+                                .pt(px(4.))
+                                .pb(px(40.))
+                                .gap(px(32.))
                                 .overflow_y_scrollbar()
                                 .children(self.sign_in(&c))
                                 .child(page),
@@ -1175,10 +1149,10 @@ fn field(state: &Entity<InputState>) -> Input {
 fn sidebar_heading(title: &str, c: &Colors) -> Div {
     div()
         .px(px(10.))
-        .pt(px(18.))
-        .pb(px(6.))
-        .text_size(px(11.))
-        .font_weight(FontWeight::SEMIBOLD)
+        .pt(px(16.))
+        .pb(px(4.))
+        .text_size(px(ui::SMALL))
+        .font_weight(FontWeight::MEDIUM)
         .text_color(c.faint)
         .child(title.to_string())
 }

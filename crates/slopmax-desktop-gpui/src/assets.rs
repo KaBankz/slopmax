@@ -7,32 +7,7 @@ use std::borrow::Cow;
 use gpui_kit::assets::Assets;
 use gpui_kit::{AssetSource, Result, SharedString};
 
-gpui_kit::assets::icon_assets!(
-    Extra,
-    [
-        ArrowUpRight,
-        BadgeCheck,
-        ChartColumn,
-        Clock,
-        Coins,
-        Download,
-        Hash,
-        KeyRound,
-        Layers,
-        LogIn,
-        OctagonX,
-        Pin,
-        Plug,
-        Power,
-        RotateCcw,
-        Server,
-        Sparkles,
-        Timer,
-        Unplug,
-        Users,
-        Zap,
-    ]
-);
+gpui_kit::assets::icon_assets!(Extra, [ChartColumn, Users, Zap]);
 
 /// gpui-kit's icons, then slopmax's.
 pub(crate) struct AppAssets;
