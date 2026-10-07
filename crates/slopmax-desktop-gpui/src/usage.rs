@@ -8,7 +8,8 @@
 
 use std::collections::HashMap;
 
-use gpui_kit::component::chart::{AreaChart, LineChart, PieChart};
+use gpui_kit::assets::IconName;
+use gpui_kit::component::chart::{AreaChart, PieChart};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -20,12 +21,13 @@ use slopmax_core::summary::Totals;
 
 use crate::Main;
 use crate::theme::Colors;
-use crate::ui::{caption, dot, gauge as bar};
+use crate::theme::tabular;
+use crate::ui::{self, caption, dot, gauge as bar};
 
-/// macOS's own colors, which tell series apart in light and dark alike:
-/// blue, purple, pink, cyan, yellow. Orange and green are left out, as
-/// Claude's and ChatGPT's everywhere on the page.
-const PALETTE: [u32; 5] = [0x0a84ff, 0xbf5af2, 0xff375f, 0x64d2ff, 0xffd60a];
+/// slopmax's chart colors, which tell series apart in light and dark
+/// alike: violet, sky, pink, teal, yellow. Orange and green are left out,
+/// as Claude's and ChatGPT's everywhere on the page.
+const PALETTE: [u32; 5] = [0x8b5cf6, 0x0ea5e9, 0xec4899, 0x14b8a6, 0xeab308];
 /// The width left of a column chart for its counts.
 const GUTTER: f32 = 32.;
 /// The models the ring names; the rest share a slice.
@@ -44,18 +46,22 @@ impl Main {
             .as_ref()
             .filter(|h| h.range == self.range)
         {
-            None => v_flex().child(caption("Reading the ledger…", c)),
+            None => v_flex().child(ui::empty(
+                IconName::ChartColumn,
+                "Reading the ledger…",
+                "Every request slopmax answers is counted here.",
+                c,
+            )),
             Some(history) if history.total.requests == 0 && history.total.failed == 0 => v_flex()
-                .p(px(32.))
-                .rounded(px(14.))
-                .bg(c.surface)
-                .border_1()
-                .border_color(c.border)
-                .items_center()
-                .child(div().text_color(c.muted).child(match history.range {
-                    Range::Today => "Nothing has gone through slopmax today.",
-                    _ => "Nothing has gone through slopmax in this range.",
-                })),
+                .child(ui::empty(
+                    IconName::ChartColumn,
+                    match history.range {
+                        Range::Today => "Nothing yet today",
+                        _ => "Nothing in this range",
+                    },
+                    "Requests show here once an agent sends them through slopmax.",
+                    c,
+                )),
             Some(history) if performance => self::performance(history, c),
             Some(history) => page(history, c),
         }
@@ -71,12 +77,14 @@ fn margin(history: &History) -> usize {
     }
 }
 
+/// Two cards side by side, one over the other when the window is narrow.
 fn pair(left: Div, right: Div) -> Div {
     h_flex()
+        .flex_wrap()
         .items_stretch()
         .gap(px(16.))
-        .child(left)
-        .child(right)
+        .child(left.min_w(px(340.)))
+        .child(right.min_w(px(340.)))
 }
 
 fn page(history: &History, c: &Colors) -> Div {
@@ -92,6 +100,8 @@ fn page(history: &History, c: &Colors) -> Div {
         .child(tiles(
             [
                 (
+                    IconName::Layers,
+                    c.violet,
                     "Tokens",
                     human::compact(history::tokens(total)),
                     history
@@ -99,6 +109,8 @@ fn page(history: &History, c: &Colors) -> Div {
                         .map_or_else(String::new, |r| format!("{:.0}% from cache", r * 100.)),
                 ),
                 (
+                    IconName::Hash,
+                    c.accent,
                     "Requests",
                     grouped(total.requests),
                     match history.sessions {
@@ -107,6 +119,8 @@ fn page(history: &History, c: &Colors) -> Div {
                     },
                 ),
                 (
+                    IconName::Coins,
+                    c.info,
                     "API value",
                     priced(total.cost, total),
                     match total.unpriced {
@@ -115,6 +129,8 @@ fn page(history: &History, c: &Colors) -> Div {
                     },
                 ),
                 (
+                    IconName::Timer,
+                    c.good,
                     "A month at this pace",
                     history.monthly.map_or_else(|| "—".to_owned(), dollars),
                     match history.range {
@@ -136,7 +152,7 @@ fn page(history: &History, c: &Colors) -> Div {
                 .child(requests(history, margin, c)),
             card(c)
                 .child(header("API value", Vec::new(), c))
-                .child(div().h(px(150.)).child(cost(history, margin))),
+                .child(div().h(px(150.)).child(cost(history, margin, c))),
         ))
         .child(pair(models(history, c), mix(history, c)))
         .child(agents(history, c))
@@ -155,6 +171,8 @@ fn performance(history: &History, c: &Colors) -> Div {
         .child(tiles(
             [
                 (
+                    IconName::BadgeCheck,
+                    c.good,
                     "Answered",
                     format!("{answered:.1}%"),
                     match total.failed {
@@ -163,11 +181,15 @@ fn performance(history: &History, c: &Colors) -> Div {
                     },
                 ),
                 (
+                    IconName::Zap,
+                    c.warn,
                     "Saved by failover",
                     grouped(history.rescued),
-                    "requests another account took".to_owned(),
+                    "taken by another account".to_owned(),
                 ),
                 (
+                    IconName::Layers,
+                    c.violet,
                     "From cache",
                     history
                         .cached
@@ -175,6 +197,8 @@ fn performance(history: &History, c: &Colors) -> Div {
                     format!("saving {}", priced(history.cache_saved, total)),
                 ),
                 (
+                    IconName::Timer,
+                    c.info,
                     "First byte",
                     history
                         .first_byte
@@ -200,36 +224,19 @@ fn performance(history: &History, c: &Colors) -> Div {
         ))
 }
 
-/// Totals side by side: each a title, a value, and a note.
-fn tiles<const N: usize>(tiles: [(&str, String, String); N], c: &Colors) -> Div {
+/// Totals side by side, each a card: what it counts beside its icon, its
+/// value, and a note.
+fn tiles<const N: usize>(tiles: [(IconName, Hsla, &str, String, String); N], c: &Colors) -> Div {
     h_flex()
-        .items_stretch()
-        .rounded(px(14.))
-        .bg(c.surface)
-        .border_1()
-        .border_color(c.border)
-        .children(
-            tiles
-                .into_iter()
-                .enumerate()
-                .map(|(i, (title, value, note))| {
-                    v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .p(px(16.))
-                        .gap(px(4.))
-                        .when(i > 0, |tile| tile.border_l_1().border_color(c.separator))
-                        .child(caption(title, c))
-                        .child(
-                            div()
-                                .text_size(px(24.))
-                                .line_height(px(30.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(value),
-                        )
-                        .child(caption(&note, c).truncate())
-                }),
-        )
+        .flex_wrap()
+        .gap(px(16.))
+        .children(tiles.into_iter().map(|(name, color, title, value, note)| {
+            ui::card(c)
+                .flex_1()
+                .min_w(px(190.))
+                .p(px(18.))
+                .child(ui::stat(name, color, title, value, note, c))
+        }))
 }
 
 /// Tokens over the range, an area per provider.
@@ -268,9 +275,10 @@ fn tokens(history: &History, margin: usize, c: &Colors) -> AreaChart<Bucket, Sha
     chart
 }
 
-/// Requests over the range, a column each hour or day.
+/// Requests over the range, a column each hour or day, in slopmax's
+/// gradient.
 fn requests(history: &History, margin: usize, c: &Colors) -> Div {
-    let fill = c.accent;
+    let fill = c.brand(180.);
     columns(
         "requests",
         history,
@@ -282,8 +290,8 @@ fn requests(history: &History, margin: usize, c: &Colors) -> Div {
     )
 }
 
-/// What the requests would have cost on the API, a point each hour or day.
-fn cost(history: &History, margin: usize) -> LineChart<Bucket, SharedString, f64> {
+/// What the requests would have cost on the API, each hour or day.
+fn cost(history: &History, margin: usize, c: &Colors) -> AreaChart<Bucket, SharedString, f64> {
     let most = history.buckets.iter().map(|b| b.cost).fold(0., f64::max);
     let (top, ticks) = axis(most, 0.01);
     // Cents only where the steps need them.
@@ -292,18 +300,18 @@ fn cost(history: &History, margin: usize) -> LineChart<Bucket, SharedString, f64
     } else {
         2
     };
-    let chart = LineChart::new(history.buckets.clone())
+    let chart = AreaChart::new(history.buckets.clone())
         .id("cost")
         .x(|b: &Bucket| SharedString::from(b.label.clone()))
         .y(|b: &Bucket| b.cost)
-        .stroke(rgb(PALETTE[1]))
+        .stroke(c.violet)
+        .fill(fade(c.violet))
         .name("API value");
     if smooth(history) {
         chart.natural()
     } else {
         chart.linear()
     }
-    .dot()
     .y_domain(0., top)
     .y_padding(0., 0.)
     .tick_margin(margin)
@@ -311,7 +319,7 @@ fn cost(history: &History, margin: usize) -> LineChart<Bucket, SharedString, f64
     .y_axis(true)
     .y_tick_count(ticks)
     .y_tick_format(move |v| format!("${v:.cents$}"))
-    .tooltip_value(|_, v| format!("${v:.2}").into())
+    .tooltip_value(|_, _, v| format!("${v:.2}").into())
 }
 
 /// Days curve smoothly; hours, which climb from nothing overnight, keep to
@@ -326,13 +334,13 @@ fn smooth(history: &History) -> bool {
 fn columns(
     id: &'static str,
     history: &History,
-    parts: impl Fn(&Bucket) -> Vec<(u64, Hsla)>,
+    parts: impl Fn(&Bucket) -> Vec<(u64, Background)>,
     tip: impl Fn(&Bucket) -> String,
     height: f32,
     margin: usize,
     c: &Colors,
 ) -> Div {
-    let stacks: Vec<Vec<(u64, Hsla)>> = history.buckets.iter().map(parts).collect();
+    let stacks: Vec<Vec<(u64, Background)>> = history.buckets.iter().map(parts).collect();
     let most = stacks
         .iter()
         .map(|stack| stack.iter().map(|(n, _)| n).sum::<u64>())
@@ -483,7 +491,7 @@ fn reliability(history: &History, margin: usize, c: &Colors) -> Div {
         .child(columns(
             "reliability",
             history,
-            |b| vec![(b.rescued, good), (b.failed, bad)],
+            |b| vec![(b.rescued, good.into()), (b.failed, bad.into())],
             |b| {
                 format!(
                     "{} · {} saved by failover · {} failed",
@@ -902,14 +910,9 @@ fn activity(history: &History, c: &Colors) -> Div {
 fn stat(title: &str, value: String, c: &Colors) -> Div {
     v_flex()
         .flex_1()
-        .gap(px(2.))
+        .gap(px(4.))
         .child(caption(title, c))
-        .child(
-            div()
-                .text_size(px(18.))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(value),
-        )
+        .child(ui::figure(value, 20., c))
 }
 
 /// The accounts ranked by tokens, each with its share drawn.
@@ -922,12 +925,16 @@ fn accounts(history: &History, c: &Colors) -> Div {
         .unwrap_or(0)
         .max(1) as f32;
     let numbers = |cells: [String; 4]| {
-        h_flex().flex_shrink_0().gap(px(16.)).children(
-            cells
-                .into_iter()
-                .zip([64., 72., 56., 76.])
-                .map(|(cell, width)| div().w(px(width)).flex().justify_end().child(cell)),
-        )
+        h_flex()
+            .flex_shrink_0()
+            .gap(px(16.))
+            .font_features(tabular())
+            .children(
+                cells
+                    .into_iter()
+                    .zip([64., 72., 56., 76.])
+                    .map(|(cell, width)| div().w(px(width)).flex().justify_end().child(cell)),
+            )
     };
     let mut list = card(c).child(header("Accounts", Vec::new(), c)).child(
         h_flex()
