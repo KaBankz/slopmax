@@ -15,6 +15,8 @@ mod overview;
 mod panel;
 mod prefs;
 mod settings;
+#[cfg(feature = "shots")]
+mod shots;
 mod theme;
 mod ui;
 mod usage;
@@ -184,6 +186,8 @@ fn main() -> anyhow::Result<()> {
             panel: None,
         });
         open_window(cx);
+        #[cfg(feature = "shots")]
+        shots::start(cx);
     });
     Ok(())
 }

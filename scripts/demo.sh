@@ -9,6 +9,8 @@
 #
 # Then, in another shell, export those and run an app or the CLI:
 #   cargo run -p slopmax-desktop-gpui
+# or draw each of the desktop app's pages to images, without the screen:
+#   SLOPMAX_SHOTS=/tmp/shots cargo run -p slopmax-desktop-gpui --features shots
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -168,6 +170,11 @@ The demo proxy runs on $listen with four fake accounts. In another shell:
 
   export SLOPMAX_HOME=$demo/home SLOPMAX_LISTEN=$listen
   export CLAUDE_CONFIG_DIR=$demo/claude CODEX_HOME=$demo/codex XDG_CONFIG_HOME=$demo/config
+
+Then run the desktop app, or draw its pages to images in /tmp/shots:
+
+  cargo run -p slopmax-desktop-gpui
+  SLOPMAX_SHOTS=/tmp/shots cargo run -p slopmax-desktop-gpui --features shots
 
 Ctrl-C stops it and deletes the demo.
 EOF

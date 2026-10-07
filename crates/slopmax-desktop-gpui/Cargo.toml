@@ -9,6 +9,11 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+# Draws each page to an image, without a screen, for reviewing the design:
+# run with SLOPMAX_SHOTS naming a directory, and the app quits once done.
+shots = ["gpui-kit/test-support"]
+
 [dependencies]
 anyhow.workspace = true
 # Carries clicks outside the app, which AppKit sees, to the menu bar panel.
