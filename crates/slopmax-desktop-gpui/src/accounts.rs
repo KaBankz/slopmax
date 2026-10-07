@@ -364,13 +364,13 @@ fn pool(group: &Group, c: &Colors) -> impl IntoElement {
             .children(group.credits.as_deref().map(|credits| {
                 ui::row(false, c)
                     .py(px(10.))
-                    .child(caption(credits.replace(" · ", ", "), c))
+                    .child(caption(ui::sentence(credits), c))
             })),
     )
 }
 
-/// An account's use of one window: how much, and how its pace compares,
-/// over a meter marked where an even spend would be, and when it resets.
+/// An account's use of one window: how much, over a meter marked where an
+/// even spend would be, when it resets, and how its pace compares.
 fn limit(gauge: Option<&Gauge>, faded: bool, c: &Colors) -> Div {
     let cell = v_flex()
         .flex_1()
@@ -382,23 +382,10 @@ fn limit(gauge: Option<&Gauge>, faded: bool, c: &Colors) -> Div {
     };
     let pace = g.pace.as_ref();
     cell.child(
-        h_flex()
-            .gap(px(8.))
-            .child(
-                div()
-                    .font_features(tabular())
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(g.percent.clone()),
-            )
-            .child(div().flex_1())
-            .children(pace.map(|pace| {
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(px(ui::SMALL))
-                    .text_color(c.tone(pace.label.tone))
-                    .child(pace.label.text.clone())
-            })),
+        div()
+            .font_features(tabular())
+            .font_weight(FontWeight::MEDIUM)
+            .child(g.percent.clone()),
     )
     .child(
         meter(g.fraction, c.fill(g.tone), c).when_some(pace, |bar, pace| {
@@ -414,13 +401,20 @@ fn limit(gauge: Option<&Gauge>, faded: bool, c: &Colors) -> Div {
             )
         }),
     )
-    .child(caption(
-        match &g.resets_in {
-            Some(left) => format!("Resets in {left}"),
-            None => "Nothing to reset".to_owned(),
-        },
-        c,
-    ))
+    .child(
+        v_flex()
+            .gap(px(2.))
+            .child(caption(
+                match &g.resets_in {
+                    Some(left) => format!("Resets in {left}"),
+                    None => "Nothing to reset".to_owned(),
+                },
+                c,
+            ))
+            .children(
+                pace.map(|pace| caption(&pace.label.text, c).text_color(c.tone(pace.label.tone))),
+            ),
+    )
 }
 
 /// The way to an account's reset credits: their count, and a chevron that

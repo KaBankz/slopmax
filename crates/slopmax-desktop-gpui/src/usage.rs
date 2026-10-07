@@ -255,7 +255,7 @@ fn tokens(history: &History, margin: usize, c: &Colors) -> AreaChart<Bucket, Sha
         chart = chart
             .y(move |b: &Bucket| b.tokens[i] as f64)
             .stroke(color)
-            .fill(color.opacity(0.08))
+            .fill(color.opacity(0.05))
             .name(provider.spec().title);
     }
     chart
@@ -290,7 +290,7 @@ fn cost(history: &History, margin: usize, c: &Colors) -> AreaChart<Bucket, Share
         .x(|b: &Bucket| SharedString::from(b.label.clone()))
         .y(|b: &Bucket| b.cost)
         .stroke(c.meter)
-        .fill(c.meter.opacity(0.1))
+        .fill(c.meter.opacity(0.06))
         .name("API value");
     if smooth(history) {
         chart.natural()
@@ -502,7 +502,7 @@ fn cache(history: &History, margin: usize, c: &Colors) -> Div {
         .x(|r: &Share100| r.0.clone())
         .y(|r: &Share100| r.1)
         .stroke(c.meter)
-        .fill(c.meter.opacity(0.1))
+        .fill(c.meter.opacity(0.06))
         .name("From cache");
     let line = if smooth(history) {
         line.natural()
@@ -545,7 +545,7 @@ fn first_byte(history: &History, margin: usize, c: &Colors) -> AreaChart<Wait, S
         .x(|w: &Wait| w.0.clone())
         .y(|w: &Wait| w.1)
         .stroke(c.meter)
-        .fill(c.meter.opacity(0.1))
+        .fill(c.meter.opacity(0.06))
         .name("Median")
         .y(|w: &Wait| w.2)
         .stroke(c.series(2))

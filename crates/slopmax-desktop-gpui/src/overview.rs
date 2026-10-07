@@ -152,7 +152,7 @@ fn standing(status: &Status, c: &Colors) -> impl IntoElement {
             status
                 .detail
                 .as_ref()
-                .map(|detail| div().text_color(c.muted).child(detail.replace(" · ", ", "))),
+                .map(|detail| div().text_color(c.muted).child(ui::sentence(detail))),
         )
 }
 
@@ -245,7 +245,7 @@ fn pool(
             group
                 .credits
                 .as_deref()
-                .map(|credits| caption(credits.replace(" · ", ", "), c).pl(indent)),
+                .map(|credits| caption(ui::sentence(credits), c).pl(indent)),
         )
 }
 
@@ -266,36 +266,44 @@ fn hours(today: &History, c: &Colors) -> impl IntoElement {
         .gap(px(6.))
         .border_t_1()
         .border_color(c.separator)
-        .child(
+        .child(h_flex().h(px(56.)).children((0..24).map(|hour| {
+            let requests = today.buckets.get(hour).map_or(0, |b| b.requests);
+            // A slim column, centered in its hour and clear of its
+            // neighbors.
+            let column = div().w(relative(0.6)).max_w(px(14.)).rounded(px(2.));
+            let column = if requests > 0 {
+                column
+                    .h(relative(requests as f32 / most))
+                    .min_h(px(3.))
+                    .bg(c.meter)
+            } else {
+                column.h(px(3.)).bg(c.track)
+            };
             h_flex()
-                .h(px(56.))
+                .flex_1()
+                .h_full()
                 .items_end()
-                .gap(px(3.))
-                .children((0..24).map(|hour| {
-                    let requests = today.buckets.get(hour).map_or(0, |b| b.requests);
-                    let column = div().flex_1().rounded(px(2.));
-                    if requests > 0 {
-                        column
-                            .h(relative(requests as f32 / most))
-                            .min_h(px(3.))
-                            .bg(c.meter)
-                    } else {
-                        column.h(px(3.)).bg(c.track)
-                    }
-                })),
-        )
+                .justify_center()
+                .child(column)
+        })))
         .child(
             // Each label under its own hour's column.
             h_flex()
-                .gap(px(3.))
                 .text_size(px(11.))
                 .text_color(c.faint)
                 .font_features(tabular())
                 .children((0..24).map(|hour| {
-                    div()
+                    h_flex()
                         .flex_1()
-                        .whitespace_nowrap()
-                        .when(hour % 6 == 0, |cell| cell.child(format!("{hour:02}:00")))
+                        .justify_center()
+                        .when(hour % 6 == 0, |cell| {
+                            cell.child(
+                                div()
+                                    .flex_shrink_0()
+                                    .whitespace_nowrap()
+                                    .child(format!("{hour:02}:00")),
+                            )
+                        })
                 })),
         )
 }

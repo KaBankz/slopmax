@@ -66,7 +66,7 @@ impl Main {
         v_flex()
             .max_w(px(WIDTH))
             .gap(px(16.))
-            .child(div().text_color(c.muted).child(
+            .child(div().max_w(px(560.)).text_color(c.muted).child(
                 "Connecting points an agent's own settings at slopmax, so its requests share \
                  your accounts. Disconnecting puts back what was there.",
             ))
@@ -129,12 +129,13 @@ impl Main {
                         .gap(px(8.))
                         .child(
                             div()
-                                .px(px(10.))
-                                .py(px(4.))
+                                .px(px(8.))
+                                .py(px(3.))
                                 .rounded(px(6.))
                                 .bg(c.well)
                                 .border_1()
                                 .border_color(c.border)
+                                .text_size(px(ui::SMALL))
                                 .font_features(tabular())
                                 .child(address),
                         )

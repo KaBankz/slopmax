@@ -400,14 +400,14 @@ fn pool(group: &Group, c: &Colors) -> impl IntoElement {
                         .min_w_0()
                         .truncate()
                         .text_color(c.muted)
-                        .child(row.status.text.clone()),
+                        .child(ui::sentence(&row.status.text)),
                 )
         }))
         .children(
             group
                 .credits
                 .as_deref()
-                .map(|credits| caption(credits.replace(" · ", ", "), c)),
+                .map(|credits| caption(ui::sentence(credits), c)),
         )
 }
 

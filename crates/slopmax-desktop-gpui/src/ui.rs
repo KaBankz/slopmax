@@ -118,7 +118,7 @@ pub(crate) fn dot(color: Hsla) -> Div {
 /// A state in words beside a dot of its tone. A good state reads in the
 /// text's own color, a quiet one in secondary text, and the rest in theirs.
 pub(crate) fn label(label: &Label, c: &Colors) -> Div {
-    let words = div().min_w_0().truncate().child(label.text.clone());
+    let words = div().min_w_0().truncate().child(sentence(&label.text));
     let line = h_flex().min_w_0().gap(px(7.));
     match label.tone {
         Tone::Muted | Tone::Accent => line.text_color(c.muted).child(words),
@@ -128,6 +128,21 @@ pub(crate) fn label(label: &Label, c: &Colors) -> Div {
             .child(dot(c.tone(tone)))
             .child(words),
     }
+}
+
+/// The core's words, set as `slopmax status` sets them, as a window's:
+/// without the dot that leads an active account, as the window draws its
+/// own; capitalized; and with commas where the terminal sets parts apart
+/// with dots.
+pub(crate) fn sentence(text: &str) -> String {
+    let text = text
+        .trim_start_matches('●')
+        .trim_start()
+        .replace(" · ", ", ");
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
 }
 
 /// A word or a count on a quiet chip, as a plan or a total shows.
@@ -322,4 +337,19 @@ pub(crate) fn empty(title: &str, detail: &str, c: &Colors) -> Div {
                 .child(title.to_owned()),
         )
         .child(caption(detail, c))
+}
+
+#[cfg(test)]
+mod tests {
+    // Not the glob, which brings GPUI's own `test` attribute.
+    use super::sentence;
+
+    #[test]
+    fn the_cores_words_read_as_a_sentence() {
+        assert_eq!(sentence("ready"), "Ready");
+        assert_eq!(sentence("● active · 2 sessions"), "Active, 2 sessions");
+        assert_eq!(sentence("limited · back in 1h"), "Limited, back in 1h");
+        assert_eq!(sentence("120 req · 5.2M tok"), "120 req, 5.2M tok");
+        assert_eq!(sentence(""), "");
+    }
 }
