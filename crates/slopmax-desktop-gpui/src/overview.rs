@@ -13,9 +13,9 @@ use slopmax_core::report::Tone;
 use slopmax_core::time::Timestamp;
 
 use crate::theme::{Colors, tabular};
-use crate::ui::{self, caption, dot, icon, panel, resets, segments, stat, stats};
+use crate::ui::{self, caption, dot, icon, panel, push, resets, segments, stat, stats};
 use crate::usage::{grouped, priced};
-use crate::{Main, Section, push};
+use crate::{Main, Section};
 
 /// The width of a window's title, beside its meter.
 const WINDOW: f32 = 100.;

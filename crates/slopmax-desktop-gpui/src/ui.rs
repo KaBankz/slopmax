@@ -5,7 +5,9 @@
 //! reports a state.
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::{Icon, h_flex, v_flex};
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use slopmax_app::view::{Gauge, Label, Share};
@@ -19,6 +21,41 @@ pub(crate) const TITLE: f32 = 20.;
 pub(crate) const HEADING: f32 = 15.;
 pub(crate) const BODY: f32 = 13.;
 pub(crate) const SMALL: f32 = 12.;
+
+/// The height of every control: a button, a text field, a segmented
+/// choice.
+pub(crate) const CONTROL: f32 = 28.;
+
+/// A button, sized as slopmax's controls are rather than by gpui-kit's rem
+/// steps, which at a 13-point rem leave a small button 19.5 points tall
+/// around 11-point words: as tall as every control, its words at body size
+/// in medium weight, 12 points either side. It is quiet by default, a face
+/// inside a hairline; `.primary()` inverts it for a page's main act.
+pub(crate) fn push(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
+    Button::new(id)
+        .label(label)
+        .h(px(CONTROL))
+        .px(px(12.))
+        .font_weight(FontWeight::MEDIUM)
+}
+
+/// A button that is only an icon, its tooltip saying what it does: a
+/// square as tall as every control, the icon at 16 points.
+pub(crate) fn tool(id: impl Into<ElementId>, icon: IconName, tip: &'static str) -> Button {
+    Button::new(id)
+        .icon(icon)
+        .ghost()
+        // gpui-kit draws a button's icon at three quarters of its size.
+        .with_size(px(16. / 0.75))
+        .size(px(CONTROL))
+        .tooltip(tip)
+        .accessibility_label(tip)
+}
+
+/// A text field as tall as every control, its words at body size.
+pub(crate) fn field(state: &Entity<InputState>) -> Input {
+    Input::new(state).large().h(px(CONTROL)).px(px(10.)).py_0()
+}
 
 /// A Lucide icon, `size` points square, in `color`.
 pub(crate) fn icon(name: IconName, size: f32, color: Hsla) -> Icon {

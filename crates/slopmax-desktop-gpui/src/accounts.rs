@@ -4,9 +4,9 @@
 //! beneath it.
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{Disableable, Sizable, h_flex, v_flex};
+use gpui_kit::component::{Disableable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use slopmax_app::Proxy;
@@ -16,8 +16,10 @@ use slopmax_core::report::Tone;
 use slopmax_core::time::Timestamp;
 
 use crate::theme::{Colors, tabular};
-use crate::ui::{self, badge, caption, dot, figure, icon, label, meter, panel, resets, segments};
-use crate::{Main, motion, push};
+use crate::ui::{
+    self, badge, caption, dot, figure, icon, label, meter, panel, push, resets, segments,
+};
+use crate::{Main, motion};
 
 /// The table's columns: an account's name and standing, and its controls.
 /// Its windows share what is left.
@@ -132,12 +134,9 @@ impl Main {
             .child(if row.pinned {
                 badge("Pinned", c).into_any_element()
             } else {
-                Button::new(SharedString::from(format!("use-{}", row.id)))
-                    .label("Use")
+                push(SharedString::from(format!("use-{}", row.id)), "Use")
                     .tooltip("Send requests here first")
                     .accessibility_label(format!("Use {}", row.name))
-                    .outline()
-                    .small()
                     .disabled(row.disabled)
                     .on_click(move |_, _, _| pin.pin(&id))
                     .into_any_element()
@@ -232,10 +231,8 @@ impl Main {
                     )),
                 )
                 .child(
-                    Button::new(SharedString::from(format!("redeem-{id}")))
-                        .label("Redeem")
+                    push(SharedString::from(format!("redeem-{id}")), "Redeem")
                         .primary()
-                        .small()
                         .accessibility_label(format!("Redeem it now on {}", row.name))
                         .on_click(cx.listener(move |main, _, _, cx| {
                             main.confirming = None;

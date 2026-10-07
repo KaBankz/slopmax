@@ -14,8 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{Disableable, Sizable, h_flex, v_flex};
+use gpui_kit::component::{Disableable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use slopmax_app::history::History;
@@ -27,7 +26,7 @@ use slopmax_core::time::Timestamp;
 
 use crate::native;
 use crate::theme::{Colors, tabular};
-use crate::ui::{self, caption, dot, logo, resets, segments};
+use crate::ui::{self, caption, dot, logo, resets, segments, tool};
 use crate::usage::{grouped, priced};
 use crate::{OpenSettings, OpenWindow, Quit, Section, Shared};
 
@@ -236,12 +235,7 @@ impl Panel {
                     ),
             )
             .child(
-                Button::new("refresh")
-                    .icon(IconName::RefreshCw)
-                    .ghost()
-                    .small()
-                    .tooltip("Refresh usage")
-                    .accessibility_label("Refresh usage")
+                tool("refresh", IconName::RefreshCw, "Refresh usage")
                     .disabled(!running)
                     .on_click(move |_, _, _| app.refresh()),
             )

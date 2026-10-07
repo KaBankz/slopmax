@@ -32,7 +32,7 @@
         "foreground": "#1d1d1f",
         "info.background": "#3b6fb6",
         "info.foreground": "#3b6fb6",
-        "input.border": "#d6d6db",
+        "input.border": "#dcdce0",
         "link.foreground": "#1d1d1f",
         "link.active.foreground": "#333336",
         "link.hover.foreground": "#000000",
@@ -107,6 +107,10 @@
         "base.magenta.light": "purple-400",
         "base.cyan": "cyan-600",
         "base.cyan.light": "cyan-400",
+        "button.background": "#ffffff",
+        "button.foreground": "#1d1d1f",
+        "button.hover.background": "#f4f4f5",
+        "button.active.background": "#ececee",
         "description_list_label.background": "#f7f7f8"
       },
       "highlight": {
@@ -313,7 +317,11 @@
         "base.magenta": "purple-400",
         "base.magenta.light": "purple-300",
         "base.cyan": "cyan-400",
-        "base.cyan.light": "cyan-300"
+        "base.cyan.light": "cyan-300",
+        "button.background": "#232326",
+        "button.foreground": "#e6e6e8",
+        "button.hover.background": "#2b2b2f",
+        "button.active.background": "#323236"
       },
       "highlight": {
         "editor.foreground": "#CACCCA",

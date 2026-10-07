@@ -4,8 +4,8 @@
 //! panel of rows: a setting's name and what it does on the left, its
 //! control on the right.
 
-use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{Disableable, Sizable, h_flex, v_flex};
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::{Disableable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use slopmax_app::Proxy;
@@ -17,8 +17,8 @@ use slopmax_core::report::Tone;
 
 use crate::prefs::{Appearance, Prefs};
 use crate::theme::{self, Colors, tabular};
-use crate::ui::{self, caption, label, panel, section, segmented};
-use crate::{KEYS, Main, field, push};
+use crate::ui::{self, caption, field, label, panel, push, section, segmented};
+use crate::{KEYS, Main};
 
 /// The widest these pages' panels grow, so a row's name and its control
 /// stay within a glance of each other.
@@ -31,9 +31,7 @@ impl Main {
             let (state, connected) = view::agent_line(agent);
             let (app, id) = (self.app.clone(), agent.id);
             let verb = if connected { "Disconnect" } else { "Connect" };
-            let button = Button::new(SharedString::from(format!("agent-{id}")))
-                .label(verb)
-                .small()
+            let button = push(SharedString::from(format!("agent-{id}")), verb)
                 .accessibility_label(format!("{verb} {}", agent.title))
                 .map(|button| if connected { button } else { button.primary() })
                 .on_click(move |_, _, _| {
@@ -107,9 +105,7 @@ impl Main {
                         .gap(px(16.))
                         .child(label(&Label { text, tone }, c))
                         .child(
-                            Button::new("proxy")
-                                .label(if running { "Stop" } else { "Start" })
-                                .small()
+                            push("proxy", if running { "Stop" } else { "Start" })
                                 .map(|b| if running { b } else { b.primary() })
                                 .on_click(move |_, _, _| {
                                     if running {
@@ -220,21 +216,17 @@ impl Main {
                                     cx,
                                 ))
                                 .child(div().flex_1().child(field(&self.key)))
-                                .child(
-                                    Button::new("add-key")
-                                        .label("Add key")
-                                        .primary()
-                                        .small()
-                                        .on_click(move |_, window, cx| {
-                                            let value = key.read(cx).value().to_string();
-                                            if !value.is_empty() {
-                                                app.add_key(provider, value);
-                                                key.update(cx, |input, cx| {
-                                                    input.set_value("", window, cx);
-                                                });
-                                            }
-                                        }),
-                                ),
+                                .child(push("add-key", "Add key").primary().on_click(
+                                    move |_, window, cx| {
+                                        let value = key.read(cx).value().to_string();
+                                        if !value.is_empty() {
+                                            app.add_key(provider, value);
+                                            key.update(cx, |input, cx| {
+                                                input.set_value("", window, cx);
+                                            });
+                                        }
+                                    },
+                                )),
                         ),
                 ),
         )

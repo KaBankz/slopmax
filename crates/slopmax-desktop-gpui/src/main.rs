@@ -24,11 +24,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::input::{self, Input, InputState};
+use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::input::{self, InputState};
 use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::{ActiveTheme as _, Disableable, Sizable, TitleBar, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Disableable, TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use gpui_tray::{Icon, Tray};
@@ -41,7 +41,7 @@ use slopmax_core::time::Timestamp;
 
 use crate::prefs::Prefs;
 use crate::theme::Colors;
-use crate::ui::{caption, dot, icon, logo, panel, segmented};
+use crate::ui::{caption, dot, field, icon, logo, panel, push, segmented, tool};
 
 actions!(
     slopmax,
@@ -854,17 +854,13 @@ impl Main {
         } else {
             "Show Sidebar"
         };
-        Button::new(if shown {
+        let id = if shown {
             "hide-sidebar"
         } else {
             "show-sidebar"
-        })
-        .icon(IconName::PanelLeft)
-        .ghost()
-        .small()
-        .tooltip(tip)
-        .accessibility_label(tip)
-        .on_click(cx.listener(|main, _, _, cx| main.toggle_sidebar(true, cx)))
+        };
+        tool(id, IconName::PanelLeft, tip)
+            .on_click(cx.listener(|main, _, _, cx| main.toggle_sidebar(true, cx)))
     }
 
     /// The page's header: its title, and what acts on it.
@@ -879,21 +875,14 @@ impl Main {
                 let app = self.app.clone();
                 tools
                     .child(
-                        Button::new("refresh")
-                            .icon(IconName::RefreshCw)
-                            .ghost()
-                            .small()
-                            .tooltip("Refresh usage")
-                            .accessibility_label("Refresh usage")
+                        tool("refresh", IconName::RefreshCw, "Refresh usage")
                             .disabled(!running)
                             .on_click(move |_, _, _| app.refresh()),
                     )
                     .child(
-                        Button::new("add")
+                        push("add", "Add account")
                             .icon(IconName::Plus)
-                            .label("Add account")
                             .primary()
-                            .small()
                             .dropdown_menu_with_anchor(Anchor::TopRight, |menu, _, _| {
                                 menu.menu("Sign in with Claude…", Box::new(SignInClaude))
                                     .menu("Sign in with ChatGPT…", Box::new(SignInChatGpt))
@@ -980,12 +969,7 @@ impl Main {
                     .child(notice.text.clone()),
             )
             .child(
-                Button::new("dismiss")
-                    .icon(IconName::Close)
-                    .ghost()
-                    .xsmall()
-                    .tooltip("Dismiss")
-                    .accessibility_label("Dismiss")
+                tool("dismiss", IconName::Close, "Dismiss")
                     .on_click(move |_, _, _| app.dismiss_notice()),
             );
         let rise = Animation::new(motion::APPEAR).with_easing(motion::ease_out);
@@ -1169,16 +1153,6 @@ impl Render for Main {
             })
             .children(self.notice(&c))
     }
-}
-
-/// A button for a secondary action.
-fn push(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
-    Button::new(id).label(label).small()
-}
-
-/// A text field.
-fn field(state: &Entity<InputState>) -> Input {
-    Input::new(state).small()
 }
 
 /// A group's title in the sidebar.
