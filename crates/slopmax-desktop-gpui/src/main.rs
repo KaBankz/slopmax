@@ -369,9 +369,10 @@ struct Sidebar {
     hidden: bool,
     /// The slides so far, so that each plays afresh.
     slides: usize,
-    /// Whether the latest change slides it: a toggle does; a drag hides it
-    /// at once.
-    sliding: bool,
+    /// The latest slide, while it is the latest change: a press of its
+    /// button slides it, while the keyboard, a menu, or a drag of its edge
+    /// shows or hides it at once.
+    slide: Option<Slide>,
     /// A drag of its edge in progress, and the width it began at, which a
     /// drag that hides the sidebar leaves it to come back at.
     dragging: bool,
@@ -384,7 +385,7 @@ impl Sidebar {
             width: prefs.sidebar_width.clamp(SIDEBAR_MIN, SIDEBAR_MAX),
             hidden: prefs.sidebar_hidden,
             slides: 0,
-            sliding: false,
+            slide: None,
             dragging: false,
             dragged_from: SIDEBAR,
         }
@@ -397,17 +398,54 @@ impl Sidebar {
         prefs.save();
     }
 
-    /// How wide it shows `along` a slide, from 0 to 1.
+    /// The share of its width it comes to rest at.
+    fn rest(self) -> f32 {
+        if self.hidden { 0. } else { 1. }
+    }
+
+    /// The share of its width showing now: where a slide under way has
+    /// reached, or where it rests.
+    fn shown(self) -> f32 {
+        match self.slide {
+            Some(slide) => {
+                let along = slide.started.elapsed().as_secs_f32() / slide.length.as_secs_f32();
+                slide.from + (self.rest() - slide.from) * motion::ease_in_out(along.min(1.))
+            }
+            None => self.rest(),
+        }
+    }
+
+    /// How wide it shows `along` its slide, from 0 to 1.
     fn open(self, along: f32) -> f32 {
-        let shown = if self.sliding {
-            if self.hidden { 1. - along } else { along }
-        } else if self.hidden {
-            0.
-        } else {
-            1.
+        let shown = match self.slide {
+            Some(slide) => slide.from + (self.rest() - slide.from) * along,
+            None => self.rest(),
         };
         self.width * shown
     }
+
+    /// Hides it, or shows it again; sliding, from wherever a slide under
+    /// way has reached, in as much of a full slide's time as it has left to
+    /// go.
+    fn toggle(&mut self, slide: bool) {
+        let from = self.shown();
+        self.hidden = !self.hidden;
+        self.slides += 1;
+        self.slide = slide.then(|| Slide {
+            from,
+            started: Instant::now(),
+            length: motion::SLIDE.mul_f32((self.rest() - from).abs().max(0.3)),
+        });
+    }
+}
+
+/// A slide of the sidebar: the share of its width it set out from, when,
+/// and for how long.
+#[derive(Debug, Clone, Copy)]
+struct Slide {
+    from: f32,
+    started: Instant,
+    length: Duration,
 }
 
 impl Main {
@@ -563,9 +601,7 @@ impl Main {
     /// pressed, and at once from the keyboard or a menu, as often as those
     /// are used.
     fn toggle_sidebar(&mut self, slide: bool, cx: &mut Context<Self>) {
-        self.sidebar.hidden = !self.sidebar.hidden;
-        self.sidebar.slides += 1;
-        self.sidebar.sliding = slide;
+        self.sidebar.toggle(slide);
         self.sidebar.remember(cx);
         menus(cx, self.sidebar.hidden);
         cx.notify();
@@ -587,7 +623,7 @@ impl Main {
             self.sidebar.hidden = true;
             self.sidebar.width = self.sidebar.dragged_from;
             self.sidebar.dragging = false;
-            self.sidebar.sliding = false;
+            self.sidebar.slide = None;
             self.sidebar.remember(cx);
             menus(cx, true);
         } else {
@@ -1056,8 +1092,8 @@ impl Render for Main {
             .flex_shrink_0()
             .overflow_hidden()
             .child(self.sidebar(&c, now, cx).w(px(sidebar.width)));
-        let pane = if sidebar.sliding {
-            let slide = Animation::new(motion::SLIDE).with_easing(motion::ease_in_out);
+        let pane = if let Some(slide) = sidebar.slide {
+            let slide = Animation::new(slide.length).with_easing(motion::ease_in_out);
             pane.with_animation(("slide", sidebar.slides), slide, move |pane, along| {
                 pane.w(px(sidebar.open(along)))
             })
@@ -1124,7 +1160,7 @@ impl Render for Main {
                             cx.listener(|main, _, _, cx| {
                                 main.sidebar.dragging = true;
                                 main.sidebar.dragged_from = main.sidebar.width;
-                                main.sidebar.sliding = false;
+                                main.sidebar.slide = None;
                                 cx.stop_propagation();
                                 cx.notify();
                             }),
@@ -1155,4 +1191,59 @@ fn sidebar_heading(title: &str, c: &Colors) -> Div {
         .font_weight(FontWeight::MEDIUM)
         .text_color(c.faint)
         .child(title.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    // Not the glob, which brings GPUI's own `test` attribute.
+    use std::time::Instant;
+
+    use super::{SIDEBAR, Sidebar};
+
+    fn shown() -> Sidebar {
+        Sidebar {
+            width: SIDEBAR,
+            hidden: false,
+            slides: 0,
+            slide: None,
+            dragging: false,
+            dragged_from: SIDEBAR,
+        }
+    }
+
+    #[test]
+    fn a_slide_runs_from_where_it_set_out_to_where_it_rests() {
+        let mut sidebar = shown();
+        sidebar.toggle(true);
+        assert!(sidebar.hidden);
+        assert_eq!(sidebar.open(0.), SIDEBAR);
+        assert_eq!(sidebar.open(1.), 0.);
+    }
+
+    #[test]
+    fn a_slide_turned_back_sets_out_from_where_it_had_reached() {
+        let mut sidebar = shown();
+        sidebar.toggle(true);
+        let hiding = sidebar.slide.expect("a press slides it");
+        // Halfway through hiding, in time.
+        if let Some(slide) = sidebar.slide.as_mut() {
+            slide.started = Instant::now() - hiding.length / 2;
+        }
+        let reached = sidebar.shown();
+        assert!(0. < reached && reached < 1.);
+        sidebar.toggle(true);
+        assert!(!sidebar.hidden);
+        assert!((sidebar.open(0.) - SIDEBAR * reached).abs() < 1.);
+        assert_eq!(sidebar.open(1.), SIDEBAR);
+        // With less of the way to go, it takes less time.
+        assert!(sidebar.slide.expect("a press slides it").length < hiding.length);
+    }
+
+    #[test]
+    fn the_keyboard_shows_and_hides_it_at_once() {
+        let mut sidebar = shown();
+        sidebar.toggle(false);
+        assert!(sidebar.slide.is_none());
+        assert_eq!(sidebar.open(0.), 0.);
+    }
 }
