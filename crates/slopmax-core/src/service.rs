@@ -29,7 +29,13 @@ pub struct Status {
 
 impl Manager {
     /// The manager available here, if slopmax knows how to use it.
+    /// `SLOPMAX_NO_SERVICE` set hides it, for a demo or a test whose proxy
+    /// must not become the user's login service: launchd and systemd are
+    /// the user's own, whatever directories the environment moves.
     pub fn detect() -> Option<Self> {
+        if std::env::var_os("SLOPMAX_NO_SERVICE").is_some_and(|v| !v.is_empty()) {
+            return None;
+        }
         if cfg!(target_os = "macos") {
             Some(Self::Launchd)
         } else if cfg!(target_os = "linux") && succeeds("systemctl", &["--user", "--version"]) {

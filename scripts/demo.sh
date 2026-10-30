@@ -2,8 +2,8 @@
 # A throwaway slopmax for working on the desktop app or the dashboard: the
 # bench rig's mock provider and proxy, four fake accounts with varied usage
 # (one limited), and every config directory an app could touch (Claude
-# Code's, Codex's, systemd's) pointed into the demo, so nothing reaches a
-# real account or a real setting.
+# Code's, Codex's) pointed into the demo, and the login service turned off,
+# so nothing reaches a real account, a real setting, or launchd/systemd.
 #
 #   scripts/demo.sh            # prints what to export, runs until Ctrl-C
 #
@@ -180,6 +180,7 @@ The demo proxy runs on $listen with four fake accounts. In another shell:
 
   export SLOPMAX_HOME=$demo/home SLOPMAX_LISTEN=$listen
   export CLAUDE_CONFIG_DIR=$demo/claude CODEX_HOME=$demo/codex XDG_CONFIG_HOME=$demo/config
+  export SLOPMAX_NO_SERVICE=1
 
 Then run the desktop app, or draw its pages to images in /tmp/shots:
 
