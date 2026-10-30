@@ -5,7 +5,7 @@
 slopmax pools your Claude and ChatGPT subscriptions behind one local proxy, so Claude Code and Codex keep working when an account runs out. Each session stays on one account until that account is spent, then moves to the next. New sessions go to the quota that resets soonest, so less of it goes unused; or fill accounts in order, balance them, or take turns.
 
 - One Rust binary under 6 MB. No runtime, database, or browser extension.
-- Signs in with each provider's own OAuth flow, or takes over logins from Claude Code, Codex, and CLIProxyAPI. A guided `slopmax init` does it all, and `slopmax doctor` says what to fix.
+- Signs in with each provider's own OAuth flow, or takes over logins from Claude Code, Codex, and CLIProxyAPI. A guided `slopmax setup` does it all, or runs unattended for a script or an agent, and `slopmax doctor` says what to fix.
 - Tracks every account's 5-hour and weekly windows, from the usage APIs and from the headers on every response.
 - Fails over before the agent sees an error, and streams every response back as it arrives.
 - Forwards Claude Code's requests unchanged except for the credential.
@@ -38,15 +38,25 @@ docker exec -it slopmax slopmax login codex --device
 ## Quick start
 
 ```sh
-slopmax             # the first time, a guided setup
+slopmax setup       # or just `slopmax`, the first time
 ```
 
-`slopmax init` walks through it step by step:
+`slopmax setup` walks through it step by step:
 
-1. It finds the agents you have and the logins they hold, and offers to bring them over. If CLIProxyAPI is running, its logins are linked rather than copied (see [Accounts](#accounts)), so both can run while you switch.
-2. It signs you in to more accounts. Without a browser, Codex signs in with a code and Claude by pasting the final URL back.
-3. It installs the proxy as a service that starts at login.
+1. It finds the logins Claude Code, Codex, and CLIProxyAPI hold, and offers to bring them over. CLIProxyAPI's are linked rather than copied (see [Accounts](#accounts)), so both can run while you switch.
+2. You choose which kinds of accounts to pool (Claude, ChatGPT, API keys, compatible endpoints), and it signs you in or takes the keys. Without a browser, Codex signs in with a code and Claude by pasting the final URL back.
+3. You choose how requests are routed: the [strategy](#resets) and whether sessions keep their account.
 4. It points Claude Code and Codex at the proxy, keeping a backup for `--undo`.
+5. It installs the proxy as a service that starts at login, and starts it.
+
+Every question has a flag, and with `--yes`, or without a terminal, it asks nothing. That is the way to have an agent set slopmax up, or a provisioning script:
+
+```sh
+slopmax setup --yes --import claude-code,codex --keys-from-env \
+  --strategy reset-first --affinity on --agents claude,codex
+```
+
+`--import` takes over the logins this machine has (`claude-code`, `codex`, `cliproxyapi`, `all`, or `none`); `--login claude,codex` signs in to more subscriptions (with a device code when there is no browser); `--keys-from-env` adds the keys in `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `XAI_API_KEY`; `--agents none` and `--no-service` leave the agents and the login service alone.
 
 Or by hand:
 
@@ -171,6 +181,18 @@ total                 508    398.3k    229.7k      114.4M         2.9M    $39.98
 
 `API cost` is what the same tokens would cost on the pay-as-you-go API, at Anthropic's and OpenAI's list prices and any you set under `[prices]` in the config. Requests to models without a price are counted apart and marked `+`. Group `--by day`, `model`, or `account`, over `today`, `7d`, `30d`, or `all`, or print `--json`.
 
+### Left on the table
+
+A subscription's weekly quota that goes unused is lost at the reset, and with it that part of the fee. slopmax notes each window that resets with how much of it was used (in `~/.slopmax/windows.jsonl`), and values the unused part of each week at the plan's price: Claude Pro $20, Max 5x $100, Max 20x $200, ChatGPT Plus $20, Pro $200, and Team $30 a month, or what you pay, under `[plan_prices]`:
+
+```
+Left on the table: $61.66, 20% unused on average, across 16 weeks
+  work@example.com               $48.46  26% unused over 4
+  me@example.com                  $9.05  49% unused over 4
+```
+
+`slopmax usage`, the dashboard, and the app show it; the `reset-first` strategy and the `quota-unused` notification below are there to keep it small.
+
 ## Dashboard
 
 `slopmax dashboard` opens a page that shows every account's windows and reset countdowns, usage and cost by day, model, or account, and a live feed of answered requests. It can enable, disable, pin, reprioritize, and redeem. The page is one file built into the binary and loads nothing from elsewhere. It takes the slopmax key from its address's `#fragment`, which browsers never send to a server. On a remote machine, forward the port first (`ssh -L 7567:127.0.0.1:7567 host`).
@@ -198,7 +220,12 @@ slopmax answers the three management calls these tools make: `auth-files`, `api-
 
 ## Notifications
 
-A webhook or a command hears when every account of a kind is limited (so requests fail), when it recovers, and when an account needs signing in again. Add `limited` and `available` to `events` to hear about each account too.
+A webhook or a command hears when every account of a kind is limited (so requests fail), when it recovers, and when an account needs signing in again. It also hears, once each, about what is worth doing before it is lost:
+
+- `reset-expiring`: a limit reset lapses within the day, and slopmax won't redeem it by itself (`redeem_expiring_credits` is off);
+- `quota-unused`: a week resets within the day with a quarter or more of it unused, and what that is worth.
+
+Add `limited` and `available` to `events` to hear about each account too. `slopmax status`, the dashboard, and the app list the current nudges, and the app posts them as notifications.
 
 ```toml
 [notify]
@@ -277,7 +304,7 @@ What crosses: text, images, documents, tool definitions and calls, tool results,
 | Command                              | Description                                                                   |
 | ------------------------------------ | ----------------------------------------------------------------------------- |
 | `slopmax [status]`                   | Accounts, usage windows, and resets (`--watch`, `--refresh`, `--json`)        |
-| `slopmax init`                       | Guided setup of accounts, agents, and the service (`--yes` takes the defaults) |
+| `slopmax setup`                      | Set everything up step by step (`--yes` and flags for unattended runs; alias `init`) |
 | `slopmax login <provider>`           | Sign in, or enter an API key (`--label`; `--device`, `--no-browser`; `--url`, `--dialect`, `--models` for `compat`) |
 | `slopmax import [source]`            | Copy logins from `claude-code`, `codex`, `cliproxyapi`, or `all` (`--own`)    |
 | `slopmax own <account\|all>`         | Refresh an account slopmax has been following from CLIProxyAPI               |
@@ -292,7 +319,8 @@ What crosses: text, images, documents, tool definitions and calls, tool results,
 | `slopmax serve`                      | Run the proxy in the foreground                                               |
 | `slopmax run <agent> [args…]`        | Launch Claude Code or Codex through the proxy                                 |
 | `slopmax env <agent>`                | Print shell setup for `eval`                                                  |
-| `slopmax setup <agent> [--undo]`     | Point an agent's own config at the proxy, or restore it                       |
+| `slopmax setup <agent> [--undo]`     | Point one agent's own config at the proxy, or restore it                      |
+| `slopmax config [name] [value]`      | Show the routing and redeem settings, or change one while the proxy runs      |
 | `slopmax usage [range]`              | Token totals and API-equivalent cost (`--by`, `--json`)                       |
 | `slopmax dashboard`                  | Open the dashboard in a browser (`--print` shows its address)                 |
 | `slopmax logs [-f]`                  | The background proxy's log (`-n` lines, `-f` to follow)                       |
@@ -323,7 +351,8 @@ What crosses: text, images, documents, tool definitions and calls, tool results,
 | `paid_overflow`           | `false`          | Let API keys take over a subscription's models once it is limited   |
 | `proxy`                   | none             | Upstream proxy (`http://`, `socks5://`, `socks5h://`), else `HTTPS_PROXY` |
 | `[aliases]`, `[fallbacks]` | none            | Model renames, and models to try once one is limited everywhere     |
-| `[prices]`                | none             | API prices for `slopmax usage`, beyond Anthropic's built-in list    |
+| `[prices]`                | none             | API prices for `slopmax usage`, beyond the built-in lists           |
+| `[plan_prices]`           | list prices      | What each plan costs a month (`"claude/max 20x" = 200`), for what unused quota is worth |
 | `[notify]`                | none             | Webhook, command, and events for notifications                      |
 | `[[keys]]`                | none             | Client keys, made with `slopmax key add`, each possibly limited to some models |
 
@@ -336,7 +365,7 @@ The proxy applies a changed config.toml within two seconds, without a restart; o
 |                        | slopmax                                                                          | CLIProxyAPI                                                                 | opencodex                                          |
 | ---------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------- |
 | Built with             | Rust: one binary of about 6 MB, about 7 MB of memory when idle                   | Go: a 69 MB binary                                                          | TypeScript on Bun, with a desktop app              |
-| Setup                  | `slopmax init` walks through it; `slopmax doctor` checks it                      | A config file and login flags                                               | Desktop app and CLI                                |
+| Setup                  | `slopmax setup` walks through it or runs unattended; `slopmax doctor` checks it  | A config file and login flags                                               | Desktop app and CLI                                |
 | Default account choice | The used quota that resets soonest, so less of it goes to waste; or fill-first, least-used, round-robin | Round-robin or fill-first within priority tiers                  | One active account, switching at 80% used          |
 | Usage data             | Usage endpoints and response headers; agents are shown the pool's combined usage | Response headers, kept for display                                          | Usage endpoint and response headers                |
 | Session stickiness     | Built in; off for the proxy or one request (`x-slopmax-affinity`)                | Opt-in                                                                      | Built in                                           |

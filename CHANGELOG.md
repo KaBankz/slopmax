@@ -14,6 +14,11 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 - The proxy applies a changed config.toml without a restart; only the address needs one. Background tasks such as polling and redeeming read the config each time they run.
 - `GET` and `POST /slopmax/settings` read and change the strategy, session affinity, and the redeem settings while the proxy runs, keeping config.toml's comments. `GET /slopmax/history` serves the same usage analytics the desktop app charts: tokens, cost, failovers, caching, speed, and the split by account, model, and agent.
 - API prices for GPT-6 Sol and Luna, so ChatGPT usage is costed beside Claude's.
+- `slopmax setup` takes you from nothing to a running proxy: choose the kinds of accounts to pool and sign in or add keys, choose the strategy and session affinity, wire the agents, and start the proxy at login. With `--yes`, or without a terminal, it asks nothing and takes flags instead (`--import`, `--login`, `--keys-from-env`, `--strategy`, `--affinity`, `--agents`, `--no-service`), so an agent or a script can run it. `slopmax init` is its alias, and `slopmax setup <agent>` still wires one agent.
+- `slopmax config` lists the settings that apply while the proxy runs, shows one, or changes one and has the proxy apply it at once.
+- Left on the table: slopmax notes each window that resets with how much of it was used, and values the unused part of each week at the plan's price (list prices, or `[plan_prices]`). `slopmax usage`, the dashboard, and the app show it by account.
+- Two notifications, on by default: `reset-expiring`, a limit reset lapsing within the day that slopmax won't redeem by itself, and `quota-unused`, a week resetting within the day with a quarter or more unused. `slopmax status`, the dashboard, and the app list them, and the app posts them.
+- Each pool says where a new session would go and why (`slopmax status`, `/slopmax/status`), and shows its model-scoped windows, such as a weekly Fable cap.
 
 ### Changed
 
@@ -26,6 +31,10 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ### Fixed
 
+- When several slopmax processes started at once on a fresh home, each could write its own `api_key`, leaving a proxy with a key no client had.
+- A request no longer tries an account whose sign-in another process found revoked, before the proxy reloads its accounts.
+- A browser sign-in that could neither receive the callback nor read a pasted address now fails at once instead of waiting 10 minutes.
+- A demo (`mise run demo`) can no longer install the real login service; `SLOPMAX_NO_SERVICE` hides the service manager.
 - In `slopmax init`, the answer to the question after a browser sign-in could be swallowed by input the sign-in kept waiting for.
 
 ## [0.3.0] - 2026-10-04

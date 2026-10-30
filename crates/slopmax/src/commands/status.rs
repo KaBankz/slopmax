@@ -117,6 +117,12 @@ fn render(report: &Report, now: Timestamp) -> String {
             );
         }
     }
+    if !report.nudges.is_empty() {
+        let _ = writeln!(out);
+        for nudge in &report.nudges {
+            let _ = writeln!(out, "{} {}", ui::yellow("•"), nudge.message);
+        }
+    }
     let _ = writeln!(
         out,
         "\n{}",
