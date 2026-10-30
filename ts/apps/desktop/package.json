@@ -1,0 +1,10 @@
+{
+  "name": "slopmax-desktop",
+  "private": true,
+  "type": "module",
+  "description": "The desktop app: an Electron shell over the CLI's app-host",
+  "main": "out/main.js",
+  "devDependencies": {
+    "@slopmax/test": "workspace:*"
+  }
+}

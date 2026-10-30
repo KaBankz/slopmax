@@ -1,0 +1,15 @@
+{
+  "name": "@slopmax/common",
+  "private": true,
+  "type": "module",
+  "description": "Time, ids, the logger, and short formats for people",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "effect": "4.1.0"
+  },
+  "devDependencies": {
+    "@slopmax/test": "workspace:*"
+  }
+}

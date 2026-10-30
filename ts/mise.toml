@@ -1,0 +1,18 @@
+# The TypeScript port's toolchain. Bun is the runtime and most of the tools;
+# the CLI binary is compiled ahead of time with Bun canary (see docs/AOT.md).
+
+[tools]
+bun = "1.4.4"
+node = "24"
+
+[tasks.install]
+run = "bun install"
+
+[tasks.check]
+description = "Format check, types, lint, and every test"
+run = "bun run verify"
+
+[tasks.compile]
+description = "Build the CLI ahead of time with Bun canary"
+tools = { "github:oven-sh/bun" = { version = "canary", asset_pattern = "bun-linux-x64.zip" } }
+run = "bun run --cwd apps/cli compile"

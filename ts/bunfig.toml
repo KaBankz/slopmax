@@ -1,0 +1,6 @@
+[fmt]
+printWidth = 120
+semi = false
+
+[test]
+root = "."

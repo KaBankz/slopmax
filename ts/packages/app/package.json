@@ -1,0 +1,16 @@
+{
+  "name": "@slopmax/app",
+  "private": true,
+  "type": "module",
+  "description": "The desktop app apart from any UI: its state, actions, and what it draws",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "effect": "4.1.0",
+    "@slopmax/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@slopmax/test": "workspace:*"
+  }
+}

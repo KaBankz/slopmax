@@ -1,0 +1,16 @@
+{
+  "name": "@slopmax/net",
+  "private": true,
+  "type": "module",
+  "description": "Outbound HTTP (pooling, proxies, origins), WebSocket and form helpers",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "effect": "4.1.0",
+    "@slopmax/common": "workspace:*"
+  },
+  "devDependencies": {
+    "@slopmax/test": "workspace:*"
+  }
+}

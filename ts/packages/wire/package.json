@@ -1,0 +1,16 @@
+{
+  "name": "@slopmax/wire",
+  "private": true,
+  "type": "module",
+  "description": "API formats and translation between them; no I/O",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "effect": "4.1.0",
+    "@slopmax/common": "workspace:*"
+  },
+  "devDependencies": {
+    "@slopmax/test": "workspace:*"
+  }
+}
