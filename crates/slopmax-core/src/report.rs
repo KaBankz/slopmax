@@ -27,6 +27,10 @@ pub struct Report {
     /// Each subscription's working accounts read as one, as agents see them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pools: Vec<PoolReport>,
+    /// What is worth doing before it is lost: limit resets about to lapse
+    /// unredeemed, and weeks about to reset with quota to spare.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nudges: Vec<crate::notify::Event>,
 }
 
 /// A provider's working accounts (enabled and signed in) read as one: each
@@ -52,6 +56,25 @@ pub struct NextReport {
 }
 
 impl Report {
+    /// Adds the [nudges](crate::notify::nudges) the accounts call for now.
+    pub fn with_nudges(mut self, config: &Config, now: Timestamp) -> Self {
+        let subjects: Vec<crate::notify::Subject> = self
+            .accounts
+            .iter()
+            .map(crate::notify::Subject::of)
+            .collect();
+        self.nudges = crate::notify::nudges(
+            &subjects,
+            config.redeem_expiring_credits,
+            &config.plan_prices,
+            now,
+        )
+        .into_iter()
+        .map(|(_, event)| event)
+        .collect();
+        self
+    }
+
     /// Says, for each pool, which account `pool` would give a new session.
     pub fn with_next(mut self, pool: &Pool, now: Timestamp) -> Self {
         for report in &mut self.pools {
@@ -336,6 +359,7 @@ pub fn build(
         generated_at: now,
         accounts,
         pools,
+        nudges: Vec::new(),
     }
 }
 
@@ -422,7 +446,8 @@ pub async fn offline(config: &Config, store: &Store, refresh: bool) -> Result<Re
         false,
         now,
     )
-    .with_next(&pool, now))
+    .with_next(&pool, now)
+    .with_nudges(config, now))
 }
 
 #[cfg(test)]

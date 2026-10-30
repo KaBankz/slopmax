@@ -89,6 +89,18 @@ pub struct Limits {
     pub reset_credits: Option<u32>,
 }
 
+/// A window that ran out its time, and how much of it was used: what was
+/// left is quota the reset threw away.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Lapse {
+    pub span: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Percent used when it was last read before the reset.
+    pub used: f64,
+    pub ended_at: Timestamp,
+}
+
 /// Score for accounts with no usage data: worse than any real reading but
 /// still selectable, so an unmeasured account never looks empty.
 pub const UNKNOWN_SCORE: f64 = 101.0;
@@ -121,6 +133,29 @@ impl Limits {
         if newer.reset_credits.is_some() {
             self.reset_credits = newer.reset_credits;
         }
+    }
+
+    /// The windows of this reading that `newer`, taken at `now`, shows
+    /// have reset: their time passed, or a later period of the same slot
+    /// began. Each is reported once, as merging then drops it.
+    pub fn lapsed(&self, newer: &Limits, now: Timestamp) -> Vec<Lapse> {
+        self.windows
+            .iter()
+            .filter_map(|old| {
+                let ended = old.resets_at?;
+                let next_period = newer.windows.iter().any(|w| {
+                    w.same_slot(old)
+                        && w.resets_at
+                            .is_some_and(|at| at > ended + SignedDuration::from_hours(1))
+                });
+                (ended <= now || next_period).then(|| Lapse {
+                    span: old.span.clone(),
+                    model: old.model.clone(),
+                    used: old.used,
+                    ended_at: ended,
+                })
+            })
+            .collect()
     }
 
     /// Windows that apply to every request, as opposed to one model.
@@ -358,6 +393,39 @@ mod tests {
     fn unknown_usage_scores_above_full() {
         assert_eq!(Limits::default().score(ts(0)), UNKNOWN_SCORE);
         assert!(!Limits::default().is_exhausted(ts(0)));
+    }
+
+    #[test]
+    fn a_window_lapses_once_its_reset_passes_or_a_new_period_shows() {
+        let ts = |s| Timestamp::from_second(s).unwrap();
+        let week = 7 * 86_400;
+        let old = Limits {
+            windows: vec![
+                Window::new("5h", 30.0, Some(ts(10_000))),
+                Window::new("7d", 60.0, Some(ts(50_000))),
+            ],
+            observed_at: Some(ts(1_000)),
+            reset_credits: None,
+        };
+        // Before either reset, a reading of the same period lapses nothing.
+        let same =
+            Limits::observed(vec![Window::new("7d", 61.0, Some(ts(50_000)))], ts(2_000)).unwrap();
+        assert!(old.lapsed(&same, ts(2_000)).is_empty());
+        // The 5-hour window's time passed: it lapsed at 30% used.
+        let lapsed = old.lapsed(&same, ts(20_000));
+        assert_eq!(lapsed.len(), 1);
+        assert_eq!((lapsed[0].span.as_str(), lapsed[0].used), ("5h", 30.0));
+        assert_eq!(lapsed[0].ended_at, ts(10_000));
+        // A reading of next week's window shows this week's ended, even if
+        // the clock says otherwise.
+        let next = Limits::observed(
+            vec![Window::new("7d", 2.0, Some(ts(50_000 + week)))],
+            ts(3_000),
+        )
+        .unwrap();
+        let lapsed = old.lapsed(&next, ts(3_000));
+        assert_eq!(lapsed.len(), 1);
+        assert_eq!((lapsed[0].span.as_str(), lapsed[0].used), ("7d", 60.0));
     }
 
     #[test]

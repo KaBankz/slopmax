@@ -5,7 +5,6 @@
 //! out once for every UI, as `view` is for the accounts.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::Path;
 
 use serde::Serialize;
 
@@ -80,6 +79,8 @@ pub struct History {
     /// What answers from API keys were billed, in dollars: real spending,
     /// unlike the rest of `total.cost`, which subscriptions cover.
     pub billed: f64,
+    /// Subscription quota the range's resets threw away, and what it cost.
+    pub left: crate::waste::Left,
     /// What reading input from cache saved against sending it afresh, in
     /// dollars at API prices.
     pub cache_saved: f64,
@@ -165,17 +166,43 @@ pub fn cached(totals: &Totals) -> Option<f32> {
     (input > 0).then(|| totals.cache_read as f32 / input as f32)
 }
 
-/// Reads the ledger in `dir` over `range`. `names` gives accounts their
-/// display names.
+/// Reads `home`'s ledger and reset windows over `range`. `names` gives
+/// accounts their display names.
 pub fn load(
-    dir: &Path,
+    home: &crate::paths::Home,
     range: Range,
     now: Timestamp,
-    prices: &BTreeMap<String, Custom>,
+    prices: &Prices,
     names: &HashMap<String, String>,
 ) -> History {
     let since = summary::since(range.key(), now).unwrap_or(now);
-    build(&ledger::read(dir, since), range, since, now, prices, names)
+    let mut history = build(
+        &ledger::read(&home.usage(), since),
+        range,
+        since,
+        now,
+        prices.models,
+        names,
+    );
+    let lapsed = crate::waste::read(&home.windows(), since);
+    history.left = crate::waste::left(&lapsed, prices.plans, names);
+    history
+}
+
+/// What usage is valued at: API prices per model, and plans' fees.
+#[derive(Debug, Clone, Copy)]
+pub struct Prices<'a> {
+    pub models: &'a BTreeMap<String, Custom>,
+    pub plans: &'a BTreeMap<String, f64>,
+}
+
+impl<'a> Prices<'a> {
+    pub fn of(config: &'a crate::config::Config) -> Self {
+        Self {
+            models: &config.prices,
+            plans: &config.plan_prices,
+        }
+    }
 }
 
 /// One bucket while it fills.
@@ -350,6 +377,7 @@ fn build(
         rescued,
         unplaced,
         billed: billed.cost,
+        left: crate::waste::Left::default(),
         cache_saved,
         cached: cached(&work),
         sessions: sessions.len() as u64,

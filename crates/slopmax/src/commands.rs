@@ -368,6 +368,22 @@ pub static APP: App = App {
             &[arg("agent", "Which agent", Kind::Required(AGENTS))],
         ),
         command(
+            "config",
+            "Show the routing and redeem settings, or change one while the proxy runs",
+            &[
+                arg(
+                    "name",
+                    "The setting, e.g. strategy",
+                    Kind::Optional(&[], ""),
+                ),
+                arg(
+                    "value",
+                    "Its new value, e.g. round-robin",
+                    Kind::Optional(&[], ""),
+                ),
+            ],
+        ),
+        command(
             "usage",
             "Show token usage and its API-equivalent cost",
             &[
@@ -550,6 +566,11 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
             let exe = std::env::current_exe().context("locating the slopmax binary")?;
             print!("{}", agent_named(m)?.env(&config, &exe));
         }
+        "config" => {
+            let name = m.value("name").unwrap_or_default();
+            let value = m.value("value").unwrap_or_default();
+            settings(&config, name, value).await?;
+        }
         "usage" => {
             let by = m.value("by").unwrap_or("day");
             if !matches!(by, "day" | "model" | "account") {
@@ -680,6 +701,54 @@ fn endpoint(url: &str, dialect: Option<&str>, models: Option<&str>) -> Result<En
     })
 }
 
+/// `slopmax config [name [value]]`: shows the live settings, or one, or
+/// sets one and has the running proxy apply it at once.
+async fn settings(config: &Config, name: &str, value: &str) -> Result<()> {
+    use slopmax_core::config::{LIVE, live_value};
+    if name.is_empty() {
+        let width = LIVE.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
+        for (name, about) in LIVE {
+            let current = config.live(name).unwrap_or_default();
+            println!(
+                "{}  {}  {}",
+                ui::pad(name, width),
+                ui::bold(ui::pad(&current, 11)),
+                ui::dim(about)
+            );
+        }
+        println!(
+            "\n{}",
+            ui::dim(format!(
+                "`slopmax config <name> <value>` changes one; the rest live in {}.",
+                paths::config_file().display()
+            ))
+        );
+        return Ok(());
+    }
+    if value.is_empty() {
+        let current = config
+            .live(name)
+            .with_context(|| live_value(name, "").err().unwrap_or_default())?;
+        println!("{current}");
+        return Ok(());
+    }
+    let setting = live_value(name, value).map_err(anyhow::Error::msg)?;
+    let changed = Config::set(&paths::config_file(), &[setting])?;
+    let now = changed.live(name).unwrap_or_default();
+    let daemon = slopmax_core::background::Daemon::new(config);
+    let applied = if daemon.sync().await.is_some() {
+        "applied now"
+    } else {
+        "the proxy applies it when it starts"
+    };
+    println!(
+        "{name} = {} {}",
+        ui::bold(now),
+        ui::dim(format!("({applied})"))
+    );
+    Ok(())
+}
+
 /// `on` or `off`, as switches are given.
 fn on_off(value: &str) -> Result<bool> {
     match value {
@@ -761,6 +830,8 @@ mod tests {
             "env claude",
             "setup codex --undo",
             "usage 30d --by model",
+            "config strategy round-robin",
+            "setup --yes --import none --strategy fill-first --affinity off --agents none",
             "notify",
             "key add laptop --models gpt-*",
             "logs -f -n 100",

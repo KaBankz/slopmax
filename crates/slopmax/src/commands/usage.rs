@@ -8,9 +8,10 @@ use anyhow::{Result, bail};
 use crate::ui;
 use slopmax_core::account::Store;
 use slopmax_core::config::Config;
+use slopmax_core::paths::Home;
 use slopmax_core::summary::{self, Totals};
 use slopmax_core::time::Timestamp;
-use slopmax_core::{human, paths};
+use slopmax_core::{human, paths, waste};
 
 /// Prints usage since the start of `range` (`today`, `7d`, `30d`, `all`),
 /// grouped `by` day, model, or account.
@@ -26,9 +27,13 @@ pub fn run(config: &Config, store: &Store, range: &str, by: &str, json: bool) ->
         .collect();
     let report = summary::build(&paths::usage_dir(), since, by, &config.prices, &names);
     let (rows, total) = (&report.rows, &report.total);
+    let lapsed = waste::read(&Home::current().windows(), since);
+    let left = waste::left(&lapsed, &config.plan_prices, &names);
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        let mut value = serde_json::to_value(&report)?;
+        value["left_on_the_table"] = serde_json::to_value(&left)?;
+        println!("{}", serde_json::to_string_pretty(&value)?);
         return Ok(());
     }
     let title = match range {
@@ -96,5 +101,44 @@ pub fn run(config: &Config, store: &Store, range: &str, by: &str, json: bool) ->
         ));
     }
     println!("\n{}", ui::dim(note));
+    print_left(&left);
     Ok(())
+}
+
+/// What the weeks that reset left unused, and what that part of the plans
+/// cost.
+fn print_left(left: &waste::Left) {
+    if left.windows == 0 {
+        return;
+    }
+    let windows = format!(
+        "{} week{}",
+        left.windows,
+        if left.windows == 1 { "" } else { "s" }
+    );
+    println!(
+        "
+{} {}, {:.0}% unused on average, across {windows}",
+        ui::bold("Left on the table:"),
+        ui::bold(format!("${:.2}", left.dollars)),
+        left.unused,
+    );
+    for account in left.accounts.iter().filter(|a| a.unused >= 0.5) {
+        println!(
+            "  {}  {:>7}  {}",
+            ui::pad(&account.name, 28),
+            format!("${:.2}", account.dollars),
+            ui::dim(format!(
+                "{:.0}% unused over {}",
+                account.unused, account.windows
+            )),
+        );
+    }
+    let mut note = "What each plan costs for the part of its weekly quota a reset threw away. \
+                    `slopmax status` shows what is left this week."
+        .to_owned();
+    if left.unpriced > 0 {
+        note.push_str(" Plans without a known price are left out; set them under [plan_prices].");
+    }
+    println!("{}", ui::dim(note));
 }

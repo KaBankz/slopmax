@@ -47,13 +47,25 @@ pub enum Kind {
     Recovered,
     /// An account's sign-in stopped working and needs `slopmax login`.
     SignedOut,
+    /// A limit reset expires within the day, and slopmax won't redeem it
+    /// by itself (`redeem_expiring_credits` is off).
+    ResetExpiring,
+    /// A week (or month) resets within the day with much of its quota
+    /// unused: work put on the account now costs nothing extra.
+    QuotaUnused,
     /// Sent by `slopmax notify` to check the setup.
     Test,
 }
 
 /// Sent unless `events` says otherwise: the ones that need action or
 /// explain failing requests. Per-account limits come and go all day.
-pub const DEFAULT_EVENTS: &[Kind] = &[Kind::Exhausted, Kind::Recovered, Kind::SignedOut];
+pub const DEFAULT_EVENTS: &[Kind] = &[
+    Kind::Exhausted,
+    Kind::Recovered,
+    Kind::SignedOut,
+    Kind::ResetExpiring,
+    Kind::QuotaUnused,
+];
 
 impl Kind {
     pub fn as_str(self) -> &'static str {
@@ -63,13 +75,15 @@ impl Kind {
             Self::Exhausted => "exhausted",
             Self::Recovered => "recovered",
             Self::SignedOut => "signed-out",
+            Self::ResetExpiring => "reset-expiring",
+            Self::QuotaUnused => "quota-unused",
             Self::Test => "test",
         }
     }
 }
 
 /// One notification.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Event {
     pub event: Kind,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -188,6 +202,120 @@ async fn run(command: &str, event: &Event) -> Result<()> {
     Ok(())
 }
 
+/// How long before it lapses a limit reset is worth a nudge, and a week's
+/// unused quota too.
+pub const NUDGE_AHEAD: crate::time::SignedDuration = crate::time::SignedDuration::from_hours(24);
+/// The share of a week, in percent, left unused that is worth a nudge.
+pub const UNUSED_WORTH_A_NUDGE: f64 = 25.0;
+
+/// An account as nudges see it.
+#[derive(Debug, Clone, Copy)]
+pub struct Subject<'a> {
+    pub id: &'a str,
+    pub name: &'a str,
+    pub provider: ProviderId,
+    pub plan: Option<&'a str>,
+    /// Disabled or signed out: nothing to nudge about.
+    pub off: bool,
+    pub state: &'a AccountState,
+}
+
+impl<'a> Subject<'a> {
+    pub fn of(report: &'a crate::report::AccountReport) -> Self {
+        Self {
+            id: &report.id,
+            name: &report.name,
+            provider: report.provider,
+            plan: report.plan.as_deref(),
+            off: report.disabled || report.auth_error.is_some(),
+            state: &report.state,
+        }
+    }
+}
+
+/// Things worth doing before they are lost: a limit reset that will lapse
+/// unredeemed, and a week about to reset with quota to spare. Each comes
+/// with a key that names it, so it is told once. `auto_redeem` is
+/// `redeem_expiring_credits`, which spends lapsing resets by itself.
+pub fn nudges(
+    accounts: &[Subject],
+    auto_redeem: bool,
+    plan_prices: &BTreeMap<String, f64>,
+    now: Timestamp,
+) -> Vec<(String, Event)> {
+    let horizon = now + NUDGE_AHEAD;
+    let mut nudges = Vec::new();
+    for account in accounts.iter().filter(|a| !a.off) {
+        let event = |kind, until: Timestamp, message| Event {
+            event: kind,
+            provider: Some(account.provider),
+            account: Some(account.name.to_owned()),
+            until: Some(until),
+            message,
+            at: now,
+        };
+        if !auto_redeem {
+            for credit in account.state.unexpired_credits(now) {
+                let Some(expires) = credit.expires_at.filter(|at| *at <= horizon) else {
+                    continue;
+                };
+                let key = format!("reset:{}:{}", account.id, credit.id);
+                let message = format!(
+                    "A limit reset on {} expires {}; redeem it with `slopmax redeem {}` before it is lost.",
+                    account.name,
+                    when(expires, now),
+                    account.name,
+                );
+                nudges.push((key, event(Kind::ResetExpiring, expires, message)));
+            }
+        }
+        let long = account
+            .state
+            .limits
+            .windows
+            .iter()
+            .filter(|w| w.model.is_none() && matches!(w.span.as_str(), "7d" | "30d"));
+        for window in long {
+            let Some(resets) = window.upcoming_reset(now).filter(|at| *at <= horizon) else {
+                continue;
+            };
+            let unused = 100.0 - window.used_at(now).clamp(0.0, 100.0);
+            if unused < UNUSED_WORTH_A_NUDGE || account.state.is_blocked(now) {
+                continue;
+            }
+            let worth = crate::waste::value(
+                account.provider,
+                account.plan,
+                &window.span,
+                None,
+                100.0 - unused,
+                plan_prices,
+            )
+            .filter(|d| *d >= 0.5)
+            .map(|d| format!(", about ${d:.0} of its plan"))
+            .unwrap_or_default();
+            let period = if window.span == "30d" {
+                "month"
+            } else {
+                "week"
+            };
+            let key = format!(
+                "unused:{}:{}:{}",
+                account.id,
+                window.span,
+                resets.as_second()
+            );
+            let message = format!(
+                "{}'s {period} resets {} with {unused:.0}% of it unused{worth}. Work sent there before then costs nothing extra.",
+                account.name,
+                when(resets, now),
+            );
+            nudges.push((key, event(Kind::QuotaUnused, resets, message)));
+        }
+    }
+    nudges
+}
+
 /// An account's condition, as far as notifications care.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Condition {
@@ -204,9 +332,20 @@ pub struct Watcher {
     accounts: HashMap<String, Condition>,
     exhausted: BTreeMap<ProviderId, bool>,
     primed: bool,
+    /// The keys of the nudges told already.
+    told: std::collections::HashSet<String>,
 }
 
 impl Watcher {
+    /// The [`nudges`] not told before.
+    pub fn new_nudges(&mut self, nudges: Vec<(String, Event)>) -> Vec<Event> {
+        nudges
+            .into_iter()
+            .filter(|(key, _)| self.told.insert(key.clone()))
+            .map(|(_, event)| event)
+            .collect()
+    }
+
     /// What changed since the previous call. The first call only takes
     /// stock: conditions that predate the proxy are not news.
     pub fn changes(
@@ -472,5 +611,119 @@ mod tests {
         let error = failing.send(&http, &event).await.unwrap_err().to_string();
         assert!(error.contains("nope"), "{error}");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn nudges_name_lapsing_resets_and_spare_weeks_once_each() {
+        use crate::limits::{Limits, Window};
+        use crate::pool::CreditList;
+        use crate::provider::credits::Credit;
+        let now = Timestamp::from_second(1_000_000).unwrap();
+        let hours = |h: i64| now + SignedDuration::from_hours(h);
+        let credit = |id: &str, expires| Credit {
+            id: id.into(),
+            title: None,
+            granted_at: None,
+            expires_at: Some(expires),
+        };
+        let state = AccountState {
+            credits: Some(CreditList {
+                credits: vec![credit("soon", hours(5)), credit("later", hours(72))],
+                listed_at: now,
+                counted: None,
+            }),
+            limits: Limits {
+                windows: vec![
+                    Window {
+                        span: "5h".into(),
+                        model: None,
+                        used: 0.0,
+                        resets_at: Some(hours(2)),
+                    },
+                    Window {
+                        span: "7d".into(),
+                        model: None,
+                        used: 40.0,
+                        resets_at: Some(hours(10)),
+                    },
+                    Window {
+                        span: "7d".into(),
+                        model: Some("Fable".into()),
+                        used: 0.0,
+                        resets_at: Some(hours(10)),
+                    },
+                ],
+                observed_at: Some(now),
+                reset_credits: None,
+            },
+            ..AccountState::default()
+        };
+        let subject = Subject {
+            id: "claude-1",
+            name: "work@x.dev",
+            provider: ProviderId::Claude,
+            plan: Some("max 20x"),
+            off: false,
+            state: &state,
+        };
+        let plans = BTreeMap::new();
+        let found = nudges(&[subject], false, &plans, now);
+        let kinds: Vec<Kind> = found.iter().map(|(_, e)| e.event).collect();
+        assert_eq!(kinds, [Kind::ResetExpiring, Kind::QuotaUnused]);
+        let reset = &found[0].1;
+        assert!(
+            reset.message.contains("slopmax redeem work@x.dev"),
+            "{}",
+            reset.message
+        );
+        assert_eq!(reset.until, Some(hours(5)));
+        // 60% of a $200 plan's week: about $28.
+        let spare = &found[1].1.message;
+        assert!(
+            spare.contains("60% of it unused, about $28 of its plan"),
+            "{spare}"
+        );
+
+        // With auto-redeem on, slopmax spends the reset itself.
+        let found = nudges(&[subject], true, &plans, now);
+        assert_eq!(found.len(), 1);
+
+        // Each is told once.
+        let mut watcher = Watcher::default();
+        assert_eq!(
+            watcher
+                .new_nudges(nudges(&[subject], false, &plans, now))
+                .len(),
+            2
+        );
+        assert!(
+            watcher
+                .new_nudges(nudges(&[subject], false, &plans, now))
+                .is_empty()
+        );
+
+        // A week nearly spent, an account switched off, or a week far from
+        // its reset is not worth a word.
+        let mut spent = state.clone();
+        spent.limits.windows[1].used = 90.0;
+        let nearly = Subject {
+            state: &spent,
+            ..subject
+        };
+        assert_eq!(nudges(&[nearly], true, &plans, now).len(), 0);
+        let off = Subject {
+            off: true,
+            ..subject
+        };
+        assert!(nudges(&[off], false, &plans, now).is_empty());
+        assert!(
+            nudges(
+                &[subject],
+                true,
+                &plans,
+                now - SignedDuration::from_hours(48)
+            )
+            .is_empty()
+        );
     }
 }

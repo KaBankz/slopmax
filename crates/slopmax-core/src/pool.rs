@@ -271,6 +271,10 @@ struct Inner {
     /// round-robin hands the next to the one handed one longest ago.
     picked: HashMap<String, u64>,
     picks: u64,
+    /// Windows that reset since they were last taken, by account, and
+    /// those already taken.
+    lapses: Vec<(String, crate::limits::Lapse)>,
+    told: Vec<(String, crate::limits::Lapse)>,
     dirty: bool,
 }
 
@@ -521,13 +525,48 @@ impl Pool {
     pub fn observe(&self, id: &str, limits: Limits, now: Timestamp) {
         let mut inner = self.lock();
         let state = inner.states.entry(id.to_owned()).or_default();
+        let lapsed = state.limits.lapsed(&limits, now);
         state.limits.merge(limits);
         // A fresh reading below the limit proves an earlier block has lifted,
         // often well before the advertised reset.
         if state.blocked_until.is_some() && !state.limits.is_exhausted(now) {
             state.blocked_until = None;
         }
+        inner
+            .lapses
+            .extend(lapsed.into_iter().map(|lapse| (id.to_owned(), lapse)));
         inner.dirty = true;
+    }
+
+    /// The windows that reset since the last call, by account: those
+    /// readings showed, and those whose time passed with no reading since.
+    /// A window may be told twice (after a restart, say); readers drop
+    /// the repeats.
+    pub fn take_lapses(&self, now: Timestamp) -> Vec<(String, crate::limits::Lapse)> {
+        let mut inner = self.lock();
+        let inner = &mut *inner;
+        let mut found = std::mem::take(&mut inner.lapses);
+        for (id, state) in &inner.states {
+            let lapsed = state.limits.lapsed(&Limits::default(), now);
+            found.extend(lapsed.into_iter().map(|lapse| (id.clone(), lapse)));
+        }
+        let same = |a: &(String, crate::limits::Lapse), b: &(String, crate::limits::Lapse)| {
+            a.0 == b.0
+                && a.1.span == b.1.span
+                && a.1.model == b.1.model
+                && a.1.ended_at == b.1.ended_at
+        };
+        let mut taken: Vec<(String, crate::limits::Lapse)> = Vec::new();
+        for lapse in found {
+            if !inner.told.iter().chain(&taken).any(|t| same(t, &lapse)) {
+                taken.push(lapse);
+            }
+        }
+        inner.told.extend(taken.iter().cloned());
+        // Only the recent ones can come round again.
+        let week_ago = now - SignedDuration::from_hours(24 * 8);
+        inner.told.retain(|(_, l)| l.ended_at > week_ago);
+        taken
     }
 
     /// Sits an account out after a quota refusal. Deadlines only extend.
@@ -850,6 +889,35 @@ mod tests {
         pool.block(&a.id, ts(5000), None, "limit");
         pool.block(&b.id, ts(5000), None, "limit");
         assert_eq!(pick(&pool, None, 1000).unwrap(), reserve.id);
+    }
+
+    #[test]
+    fn reset_windows_are_told_once_with_what_was_used() {
+        let a = account(ProviderId::Claude, "a", 1);
+        let pool = pool(Strategy::FillFirst, &[&a]);
+        pool.observe(
+            &a.id,
+            limits(vec![
+                window("7d", 70.0, Some(5_000)),
+                window("5h", 10.0, Some(9_000)),
+            ]),
+            ts(1000),
+        );
+        assert!(pool.take_lapses(ts(2_000)).is_empty());
+        // The week's time passes with no reading since.
+        let lapsed = pool.take_lapses(ts(6_000));
+        assert_eq!(lapsed.len(), 1);
+        assert_eq!((lapsed[0].1.span.as_str(), lapsed[0].1.used), ("7d", 70.0));
+        assert!(pool.take_lapses(ts(6_500)).is_empty(), "told once");
+        // A reading of the next 5-hour period shows that one ended too.
+        pool.observe(
+            &a.id,
+            limits(vec![window("5h", 1.0, Some(30_000))]),
+            ts(9_500),
+        );
+        let lapsed = pool.take_lapses(ts(9_500));
+        assert_eq!(lapsed.len(), 1);
+        assert_eq!((lapsed[0].1.span.as_str(), lapsed[0].1.used), ("5h", 10.0));
     }
 
     #[test]

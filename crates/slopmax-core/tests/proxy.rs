@@ -2487,3 +2487,33 @@ async fn the_history_api_charts_what_went_through() {
     let (status, _) = admin(&h, Method::GET, "history?range=forever", "").await;
     assert_eq!(status, 400);
 }
+
+#[tokio::test]
+async fn history_says_what_resets_left_on_the_table() {
+    let h = harness(ProviderId::Codex, &["tok-ok"]).await;
+    let ended = Timestamp::now() - SignedDuration::from_hours(1);
+    let record = |span: &str, used: f64| slopmax_core::waste::Record {
+        ended_at: ended,
+        account: h.ids[0].clone(),
+        provider: ProviderId::Codex,
+        plan: Some("pro".into()),
+        span: span.into(),
+        model: None,
+        used,
+    };
+    let file = h.dir.join("windows.jsonl");
+    slopmax_core::waste::append(&file, &[record("7d", 25.0), record("5h", 0.0)]).unwrap();
+
+    let (status, history) = admin(&h, Method::GET, "history?range=7d", "").await;
+    assert_eq!(status, 200);
+    let left = &history["left"];
+    assert_eq!(left["windows"], 1, "the weeks alone");
+    assert_eq!(left["unused"], 75.0);
+    // ChatGPT Pro at $200 a month: three quarters of a week's share.
+    let dollars = left["dollars"].as_f64().unwrap();
+    assert!(
+        (dollars - 200.0 * 12.0 / 52.0 * 0.75).abs() < 1e-6,
+        "{dollars}"
+    );
+    assert_eq!(left["accounts"][0]["name"], "codex0@example.com");
+}

@@ -6,6 +6,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::provider::ProviderId;
+
 /// Prices in US dollars per million tokens.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Price {
@@ -66,6 +68,38 @@ const OPENAI: &[(&str, f64, f64, f64)] = &[
     ("gpt-6-sol", 2.0, 10.0, 0.20),
     ("gpt-6-luna", 0.10, 0.50, 0.01),
 ];
+
+/// Subscription list prices in US dollars a month, by provider and the
+/// plan its accounts report. What a plan costs varies by country and with
+/// tax; `[plan_prices]` in config.toml sets the real figure.
+const PLANS: &[(ProviderId, &str, f64)] = &[
+    (ProviderId::Claude, "pro", 20.0),
+    (ProviderId::Claude, "max", 100.0),
+    (ProviderId::Claude, "max 5x", 100.0),
+    (ProviderId::Claude, "max 20x", 200.0),
+    (ProviderId::Claude, "team", 30.0),
+    (ProviderId::Codex, "plus", 20.0),
+    (ProviderId::Codex, "pro", 200.0),
+    (ProviderId::Codex, "team", 30.0),
+    (ProviderId::Codex, "business", 30.0),
+];
+
+/// What a subscription plan costs a month: the user's own figure, set as
+/// `"claude/max 20x" = 200` under `[plan_prices]`, else the list price.
+pub fn plan_monthly(
+    provider: ProviderId,
+    plan: &str,
+    custom: &BTreeMap<String, f64>,
+) -> Option<f64> {
+    let plan = plan.trim().to_ascii_lowercase();
+    let key = format!("{}/{plan}", provider.as_str());
+    custom.get(&key).copied().or_else(|| {
+        PLANS
+            .iter()
+            .find(|(p, name, _)| *p == provider && *name == plan)
+            .map(|(.., price)| *price)
+    })
+}
 
 /// The price of `model`: the user's own if they set one, else the list
 /// price.
@@ -130,6 +164,21 @@ mod tests {
         assert!(list("claude-opus-5-6").is_none());
         assert!(list("claude-opus-5-5-fast").is_none());
         assert!(list("gpt-6-sol-pro").is_none());
+    }
+
+    #[test]
+    fn plans_are_priced_by_provider_and_can_be_set() {
+        let none = BTreeMap::new();
+        assert_eq!(
+            plan_monthly(ProviderId::Claude, "max 20x", &none),
+            Some(200.0)
+        );
+        // "pro" is a different plan on each service.
+        assert_eq!(plan_monthly(ProviderId::Claude, "Pro", &none), Some(20.0));
+        assert_eq!(plan_monthly(ProviderId::Codex, "pro", &none), Some(200.0));
+        assert_eq!(plan_monthly(ProviderId::Codex, "enterprise", &none), None);
+        let mine = BTreeMap::from([("codex/pro".to_owned(), 229.0)]);
+        assert_eq!(plan_monthly(ProviderId::Codex, "pro", &mine), Some(229.0));
     }
 
     #[test]

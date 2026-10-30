@@ -66,6 +66,10 @@ pub struct Config {
     /// Per-model API prices for `slopmax usage`, beyond the built-in ones.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub prices: BTreeMap<String, Custom>,
+    /// What each subscription plan costs a month, as `"claude/max 20x" =
+    /// 200`, for what unused quota is worth; list prices otherwise.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub plan_prices: BTreeMap<String, f64>,
     /// Where to send notifications, and which.
     #[serde(skip_serializing_if = "notify::Settings::is_empty")]
     pub notify: notify::Settings,
@@ -116,6 +120,7 @@ impl Default for Config {
             aliases: BTreeMap::new(),
             fallbacks: BTreeMap::new(),
             prices: BTreeMap::new(),
+            plan_prices: BTreeMap::new(),
             notify: notify::Settings::default(),
             keys: Vec::new(),
         }
@@ -173,7 +178,90 @@ impl fmt::Display for Strategy {
     }
 }
 
+/// The settings that apply while the proxy runs, which `slopmax config`,
+/// the dashboard, and the app change: each name and what it does.
+pub const LIVE: &[(&str, &str)] = &[
+    (
+        "strategy",
+        "reset-first, fill-first, least-used, or round-robin",
+    ),
+    (
+        "session_affinity",
+        "keep a session on its account, for the prompt cache",
+    ),
+    (
+        "session_ttl_mins",
+        "idle minutes before a session's account is forgotten",
+    ),
+    (
+        "redeem_expiring_credits",
+        "redeem a limit reset before it expires unused",
+    ),
+    (
+        "redeem_when_exhausted",
+        "redeem one when every account is spent",
+    ),
+    (
+        "warm_windows",
+        "start idle ChatGPT accounts' windows as they reset",
+    ),
+    (
+        "paid_overflow",
+        "let API keys take over once subscriptions are limited",
+    ),
+    (
+        "poll_mins",
+        "minutes between usage polls (0 turns them off)",
+    ),
+];
+
+/// `value` as the setting `name` takes it, or why not.
+pub fn live_value(name: &str, value: &str) -> Result<(&'static str, toml_edit::Value), String> {
+    let Some((name, _)) = LIVE.iter().find(|(n, _)| *n == name) else {
+        let names: Vec<&str> = LIVE.iter().map(|(n, _)| *n).collect();
+        return Err(format!(
+            "{name} is not a setting slopmax changes while it runs; those are {}",
+            names.join(", ")
+        ));
+    };
+    let value = value.trim();
+    let parsed = match *name {
+        "strategy" => match Strategy::parse(value) {
+            Some(strategy) => toml_edit::Value::from(strategy.to_string()),
+            None => {
+                let names: Vec<String> = Strategy::ALL.iter().map(|s| s.to_string()).collect();
+                return Err(format!("strategy is one of {}", names.join(", ")));
+            }
+        },
+        "session_ttl_mins" | "poll_mins" => match value.parse::<i64>() {
+            Ok(mins) if mins > 0 || (*name == "poll_mins" && mins == 0) => mins.into(),
+            _ => return Err(format!("{name} is a number of minutes")),
+        },
+        _ => match value {
+            "true" | "on" | "1" | "yes" => true.into(),
+            "false" | "off" | "0" | "no" => false.into(),
+            _ => return Err(format!("{name} is on or off")),
+        },
+    };
+    Ok((name, parsed))
+}
+
 impl Config {
+    /// A live setting's value as config.toml writes it.
+    pub fn live(&self, name: &str) -> Option<String> {
+        Some(match name {
+            "strategy" => self.strategy.to_string(),
+            "session_affinity" => self.session_affinity.to_string(),
+            "session_ttl_mins" => self.session_ttl_mins.to_string(),
+            "redeem_expiring_credits" => self.redeem_expiring_credits.to_string(),
+            "redeem_when_exhausted" => self.redeem_when_exhausted.to_string(),
+            "warm_windows" => self.warm_windows.to_string(),
+            "paid_overflow" => self.paid_overflow.to_string(),
+            "poll_mins" => self.poll_mins.to_string(),
+            _ => return None,
+        })
+    }
+
     /// Loads the config, creating it (with a fresh API key) on first use.
     /// `SLOPMAX_LISTEN` overrides `listen`, for containers.
     pub fn load() -> Result<Self> {
@@ -411,7 +499,9 @@ api_key = "{api_key}"
 #   "gpt-6-sol" = ["openai/gpt-6-sol"]
 
 # Notifications, sent when every account of a kind is limited (so requests
-# fail), when it recovers, and when an account needs `slopmax login` again.
+# fail), when it recovers, when an account needs `slopmax login` again, when
+# a limit reset would expire unused (with redeem_expiring_credits off), and
+# when a week is about to reset with much of its quota unused.
 # A webhook gets a JSON POST (with "text" and "content", so Slack and
 # Discord show it); a command runs in the shell with SLOPMAX_EVENT,
 # SLOPMAX_PROVIDER, SLOPMAX_ACCOUNT, SLOPMAX_UNTIL, and SLOPMAX_MESSAGE set.
@@ -420,7 +510,7 @@ api_key = "{api_key}"
 #   [notify]
 #   webhook = "https://hooks.slack.com/services/..."
 #   command = 'notify-send slopmax "$SLOPMAX_MESSAGE"'
-#   events = ["exhausted", "recovered", "signed-out"]
+#   events = ["exhausted", "recovered", "signed-out", "reset-expiring", "quota-unused"]
 
 # More keys, for other machines and tools, made with `slopmax key add`. A
 # key may be limited to some models; only api_key reaches slopmax's own API.
@@ -429,8 +519,15 @@ api_key = "{api_key}"
 #   key = "sm-..."
 #   models = ["gpt-*"]
 
+# What each subscription costs a month, for what unused quota is worth.
+# List prices are built in (Claude Pro $20, Max 5x $100, Max 20x $200;
+# ChatGPT Plus $20, Pro $200); set what you really pay:
+#   [plan_prices]
+#   "claude/max 20x" = 200
+#   "codex/pro" = 200
+
 # API prices for `slopmax usage`, in dollars per million tokens. Anthropic's
-# list prices are built in; add models it can't price. Cache reads default
+# and OpenAI's list prices are built in; add models it can't price. Cache reads default
 # to a tenth of input, cache writes to 1.25x input. For example:
 #   [prices."my-model"]
 #   input = 2.0
@@ -472,6 +569,40 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert_eq!(text, format!("{mine}api_key = \"{}\"\n", config.api_key));
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn live_settings_are_checked_before_they_are_written() {
+        assert_eq!(
+            live_value("strategy", "round-robin").unwrap().1.as_str(),
+            Some("round-robin")
+        );
+        assert_eq!(
+            live_value("session_affinity", "off").unwrap().1.as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            live_value("poll_mins", "0").unwrap().1.as_integer(),
+            Some(0)
+        );
+        assert!(live_value("session_ttl_mins", "0").is_err());
+        assert!(
+            live_value("strategy", "fastest")
+                .unwrap_err()
+                .contains("round-robin")
+        );
+        assert!(
+            live_value("listen", "0.0.0.0:1")
+                .unwrap_err()
+                .contains("not a setting")
+        );
+        assert!(live_value("warm_windows", "maybe").is_err());
+        let config = Config::default();
+        for (name, _) in LIVE {
+            let value = config.live(name).unwrap();
+            assert!(live_value(name, &value).is_ok(), "{name} = {value}");
+        }
+        assert!(config.live("api_key").is_none());
     }
 
     #[test]

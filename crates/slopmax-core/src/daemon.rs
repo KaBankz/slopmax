@@ -108,9 +108,7 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<()> {
             }
         },
     ));
-    if app.config().notify.is_enabled() {
-        tokio::spawn(watch(app.clone()));
-    }
+    tokio::spawn(watch(app.clone()));
     tokio::spawn(every(
         Duration::from_secs(60),
         app.clone(),
@@ -180,11 +178,26 @@ async fn watch(app: Arc<App>) {
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         ticker.tick().await;
+        let now = Timestamp::now();
         let accounts = app.pool.accounts();
-        let events = watcher.changes(&accounts, |id| app.pool.state(id), Timestamp::now());
+        let mut events = watcher.changes(&accounts, |id| app.pool.state(id), now);
+        let config = app.config();
+        let report = app.report();
+        let subjects: Vec<notify::Subject> =
+            report.accounts.iter().map(notify::Subject::of).collect();
+        let nudges = notify::nudges(
+            &subjects,
+            config.redeem_expiring_credits,
+            &config.plan_prices,
+            now,
+        );
+        events.extend(watcher.new_nudges(nudges));
         for event in events {
             log::info!("{}", event.message);
-            if let Err(e) = app.config().notify.send(&app.auth_http, &event).await {
+            if !config.notify.is_enabled() {
+                continue;
+            }
+            if let Err(e) = config.notify.send(&app.auth_http, &event).await {
                 log::warn!("sending a notification: {e:#}");
             }
         }
@@ -192,9 +205,39 @@ async fn watch(app: Arc<App>) {
 }
 
 fn save_state(app: &App) {
-    let (state, dirty) = app.pool.snapshot(Timestamp::now());
+    let now = Timestamp::now();
+    record_lapses(app, now);
+    let (state, dirty) = app.pool.snapshot(now);
     if dirty && let Err(e) = fsx::write_json(&app.home.state(), &state) {
         log::warn!("saving state: {e}");
+    }
+}
+
+/// Writes down the windows that reset, with how much of each was used, for
+/// what was left on the table.
+fn record_lapses(app: &App, now: Timestamp) {
+    let lapses = app.pool.take_lapses(now);
+    if lapses.is_empty() {
+        return;
+    }
+    let accounts = app.pool.accounts();
+    let records: Vec<crate::waste::Record> = lapses
+        .into_iter()
+        .filter_map(|(id, lapse)| {
+            let account = accounts.iter().find(|a| a.id == id)?;
+            Some(crate::waste::Record {
+                ended_at: lapse.ended_at,
+                account: id,
+                provider: account.provider,
+                plan: account.plan.clone(),
+                span: lapse.span,
+                model: lapse.model,
+                used: lapse.used,
+            })
+        })
+        .collect();
+    if let Err(e) = crate::waste::append(&app.home.windows(), &records) {
+        log::warn!("recording reset windows: {e:#}");
     }
 }
 

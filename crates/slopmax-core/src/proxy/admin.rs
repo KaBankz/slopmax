@@ -158,11 +158,12 @@ async fn history(app: &App, query: &str) -> Response {
         .into_iter()
         .map(|a| (a.id.clone(), a.name()))
         .collect();
-    let dir = app.home.usage();
-    let prices = app.config().prices.clone();
+    let home = app.home.clone();
+    let config = app.config();
     // Reading a month of the ledger takes a moment: off the request threads.
     let loaded = tokio::task::spawn_blocking(move || {
-        history::load(&dir, range, Timestamp::now(), &prices, &names)
+        let prices = history::Prices::of(&config);
+        history::load(&home, range, Timestamp::now(), &prices, &names)
     })
     .await;
     match loaded {
@@ -186,6 +187,7 @@ fn settings(config: &Config) -> serde_json::Value {
         "redeem_when_exhausted": config.redeem_when_exhausted,
         "warm_windows": config.warm_windows,
         "paid_overflow": config.paid_overflow,
+        "poll_mins": config.poll_mins,
     })
 }
 
@@ -195,46 +197,13 @@ fn settings(config: &Config) -> serde_json::Value {
 fn change_settings(app: &App, form: &str) -> Response {
     let mut values: Vec<(&str, toml_edit::Value)> = Vec::new();
     for (key, value) in crate::net::form::decode(form) {
-        let value = value.trim();
-        let parsed = match key.as_str() {
-            "strategy" => match Strategy::parse(value) {
-                Some(strategy) => toml_edit::Value::from(strategy.to_string()),
-                None => {
-                    let names: Vec<String> = Strategy::ALL.iter().map(|s| s.to_string()).collect();
-                    let message = format!("strategy is one of {}", names.join(", "));
-                    return error(None, StatusCode::BAD_REQUEST, &message);
-                }
-            },
-            "session_ttl_mins" => match value.parse::<i64>() {
-                Ok(mins) if mins > 0 => toml_edit::Value::from(mins),
-                _ => {
-                    return error(
-                        None,
-                        StatusCode::BAD_REQUEST,
-                        "session_ttl_mins is a number of minutes",
-                    );
-                }
-            },
-            "session_affinity"
-            | "redeem_expiring_credits"
-            | "redeem_when_exhausted"
-            | "warm_windows"
-            | "paid_overflow" => match value {
-                "true" | "on" | "1" => toml_edit::Value::from(true),
-                "false" | "off" | "0" => toml_edit::Value::from(false),
-                _ => {
-                    let message = format!("{key} is true or false");
-                    return error(None, StatusCode::BAD_REQUEST, &message);
-                }
-            },
-            "" => continue,
-            _ => {
-                let message = format!("{key} is not a setting slopmax changes while it runs");
-                return error(None, StatusCode::BAD_REQUEST, &message);
-            }
-        };
-        let key: &'static str = SETTABLE.iter().find(|k| **k == key).expect("matched above");
-        values.push((key, parsed));
+        if key.is_empty() {
+            continue;
+        }
+        match crate::config::live_value(&key, &value) {
+            Ok(setting) => values.push(setting),
+            Err(message) => return error(None, StatusCode::BAD_REQUEST, &message),
+        }
     }
     if values.is_empty() {
         return error(None, StatusCode::BAD_REQUEST, "no settings to change");
@@ -246,26 +215,13 @@ fn change_settings(app: &App, form: &str) -> Response {
             config.listen = current.listen;
             config.api_key.clone_from(&current.api_key);
             log::info!("settings changed from the API");
-            json_reply(StatusCode::OK, &{
-                let reply = settings(&config);
-                app.set_config(config);
-                reply
-            })
+            let reply = settings(&config);
+            app.set_config(config);
+            json_reply(StatusCode::OK, &reply)
         }
         Err(e) => error(None, StatusCode::BAD_REQUEST, &format!("{e:#}")),
     }
 }
-
-/// The settings [`change_settings`] takes.
-const SETTABLE: &[&str] = &[
-    "strategy",
-    "session_ttl_mins",
-    "session_affinity",
-    "redeem_expiring_credits",
-    "redeem_when_exhausted",
-    "warm_windows",
-    "paid_overflow",
-];
 
 /// A server-sent event for each request answered from now on.
 fn events(app: &App) -> Response {

@@ -61,6 +61,11 @@ impl Home {
     pub fn pins(&self) -> PathBuf {
         self.0.join("pins.json")
     }
+
+    /// Each subscription window that reset, and how much of it was used.
+    pub fn windows(&self) -> PathBuf {
+        self.0.join("windows.jsonl")
+    }
 }
 
 /// Root of all slopmax state: `$SLOPMAX_HOME`, else `~/.slopmax`.

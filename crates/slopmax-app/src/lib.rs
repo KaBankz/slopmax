@@ -512,10 +512,10 @@ impl App {
             let worker = shared.clone();
             let loaded = tokio::task::spawn_blocking(move || {
                 history::load(
-                    &worker.home.usage(),
+                    &worker.home,
                     range,
                     slopmax_core::time::Timestamp::now(),
-                    &worker.config.prices,
+                    &history::Prices::of(&worker.config),
                     &names,
                 )
             })

@@ -31,6 +31,7 @@ pub mod summary;
 #[cfg(test)]
 mod testkit;
 pub mod usage;
+pub mod waste;
 
 pub use slopmax_common::{human, ids, log, time};
 pub use slopmax_net as net;
