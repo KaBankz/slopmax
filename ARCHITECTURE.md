@@ -263,18 +263,22 @@ State a format cannot carry back is kept by slopmax: the encrypted reasoning an 
 
 - reloading accounts and pins from disk every 2 seconds, and config.toml when it changed, so the CLI's and the app's changes take effect (`POST /slopmax/sync` applies them at once). `App::config` is swapped whole; only the listener is bound for good;
 - saving pool state (windows, blocks, sessions) every 10 seconds, so a restart keeps sessions on their accounts;
-- refreshing tokens ahead of expiry, polling usage, listing limit resets, and redeeming those about to expire;
-- watching account conditions for notifications.
+- refreshing tokens ahead of expiry (every 5 minutes), polling usage when due, listing limit resets, and warming idle windows (each checked every minute), and redeeming resets about to expire (every 30 minutes);
+- watching account conditions every 15 seconds: notifications and nudges, and each window that reset, written to `windows.jsonl` for quota left on the table.
+
+Each task reads the config as it runs, so a changed setting turns it on or off without a restart.
 
 ## Files
 
 ```
 ~/.slopmax/                 (SLOPMAX_HOME moves it; directories 0700, files 0600)
-  config.toml
+  config.toml, .config.lock (held while the first run writes the proxy's key)
   accounts/<provider>-<hash>.json, .<id>.lock
   state.json                windows, blocks, sessions, limit resets, Claude Code's user agent
   pins.json                 `slopmax use`
   usage/<year>-<month>.jsonl
+  windows.jsonl             each window as it reset and how much of it was used (waste.rs)
+  nudged.json               the nudges already sent, so a restart does not repeat them
   setup-backup.json         what `setup` replaced
   slopmax.log
 ```
