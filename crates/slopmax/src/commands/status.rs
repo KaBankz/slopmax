@@ -101,25 +101,21 @@ fn render(report: &Report, now: Timestamp) -> String {
                 window_cell(account.long_window(), now),
                 status_cell(account, now),
             );
-            for scoped in account.scoped_windows() {
-                // Under the matching column: the row prefix is the index and
-                // name, then the plan, then each usage cell.
-                let five_hour_column = name_width + 4 + 2 + PLAN + 2;
-                let column = match scoped.span.as_str() {
-                    "5h" => five_hour_column,
-                    _ => five_hour_column + CELL + 2,
-                };
-                let label = format!("└ {}", scoped.label());
-                let _ = writeln!(
-                    out,
-                    "   {}{}",
-                    ui::dim(ui::pad(&label, column - 3)),
-                    window_cell(Some(scoped), now),
-                );
-            }
+            scoped_rows(&mut out, account.scoped_windows(), name_width, now);
         }
         let pool = report.pools.iter().find(|p| p.provider == provider);
         pool_row(&mut out, pool, name_width, now);
+        if let Some(next) = pool.and_then(|p| p.next.as_ref()) {
+            let name = accounts
+                .iter()
+                .find(|a| a.id == next.account)
+                .map_or(next.account.as_str(), |a| a.name.as_str());
+            let _ = writeln!(
+                out,
+                "   {}",
+                ui::dim(format!("next session → {name}, {}", next.why))
+            );
+        }
     }
     let _ = writeln!(
         out,
@@ -176,6 +172,31 @@ fn metered(
     index
 }
 
+/// Windows that cover one model, each under its column.
+fn scoped_rows<'a>(
+    out: &mut String,
+    windows: impl Iterator<Item = &'a Window>,
+    name_width: usize,
+    now: Timestamp,
+) {
+    for scoped in windows {
+        // Under the matching column: the row prefix is the index and name,
+        // then the plan, then each usage cell.
+        let five_hour_column = name_width + 4 + 2 + PLAN + 2;
+        let column = match scoped.span.as_str() {
+            "5h" => five_hour_column,
+            _ => five_hour_column + CELL + 2,
+        };
+        let label = format!("└ {}", scoped.label());
+        let _ = writeln!(
+            out,
+            "   {}{}",
+            ui::dim(ui::pad(&label, column - 3)),
+            window_cell(Some(scoped), now),
+        );
+    }
+}
+
 /// The pool as the agents see it, when it has more than one account.
 fn pool_row(out: &mut String, pool: Option<&PoolReport>, name_width: usize, now: Timestamp) {
     let Some(pool) = pool.filter(|p| p.accounts > 1) else {
@@ -190,6 +211,7 @@ fn pool_row(out: &mut String, pool: Option<&PoolReport>, name_width: usize, now:
         window_cell(pool.long_window(), now),
         ui::dim("what the agents see"),
     );
+    scoped_rows(out, pool.scoped_windows(), name_width, now);
 }
 
 fn window_cell(window: Option<&Window>, now: Timestamp) -> String {

@@ -74,6 +74,12 @@ pub struct History {
     /// Answers that came from another account after the first could not
     /// give one: the requests failover saved.
     pub rescued: u64,
+    /// Failures that reached no account, because every one was limited or
+    /// out of rotation; the rest count against the account they reached.
+    pub unplaced: u64,
+    /// What answers from API keys were billed, in dollars: real spending,
+    /// unlike the rest of `total.cost`, which subscriptions cover.
+    pub billed: f64,
     /// What reading input from cache saved against sending it afresh, in
     /// dollars at API prices.
     pub cache_saved: f64,
@@ -217,6 +223,8 @@ fn build(
     let mut total = Totals::default();
     let mut work = Totals::default();
     let mut rescued = 0;
+    let mut unplaced = 0;
+    let mut billed = Totals::default();
     let mut cache_saved = 0.;
     let mut sessions = HashSet::new();
     let mut waits = Vec::new();
@@ -242,8 +250,14 @@ fn build(
                 .or_default()
                 .add(entry, prices);
         }
+        if entry.failed() && entry.account.is_empty() {
+            unplaced += 1;
+        }
         if !entry.answered() {
             continue;
+        }
+        if !entry.provider.spec().is_subscription() {
+            billed.add(entry, prices);
         }
         if let Some(i) = providers.iter().position(|p| *p == entry.provider) {
             bucket.tokens[i] += entry.tokens();
@@ -334,6 +348,8 @@ fn build(
         },
         total,
         rescued,
+        unplaced,
+        billed: billed.cost,
         cache_saved,
         cached: cached(&work),
         sessions: sessions.len() as u64,
@@ -512,7 +528,29 @@ mod tests {
         // The account the failure reached counts it; no account, no row.
         assert_eq!(history.accounts.len(), 1);
         assert_eq!(history.accounts[0].totals.failed, 1);
+        assert_eq!(history.unplaced, 1, "the failure no account took");
         assert_eq!(history.models.len(), 1);
+    }
+
+    #[test]
+    fn api_keys_bill_what_subscriptions_only_value() {
+        let now = Timestamp::now();
+        let since = summary::since("today", now).unwrap();
+        let at = since.max(now - SignedDuration::from_mins(1));
+        let subscription = entry(at, ProviderId::Claude, "claude-opus-5-5", 1_000_000);
+        let key = entry(at, ProviderId::Anthropic, "claude-opus-5-5", 1_000_000);
+        let history = build(
+            &[subscription, key],
+            Range::Today,
+            since,
+            now,
+            &BTreeMap::new(),
+            &HashMap::new(),
+        );
+        // 1M input at $4 and 10 output: both valued, one of them billed.
+        let each = 4.0 + 10.0 * 20.0 / 1e6;
+        assert!((history.total.cost - 2.0 * each).abs() < 1e-9);
+        assert!((history.billed - each).abs() < 1e-9);
     }
 
     #[test]

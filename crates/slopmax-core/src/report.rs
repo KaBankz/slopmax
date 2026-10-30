@@ -35,7 +35,34 @@ pub struct Report {
 pub struct PoolReport {
     pub provider: ProviderId,
     pub accounts: usize,
+    /// The shared windows, then those for one model (a weekly cap on one
+    /// Claude model), which stop only that model's requests.
     pub windows: Vec<Window>,
+    /// The account a new session would get now, when one can serve.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next: Option<NextReport>,
+}
+
+/// Where a new session would go, and why, worded for people.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NextReport {
+    pub account: String,
+    pub reason: crate::pool::Reason,
+    pub why: String,
+}
+
+impl Report {
+    /// Says, for each pool, which account `pool` would give a new session.
+    pub fn with_next(mut self, pool: &Pool, now: Timestamp) -> Self {
+        for report in &mut self.pools {
+            report.next = pool.next(report.provider, now).map(|next| NextReport {
+                why: next.reason.text().to_owned(),
+                account: next.account,
+                reason: next.reason,
+            });
+        }
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -246,6 +273,11 @@ impl PoolReport {
     pub fn long_window(&self) -> Option<&Window> {
         self.window("7d").or_else(|| self.window("30d"))
     }
+
+    /// Windows that cover one model only.
+    pub fn scoped_windows(&self) -> impl Iterator<Item = &Window> {
+        self.windows.iter().filter(|w| w.model.is_some())
+    }
 }
 
 fn shared<'a>(windows: &'a [Window], span: &str) -> Option<&'a Window> {
@@ -316,7 +348,7 @@ fn pool(provider: ProviderId, accounts: &[AccountReport], now: Timestamp) -> Opt
     if working.is_empty() {
         return None;
     }
-    let windows = limits::pooled(
+    let mut windows: Vec<Window> = limits::pooled(
         working
             .iter()
             .map(|a| (&a.state.limits, a.state.is_blocked(now))),
@@ -325,10 +357,35 @@ fn pool(provider: ProviderId, accounts: &[AccountReport], now: Timestamp) -> Opt
     .into_iter()
     .map(|w| Window::new(w.span, w.used, w.resets_at))
     .collect();
+    // A model's own window, read as one over the accounts that report it.
+    let mut scoped: Vec<(&str, &str)> = working
+        .iter()
+        .flat_map(|a| &a.state.limits.windows)
+        .filter_map(|w| Some((w.span.as_str(), w.model.as_deref()?)))
+        .collect();
+    scoped.sort_unstable();
+    scoped.dedup();
+    for (span, model) in scoped {
+        let readings: Vec<&Window> = working
+            .iter()
+            .flat_map(|a| &a.state.limits.windows)
+            .filter(|w| w.span == span && w.model.as_deref() == Some(model))
+            .collect();
+        let used = readings.iter().map(|w| w.used_at(now)).sum::<f64>() / readings.len() as f64;
+        let resets_at = readings
+            .iter()
+            .filter(|w| w.used_at(now) > 0.0)
+            .filter_map(|w| w.upcoming_reset(now))
+            .min();
+        let mut window = Window::new(span, used, resets_at);
+        window.model = Some(model.to_owned());
+        windows.push(window);
+    }
     Some(PoolReport {
         provider,
         accounts: working.len(),
         windows,
+        next: None,
     })
 }
 
@@ -355,6 +412,7 @@ pub async fn offline(config: &Config, store: &Store, refresh: bool) -> Result<Re
         let (state, _) = pool.snapshot(Timestamp::now());
         fsx::write_json(&paths::state_file(), &state)?;
     }
+    let now = Timestamp::now();
     Ok(build(
         store.list()?,
         |id| pool.state(id),
@@ -362,8 +420,9 @@ pub async fn offline(config: &Config, store: &Store, refresh: bool) -> Result<Re
         &HashMap::new(),
         config.strategy,
         false,
-        Timestamp::now(),
-    ))
+        now,
+    )
+    .with_next(&pool, now))
 }
 
 #[cfg(test)]

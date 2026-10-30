@@ -246,6 +246,7 @@ impl App {
             true,
             now,
         )
+        .with_next(&self.pool, now)
     }
 }
 

@@ -213,6 +213,45 @@ pub struct Choice {
     pub moved_from: Option<String>,
 }
 
+/// The account a new session would get now, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Next {
+    pub account: String,
+    pub reason: Reason,
+}
+
+/// Why placement would choose an account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Reason {
+    /// Chosen with `slopmax use`.
+    Pinned,
+    /// No other account of the provider can serve.
+    OnlyReady,
+    /// Its used quota resets soonest (reset-first).
+    ResetsSoonest,
+    /// The oldest in the top priority tier (fill-first).
+    FirstInOrder,
+    /// The most room left (least-used, or reset-first among idle ones).
+    MostRoom,
+    /// Handed a request longest ago (round-robin).
+    NextInTurn,
+}
+
+impl Reason {
+    /// Why, in a phrase for people.
+    pub fn text(self) -> &'static str {
+        match self {
+            Self::Pinned => "pinned for new sessions",
+            Self::OnlyReady => "the only account ready",
+            Self::ResetsSoonest => "its quota resets soonest",
+            Self::FirstInOrder => "first in priority order",
+            Self::MostRoom => "the most room left",
+            Self::NextInTurn => "next in turn",
+        }
+    }
+}
+
 /// No account can serve the request right now.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Unavailable {
@@ -417,6 +456,55 @@ impl Pool {
             account,
             moved_from,
         })
+    }
+
+    /// The account a new session of `provider` would get now, and why;
+    /// `None` when none can serve. Nothing changes: this is what `pick`
+    /// would do for a request with no session.
+    pub fn next(&self, provider: ProviderId, now: Timestamp) -> Option<Next> {
+        let strategy = self.routing().strategy;
+        let inner = self.lock();
+        let ready: Vec<&Account> = inner
+            .accounts
+            .iter()
+            .filter(|a| a.provider == provider && !a.disabled && a.auth_error.is_none())
+            .filter(|a| {
+                inner
+                    .states
+                    .get(&a.id)
+                    .is_none_or(|s| s.blocked(None, now).is_ok())
+            })
+            .collect();
+        let next = |account: &Account, reason| {
+            Some(Next {
+                account: account.id.clone(),
+                reason,
+            })
+        };
+        if let Some(pinned) = inner.pins.get(&provider)
+            && let Some(account) = ready.iter().find(|a| &a.id == pinned)
+        {
+            return next(account, Reason::Pinned);
+        }
+        let chosen = place(strategy, &ready, &inner, now)?;
+        let top = ready
+            .iter()
+            .filter(|a| a.priority == chosen.priority)
+            .count();
+        let reason = match strategy {
+            _ if top == 1 => Reason::OnlyReady,
+            Strategy::ResetFirst => {
+                let limits = inner.states.get(&chosen.id).map(|s| &s.limits);
+                match limits.and_then(|l| l.expiring_at(now)) {
+                    Some(_) => Reason::ResetsSoonest,
+                    None => Reason::MostRoom,
+                }
+            }
+            Strategy::FillFirst => Reason::FirstInOrder,
+            Strategy::LeastUsed => Reason::MostRoom,
+            Strategy::RoundRobin => Reason::NextInTurn,
+        };
+        next(chosen, reason)
     }
 
     /// Records a successful request: binds the session and clears throttling.
@@ -762,6 +850,40 @@ mod tests {
         pool.block(&a.id, ts(5000), None, "limit");
         pool.block(&b.id, ts(5000), None, "limit");
         assert_eq!(pick(&pool, None, 1000).unwrap(), reserve.id);
+    }
+
+    #[test]
+    fn next_says_who_a_new_session_would_get_and_why() {
+        let a = account(ProviderId::Claude, "a", 1);
+        let b = account(ProviderId::Claude, "b", 2);
+        let pool = pool(Strategy::ResetFirst, &[&a, &b]);
+        let next = |pool: &Pool| pool.next(ProviderId::Claude, ts(1000)).unwrap();
+        // Neither has a window running: the less used, as placement does.
+        assert_eq!(next(&pool).reason, Reason::MostRoom);
+        pool.observe(
+            &b.id,
+            limits(vec![window("5h", 40.0, Some(1000 + 3600))]),
+            ts(1000),
+        );
+        assert_eq!(
+            next(&pool),
+            Next {
+                account: b.id.clone(),
+                reason: Reason::ResetsSoonest
+            }
+        );
+        // Previewing changes nothing: the pick agrees.
+        assert_eq!(pick(&pool, Some("s"), 1000).unwrap(), b.id);
+        pool.block(&b.id, ts(5000), None, "limit");
+        assert_eq!(next(&pool).reason, Reason::OnlyReady);
+        pool.sync(
+            vec![a.clone(), b.clone()],
+            Pins::from([(ProviderId::Claude, a.id.clone())]),
+        );
+        assert_eq!(next(&pool).reason, Reason::Pinned);
+        pool.block(&a.id, ts(5000), None, "limit");
+        assert!(pool.next(ProviderId::Claude, ts(1000)).is_none());
+        assert!(pool.next(ProviderId::Codex, ts(1000)).is_none());
     }
 
     #[test]
