@@ -81,6 +81,11 @@ async fn mock(log: Log, mut request: Request) -> Response {
     if request.headers().contains_key("upgrade") {
         return mock_socket(log, &mut request);
     }
+    // Other programs on the machine may probe any open port; only what
+    // slopmax sends counts.
+    if request.uri().path() == "/" {
+        return reply(StatusCode::NOT_FOUND, &[], "");
+    }
     let (parts, incoming) = request.into_parts();
     let body = body::read(incoming, usize::MAX).await.unwrap();
     log.lock().unwrap().push(Seen {
@@ -2187,12 +2192,24 @@ fn codex_in(h: &Harness, session: &str) -> RequestBuilder {
         .body(r#"{"model":"gpt-6-sol","input":[],"stream":true}"#)
 }
 
+/// The Codex requests the mock has seen, leaving out what slopmax asks
+/// for itself in the background.
+fn responses(h: &Harness) -> Vec<Seen> {
+    h.log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|s| s.path == "/codex/responses")
+        .cloned()
+        .collect()
+}
+
 /// Sends `request` and returns the workspace of the account that answered.
 async fn served_by(h: &Harness, request: RequestBuilder) -> String {
     let response = request.send().await.unwrap();
     assert_eq!(response.status(), 200);
     response.text().await.unwrap();
-    let seen = h.log.lock().unwrap();
+    let seen = responses(h);
     let last = seen.last().unwrap();
     last.headers["chatgpt-account-id"]
         .to_str()
@@ -2269,7 +2286,7 @@ async fn affinity_can_be_turned_off_for_the_proxy_or_one_request() {
     assert_ne!(spread[0], spread[1], "placed afresh each time: {spread:?}");
 
     // slopmax's own headers never reach the provider.
-    let seen = h.log.lock().unwrap();
+    let seen = responses(&h);
     assert!(
         seen.iter()
             .all(|s| !s.headers.contains_key("x-slopmax-affinity"))
@@ -2300,7 +2317,7 @@ async fn moving_without_affinity_still_drops_another_accounts_state() {
     let request = || codex_in(&h, "s").body(body);
     served_by(&h, request()).await;
     served_by(&h, request()).await;
-    let seen = h.log.lock().unwrap();
+    let seen = responses(&h);
     // The first request had no account before it, so went as sent; the
     // second landed on another account, so lost what the first minted.
     assert!(String::from_utf8_lossy(&seen[0].body).contains("previous_response_id"));
@@ -2313,10 +2330,7 @@ async fn passing_server_errors_are_retried_once_on_the_same_account() {
     // The first try fails with a 503; the second, on the same account,
     // answers. The session's account never changes.
     assert_eq!(served_by(&h, codex_in(&h, "s")).await, "acct-codex0");
-    let tokens: Vec<String> = h
-        .log
-        .lock()
-        .unwrap()
+    let tokens: Vec<String> = responses(&h)
         .iter()
         .map(|s| s.headers["authorization"].to_str().unwrap().to_owned())
         .collect();
@@ -2328,7 +2342,7 @@ async fn passing_server_errors_are_retried_once_on_the_same_account() {
     let response = codex_in(&h, "s").send().await.unwrap();
     assert_eq!(response.status(), 502);
     assert!(response.text().await.unwrap().contains("bad gateway"));
-    assert_eq!(h.log.lock().unwrap().len(), 2);
+    assert_eq!(responses(&h).len(), 2);
 }
 
 async fn admin(h: &Harness, method: Method, path: &str, form: &str) -> (StatusCode, Value) {
