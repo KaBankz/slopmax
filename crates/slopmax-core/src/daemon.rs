@@ -173,7 +173,10 @@ async fn shutdown(app: Arc<App>) {
 
 /// Sends a notification for each change in the accounts' conditions.
 async fn watch(app: Arc<App>) {
-    let mut watcher = notify::Watcher::default();
+    // The nudges told before a restart stay told.
+    let file = app.home.nudged();
+    let told: Vec<String> = fsx::read_json(&file).ok().flatten().unwrap_or_default();
+    let mut watcher = notify::Watcher::remembering(told);
     let mut ticker = tokio::time::interval(WATCH_EVERY);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -191,7 +194,13 @@ async fn watch(app: Arc<App>) {
             &config.plan_prices,
             now,
         );
-        events.extend(watcher.new_nudges(nudges));
+        let fresh = watcher.new_nudges(nudges);
+        if !fresh.is_empty()
+            && let Err(e) = fsx::write_json(&file, &watcher.told())
+        {
+            log::warn!("saving the nudges told: {e}");
+        }
+        events.extend(fresh);
         for event in events {
             log::info!("{}", event.message);
             if !config.notify.is_enabled() {

@@ -660,7 +660,7 @@ fn key(config: &Config, action: &str, m: &args::Matches) -> Result<()> {
             eprintln!(
                 "{}",
                 ui::dim(format!(
-                    "Added the key {name:?}. Clients present it as a bearer token or x-api-key; a running proxy picks it up after `slopmax stop && slopmax start`."
+                    "Added the key {name:?}. Clients present it as a bearer token or x-api-key; a running proxy takes it within seconds."
                 ))
             );
         }

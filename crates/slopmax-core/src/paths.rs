@@ -62,6 +62,11 @@ impl Home {
         self.0.join("pins.json")
     }
 
+    /// The nudges already told, so a restart doesn't tell them again.
+    pub fn nudged(&self) -> PathBuf {
+        self.0.join("nudged.json")
+    }
+
     /// Each subscription window that reset, and how much of it was used.
     pub fn windows(&self) -> PathBuf {
         self.0.join("windows.jsonl")

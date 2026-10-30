@@ -356,7 +356,7 @@ What crosses: text, images, documents, tool definitions and calls, tool results,
 | `[notify]`                | none             | Webhook, command, and events for notifications                      |
 | `[[keys]]`                | none             | Client keys, made with `slopmax key add`, each possibly limited to some models |
 
-The proxy applies a changed config.toml within two seconds, without a restart; only `listen` needs one. The background proxy logs to `~/.slopmax/slopmax.log`. `SLOPMAX_LOG` sets the log level, for example `SLOPMAX_LOG=debug`.
+The proxy applies a changed config.toml within two seconds, without a restart; only `listen` and `proxy` need one. The background proxy logs to `~/.slopmax/slopmax.log`. `SLOPMAX_LOG` sets the log level, for example `SLOPMAX_LOG=debug`.
 
 ## How slopmax compares
 

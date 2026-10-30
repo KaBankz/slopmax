@@ -346,6 +346,22 @@ pub struct Watcher {
 }
 
 impl Watcher {
+    /// A watcher that remembers the nudges told before, as `told` lists
+    /// their keys, so a restart doesn't tell them again.
+    pub fn remembering(told: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            told: told.into_iter().collect(),
+            ..Self::default()
+        }
+    }
+
+    /// The keys of the nudges told so far.
+    pub fn told(&self) -> Vec<String> {
+        let mut told: Vec<String> = self.told.iter().cloned().collect();
+        told.sort();
+        told
+    }
+
     /// The [`nudges`] not told before.
     pub fn new_nudges(&mut self, nudges: Vec<(String, Event)>) -> Vec<Event> {
         nudges
@@ -710,6 +726,12 @@ mod tests {
         );
         assert!(
             watcher
+                .new_nudges(nudges(&[subject], false, &plans, now))
+                .is_empty()
+        );
+        let mut restarted = Watcher::remembering(watcher.told());
+        assert!(
+            restarted
                 .new_nudges(nudges(&[subject], false, &plans, now))
                 .is_empty()
         );
