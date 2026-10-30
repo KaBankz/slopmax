@@ -58,8 +58,11 @@ pub(super) async fn handle(app: Arc<App>, request: Request) -> Response {
             daemon::list_credits(&app, true).await;
             json_reply(StatusCode::OK, &app.report())
         }
-        // Picks up changes on disk now, then reports.
-        (&Method::POST, ["sync"]) => reload(&app, Ok(())),
+        // Picks up changes on disk now, config.toml's too, then reports.
+        (&Method::POST, ["sync"]) => {
+            app.reload_config();
+            reload(&app, Ok(()))
+        }
         (&Method::POST, ["shutdown"]) => {
             app.shutdown.notify_one();
             json_reply(StatusCode::OK, &json!({ "status": "stopping" }))
