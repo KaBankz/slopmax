@@ -101,6 +101,7 @@ section { padding-top: 40px; scroll-margin-top: 56px; }
 .card + .card, .grid + .card, .card + .grid, .grid + .grid { margin-top: 16px; }
 .grid { display: grid; gap: 16px; }
 .grid > .card { margin-top: 0; }
+.grid.hug { align-items: start; }
 .g2 { grid-template-columns: 1fr 1fr; } .g21 { grid-template-columns: 1.6fr 1fr; }
 .ch { display: flex; align-items: center; gap: 10px; padding: 14px 18px 0; min-height: 44px; }
 .ch h3 { margin: 0; font-size: 13px; font-weight: 600; }
@@ -125,6 +126,7 @@ tr.unplaced td { color: var(--ink2); }
 .left .tbl { padding-top: 10px; }
 tr.total td { border-top: 1px solid var(--line); }
 .empty { color: var(--muted); padding: 28px 18px; text-align: center; font-size: 13px; }
+.empty a { color: var(--ink); text-underline-offset: 2px; }
 .empty b { display: block; color: var(--ink); font-weight: 550; margin-bottom: 2px; }
 
 /* Summary line */
@@ -281,7 +283,7 @@ tr.total td { font-weight: 600; }
 .set .d { color: var(--muted); font-size: 12.5px; margin-top: 2px; max-width: 520px; }
 .set .switch { margin-top: 2px; margin-left: auto; }
 .ttl { display: inline-flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12.5px; color: var(--muted); }
-.ttl .field { width: 64px; height: 28px; text-align: right; font-variant-numeric: tabular-nums; }
+.ttl .field { width: 56px; height: 28px; padding: 0 6px; text-align: center; font-variant-numeric: tabular-nums; }
 .group-t { font-size: 12px; color: var(--muted); font-weight: 500; margin: 18px 0 0; }
 .group-t:first-child { margin-top: 0; }
 
@@ -436,7 +438,7 @@ footer.wrap { color: var(--faint); font-size: 12px; padding-bottom: 40px; }
 
   <section id="access">
     <div class="shead"><h2>Access</h2><span class="lede">Who may use slopmax, the accounts it serves from, and whether it is set up right.</span></div>
-    <div class="grid g2"><div class="card" id="keys"></div><div class="card" id="addacct"></div></div>
+    <div class="grid g2 hug"><div class="card" id="keys"></div><div class="card" id="addacct"></div></div>
     <div class="card" id="doctor"></div>
   </section>
 
@@ -611,7 +613,7 @@ function nudgeView(n) {
   if (n.event === "quota-unused") {
     const w = a && (a.state.limits?.windows || []).find((x) => !x.model && x.span === "7d");
     const unused = w ? round(100 - usedNow(w)) : null;
-    const worth = n.worth >= 0.5 ? `$${Math.round(n.worth)}` : null;
+    const worth = n.worth >= 0.5 ? `$${round(n.worth)}` : null;
     return { text: `<b>${esc(n.account)}</b>'s week resets in ${when}${unused != null ? ` with ${unused}% unused` : ""}`,
       sub: `${worth ? `About ${worth} of its plan. ` : ""}Work sent there before then costs nothing extra.`,
       plain: `${n.account}'s week resets in ${at ? until(at) : "soon"}${unused != null ? ` with ${unused}% unused` : ""}. Work sent there before then costs nothing extra.`,
@@ -672,7 +674,7 @@ function renderAccounts() {
     if (group.length) html += providerCard(p, group, report.pools.find((x) => x.provider === p));
   }
   if (keys.length) html += keysCard(keys);
-  if (!accounts.length) html = `<div class="card empty"><b>No accounts yet</b>Add one with <code>slopmax login claude</code> or <code>slopmax login codex</code>, and it shows up here.</div>`;
+  if (!accounts.length) html = `<div class="card empty"><b>No accounts yet</b>Sign in to a subscription with <code>slopmax login claude</code> or <code>slopmax login codex</code>, or add an API key or endpoint under <a href="#access" data-goto="addacct">Access › Add an account</a>.</div>`;
   $("#providers").innerHTML = html;
 }
 
@@ -1076,8 +1078,8 @@ function leftCard(h) {
     <td class="n ${a.dollars >= 0.005 ? "" : "faint"}">${money(a.dollars)}</td></tr>`).join("");
   return `<div class="card left"><div class="lg">
     <div class="lsum"><div class="k">Left on the table</div><div class="v">${money(l.dollars)}</div>
-      <div class="d">${int(l.windows)} week${l.windows > 1 ? "s" : ""} reset ${span} · ${round(l.unused)}%&nbsp;unused on&nbsp;average</div><p class="why">${why}</p></div>
-    <div class="tbl"><table><thead><tr><th>Account</th><th class="n">Weeks</th><th class="n">Unused, on average</th><th class="n">Left</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="d">${int(l.windows)} weekly window${l.windows > 1 ? "s" : ""} reset ${span} · ${round(l.unused)}%&nbsp;unused on average across&nbsp;them</div><p class="why">${why}</p></div>
+    <div class="tbl"><table><thead><tr><th>Account</th><th class="n">Weekly windows</th><th class="n">Unused, on average</th><th class="n">Left</th></tr></thead><tbody>${rows}</tbody></table></div>
   </div></div>`;
 }
 
@@ -1152,7 +1154,7 @@ function renderKeys() {
         <button class="btn ghost sm" data-revoke="${esc(k.name)}">Revoke…</button></div>`).join("")
     : `<div class="muted kempty">None yet. Agents use the main key until you make one.</div>`;
   const reveal = newKey ? `<div class="reveal"><div><b>Key for ${esc(newKey.name)}</b> <span class="muted">· copy it now; you won't see it again</span></div>
-      <div class="kv"><code class="kcode">${esc(newKey.key)}</code><button class="btn sm" data-copy="${esc(newKey.key)}">${COPY}Copy</button><button class="btn ghost sm" id="keydone">Done</button></div></div>` : "";
+      <div class="kv"><code class="kcode">${esc(newKey.key)}</code><button class="btn primary sm" data-copy="${esc(newKey.key)}">${COPY}Copy</button><button class="btn sm" id="keydone">Done</button></div></div>` : "";
   $("#keys").innerHTML = `<div class="ch"><h3>Client keys</h3><span class="note">One for each agent or machine, each revoked on its own</span></div><div class="cb">
     ${reveal}<div class="klist">${list}</div>
     <form class="kform" id="keyform"><input class="field" name="name" placeholder="Name, such as laptop" required autocomplete="off" spellcheck="false">
@@ -1328,6 +1330,14 @@ document.addEventListener("click", async (e) => {
   const kind = t.closest("[data-kind]");
   if (kind) { addKind = kind.dataset.kind; return renderAdd(); }
   if (t.closest("#rundoctor")) return loadDoctor();
+  const go = t.closest("[data-goto]");
+  if (go) {
+    e.preventDefault();
+    const el = document.getElementById(go.dataset.goto);
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    $("input", el)?.focus({ preventScroll: true });
+    return;
+  }
   const jump = t.closest("[data-jump]");
   if (jump) {
     const row = document.getElementById("acct-" + jump.dataset.jump);
