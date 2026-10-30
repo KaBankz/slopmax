@@ -88,7 +88,7 @@ pub(super) async fn handle(app: Arc<App>, request: Request) -> Response {
         (&Method::POST, ["accounts"]) => {
             let form = match form(request, &query).await {
                 Ok(form) => form,
-                Err(response) => return response,
+                Err(e) => return error(None, StatusCode::BAD_REQUEST, &e),
             };
             add_account(&app, &form).await
         }
@@ -96,7 +96,7 @@ pub(super) async fn handle(app: Arc<App>, request: Request) -> Response {
         (&Method::POST, ["keys"]) => {
             let form = match form(request, &query).await {
                 Ok(form) => form,
-                Err(response) => return response,
+                Err(e) => return error(None, StatusCode::BAD_REQUEST, &e),
             };
             add_key(&app, &form)
         }
@@ -196,10 +196,10 @@ async fn history(app: &App, query: &str) -> Response {
 }
 
 /// The form fields of a POST, from its query and its body.
-async fn form(request: Request, query: &str) -> Result<Vec<(String, String)>, Response> {
+async fn form(request: Request, query: &str) -> Result<Vec<(String, String)>, String> {
     let body = body::read(request.into_body(), 64 * 1024)
         .await
-        .map_err(|e| error(None, StatusCode::BAD_REQUEST, &format!("{e}")))?;
+        .map_err(|e| e.to_string())?;
     let text = format!("{query}&{}", String::from_utf8_lossy(&body));
     Ok(crate::net::form::decode(&text))
 }
