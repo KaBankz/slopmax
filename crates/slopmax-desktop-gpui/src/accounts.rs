@@ -311,7 +311,7 @@ impl Main {
             );
         }
         let well = well.children(
-            view::auto_redeem(self.app.config(), provider).map(|policy| caption(policy, c)),
+            view::auto_redeem(&self.snapshot.config, provider).map(|policy| caption(policy, c)),
         );
         let drop = Animation::new(motion::APPEAR).with_easing(motion::ease_out);
         well.relative().with_animation(

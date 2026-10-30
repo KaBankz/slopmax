@@ -1,17 +1,19 @@
 //! The Agents page, which points Claude Code and Codex at slopmax, and the
 //! Settings page: how the window looks, the proxy and starting at login,
-//! adding accounts, and when reset credits are redeemed. Each is a titled
-//! panel of rows: a setting's name and what it does on the left, its
-//! control on the right.
+//! how requests find their account, adding accounts, and when reset
+//! credits are redeemed. Each is a titled panel of rows: a setting's name
+//! and what it does on the left, its control on the right.
+
+use std::sync::Arc;
 
 use gpui_kit::component::button::ButtonVariants as _;
+use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use slopmax_app::Proxy;
 use slopmax_app::view::{self, Label};
-use slopmax_core::config::Config;
-use slopmax_core::daemon::CREDIT_EXPIRY_LEAD;
+use slopmax_app::{App as Slopmax, Proxy, Setting};
+use slopmax_core::config::{Config, Strategy};
 use slopmax_core::provider::ProviderId;
 use slopmax_core::report::Tone;
 
@@ -76,8 +78,9 @@ impl Main {
             .gap(px(32.))
             .child(appearance(c, cx))
             .child(self.proxy(c))
+            .child(routing(&self.app, &self.snapshot.config, c))
             .child(self.adding(c, cx))
-            .child(redeeming(self.app.config(), c))
+            .child(redeeming(&self.app, &self.snapshot.config, c))
     }
 
     /// The proxy: whether it runs, where agents reach it, its dashboard,
@@ -255,50 +258,134 @@ fn appearance(c: &Colors, cx: &mut Context<Main>) -> impl IntoElement {
     )))
 }
 
-/// When slopmax redeems a reset credit by itself, as its configuration has
-/// it.
-fn redeeming(config: &Config, c: &Colors) -> impl IntoElement {
-    let lead = CREDIT_EXPIRY_LEAD.as_secs() / 3_600;
-    let (expiring, on) = if config.redeem_expiring_credits {
-        (
-            format!("Redeemed {lead} hours before, if the account has quota to reset."),
-            true,
-        )
-    } else {
-        ("Left to expire.".to_owned(), false)
-    };
-    let (exhausted, spent) = if config.redeem_when_exhausted {
-        ("One is redeemed, so the pool keeps serving.", true)
-    } else {
-        ("None are redeemed; the pool waits for a reset.", false)
-    };
-    let state = |on: bool| {
-        div()
-            .text_color(if on { c.fg } else { c.muted })
-            .child(if on { "On" } else { "Off" })
-    };
-    section("Limit resets", None, c)
-        .child(
-            panel(c)
-                .child(setting(
-                    true,
-                    "When one would expire unused",
-                    expiring,
-                    state(on),
-                    c,
-                ))
-                .child(setting(
-                    false,
-                    "When every account is spent",
-                    exhausted,
-                    state(spent),
-                    c,
-                )),
-        )
-        .child(caption(
-            "Set in config.toml, as redeem_expiring_credits and redeem_when_exhausted.",
+/// How a request finds its account: the strategy that places a new
+/// session, and whether a session keeps the account it started on.
+fn routing(app: &Arc<Slopmax>, config: &Config, c: &Colors) -> impl IntoElement {
+    let mut strategies = panel(c);
+    for (i, strategy) in Strategy::ALL.into_iter().enumerate() {
+        strategies = strategies.child(choice(
+            app,
+            strategy,
+            config.strategy == strategy,
+            i == 0,
             c,
-        ))
+        ));
+    }
+    section("Routing", None, c)
+        .child(strategies)
+        .child(panel(c).child(setting(
+            true,
+            "Session affinity",
+            view::AFFINITY,
+            toggle(
+                app,
+                "session-affinity",
+                "Session affinity",
+                config.session_affinity,
+                Setting::SessionAffinity,
+            ),
+            c,
+        )))
+        .child(caption(view::AFFINITY_HEADER, c))
+}
+
+/// A strategy to choose, as a row that chooses it when pressed: a radio,
+/// its name, and what it does.
+fn choice(
+    app: &Arc<Slopmax>,
+    strategy: Strategy,
+    chosen: bool,
+    first: bool,
+    c: &Colors,
+) -> impl IntoElement {
+    let title = view::strategy_title(strategy);
+    let app = app.clone();
+    let hover = c.hover;
+    let radio = div()
+        .flex_shrink_0()
+        .size(px(16.))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .map(|radio| {
+            if chosen {
+                radio
+                    .bg(c.fg)
+                    .child(div().size(px(6.)).rounded_full().bg(c.bg))
+            } else {
+                radio.border_1().border_color(c.faint)
+            }
+        });
+    ui::row(first, c)
+        .id(SharedString::from(format!("strategy-{strategy}")))
+        .min_h(px(60.))
+        .when(first, |row| row.rounded_t(px(7.)))
+        .when(!chosen, |row| {
+            row.cursor_pointer().hover(move |row| row.bg(hover))
+        })
+        .role(Role::RadioButton)
+        .aria_label(title)
+        .aria_selected(chosen)
+        .child(radio)
+        .child(name(title, view::strategy_detail(strategy), c))
+        .on_click(move |_, _, _| {
+            if !chosen {
+                app.set(Setting::Strategy(strategy));
+            }
+        })
+}
+
+/// A switch for a setting that is on or off.
+fn toggle(
+    app: &Arc<Slopmax>,
+    id: &'static str,
+    title: &'static str,
+    on: bool,
+    setting: fn(bool) -> Setting,
+) -> impl IntoElement {
+    let app = app.clone();
+    Switch::new(id)
+        .checked(on)
+        .accessibility_label(title)
+        .on_click(move |on, _, _| app.set(setting(*on)))
+}
+
+/// When slopmax redeems a reset credit by itself.
+fn redeeming(app: &Arc<Slopmax>, config: &Config, c: &Colors) -> impl IntoElement {
+    let (expiring, exhausted) = (
+        "When one would expire unused",
+        "When every account is spent",
+    );
+    section("Limit resets", None, c).child(
+        panel(c)
+            .child(setting(
+                true,
+                expiring,
+                view::redeem_expiring_detail(),
+                toggle(
+                    app,
+                    "redeem-expiring",
+                    expiring,
+                    config.redeem_expiring_credits,
+                    Setting::RedeemExpiringCredits,
+                ),
+                c,
+            ))
+            .child(setting(
+                false,
+                exhausted,
+                view::REDEEM_EXHAUSTED,
+                toggle(
+                    app,
+                    "redeem-exhausted",
+                    exhausted,
+                    config.redeem_when_exhausted,
+                    Setting::RedeemWhenExhausted,
+                ),
+                c,
+            )),
+    )
 }
 
 /// A setting's name over what it does.

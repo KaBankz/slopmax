@@ -4,7 +4,7 @@
 //! Account words come from the core, so they read as `slopmax status` does.
 
 use slopmax_core::agent::Wiring;
-use slopmax_core::config::Config;
+use slopmax_core::config::{Config, Strategy};
 use slopmax_core::daemon::CREDIT_EXPIRY_LEAD;
 use slopmax_core::human;
 use slopmax_core::limits::Window;
@@ -14,7 +14,7 @@ use slopmax_core::report::{AccountReport, Condition, Note, Report, Tone};
 use slopmax_core::service;
 use slopmax_core::time::{SignedDuration, Timestamp};
 
-use crate::{AgentStatus, Proxy, SignIn, Snapshot, Step};
+use crate::{AgentStatus, Proxy, Setting, SignIn, Snapshot, Step};
 
 /// One provider's accounts.
 #[derive(Debug, Clone, PartialEq)]
@@ -510,6 +510,72 @@ pub fn auto_redeem(config: &Config, provider: &str) -> Option<String> {
     }
 }
 
+/// A strategy's name, as Settings lists it: `Reset first`.
+pub fn strategy_title(strategy: Strategy) -> &'static str {
+    match strategy {
+        Strategy::ResetFirst => "Reset first",
+        Strategy::FillFirst => "Fill first",
+        Strategy::LeastUsed => "Least used",
+        Strategy::RoundRobin => "Round robin",
+    }
+}
+
+/// What a strategy does, as a sentence.
+pub fn strategy_detail(strategy: Strategy) -> String {
+    format!("{}.", strategy.summary())
+}
+
+/// How requests find their account, in a line: `Reset first · sessions
+/// keep their account`.
+pub fn routing(config: &Config) -> String {
+    let sessions = if config.session_affinity {
+        "sessions keep their account"
+    } else {
+        "sessions move between accounts"
+    };
+    format!("{} · {sessions}", strategy_title(config.strategy))
+}
+
+/// What session affinity does.
+pub const AFFINITY: &str = "Keep a conversation on the account it started on, so its prompt \
+                            cache stays warm. Off, the strategy places every request.";
+
+/// How one request can ask otherwise.
+pub const AFFINITY_HEADER: &str =
+    "A request can ask otherwise with the x-slopmax-affinity header, set to on or off.";
+
+/// What `redeem_expiring_credits` does.
+pub fn redeem_expiring_detail() -> String {
+    let lead = CREDIT_EXPIRY_LEAD.as_secs() / 3_600;
+    format!("Redeem it {lead} hours before, if the account has quota to reset.")
+}
+
+/// What `redeem_when_exhausted` does.
+pub const REDEEM_EXHAUSTED: &str =
+    "Redeem one so the pool keeps serving, rather than wait for a reset.";
+
+/// What the app says once `setting` is changed.
+pub fn setting_changed(setting: Setting) -> String {
+    match setting {
+        Setting::Strategy(strategy) => format!(
+            "slopmax now routes {}.",
+            strategy_title(strategy).to_lowercase()
+        ),
+        Setting::SessionAffinity(true) => "Sessions keep the account they started on.".to_owned(),
+        Setting::SessionAffinity(false) => "The strategy now places every request.".to_owned(),
+        Setting::RedeemExpiringCredits(true) => {
+            "Limit resets are redeemed before they expire.".to_owned()
+        }
+        Setting::RedeemExpiringCredits(false) => "Limit resets are left to expire.".to_owned(),
+        Setting::RedeemWhenExhausted(true) => {
+            "A limit reset is redeemed once every account is spent.".to_owned()
+        }
+        Setting::RedeemWhenExhausted(false) => {
+            "Once every account is spent, the pool waits for a reset.".to_owned()
+        }
+    }
+}
+
 /// `a`, `a and b`, or `a, b, and c`.
 fn listed(items: &[String]) -> String {
     match items {
@@ -784,7 +850,6 @@ mod tests {
     use std::collections::HashMap;
 
     use slopmax_core::account::{Account, Tokens};
-    use slopmax_core::config::Strategy;
     use slopmax_core::limits::Limits;
     use slopmax_core::pool::{AccountState, CreditList, Pins};
     use slopmax_core::report::build;
@@ -1070,5 +1135,207 @@ mod tests {
         assert_eq!(menu_bar(&report(now), now), "Claude 50%");
         // Once the window resets, its use is gone.
         assert_eq!(menu_bar(&report(now), ts(5_000)), "Claude 0%");
+    }
+
+    #[test]
+    fn the_menu_bar_without_pools_shows_the_name() {
+        let report = report_of(ts(1_000), Vec::new());
+        assert_eq!(menu_bar(&report, ts(1_000)), "slopmax");
+    }
+
+    #[test]
+    fn every_strategy_has_a_name_and_a_sentence() {
+        let titles: Vec<&str> = Strategy::ALL.into_iter().map(strategy_title).collect();
+        assert_eq!(
+            titles,
+            ["Reset first", "Fill first", "Least used", "Round robin"]
+        );
+        for strategy in Strategy::ALL {
+            let detail = strategy_detail(strategy);
+            assert!(detail.ends_with('.') && !detail.ends_with(".."), "{detail}");
+            assert!(detail.starts_with(strategy.summary()));
+        }
+    }
+
+    #[test]
+    fn routing_reads_as_a_line() {
+        let mut config = Config::default();
+        assert_eq!(
+            routing(&config),
+            "Reset first · sessions keep their account"
+        );
+        config.strategy = Strategy::RoundRobin;
+        config.session_affinity = false;
+        assert_eq!(
+            routing(&config),
+            "Round robin · sessions move between accounts"
+        );
+    }
+
+    #[test]
+    fn changing_a_setting_says_what_it_does_now() {
+        assert_eq!(
+            setting_changed(Setting::Strategy(Strategy::FillFirst)),
+            "slopmax now routes fill first."
+        );
+        let said: Vec<String> = [
+            Setting::SessionAffinity(true),
+            Setting::SessionAffinity(false),
+            Setting::RedeemExpiringCredits(true),
+            Setting::RedeemExpiringCredits(false),
+            Setting::RedeemWhenExhausted(true),
+            Setting::RedeemWhenExhausted(false),
+        ]
+        .into_iter()
+        .map(setting_changed)
+        .collect();
+        for (i, text) in said.iter().enumerate() {
+            assert!(text.ends_with('.'), "{text}");
+            assert!(!said[..i].contains(text), "{text} said twice");
+        }
+        assert!(AFFINITY.contains("prompt cache"));
+        assert!(AFFINITY_HEADER.contains("x-slopmax-affinity"));
+        let lead = CREDIT_EXPIRY_LEAD.as_secs() / 3_600;
+        assert!(redeem_expiring_detail().contains(&format!("{lead} hours")));
+    }
+
+    #[test]
+    fn auto_redeem_follows_the_config() {
+        let mut config = Config::default();
+        let say = |config: &Config| auto_redeem(config, "ChatGPT");
+        config.redeem_expiring_credits = false;
+        config.redeem_when_exhausted = false;
+        assert_eq!(say(&config), None);
+        config.redeem_when_exhausted = true;
+        assert_eq!(
+            say(&config).as_deref(),
+            Some("slopmax redeems one by itself when every ChatGPT account is spent.")
+        );
+        config.redeem_expiring_credits = true;
+        let both = say(&config).unwrap();
+        assert!(both.contains("every ChatGPT account is spent") && both.contains("hours before"));
+        config.redeem_when_exhausted = false;
+        let expiring = say(&config).unwrap();
+        assert!(expiring.contains("before it would expire unused"));
+        assert!(!expiring.contains("spent"));
+    }
+
+    #[test]
+    fn lists_read_as_english() {
+        let items = |list: &[&str]| -> Vec<String> { list.iter().map(|s| s.to_string()).collect() };
+        assert_eq!(listed(&items(&[])), "");
+        assert_eq!(listed(&items(&["a"])), "a");
+        assert_eq!(listed(&items(&["a", "b"])), "a and b");
+        assert_eq!(listed(&items(&["a", "b", "c"])), "a, b, and c");
+    }
+
+    fn snapshot(proxy: Proxy) -> Snapshot {
+        Snapshot {
+            proxy,
+            address: "http://127.0.0.1:7567".to_owned(),
+            report: None,
+            agents: Vec::new(),
+            service: None,
+            sign_in: None,
+            notice: None,
+            history: None,
+            today: None,
+            redeeming: None,
+            config: Config::default(),
+        }
+    }
+
+    #[test]
+    fn the_proxy_line_says_how_it_stands() {
+        assert_eq!(
+            proxy_line(&snapshot(Proxy::Running {
+                version: "0.3.0".to_owned()
+            })),
+            "Running 0.3.0 at http://127.0.0.1:7567"
+        );
+        assert_eq!(
+            proxy_line(&snapshot(Proxy::Stopped)),
+            "Stopped: agents cannot reach slopmax"
+        );
+        assert_eq!(
+            proxy_line(&snapshot(Proxy::Checking)),
+            "Looking for the proxy…"
+        );
+        assert_eq!(
+            proxy_line(&snapshot(Proxy::Starting)),
+            "Starting the proxy…"
+        );
+    }
+
+    #[test]
+    fn agents_and_the_service_read_plainly() {
+        let agent = |wiring| AgentStatus {
+            id: "codex",
+            title: "Codex",
+            wiring,
+        };
+        assert_eq!(
+            agent_line(&agent(Wiring::Slopmax)),
+            ("Goes through slopmax".to_owned(), true)
+        );
+        assert_eq!(
+            agent_line(&agent(Wiring::Elsewhere("http://elsewhere".to_owned()))),
+            ("Goes to http://elsewhere".to_owned(), false)
+        );
+        assert!(!agent_line(&agent(Wiring::Direct)).1);
+
+        let status = |installed, running| service::Status {
+            installed,
+            running,
+            lingering: None,
+        };
+        assert!(!service_line(None).1);
+        assert_eq!(
+            service_line(Some(&status(true, true))),
+            ("Starts at login; running".to_owned(), false)
+        );
+        assert_eq!(
+            service_line(Some(&status(true, false))).0,
+            "Starts at login; not running now"
+        );
+        // Only a service not yet installed offers to install it.
+        assert_eq!(
+            service_line(Some(&status(false, false))),
+            ("Not started at login yet".to_owned(), true)
+        );
+    }
+
+    #[test]
+    fn a_sign_in_says_what_to_do_next() {
+        let at = |step| SignIn {
+            provider: ProviderId::Claude,
+            step,
+            notes: vec!["That address was not it.".to_owned()],
+        };
+        let starting = sign_in(&at(Step::Starting));
+        assert_eq!(starting.title, "Signing in to Claude");
+        assert_eq!(starting.notes, "That address was not it.");
+        assert_eq!((starting.link, starting.code), (None, None));
+
+        let url = "https://example.invalid/authorize".to_owned();
+        let opened = sign_in(&at(Step::Authorize {
+            url: url.clone(),
+            opened: true,
+        }));
+        assert!(opened.detail.contains("in your browser"));
+        assert_eq!(opened.link.as_deref(), Some(url.as_str()));
+        let closed = sign_in(&at(Step::Authorize {
+            url: url.clone(),
+            opened: false,
+        }));
+        assert!(closed.detail.starts_with("Open this address"));
+
+        let device = sign_in(&at(Step::DeviceCode {
+            url: url.clone(),
+            code: "ABCD-1234".to_owned(),
+        }));
+        assert_eq!(device.code.as_deref(), Some("ABCD-1234"));
+        assert_eq!(device.link, None);
+        assert!(device.detail.contains(&url));
     }
 }

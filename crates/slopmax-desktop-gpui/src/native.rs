@@ -106,8 +106,37 @@ mod mac {
         native.setFrame_display(frame, true);
         native.invalidateShadow();
     }
+
+    /// Makes the main window `height` tall, past the screen if need be:
+    /// for drawing a long page whole to an image. It loses its title bar,
+    /// which the page draws its own of.
+    #[cfg(feature = "shots")]
+    pub(crate) fn stretch(window: &Window, height: f32) {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let width = f64::from(window.bounds().size.width.as_f32());
+        let native = NSApplication::sharedApplication(mtm)
+            .windows()
+            .iter()
+            .find(|w| {
+                !w.styleMask()
+                    .contains(NSWindowStyleMask::NonactivatingPanel)
+                    && (w.frame().size.width - width).abs() < 1.
+            });
+        if let Some(native) = native {
+            // AppKit holds a titled window's frame to the screen, but not a
+            // borderless one's; the page draws its own title bar either way.
+            native.setStyleMask(NSWindowStyleMask::Borderless);
+            let mut frame = native.frame();
+            frame.size.height = f64::from(height);
+            native.setFrame_display(frame, false);
+        }
+    }
 }
 
+#[cfg(all(target_os = "macos", feature = "shots"))]
+pub(crate) use mac::stretch;
 #[cfg(target_os = "macos")]
 pub(crate) use mac::{hang, menu_bar_glyph, outside_clicks, status_item};
 
@@ -123,10 +152,15 @@ mod elsewhere {
 
     pub(crate) fn hang(_: &Window, _: f32) {}
 
+    #[cfg(feature = "shots")]
+    pub(crate) fn stretch(_: &Window, _: f32) {}
+
     pub(crate) fn outside_clicks() -> Option<async_channel::Receiver<()>> {
         None
     }
 }
 
+#[cfg(all(not(target_os = "macos"), feature = "shots"))]
+pub(crate) use elsewhere::stretch;
 #[cfg(not(target_os = "macos"))]
 pub(crate) use elsewhere::{hang, menu_bar_glyph, outside_clicks, status_item};

@@ -583,27 +583,34 @@ fn name(text: impl Into<SharedString>, color: Option<Hsla>) -> Div {
         .child(div().min_w_0().truncate().child(text.into()))
 }
 
-/// Tokens by model, ranked, the rest as one.
+/// Tokens by model, ranked, the rest as one, and what each would cost
+/// on the API.
 fn models(history: &History, c: &Colors) -> Div {
-    let mut ranked: Vec<(String, u64)> = history
+    let mut ranked: Vec<(String, Totals)> = history
         .models
         .iter()
         .take(MODELS)
-        .map(|share| (share.name.clone(), history::tokens(&share.totals)))
+        .map(|share| (share.name.clone(), share.totals.clone()))
         .collect();
-    let rest: u64 = history
+    let rest = history
         .models
         .iter()
         .skip(MODELS)
-        .map(|s| history::tokens(&s.totals))
-        .sum();
-    if rest > 0 {
+        .fold(Totals::default(), |rest, share| {
+            combined(rest, &share.totals)
+        });
+    if history::tokens(&rest) > 0 {
         ranked.push(("Other".to_owned(), rest));
     }
-    let total = ranked.iter().map(|(_, n)| n).sum::<u64>().max(1) as f32;
-    let most = ranked.iter().map(|(_, n)| *n).max().unwrap_or(0).max(1) as f32;
+    let most = ranked
+        .iter()
+        .map(|(_, totals)| history::tokens(totals))
+        .max()
+        .unwrap_or(0)
+        .max(1) as f32;
     section("Models", None, c).child(panel(c).flex_1().p(px(16.)).gap(px(12.)).children(
-        ranked.into_iter().map(|(model, tokens)| {
+        ranked.into_iter().map(|(model, totals)| {
+            let tokens = history::tokens(&totals);
             h_flex()
                 .gap(px(12.))
                 .child(name(model, None))
@@ -612,12 +619,23 @@ fn models(history: &History, c: &Colors) -> Div {
                         .flex_1()
                         .child(meter(tokens as f32 / most, c.meter, c)),
                 )
-                .child(
-                    cell(format!("{:.0}%", tokens as f32 / total * 100.), 40.).text_color(c.muted),
-                )
-                .child(cell(human::compact(tokens), 56.))
+                .child(cell(human::compact(tokens), 52.))
+                .child(cell(priced(totals.cost, &totals), 64.).text_color(c.muted))
         }),
     ))
+}
+
+/// Two sets of totals as one.
+fn combined(mut sum: Totals, more: &Totals) -> Totals {
+    sum.requests += more.requests;
+    sum.input += more.input;
+    sum.output += more.output;
+    sum.cache_read += more.cache_read;
+    sum.cache_write += more.cache_write;
+    sum.cost += more.cost;
+    sum.unpriced += more.unpriced;
+    sum.failed += more.failed;
+    sum
 }
 
 /// What the tokens were: input, cache read, cache write, and output, as one
@@ -742,6 +760,7 @@ fn agents(history: &History, c: &Colors) -> Div {
                 )
                 .child(cell(human::compact(tokens), 56.))
                 .child(cell(count(part.totals.requests, "request"), 112.).text_color(c.muted))
+                .child(cell(priced(part.totals.cost, &part.totals), 72.).text_color(c.muted))
         }),
     ))
 }
@@ -819,8 +838,15 @@ fn activity(history: &History, c: &Colors) -> Div {
     )
 }
 
-/// The accounts ranked by tokens, each with its share drawn.
+/// The accounts ranked by tokens, each with its share drawn and its API
+/// value.
 fn accounts(history: &History, c: &Colors) -> Div {
+    let sum = history
+        .accounts
+        .iter()
+        .map(|s| history::tokens(&s.totals))
+        .sum::<u64>()
+        .max(1) as f32;
     let most = history
         .accounts
         .iter()
@@ -872,9 +898,18 @@ fn accounts(history: &History, c: &Colors) -> Div {
                         .child(div().min_w_0().truncate().child(share.name.clone())),
                 )
                 .child(
-                    div()
+                    h_flex()
                         .flex_1()
-                        .child(meter(tokens as f32 / most, c.meter, c)),
+                        .gap(px(12.))
+                        .child(
+                            div()
+                                .flex_1()
+                                .child(meter(tokens as f32 / most, c.meter, c)),
+                        )
+                        .child(
+                            cell(format!("{:.0}%", tokens as f32 / sum * 100.), 36.)
+                                .text_color(c.muted),
+                        ),
                 )
                 .child(numbers([
                     human::compact(tokens),

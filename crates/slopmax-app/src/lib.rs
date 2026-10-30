@@ -21,7 +21,7 @@ use slopmax_core::account::{self, Account, Store};
 use slopmax_core::agent::{self, AGENTS, Wiring};
 use slopmax_core::auth::{self, LoginEvent, LoginOptions, Prompt, callback};
 use slopmax_core::background::{self, Daemon};
-use slopmax_core::config::Config;
+use slopmax_core::config::{Config, Strategy};
 use slopmax_core::import::{self, Source};
 use slopmax_core::net::Origins;
 use slopmax_core::paths::Home;
@@ -66,6 +66,47 @@ pub struct Snapshot {
     pub today: Option<history::History>,
     /// The account a reset credit is being redeemed on.
     pub redeeming: Option<String>,
+    /// The configuration as config.toml has it now, which the Settings
+    /// page changes with [`App::set`].
+    pub config: Config,
+}
+
+/// A setting the app changes while the proxy runs, which it applies at
+/// once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Setting {
+    /// How a new session picks its account.
+    Strategy(Strategy),
+    /// Whether a session keeps the account it started on.
+    SessionAffinity(bool),
+    /// Whether a reset credit is redeemed before it would expire unused.
+    RedeemExpiringCredits(bool),
+    /// Whether one is redeemed once every account is spent.
+    RedeemWhenExhausted(bool),
+}
+
+impl Setting {
+    /// Its key in config.toml.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Strategy(_) => "strategy",
+            Self::SessionAffinity(_) => "session_affinity",
+            Self::RedeemExpiringCredits(_) => "redeem_expiring_credits",
+            Self::RedeemWhenExhausted(_) => "redeem_when_exhausted",
+        }
+    }
+
+    /// Writes it into the config at `path`, keeping the file's comments,
+    /// and returns the config that makes.
+    pub fn write(self, path: &Path) -> Result<Config> {
+        let key = self.key();
+        match self {
+            Self::Strategy(strategy) => Config::set(path, &[(key, strategy.to_string().into())]),
+            Self::SessionAffinity(on)
+            | Self::RedeemExpiringCredits(on)
+            | Self::RedeemWhenExhausted(on) => Config::set(path, &[(key, on.into())]),
+        }
+    }
 }
 
 /// The background proxy, as the app last saw it.
@@ -159,6 +200,7 @@ impl App {
             history: None,
             today: None,
             redeeming: None,
+            config: config.clone(),
         });
         let shared = Arc::new(Shared {
             home: Home::current(),
@@ -191,7 +233,8 @@ impl App {
         self.runtime.handle().clone()
     }
 
-    /// The configuration the app and its proxy run with.
+    /// The configuration the app started with, which says where the proxy
+    /// listens. The snapshot's `config` follows changes to config.toml.
     pub fn config(&self) -> &Config {
         &self.shared.config
     }
@@ -396,6 +439,16 @@ impl App {
                 }
                 Err(e) => shared.tell(format!("Could not redeem a limit reset: {e:#}"), true),
             }
+        });
+    }
+
+    /// Changes a setting in config.toml and has the proxy apply it at once.
+    pub fn set(&self, setting: Setting) {
+        self.act(move |shared| {
+            let written = setting.write(&shared.home.config())?;
+            let config = adopt(&shared.config, written);
+            shared.update(|s| s.config = config);
+            Ok(view::setting_changed(setting))
         });
     }
 
@@ -619,13 +672,21 @@ async fn watch_over(shared: Arc<Shared>) {
         let full = std::mem::take(&mut *lock(&shared.full)) || last_full.elapsed() >= SLOW_POLL;
         if full {
             last_full = Instant::now();
-            let config = shared.config.clone();
-            if let Ok((agents, service)) =
-                tokio::task::spawn_blocking(move || look_around(&config)).await
+            let (config, path) = (shared.config.clone(), shared.home.config());
+            if let Ok((agents, service, current)) = tokio::task::spawn_blocking(move || {
+                let (agents, service) = look_around(&config);
+                // As config.toml has it, should someone have edited it.
+                let current = Config::load_from(&path).ok().map(|c| adopt(&config, c));
+                (agents, service, current)
+            })
+            .await
             {
                 shared.update(|s| {
                     s.agents = agents;
                     s.service = service;
+                    if let Some(current) = current {
+                        s.config = current;
+                    }
                 });
             }
         }
@@ -649,6 +710,15 @@ fn look_around(config: &Config) -> (Vec<AgentStatus>, Option<service::Status>) {
         })
         .collect();
     (agents, Manager::detect().map(Manager::status))
+}
+
+/// A config read from config.toml, as the app runs with it: on the address
+/// and with the key it started with, which `SLOPMAX_LISTEN` may have set
+/// and only a restart changes.
+fn adopt(running: &Config, mut read: Config) -> Config {
+    read.listen = running.listen;
+    read.api_key.clone_from(&running.api_key);
+    read
 }
 
 fn progress(snapshot: &mut Snapshot, event: LoginEvent) {
@@ -693,4 +763,185 @@ fn accounts(n: usize) -> String {
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    /// A config.toml of its own in the system's temporary directory, with
+    /// a comment to keep.
+    fn config_file(text: &str) -> PathBuf {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "slopmax-app-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    const CONFIG: &str =
+        "# Mine.\napi_key = \"sm-test\"\nstrategy = \"fill-first\" # chosen by hand\n";
+
+    #[test]
+    fn settings_are_written_into_config_toml() {
+        let path = config_file(CONFIG);
+        let config = Setting::Strategy(Strategy::RoundRobin)
+            .write(&path)
+            .unwrap();
+        assert_eq!(config.strategy, Strategy::RoundRobin);
+        let text = std::fs::read_to_string(&path).unwrap();
+        // The comments stay, the one beside the value too.
+        assert!(text.starts_with("# Mine.\n"), "{text}");
+        assert!(
+            text.contains("strategy = \"round-robin\" # chosen by hand"),
+            "{text}"
+        );
+
+        let config = Setting::SessionAffinity(false).write(&path).unwrap();
+        assert!(!config.session_affinity);
+        // What was set before stays set.
+        assert_eq!(config.strategy, Strategy::RoundRobin);
+        let config = Setting::RedeemExpiringCredits(false).write(&path).unwrap();
+        assert!(!config.redeem_expiring_credits);
+        let config = Setting::RedeemWhenExhausted(true).write(&path).unwrap();
+        assert!(config.redeem_when_exhausted);
+
+        let reread = Config::load_from(&path).unwrap();
+        assert_eq!(reread, config);
+        assert!(!reread.session_affinity && !reread.redeem_expiring_credits);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn a_config_that_will_not_load_is_left_alone() {
+        let broken = "api_key = \"sm-test\"\nstrategy = 3\n";
+        let path = config_file(broken);
+        assert!(Setting::SessionAffinity(false).write(&path).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), broken);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn each_setting_has_its_key() {
+        let keys = [
+            Setting::Strategy(Strategy::ResetFirst),
+            Setting::SessionAffinity(true),
+            Setting::RedeemExpiringCredits(true),
+            Setting::RedeemWhenExhausted(true),
+        ]
+        .map(Setting::key);
+        assert_eq!(
+            keys,
+            [
+                "strategy",
+                "session_affinity",
+                "redeem_expiring_credits",
+                "redeem_when_exhausted"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_reread_config_keeps_the_address_and_key_the_app_runs_with() {
+        let running = Config {
+            listen: "127.0.0.1:9401".parse().unwrap(),
+            api_key: "sm-running".to_owned(),
+            ..Config::default()
+        };
+        let read = Config {
+            api_key: "sm-on-disk".to_owned(),
+            strategy: Strategy::LeastUsed,
+            ..Config::default()
+        };
+        let adopted = adopt(&running, read);
+        assert_eq!(adopted.listen, running.listen);
+        assert_eq!(adopted.api_key, "sm-running");
+        assert_eq!(adopted.strategy, Strategy::LeastUsed);
+    }
+
+    fn snapshot() -> Snapshot {
+        Snapshot {
+            proxy: Proxy::Checking,
+            address: String::new(),
+            report: None,
+            agents: Vec::new(),
+            service: None,
+            sign_in: None,
+            notice: None,
+            history: None,
+            today: None,
+            redeeming: None,
+            config: Config::default(),
+        }
+    }
+
+    #[test]
+    fn sign_in_progress_moves_the_step_along() {
+        let mut s = snapshot();
+        // Nothing to move along.
+        progress(&mut s, LoginEvent::Notice("ignored".to_owned()));
+        assert_eq!(s.sign_in, None);
+
+        s.sign_in = Some(SignIn {
+            provider: ProviderId::Codex,
+            step: Step::Starting,
+            notes: Vec::new(),
+        });
+        progress(
+            &mut s,
+            LoginEvent::DeviceCode {
+                url: "https://example.invalid/device".to_owned(),
+                code: "ABCD".to_owned(),
+            },
+        );
+        progress(&mut s, LoginEvent::Notice("Still waiting.".to_owned()));
+        let sign_in = s.sign_in.clone().unwrap();
+        assert_eq!(
+            sign_in.step,
+            Step::DeviceCode {
+                url: "https://example.invalid/device".to_owned(),
+                code: "ABCD".to_owned()
+            }
+        );
+        assert_eq!(sign_in.notes, ["Still waiting."]);
+
+        progress(
+            &mut s,
+            LoginEvent::Authorize {
+                title: "ChatGPT",
+                url: "https://example.invalid/authorize".to_owned(),
+                opened: false,
+                port: 1455,
+            },
+        );
+        assert_eq!(
+            s.sign_in.unwrap().step,
+            Step::Authorize {
+                url: "https://example.invalid/authorize".to_owned(),
+                opened: false
+            }
+        );
+    }
+
+    #[test]
+    fn counts_of_accounts_agree() {
+        assert_eq!(accounts(0), "0 accounts");
+        assert_eq!(accounts(1), "1 account");
+        assert_eq!(accounts(3), "3 accounts");
+    }
+
+    #[test]
+    fn commands_are_looked_up_on_path() {
+        assert_eq!(on_path("slopmax-surely-not-a-command"), None);
+        if cfg!(unix) {
+            assert!(on_path("sh").is_some_and(|sh| sh.is_file()));
+        }
+    }
 }

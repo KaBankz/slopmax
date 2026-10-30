@@ -3,6 +3,7 @@
 //! windows across its pool, each leading to its accounts; and today's work.
 
 use gpui_kit::assets::IconName;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -40,7 +41,13 @@ impl Main {
                 c,
             ))
         } else {
-            page.child(standing(&view::status(report, now), c))
+            page.child(
+                h_flex()
+                    .gap(px(16.))
+                    .child(standing(&view::status(report, now), c))
+                    .child(div().flex_1())
+                    .child(routing(&view::routing(&self.snapshot.config), c, cx)),
+            )
         };
         page.when(!attention.is_empty(), |page| {
             page.child(self.needs(&attention, c, cx))
@@ -154,6 +161,26 @@ fn standing(status: &Status, c: &Colors) -> impl IntoElement {
                 .as_ref()
                 .map(|detail| div().text_color(c.muted).child(ui::sentence(detail))),
         )
+}
+
+/// How requests find their account, quietly, leading to Settings where
+/// that is chosen.
+fn routing(line: &str, c: &Colors, cx: &mut Context<Main>) -> impl IntoElement {
+    let fg = c.fg;
+    h_flex()
+        .id("routing")
+        .flex_shrink_0()
+        .gap(px(4.))
+        .text_size(px(ui::SMALL))
+        .text_color(c.muted)
+        .cursor_pointer()
+        .hover(move |link| link.text_color(fg))
+        .role(Role::Link)
+        .aria_label(format!("Routing: {line}. Change it in Settings"))
+        .tooltip(|window, cx| Tooltip::new("Change in Settings").build(window, cx))
+        .child(line.to_owned())
+        .child(icon(IconName::ChevronRight, 12., c.faint))
+        .on_click(cx.listener(|main, _, _, cx| main.go(Section::Settings, cx)))
 }
 
 /// Each subscription's windows across its pool, a block apiece that opens

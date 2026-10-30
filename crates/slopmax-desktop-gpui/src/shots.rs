@@ -3,6 +3,8 @@
 //! screen is locked or asleep, when nothing on it draws. Built with
 //! `--features shots` and run with `SLOPMAX_SHOTS` naming a directory, the
 //! app draws its pages there once its accounts have loaded, then quits.
+//! `SLOPMAX_SHOTS_HEIGHT` sets the window's height in points, to draw a
+//! long page whole.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -13,11 +15,20 @@ use slopmax_core::provider::ProviderId;
 use slopmax_core::time::Timestamp;
 
 use crate::prefs::{Appearance, Prefs};
-use crate::{Main, Section, Shared, panel, theme};
+use crate::{Main, Section, Shared, native, panel, theme};
 
-/// The window in the images: its usual width, tall enough for most pages
-/// whole.
+/// The window in the images: its usual width, and unless
+/// `SLOPMAX_SHOTS_HEIGHT` says otherwise, tall enough for most pages whole.
 const SIZE: (f32, f32) = (1160., 1400.);
+
+/// The window's height: `SLOPMAX_SHOTS_HEIGHT`'s points, or [`SIZE`]'s.
+fn height() -> f32 {
+    std::env::var("SLOPMAX_SHOTS_HEIGHT")
+        .ok()
+        .and_then(|points| points.trim().parse::<f32>().ok())
+        .filter(|points| *points >= 400.)
+        .unwrap_or(SIZE.1)
+}
 
 /// Draws the pages, if `SLOPMAX_SHOTS` names where.
 pub(crate) fn start(cx: &mut App) {
@@ -45,12 +56,20 @@ async fn shoot(dir: &Path, cx: &mut AsyncApp) -> anyhow::Result<()> {
         anyhow::bail!("the window did not open");
     };
     window.update(cx, |_, window, _| {
-        window.resize(size(px(SIZE.0), px(SIZE.1)));
+        window.resize(size(px(SIZE.0), px(height())));
     })?;
     wait(cx, &main, |main| {
         main.snapshot.report.is_some() && main.snapshot.today.is_some()
     })
     .await?;
+    // AppKit keeps a window's frame on the screen; a taller page stretches
+    // its content past it.
+    let height = height();
+    window.update(cx, |_, window, _| {
+        if window.bounds().size.height < px(height) {
+            native::stretch(window, height);
+        }
+    })?;
     for appearance in [Appearance::Light, Appearance::Dark] {
         // Not saved: the choice in Settings stays as it was.
         cx.update(|cx| {
