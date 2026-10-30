@@ -37,6 +37,7 @@ body { margin: 0; background: var(--bg); color: var(--ink); font: 13.5px/1.5 var
 .num, td.n, .fig { font-variant-numeric: tabular-nums; }
 button, input { font: inherit; color: inherit; }
 code, .mono { font-family: var(--mono); font-size: .92em; }
+code { white-space: nowrap; }
 [hidden] { display: none !important; }
 .grow { flex: 1; }
 .muted { color: var(--muted); }
@@ -65,7 +66,7 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
   color: var(--muted); font-weight: 500; font-size: 12.5px; }
 .seg button.on { background: var(--panel); color: var(--ink); box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgba(0,0,0,.05); }
 .switch { position: relative; width: 32px; height: 18px; flex: none; border-radius: 9px; border: 0; padding: 0;
-  background: var(--track); cursor: pointer; transition: background .15s; }
+  background: color-mix(in srgb, var(--ink) 13%, var(--panel)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 8%, transparent); cursor: pointer; transition: background .15s; }
 .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
   background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s; }
 .switch[aria-checked="true"] { background: var(--ink); }
@@ -260,7 +261,8 @@ tr.total td { font-weight: 600; }
 .opts { display: grid; margin: 4px -10px 6px; }
 .opt { display: flex; gap: 12px; align-items: flex-start; padding: 10px 10px; border: 0; border-radius: 7px;
   cursor: pointer; background: transparent; text-align: left; width: 100%; transition: background .12s; }
-.opt + .opt { box-shadow: 0 -1px 0 var(--line2); }
+.opt { position: relative; }
+.opt + .opt::before { content: ""; position: absolute; top: 0; left: 10px; right: 10px; border-top: 1px solid var(--line2); }
 .opt:hover { background: var(--hover); }
 .opt b { font-weight: 500; }
 .opt.on b { font-weight: 600; }
@@ -282,6 +284,40 @@ tr.total td { font-weight: 600; }
 .ttl .field { width: 64px; height: 28px; text-align: right; font-variant-numeric: tabular-nums; }
 .group-t { font-size: 12px; color: var(--muted); font-weight: 500; margin: 18px 0 0; }
 .group-t:first-child { margin-top: 0; }
+
+/* Access */
+.hint { font-size: 12px; color: var(--muted); margin: 12px 0 0; line-height: 1.55; }
+.klist { margin: -2px 0 14px; }
+.krow { display: flex; align-items: center; gap: 12px; padding: 8px 0; }
+.krow + .krow { border-top: 1px solid var(--line2); }
+.kn { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px; }
+.kn b { font-weight: 560; }
+.kn .muted { font-size: 12px; }
+.kempty { font-size: 12.5px; padding: 4px 0; }
+.kform { display: grid; grid-template-columns: 1fr 1.4fr auto; gap: 8px; }
+.reveal { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; background: var(--well); font-size: 12.5px; }
+.reveal .kv { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.reveal .kcode { flex: 1; min-width: 0; overflow-x: auto; padding: 6px 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; font-size: 12px; user-select: all; }
+.aform { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; margin-top: 12px; }
+.aform label { display: grid; gap: 4px; font-size: 12px; color: var(--muted); }
+.aform .wide { grid-column: 1 / -1; }
+.aform select.field { appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 26px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 14px) 13px, calc(100% - 10px) 13px; background-size: 4px 4px; background-repeat: no-repeat; }
+.arow { display: flex; align-items: center; justify-content: flex-end; gap: 12px; font-size: 12.5px; }
+.arow .bad { margin-right: auto; }
+#doctor { margin-top: 16px; }
+.doctor { padding-top: 6px; }
+.dsec { display: grid; grid-template-columns: 140px 1fr; gap: 16px; padding: 9px 0; }
+.dsec + .dsec { border-top: 1px solid var(--line2); }
+.dt { font-size: 12.5px; color: var(--muted); padding-top: 2px; }
+.df { display: flex; align-items: center; gap: 10px; min-height: 28px; font-size: 13px; flex-wrap: wrap; }
+.df .dot { flex: none; }
+.dtext { flex: 1; min-width: 200px; }
+.fix { display: inline-flex; align-items: center; gap: 2px; }
+.fix code { padding: 3px 7px; background: var(--well); border: 1px solid var(--line); border-radius: 5px; font-size: 12px; }
+.fix .btn.icon { width: 26px; height: 26px; color: var(--muted); }
+.fix .btn.icon svg { width: 13px; height: 13px; }
 
 /* Feed */
 .feed { max-height: 460px; overflow: auto; }
@@ -346,6 +382,8 @@ footer.wrap { color: var(--faint); font-size: 12px; padding-bottom: 40px; }
   .credit .btn { grid-column: 2; grid-row: 1 / 4; }
   .endpoint .lbl { display: none; }
   th.x, td.x { display: none; }
+  .kform { grid-template-columns: 1fr 1fr; } .kform .btn { grid-column: 1 / -1; justify-self: end; }
+  .dsec { grid-template-columns: 1fr; gap: 2px; }
   .feed .nm { max-width: 190px; }
   .feed th, .feed td { padding-left: 7px; padding-right: 7px; }
   .feed th:first-child, .feed td:first-child { padding-left: 14px; } .feed th:last-child, .feed td:last-child { padding-right: 14px; }
@@ -368,7 +406,7 @@ footer.wrap { color: var(--faint); font-size: 12px; padding-bottom: 40px; }
     <svg viewBox="0 0 20 20" aria-hidden="true"><rect width="20" height="20" rx="5" fill="var(--accent)"/><path d="M6 14V10M10 14V6M14 14v-6" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>
     slopmax <span class="ver" id="ver"></span>
   </div>
-  <nav class="nav"><a href="#accounts">Accounts</a><a href="#usage">Usage</a><a href="#routing">Routing</a><a href="#requests">Requests</a></nav>
+  <nav class="nav"><a href="#accounts">Accounts</a><a href="#usage">Usage</a><a href="#routing">Routing</a><a href="#access">Access</a><a href="#requests">Requests</a></nav>
   <div class="grow"></div>
   <span class="live" id="live"><span class="dot"></span><span>Connecting</span></span>
   <button class="btn ghost endpoint" id="copy" title="Copy the endpoint your agents use"><span class="lbl">Endpoint</span> <span id="origin"></span>
@@ -396,11 +434,17 @@ footer.wrap { color: var(--faint); font-size: 12px; padding-bottom: 40px; }
     <div class="grid g2" id="settings"></div>
   </section>
 
+  <section id="access">
+    <div class="shead"><h2>Access</h2><span class="lede">Who may use slopmax, the accounts it serves from, and whether it is set up right.</span></div>
+    <div class="grid g2"><div class="card" id="keys"></div><div class="card" id="addacct"></div></div>
+    <div class="card" id="doctor"></div>
+  </section>
+
   <section id="requests">
     <div class="shead"><h2>Live requests</h2><span class="lede" id="feedcount">Answered and failed requests as they happen.</span>
       <div class="end"><button class="btn sm" id="clearfeed">Clear</button></div></div>
     <div class="card feed"><table>
-      <thead><tr><th>Time</th><th>Account</th><th>Model</th><th class="x">Agent</th><th>Result</th><th class="n">Input</th><th class="n">Cache read</th><th class="n x">Cache write</th><th class="n">Output</th><th class="n x">First byte</th><th class="n">Total</th></tr></thead>
+      <thead><tr><th>Time</th><th>Account</th><th>Model</th><th class="x">Agent</th><th>Result</th><th class="n">Input</th><th class="n x">Cache write</th><th class="n">Cache read</th><th class="n">Output</th><th class="n x">First byte</th><th class="n">Total</th></tr></thead>
       <tbody id="feed"></tbody></table>
       <div class="empty" id="feedempty"><b>Waiting for requests</b>Each request appears here the moment it is answered.</div>
     </div>
@@ -612,12 +656,13 @@ function renderAccounts() {
   const keys = accounts.filter((a) => !SUBSCRIPTIONS.includes(a.provider));
   const conds = accounts.map(condition);
   const ready = conds.filter((c) => c.ready).length, limited = conds.filter((c) => c.limited).length;
-  const signed = conds.filter((c) => c.tone === "bad").length;
+  const signed = conds.filter((c) => c.tone === "bad").length, disabled = conds.filter((c) => c.text === "Disabled").length;
+  const throttled = conds.filter((c) => c.text === "Throttled").length;
   const resets = subs.reduce((n, a) => n + credits(a).length, 0);
   const lead = limited || signed ? "warn" : "good";
   $("#summary").innerHTML = accounts.length
     ? `<span class="dot ${lead}"></span><b>${ready} of ${accounts.length} account${accounts.length > 1 ? "s" : ""} ready</b>` +
-      [limited && `${limited} limited`, signed && `${signed} signed out`, resets && `${resets} limit reset${resets > 1 ? "s" : ""} banked`]
+      [limited && `${limited} limited`, throttled && `${throttled} throttled`, disabled && `${disabled} disabled`, signed && `${signed} signed out`, resets && `${resets} limit reset${resets > 1 ? "s" : ""} banked`]
         .filter(Boolean).map((x) => `<span class="muted">· ${x}</span>`).join("")
     : "";
   $("#unpin").hidden = !accounts.some((a) => a.pinned);
@@ -642,13 +687,16 @@ function providerCard(p, group, pool) {
   const cols = Math.max(slots.length, 1);
   const working = group.filter((a) => !a.disabled && !a.auth_error);
   let poolHtml = "";
+  // With every plan's size known the pool weighs accounts by it (Max 20x is four Max 5x); otherwise each counts alike.
+  const shares = pool?.shares;
   if (pool && pool.windows.length) {
     poolHtml = `<div class="pool">` + pool.windows.map((w) => {
       const used = usedNow(w);
       const segs = working.map((a) => {
         const own = (a.state.limits?.windows || []).find((x) => slotKey(x) === slotKey(w));
-        const u = own ? usedNow(own) : 0;
-        return `<div data-tip="${esc(a.name)}|${round(u)}% of its ${esc(windowTitle(w).toLowerCase())} window used" aria-label="${esc(a.name)}: ${round(u)}% used"><span><i class="${u >= 90 ? "fill-bad" : u >= 70 ? "fill-warn" : ""}" style="width:${Math.min(100, u)}%"></i></span></div>`;
+        const u = own ? usedNow(own) : 0, share = shares ? shares[a.id] ?? 0 : 1 / working.length;
+        const plan = a.plan ? `${planName(a.plan)}, ` : "";
+        return `<div style="flex:${Math.max(share, 0.02).toFixed(4)}" data-tip="${esc(a.name)}|${round(u)}% of its ${esc(windowTitle(w).toLowerCase())} window used · ${plan}${round(share * 100)}% of the pool" aria-label="${esc(a.name)}: ${round(u)}% used"><span><i class="${u >= 90 ? "fill-bad" : u >= 70 ? "fill-warn" : ""}" style="width:${Math.min(100, u)}%"></i></span></div>`;
       }).join("");
       return `<div class="pw"><div class="lbl"><span>${windowTitle(w)}</span><span>${working.length} account${working.length > 1 ? "s" : ""}</span></div>
         <div class="big">${round(used)}%<small>used</small></div><div class="segs">${segs}</div>
@@ -674,7 +722,7 @@ function providerCard(p, group, pool) {
   return `<div class="card prov">
     <div class="phead"><h3>${TITLES[p]}</h3><span class="meta">${ready} of ${group.length} ready</span>
       <span class="grow"></span><span class="nextline">${nextText(pool, working)}</span></div>
-    ${poolHtml ? `<div class="poolh">Pooled · what the agents see</div>${poolHtml}` : ""}<div class="rows" style="--cols:${cols}">${head}${rows}</div>${resetsHtml}</div>`;
+    ${poolHtml ? `<div class="poolh">Pooled · what the agents see · ${shares ? `<span data-tip="Weighted by plan|Each account counts by its plan's size, so a Max 20x weighs four times a Max 5x">weighted by plan</span>` : "average of accounts"} · one segment per account${shares ? ", sized by its share" : ""}</div>${poolHtml}` : ""}<div class="rows" style="--cols:${cols}">${head}${rows}</div>${resetsHtml}</div>`;
 }
 
 // Where a new session goes now, and why; or when one can go anywhere again.
@@ -682,6 +730,7 @@ function nextText(pool, working) {
   const next = pool?.next && account(pool.next.account);
   if (next) return `New sessions → <b>${esc(next.name)}</b> <span class="muted">· ${esc(pool.next.why)}</span>`;
   if (!working.length) return `<span class="muted">No working account</span>`;
+  if (working.some((a) => condition(a).ready)) return "";
   const back = working.map(limitedUntil).filter(Boolean).sort((x, y) => x - y)[0];
   return `<span class="warn">No account can take a new session</span>${back ? ` <span class="muted">· the soonest is back in <span data-until="${back}">${until(back)}</span>, ${clock(back)}</span>` : ""}`;
 }
@@ -741,6 +790,7 @@ function openMenu(btn) {
     n ? `<button data-do="redeem">Redeem a limit reset…<span class="hint">${n} left</span></button>` : "",
     `<button data-do="priority">Set priority…<span class="hint">${a.priority}</span></button>`,
     `<button data-do="label">Rename…</button>`,
+    a.follows ? `<button data-do="own">Refresh here instead of ${esc(a.follows)}</button>` : "",
     `<button data-do="${a.disabled ? "enable" : "disable"}">${a.disabled ? "Enable" : "Disable"}</button>`,
     `<hr><button data-do="remove" class="danger">Remove…</button>`,
   ].join("");
@@ -764,7 +814,10 @@ async function menuAction(id, what) {
   closeMenu();
   const a = account(id);
   try {
-    if (what === "use") { await act(id, "use"); toast(`New ${TITLES[a.provider]} sessions go to ${a.name}.`); }
+    if (what === "own") {
+      const ok = await ask({ title: `Refresh ${esc(a.name)} here?`, body: `slopmax follows ${esc(a.follows)}'s copy of this account's tokens now. From here on slopmax refreshes them itself, and stops reading ${esc(a.follows)}'s copy.`, confirm: "Refresh here" });
+      if (ok != null) { await act(id, "own"); toast(`slopmax refreshes ${a.name} itself now.`); }
+    } else if (what === "use") { await act(id, "use"); toast(`New ${TITLES[a.provider]} sessions go to ${a.name}.`); }
     else if (what === "unpin") { setReport(await api("POST", "use/auto")); toast(`slopmax chooses accounts again.`); }
     else if (what === "enable" || what === "disable") { await act(id, what); toast(`${a.name} ${what}d.`); }
     else if (what === "redeem") await redeem(id, "");
@@ -943,7 +996,8 @@ function renderHistory() {
   const t = h.total, tokens = tokensOf(t), failed = t.failed || 0, unplaced = h.unplaced || 0, billed = h.billed || 0;
   const kpi = (k, v, d, tip = "") => `<div class="kpi" ${tip ? `data-tip="${esc(tip)}"` : ""}><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`;
   const span = { today: "today", "7d": "over 7 days", "30d": "over 30 days" }[range];
-  const valueSub = billed > 0 ? `Billed to API keys ${money(billed)}` : h.monthly != null ? `${money(h.monthly)} a month at this pace` : t.unpriced ? `${int(t.unpriced)} requests unpriced` : "What the API would charge";
+  const valueSub = [billed > 0 && `${money(billed)} billed to API keys`, h.monthly != null && `${money(h.monthly)} a month at this pace`].filter(Boolean).join(" · ")
+    || (t.unpriced ? `${int(t.unpriced)} requests unpriced` : "What the API would charge");
   let html = `<div class="card kpis">
     ${kpi("Tokens", compact(tokens), t.requests ? `${compact(t.input + t.output)} fresh · ${compact(t.cache_write)} cache write · ${compact(t.cache_read)} cache read` : "None yet",
       `Tokens|${int(t.input)} input + ${int(t.output)} output + ${int(t.cache_write)} cache write + ${int(t.cache_read)} cache read`)}
@@ -1022,7 +1076,7 @@ function leftCard(h) {
     <td class="n ${a.dollars >= 0.005 ? "" : "faint"}">${money(a.dollars)}</td></tr>`).join("");
   return `<div class="card left"><div class="lg">
     <div class="lsum"><div class="k">Left on the table</div><div class="v">${money(l.dollars)}</div>
-      <div class="d">${int(l.windows)} week${l.windows > 1 ? "s" : ""} reset ${span} · ${round(l.unused)}% unused on average</div><p class="why">${why}</p></div>
+      <div class="d">${int(l.windows)} week${l.windows > 1 ? "s" : ""} reset ${span} · ${round(l.unused)}%&nbsp;unused on&nbsp;average</div><p class="why">${why}</p></div>
     <div class="tbl"><table><thead><tr><th>Account</th><th class="n">Weeks</th><th class="n">Unused, on average</th><th class="n">Left</th></tr></thead><tbody>${rows}</tbody></table></div>
   </div></div>`;
 }
@@ -1069,7 +1123,7 @@ function renderSettings() {
   if (!s) return;
   const group = ([name, items]) => `<div class="group-t">${name}</div>` + items.map(([k, t, d, kind]) => `<div class="set"><div><div class="t">${t}</div><div class="d">${d}</div>
       ${k === "session_affinity" ? `<label class="ttl">Forget a session after <input class="field" type="number" min="1" id="ttl" value="${s.session_ttl_mins}"> idle minutes</label>` : ""}
-      ${k === "poll_mins" ? `<label class="ttl">Every <input class="field" type="number" min="0" id="poll" value="${s.poll_mins ?? 5}"> minutes <span class="faint">· 0 turns them off${s.poll_mins === 0 ? ", as now" : ""}</span></label>` : ""}</div>
+      ${k === "poll_mins" ? `<label class="ttl">Every <input class="field" inputmode="numeric" id="poll" value="${s.poll_mins === 0 ? "Off" : s.poll_mins ?? 5}" placeholder="Off"> minutes <span class="faint">· 0 or Off turns them off</span></label>` : ""}</div>
       ${kind === "number" ? "" : `<button class="switch" role="switch" aria-checked="${!!s[k]}" data-set="${k}" aria-label="${t}"></button>`}</div>`).join("");
   const strat = `<div class="group-t">Strategy <span class="faint">· where a new session goes, within the highest priority tier</span></div><div class="opts" role="radiogroup">` +
     s.strategies.map((x) => `<button class="opt ${x.id === s.strategy ? "on" : ""}" data-strategy="${x.id}" role="radio" aria-checked="${x.id === s.strategy}"><span class="radio"></span><div><b>${STRATEGY_NAMES[x.id] || x.id}${x.id === "reset-first" ? `<span class="def">default</span>` : ""}</b><span>${esc(x.summary)}</span></div></button>`).join("") + `</div>`;
@@ -1082,6 +1136,87 @@ async function changeSetting(form, done) {
   catch (e) { toast(e.message, true); renderSettings(); }
 }
 
+
+// ---------- Access ----------
+let clientKeys = null, newKey = null, addKind = "anthropic", doctor = null;
+const codeIn = (t) => esc(t).replace(/`([^`]+)`/g, "<code>$1</code>");
+const COPY = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg>`;
+
+async function loadKeys() {
+  try { clientKeys = (await api("GET", "keys")).keys; } catch (e) { clientKeys = null; toast(e.message, true); }
+  renderKeys();
+}
+function renderKeys() {
+  const list = clientKeys == null ? `<div class="muted kempty">Client keys did not load.</div>`
+    : clientKeys.length ? clientKeys.map((k) => `<div class="krow"><div class="kn"><b>${esc(k.name)}</b><span class="muted">${k.models.length ? k.models.map((m) => `<code>${esc(m)}</code>`).join(" ") : "every model"}</span></div>
+        <button class="btn ghost sm" data-revoke="${esc(k.name)}">Revoke…</button></div>`).join("")
+    : `<div class="muted kempty">None yet. Agents use the main key until you make one.</div>`;
+  const reveal = newKey ? `<div class="reveal"><div><b>Key for ${esc(newKey.name)}</b> <span class="muted">· copy it now; you won't see it again</span></div>
+      <div class="kv"><code class="kcode">${esc(newKey.key)}</code><button class="btn sm" data-copy="${esc(newKey.key)}">${COPY}Copy</button><button class="btn ghost sm" id="keydone">Done</button></div></div>` : "";
+  $("#keys").innerHTML = `<div class="ch"><h3>Client keys</h3><span class="note">One for each agent or machine, each revoked on its own</span></div><div class="cb">
+    ${reveal}<div class="klist">${list}</div>
+    <form class="kform" id="keyform"><input class="field" name="name" placeholder="Name, such as laptop" required autocomplete="off" spellcheck="false">
+      <input class="field" name="models" placeholder="Models, optional: claude-*, gpt-6-sol" autocomplete="off" spellcheck="false"><button class="btn">Create key</button></form>
+    <p class="hint">Model patterns hold a key to those models; empty allows all. The <code>api_key</code> in config.toml always works.</p></div>`;
+}
+
+const KINDS = [["anthropic", "Anthropic"], ["openai", "OpenAI"], ["xai", "xAI"], ["compat", "Compatible endpoint"]];
+function renderAdd() {
+  const compat = addKind === "compat";
+  $("#addacct").innerHTML = `<div class="ch"><h3>Add an account</h3><span class="note">An API key, or any compatible endpoint</span></div><div class="cb">
+    <div class="seg" id="kind" role="tablist">${KINDS.map(([k, t]) => `<button type="button" data-kind="${k}" class="${k === addKind ? "on" : ""}">${t}</button>`).join("")}</div>
+    <form id="acctform" class="aform">
+      ${compat ? `<label class="wide">Base URL<input class="field mono" name="url" placeholder="https://example.com/v1" required spellcheck="false"></label>
+        <label>API dialect<select class="field" name="dialect"><option value="chat">Chat Completions</option><option value="responses">Responses</option><option value="messages">Anthropic Messages</option></select></label>
+        <label>Models<input class="field" name="models" placeholder="Empty lists them" spellcheck="false"></label>` : ""}
+      <label>${compat ? "Key, if it needs one" : `${TITLES[addKind]} key`}<input class="field mono" name="key" type="password" ${compat ? "" : "required"} autocomplete="off" spellcheck="false"></label>
+      <label>Name<input class="field" name="label" placeholder="Optional" autocomplete="off"></label>
+      <div class="wide arow"><span class="bad" id="adderr"></span><button class="btn primary">Add account</button></div>
+    </form>
+    <p class="hint">slopmax checks the key with the provider before it saves it. Claude and ChatGPT subscriptions sign in with a browser instead: <code>slopmax login claude</code>, <code>slopmax login codex</code>, or the desktop app.</p></div>`;
+}
+
+const LEVELS = { ok: ["good", "OK"], note: ["", "Note"], warn: ["warn", "Warning"], fail: ["bad", "Problem"] };
+async function loadDoctor() {
+  const b = $("#rundoctor");
+  if (b) { b.disabled = true; b.classList.add("busy"); }
+  try { doctor = await api("GET", "doctor"); } catch (e) { doctor = { error: e.message }; }
+  renderDoctor();
+}
+function renderDoctor() {
+  const all = Array.isArray(doctor) ? doctor.flatMap((sec) => sec.findings) : [];
+  const n = (l) => all.filter((f) => f.level === l).length;
+  const sum = !doctor ? "Checking…" : doctor.error ? `<span class="bad">${esc(doctor.error)}</span>`
+    : [n("fail") && `${n("fail")} problem${n("fail") > 1 ? "s" : ""}`, n("warn") && `${n("warn")} warning${n("warn") > 1 ? "s" : ""}`, n("note") && `${n("note")} note${n("note") > 1 ? "s" : ""}`].filter(Boolean).join(" · ") || "Everything checks out";
+  const body = Array.isArray(doctor) ? doctor.map((sec) => `<div class="dsec"><div class="dt">${esc(sec.title)}</div><div>` +
+      sec.findings.map((f) => `<div class="df"><span class="dot ${LEVELS[f.level]?.[0] ?? ""}" title="${LEVELS[f.level]?.[1] ?? f.level}"></span><span class="dtext">${codeIn(f.text)}</span>
+        ${f.fix ? `<span class="fix"><code>${esc(f.fix)}</code><button class="btn ghost icon" data-copy="${esc(f.fix)}" title="Copy" aria-label="Copy ${esc(f.fix)}">${COPY}</button></span>` : ""}</div>`).join("") + `</div></div>`).join("") : "";
+  $("#doctor").innerHTML = `<div class="ch"><h3>Health check</h3><span class="note">${sum}</span><div class="end"><button class="btn sm" id="rundoctor"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3"/></svg>Check again</button></div></div>
+    <div class="cb doctor">${body}<p class="hint">The same checks as <code>slopmax doctor</code>.</p></div>`;
+}
+
+async function submitForm(form) {
+  const data = new URLSearchParams(new FormData(form));
+  for (const [k, v] of [...data]) if (!v.trim()) data.delete(k);
+  const button = $("button.btn:not([type=button])", form);
+  button.disabled = true;
+  try {
+    if (form.id === "keyform") {
+      newKey = await api("POST", "keys", data.toString());
+      await loadKeys();
+      $(".reveal .kcode")?.scrollIntoView({ block: "nearest" });
+    } else {
+      data.set("provider", addKind);
+      setReport(await api("POST", "accounts", data.toString()));
+      toast(`${data.get("label") || TITLES[addKind]} added.`);
+      renderAdd();
+    }
+  } catch (e) {
+    if (form.id === "acctform") $("#adderr").textContent = e.message; else toast(e.message, true);
+  }
+  button.disabled = false;
+}
+
 // ---------- Live feed ----------
 let feedCount = 0;
 const AGENTS = { claude: "Claude Code", codex: "Codex", slopmax: "Warmup" };
@@ -1092,7 +1227,7 @@ function feedRow(e) {
     <td><div class="nm">${e.account ? `<span>${esc(names[e.account] || e.account)}</span>` : `<span class="muted">No account could take it</span>`}${e.provider ? provLabel(e.provider) : ""}</div></td>
     <td class="mono">${esc(e.model || "—")}</td><td class="muted x">${esc(AGENTS[e.agent] || e.agent || "—")}</td>
     <td><span class="status">${ok ? `<span class="muted">${e.status}</span>` : `<span class="dot bad"></span><b>${e.status} failed</b>`}${failover ? `<span class="chip" data-tip="Answered after failover|${e.attempts} attempts: another account was tried first">after failover</span>` : ""}</span></td>
-    ${[[e.input, ""], [e.cache_read, ""], [e.cache_write, "x"], [e.output, ""]].map(([v, c]) => `<td class="n ${c} ${v ? "" : "faint"}">${compact(v)}</td>`).join("")}
+    ${[[e.input, ""], [e.cache_write, "x"], [e.cache_read, ""], [e.output, ""]].map(([v, c]) => `<td class="n ${c} ${v ? "" : "faint"}">${compact(v)}</td>`).join("")}
     <td class="n x">${secs(e.first_byte_ms)}</td><td class="n">${secs(e.ms)}</td></tr>`;
 }
 function addEvent(e) {
@@ -1179,6 +1314,20 @@ document.addEventListener("click", async (e) => {
   if (!t.closest("#menu")) closeMenu();
   const r = t.closest("[data-redeem]");
   if (r) return redeem(r.dataset.redeem, r.dataset.credit);
+  const cp = t.closest("[data-copy]");
+  if (cp) { try { await navigator.clipboard.writeText(cp.dataset.copy); toast("Copied."); } catch { toast("Copy did not work; select it instead.", true); } return; }
+  const rv = t.closest("[data-revoke]");
+  if (rv) {
+    const name = rv.dataset.revoke;
+    const ok = await ask({ title: `Revoke ${esc(name)}?`, body: "Agents using this key are refused from now on. This cannot be undone; make a new key to restore access.", confirm: "Revoke", danger: true });
+    if (ok == null) return;
+    try { clientKeys = (await api("POST", `keys/${encodeURIComponent(name)}/remove`)).keys; renderKeys(); toast(`${name} revoked.`); } catch (e) { toast(e.message, true); }
+    return;
+  }
+  if (t.closest("#keydone")) { newKey = null; return renderKeys(); }
+  const kind = t.closest("[data-kind]");
+  if (kind) { addKind = kind.dataset.kind; return renderAdd(); }
+  if (t.closest("#rundoctor")) return loadDoctor();
   const jump = t.closest("[data-jump]");
   if (jump) {
     const row = document.getElementById("acct-" + jump.dataset.jump);
@@ -1213,9 +1362,12 @@ document.addEventListener("change", (e) => {
     if (v > 0) changeSetting(`session_ttl_mins=${v}`, `Idle sessions are forgotten after ${v} minutes.`);
   }
   if (e.target.id === "poll") {
-    const v = parseInt(e.target.value, 10);
+    const raw = e.target.value.trim().toLowerCase(), v = raw === "" || raw === "off" ? 0 : parseInt(raw, 10);
     if (v >= 0) changeSetting(`poll_mins=${v}`, v ? `Usage is polled every ${v} minute${v > 1 ? "s" : ""}.` : "Background usage polls are off.");
   }
+});
+document.addEventListener("submit", (e) => {
+  if (e.target.id === "keyform" || e.target.id === "acctform") { e.preventDefault(); submitForm(e.target); }
 });
 document.addEventListener("keydown", (e) => e.key === "Escape" && closeMenu());
 addEventListener("scroll", closeMenu, { passive: true });
@@ -1247,6 +1399,7 @@ function start() {
   $("#origin").textContent = location.origin;
   setLive("wait");
   loadStatus(); loadSettings(); loadHistory(); follow();
+  loadKeys(); renderAdd(); renderDoctor(); loadDoctor();
   setInterval(tick, 1000);
   setInterval(loadStatus, 15000);
   setInterval(loadHistory, 120000);
