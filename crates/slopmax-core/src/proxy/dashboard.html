@@ -475,6 +475,13 @@ function ago(t) {
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
 }
+// Rounds as Rust's `{:.0}` does, half to even, so the dashboard, the CLI,
+// and the app show the same whole percent for the same reading.
+function round(x) {
+  const floor = Math.floor(x), rest = x - floor;
+  if (Math.abs(rest - 0.5) < 1e-9) return floor % 2 === 0 ? floor : floor + 1;
+  return Math.round(x);
+}
 function compact(n) {
   n = n || 0;
   if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
@@ -485,7 +492,7 @@ function compact(n) {
 const axisCompact = (n) => compact(n).replace(".0", "");
 const int = (n) => (n || 0).toLocaleString("en-US");
 const money = (x, dp = 2) => "$" + (x || 0).toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp });
-const pct = (x) => (x == null ? "—" : `${Math.round(x * 100)}%`);
+const pct = (x) => (x == null ? "—" : `${round(x * 100)}%`);
 const secs = (ms) => (ms == null ? "—" : ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(ms < 10e3 ? 2 : 1)} s`);
 const tokensOf = (t) => (t.input || 0) + (t.output || 0) + (t.cache_read || 0) + (t.cache_write || 0);
 const ts = (s) => (s ? Date.parse(s) : null);
@@ -508,7 +515,7 @@ function pace(w, used) {
   const ahead = used - elapsed * 100;
   if (Math.abs(ahead) < 5) return { elapsed, text: "On pace", tone: "" };
   if (ahead > 0) return { elapsed, text: `Runs out ~${clock(Date.now() + (100 - used) / (used / passed))}`, tone: "warn" };
-  return { elapsed, text: `${Math.round(-ahead)}% in reserve`, tone: "" };
+  return { elapsed, text: `${round(-ahead)}% in reserve`, tone: "" };
 }
 
 function limitedUntil(a) {
@@ -559,7 +566,7 @@ function nudgeView(n) {
   }
   if (n.event === "quota-unused") {
     const w = a && (a.state.limits?.windows || []).find((x) => !x.model && x.span === "7d");
-    const unused = w ? Math.round(100 - usedNow(w)) : null;
+    const unused = w ? round(100 - usedNow(w)) : null;
     const worth = n.worth >= 0.5 ? `$${Math.round(n.worth)}` : null;
     return { text: `<b>${esc(n.account)}</b>'s week resets in ${when}${unused != null ? ` with ${unused}% unused` : ""}`,
       sub: `${worth ? `About ${worth} of its plan. ` : ""}Work sent there before then costs nothing extra.`,
@@ -641,10 +648,10 @@ function providerCard(p, group, pool) {
       const segs = working.map((a) => {
         const own = (a.state.limits?.windows || []).find((x) => slotKey(x) === slotKey(w));
         const u = own ? usedNow(own) : 0;
-        return `<div data-tip="${esc(a.name)}|${Math.round(u)}% of its ${esc(windowTitle(w).toLowerCase())} window used" aria-label="${esc(a.name)}: ${Math.round(u)}% used"><span><i class="${u >= 90 ? "fill-bad" : u >= 70 ? "fill-warn" : ""}" style="width:${Math.min(100, u)}%"></i></span></div>`;
+        return `<div data-tip="${esc(a.name)}|${round(u)}% of its ${esc(windowTitle(w).toLowerCase())} window used" aria-label="${esc(a.name)}: ${round(u)}% used"><span><i class="${u >= 90 ? "fill-bad" : u >= 70 ? "fill-warn" : ""}" style="width:${Math.min(100, u)}%"></i></span></div>`;
       }).join("");
       return `<div class="pw"><div class="lbl"><span>${windowTitle(w)}</span><span>${working.length} account${working.length > 1 ? "s" : ""}</span></div>
-        <div class="big">${Math.round(used)}%<small>used</small></div><div class="segs">${segs}</div>
+        <div class="big">${round(used)}%<small>used</small></div><div class="segs">${segs}</div>
         <div class="sub">${resetText(w)}</div></div>`;
     }).join("") + `</div>`;
   }
@@ -686,8 +693,8 @@ function accountRow(a, slots, next = false) {
     const w = windows.find((x) => slotKey(x) === slotKey(s));
     if (!w) return `<div class="win none"><span class="lbl2">${windowTitle(s)}</span>—</div>`;
     const used = usedNow(w), pc = pace(w, used), t = tone(used);
-    return `<div class="win"><span class="lbl2">${windowTitle(w)}</span><div class="wt"><b class="${t}">${Math.round(used)}%</b>${pc ? `<span class="pace ${pc.tone}">${pc.text}</span>` : ""}</div>
-      <div class="meter"><i class="${t ? "fill-" + t : ""}" style="width:${Math.min(100, used)}%"></i>${pc ? `<u style="left:${(pc.elapsed * 100).toFixed(1)}%" data-tip="Even pace|${Math.round(pc.elapsed * 100)}% of the window has passed"></u>` : ""}</div>
+    return `<div class="win"><span class="lbl2">${windowTitle(w)}</span><div class="wt"><b class="${t}">${round(used)}%</b>${pc ? `<span class="pace ${pc.tone}">${pc.text}</span>` : ""}</div>
+      <div class="meter"><i class="${t ? "fill-" + t : ""}" style="width:${Math.min(100, used)}%"></i>${pc ? `<u style="left:${(pc.elapsed * 100).toFixed(1)}%" data-tip="Even pace|${round(pc.elapsed * 100)}% of the window has passed"></u>` : ""}</div>
       <div class="sub">${resetText(w)}</div></div>`;
   }).join("") || `<div class="win none">${st.limits?.observed_at ? "No windows reported" : "Not read yet"}</div>`;
   const meta = [];
@@ -787,7 +794,7 @@ async function redeem(id, credit) {
   const wins = (a.state.limits?.windows || []).map((w) => {
     const r = ts(w.resets_at), used = usedNow(w);
     const anyway = r && r > Date.now() && used > 0 ? `<span class="muted"> · resets anyway in ${until(r)}</span>` : "";
-    return `<div><span>${windowTitle(w)}</span><span><b>${Math.round(used)}% used</b>${anyway}</span></div>`;
+    return `<div><span>${windowTitle(w)}</span><span><b>${round(used)}% used</b>${anyway}</span></div>`;
   }).join("");
   const exp = ts(c.expires_at);
   const ok = await ask({
@@ -927,7 +934,7 @@ const plus = (t) => (t.unpriced ? "+" : "");
 const KEYS = (p) => !SUBSCRIPTIONS.includes(p);
 // Neutral series for the providers, strongest first: colour means state alone.
 const SERIES = ["var(--s1)", "var(--s2)", "var(--s3)", "var(--s4)"];
-const share100 = (v, all) => { if (!all || !v) return "0%"; const x = v / all * 100; return x < 1 ? "<1%" : `${Math.round(x)}%`; };
+const share100 = (v, all) => { if (!all || !v) return "0%"; const x = v / all * 100; return x < 1 ? "<1%" : `${round(x)}%`; };
 const provLabel = (p) => `<span class="plabel">${esc(TITLES[p] || p)}</span>`;
 
 function renderHistory() {
@@ -1011,11 +1018,11 @@ function leftCard(h) {
   const why = `When a weekly window resets with quota unused, that share of the plan is gone; each week is valued at a week's share of the plan's monthly fee${l.unpriced ? `; ${l.unpriced} week${l.unpriced > 1 ? "s" : ""} had no known plan price and ${l.unpriced > 1 ? "are" : "is"} left out` : ""}.`;
   if (!l.windows) return `<div class="card left"><div class="ch"><h3>Left on the table</h3><span class="note">No weekly window reset ${span}</span></div><div class="cb"><p class="why">${why}</p></div></div>`;
   const rows = l.accounts.map((a) => `<tr><td><div class="nm"><span>${esc(a.name)}</span><span class="plabel">${esc(TITLES[a.provider] || a.provider)}</span></div></td>
-    <td class="n">${int(a.windows)}</td><td class="n"><div class="share"><div class="bar"><i style="width:${Math.min(100, a.unused).toFixed(1)}%"></i></div><span>${Math.round(a.unused)}%</span></div></td>
+    <td class="n">${int(a.windows)}</td><td class="n"><div class="share"><div class="bar"><i style="width:${Math.min(100, a.unused).toFixed(1)}%"></i></div><span>${round(a.unused)}%</span></div></td>
     <td class="n ${a.dollars >= 0.005 ? "" : "faint"}">${money(a.dollars)}</td></tr>`).join("");
   return `<div class="card left"><div class="lg">
     <div class="lsum"><div class="k">Left on the table</div><div class="v">${money(l.dollars)}</div>
-      <div class="d">${int(l.windows)} week${l.windows > 1 ? "s" : ""} reset ${span} · ${Math.round(l.unused)}% unused on average</div><p class="why">${why}</p></div>
+      <div class="d">${int(l.windows)} week${l.windows > 1 ? "s" : ""} reset ${span} · ${round(l.unused)}% unused on average</div><p class="why">${why}</p></div>
     <div class="tbl"><table><thead><tr><th>Account</th><th class="n">Weeks</th><th class="n">Unused, on average</th><th class="n">Left</th></tr></thead><tbody>${rows}</tbody></table></div>
   </div></div>`;
 }
