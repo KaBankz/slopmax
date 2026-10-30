@@ -66,12 +66,13 @@ code { white-space: nowrap; }
   color: var(--muted); font-weight: 500; font-size: 12.5px; }
 .seg button.on { background: var(--panel); color: var(--ink); box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgba(0,0,0,.05); }
 .switch { position: relative; width: 32px; height: 18px; flex: none; border-radius: 9px; border: 0; padding: 0;
-  background: color-mix(in srgb, var(--ink) 13%, var(--panel)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 8%, transparent); cursor: pointer; transition: background .15s; }
+  background: color-mix(in srgb, var(--ink) 20%, var(--panel)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 12%, transparent); cursor: pointer; transition: background .15s; }
 .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
   background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s; }
 .switch[aria-checked="true"] { background: var(--ink); }
 .switch[aria-checked="true"]::after { transform: translateX(14px); background: var(--panel); }
 .field { height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); width: 100%; }
+.field::placeholder { font-family: var(--sans); color: var(--faint); }
 .field:focus { outline: none; border-color: color-mix(in srgb, var(--ink) 40%, var(--line)); }
 
 /* Frame */
@@ -316,6 +317,7 @@ tr.total td { font-weight: 600; }
 .df { display: flex; align-items: center; gap: 10px; min-height: 28px; font-size: 13px; flex-wrap: wrap; }
 .df .dot { flex: none; }
 .dtext { flex: 1; min-width: 200px; }
+.fixes { display: inline-flex; flex-wrap: wrap; gap: 4px 8px; justify-content: flex-end; }
 .fix { display: inline-flex; align-items: center; gap: 2px; }
 .fix code { padding: 3px 7px; background: var(--well); border: 1px solid var(--line); border-radius: 5px; font-size: 12px; }
 .fix .btn.icon { width: 26px; height: 26px; color: var(--muted); }
@@ -384,7 +386,7 @@ footer.wrap { color: var(--faint); font-size: 12px; padding-bottom: 40px; }
   .credit .btn { grid-column: 2; grid-row: 1 / 4; }
   .endpoint .lbl { display: none; }
   th.x, td.x { display: none; }
-  .kform { grid-template-columns: 1fr 1fr; } .kform .btn { grid-column: 1 / -1; justify-self: end; }
+  .kform { grid-template-columns: 1fr auto; } .kform .field:first-child { grid-column: 1 / -1; }
   .dsec { grid-template-columns: 1fr; gap: 2px; }
   .feed .nm { max-width: 190px; }
   .feed th, .feed td { padding-left: 7px; padding-right: 7px; }
@@ -599,38 +601,80 @@ function resetText(w) {
 const planName = (p) => String(p).replace(/\b\w/g, (c) => c.toUpperCase());
 const byName = (name, provider) => report.accounts.find((a) => a.name === name && (!provider || a.provider === provider));
 
-// What is worth doing before it is lost: an expiring limit reset, a week ending unused.
-function nudgeView(n) {
-  const a = byName(n.account, n.provider), at = ts(n.until);
-  const when = at ? `<span data-until="${at}">${until(at)}</span> <span class="faint">· ${clock(at)}</span>` : "";
-  if (n.event === "reset-expiring") {
-    const auto = settings && !settings.redeem_expiring_credits ? "Auto-redeem is off, so it will lapse unused." : "";
-    const credit = a && credits(a).find((c) => c.expires_at && Math.abs(ts(c.expires_at) - at) < 60e3);
-    return { text: `A limit reset on <b>${esc(n.account)}</b> expires in ${when}`, sub: auto,
-      plain: `A limit reset on ${n.account} expires in ${at ? until(at) : "soon"}. Redeem it before it is lost.`,
-      action: a ? `<button class="btn sm" data-redeem="${esc(a.id)}" data-credit="${esc(credit?.id || "")}">Redeem…</button>` : "" };
+// What wants a look, most pressing first, as the desktop app lists it
+// (slopmax-app view.rs `attention`): an account signed out, one limited
+// that holds a limit reset, a window running out before it resets, a
+// limit reset soon to expire, then the nudges it does not already cover.
+const EXPIRING = 72 * 3600e3;
+const lowerFirst = (t) => t.charAt(0).toLowerCase() + t.slice(1);
+const resets = (n) => (n === 1 ? "1 limit reset" : `${n} limit resets`);
+// A nudge message's first sentence, its `(19:12)` as `· 19:12`, without command marks.
+function firstSentence(m) {
+  let t = String(m || "").split(". ")[0].replace(/\.$/, "").replace(/`/g, "");
+  return t.replace(/ \(([^)]*)\)/g, " · $1");
+}
+function attention() {
+  const now = Date.now(), found = [];
+  for (const a of report.accounts.filter((x) => !x.disabled)) {
+    const note = (text, tone, remedy, extra = {}) => found.push({ a, text, tone, remedy, ...extra });
+    const held = SUBSCRIPTIONS.includes(a.provider) ? credits(a) : [];
+    const c = condition(a);
+    if (a.auth_error) { note(`${a.name} needs signing in again`, "bad", "signin"); continue; }
+    if (c.limited) {
+      if (!held.length) continue;
+      const lim = limitedUntil(a);
+      note(`${a.name} is limited until ${clock(lim)}, and holds ${resets(held.length)}`, "warn", "redeem");
+    }
+    for (const w of (a.state.limits?.windows || []).filter((x) => !x.model)) {
+      const pc = pace(w, usedNow(w));
+      if (pc && pc.tone === "warn") note(`${a.name}'s ${lowerFirst(windowTitle(w))} window ${lowerFirst(pc.text)}`, "warn", "look");
+    }
+    const soon = held.find((x) => x.expires_at);
+    const at = soon && ts(soon.expires_at);
+    if (at && at - now < EXPIRING) {
+      const off = (report.nudges || []).some((n) => n.event === "reset-expiring" && n.account === a.name);
+      note(`A limit reset on ${a.name} expires in ${until(at)} · ${clock(at)}${off ? "; auto-redeem is off" : ""}`, "warn", "redeem", { credit: soon.id });
+    }
   }
-  if (n.event === "quota-unused") {
-    const w = a && (a.state.limits?.windows || []).find((x) => !x.model && x.span === "7d");
-    const unused = w ? round(100 - usedNow(w)) : null;
-    const worth = n.worth >= 0.5 ? `$${round(n.worth)}` : null;
-    return { text: `<b>${esc(n.account)}</b>'s week resets in ${when}${unused != null ? ` with ${unused}% unused` : ""}`,
-      sub: `${worth ? `About ${worth} of its plan. ` : ""}Work sent there before then costs nothing extra.`,
-      plain: `${n.account}'s week resets in ${at ? until(at) : "soon"}${unused != null ? ` with ${unused}% unused` : ""}. Work sent there before then costs nothing extra.`,
-      action: a ? `<button class="btn sm" data-jump="${esc(a.id)}">Show</button>` : "" };
+  for (const n of report.nudges || []) {
+    const a = report.accounts.find((x) => x.name === n.account);
+    if (!a) continue;
+    const at = ts(n.until) || now;
+    if (n.event === "reset-expiring") {
+      // The list may already offer to redeem it, above.
+      if (found.some((f) => f.a.id === a.id && f.remedy === "redeem")) continue;
+      const credit = credits(a).find((x) => x.expires_at && Math.abs(ts(x.expires_at) - at) < 60e3);
+      found.push({ a, text: firstSentence(n.message), tone: "warn", remedy: "redeem", credit: credit?.id });
+    } else if (n.event === "quota-unused") {
+      const long = (a.state.limits?.windows || []).find((w) => !w.model && (w.span === "7d" || w.span === "30d"));
+      const period = long?.span === "30d" ? "month" : "week";
+      const unused = long ? 100 - Math.min(100, Math.max(0, usedNow(long))) : 0;
+      const worth = n.worth >= 0.5 ? `, about $${round(n.worth)} of its plan` : "";
+      found.push({ a, text: `${a.name}'s ${period} resets in ${until(at)} · ${clock(at)} with ${round(unused)}% of it unused${worth}`, tone: "warn", remedy: "look" });
+    }
   }
-  return { text: esc(n.message || n.event), sub: "", plain: n.message || n.event, action: "" };
+  // Signed out first; otherwise as found.
+  return [...found.filter((f) => f.tone === "bad"), ...found.filter((f) => f.tone !== "bad")];
+}
+function nudgePlain(n) {
+  if (n.event === "reset-expiring") return firstSentence(n.message);
+  const at = ts(n.until);
+  return `${n.account}'s week resets in ${at ? until(at) : "soon"}. Work sent there before then costs nothing extra.`;
 }
 function renderAttention() {
-  const nudges = report?.nudges || [];
-  if (!nudges.length) { $("#attention").innerHTML = ""; return; }
+  const items = report ? attention() : [];
+  if (!items.length) { $("#attention").innerHTML = ""; return; }
   const can = "Notification" in window, perm = can ? Notification.permission : "unsupported";
-  const control = perm === "default" ? `<button class="btn ghost sm" id="notify" title="Ask this browser to show a notification when something here needs doing">${BELL}Notify me</button>`
+  const control = !report.nudges?.length ? ""
+    : perm === "default" ? `<button class="btn ghost sm" id="notify" title="Ask this browser to show a notification for a limit reset about to expire or a week ending unused">${BELL}Notify me</button>`
     : perm === "granted" ? `<span class="muted">${BELL}Notifications on</span>`
     : perm === "denied" ? `<span class="faint">Notifications are blocked in this browser</span>` : "";
-  $("#attention").innerHTML = `<div class="card attn"><div class="ah"><b>Needs attention</b><span class="muted">${nudges.length} thing${nudges.length > 1 ? "s" : ""} to do before ${nudges.length > 1 ? "they are" : "it is"} lost</span><span class="grow"></span>${control}</div>` +
-    nudges.map((n) => { const v = nudgeView(n);
-      return `<div class="nudge"><span class="dot warn"></span><div class="nt"><div>${v.text}</div>${v.sub ? `<div class="muted">${v.sub}</div>` : ""}</div>${v.action}</div>`; }).join("") + `</div>`;
+  const action = (f) => f.remedy === "redeem" ? `<button class="btn sm" data-redeem="${esc(f.a.id)}" data-credit="${esc(f.credit || "")}">Redeem…</button>`
+    : f.remedy === "look" ? `<button class="btn sm" data-jump="${esc(f.a.id)}">Show</button>`
+    : `<span class="fix"><code>slopmax login ${esc(f.a.provider)}</code><button class="btn ghost icon" data-copy="slopmax login ${esc(f.a.provider)}" title="Copy" aria-label="Copy the sign-in command">${COPY}</button></span>`;
+  const bold = (f) => esc(f.text).replace(esc(f.a.name), `<b>${esc(f.a.name)}</b>`);
+  $("#attention").innerHTML = `<div class="card attn"><div class="ah"><b>Needs attention</b><span class="muted">${items.length} thing${items.length > 1 ? "s" : ""} to look at</span><span class="grow"></span>${control}</div>` +
+    items.map((f) => `<div class="nudge"><span class="dot ${f.tone}"></span><div class="nt">${bold(f)}</div>${action(f)}</div>`).join("") + `</div>`;
 }
 const BELL = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.5V7a4 4 0 0 1 8 0v4.5l1 1.5H3zM6.5 14a1.6 1.6 0 0 0 3 0"/></svg>`;
 // Posts each nudge once, after the user has allowed notifications.
@@ -643,7 +687,7 @@ function notifyNudges() {
     if (seen.includes(id)) continue;
     seen.push(id);
     try {
-      const note = new Notification(n.event === "reset-expiring" ? "A limit reset is about to expire" : "A week is ending unused", { body: nudgeView(n).plain, tag: id });
+      const note = new Notification(n.event === "reset-expiring" ? "A limit reset is about to expire" : "A week is ending unused", { body: nudgePlain(n), tag: id });
       note.onclick = () => { window.focus(); $("#attention").scrollIntoView({ block: "start" }); note.close(); };
     } catch { /* some browsers only notify from a service worker */ }
   }
@@ -1151,7 +1195,7 @@ async function loadKeys() {
 function renderKeys() {
   const list = clientKeys == null ? `<div class="muted kempty">Client keys did not load.</div>`
     : clientKeys.length ? clientKeys.map((k) => `<div class="krow"><div class="kn"><b>${esc(k.name)}</b><span class="muted">${k.models.length ? k.models.map((m) => `<code>${esc(m)}</code>`).join(" ") : "every model"}</span></div>
-        <button class="btn ghost sm" data-revoke="${esc(k.name)}">Revoke…</button></div>`).join("")
+        <button class="btn sm" data-revoke="${esc(k.name)}">Revoke…</button></div>`).join("")
     : `<div class="muted kempty">None yet. Agents use the main key until you make one.</div>`;
   const reveal = newKey ? `<div class="reveal"><div><b>Key for ${esc(newKey.name)}</b> <span class="muted">· copy it now; you won't see it again</span></div>
       <div class="kv"><code class="kcode">${esc(newKey.key)}</code><button class="btn primary sm" data-copy="${esc(newKey.key)}">${COPY}Copy</button><button class="btn sm" id="keydone">Done</button></div></div>` : "";
@@ -1171,13 +1215,15 @@ function renderAdd() {
       ${compat ? `<label class="wide">Base URL<input class="field mono" name="url" placeholder="https://example.com/v1" required spellcheck="false"></label>
         <label>API dialect<select class="field" name="dialect"><option value="chat">Chat Completions</option><option value="responses">Responses</option><option value="messages">Anthropic Messages</option></select></label>
         <label>Models<input class="field" name="models" placeholder="Empty lists them" spellcheck="false"></label>` : ""}
-      <label>${compat ? "Key, if it needs one" : `${TITLES[addKind]} key`}<input class="field mono" name="key" type="password" ${compat ? "" : "required"} autocomplete="off" spellcheck="false"></label>
+      <label>${compat ? "Key, if it needs one" : `${TITLES[addKind]} key`}<input class="field mono" name="key" type="password" ${compat ? "" : 'required placeholder="Paste an API key"'} autocomplete="off" spellcheck="false"></label>
       <label>Name<input class="field" name="label" placeholder="Optional" autocomplete="off"></label>
       <div class="wide arow"><span class="bad" id="adderr"></span><button class="btn primary">Add account</button></div>
     </form>
     <p class="hint">slopmax checks the key with the provider before it saves it. Claude and ChatGPT subscriptions sign in with a browser instead: <code>slopmax login claude</code>, <code>slopmax login codex</code>, or the desktop app.</p></div>`;
 }
 
+// "a, b, or c" as its commands, one chip each.
+const fixes = (fix) => fix.split(/, or |, | or /).map((c) => c.trim()).filter(Boolean);
 const LEVELS = { ok: ["good", "OK"], note: ["", "Note"], warn: ["warn", "Warning"], fail: ["bad", "Problem"] };
 async function loadDoctor() {
   const b = $("#rundoctor");
@@ -1192,7 +1238,7 @@ function renderDoctor() {
     : [n("fail") && `${n("fail")} problem${n("fail") > 1 ? "s" : ""}`, n("warn") && `${n("warn")} warning${n("warn") > 1 ? "s" : ""}`, n("note") && `${n("note")} note${n("note") > 1 ? "s" : ""}`].filter(Boolean).join(" · ") || "Everything checks out";
   const body = Array.isArray(doctor) ? doctor.map((sec) => `<div class="dsec"><div class="dt">${esc(sec.title)}</div><div>` +
       sec.findings.map((f) => `<div class="df"><span class="dot ${LEVELS[f.level]?.[0] ?? ""}" title="${LEVELS[f.level]?.[1] ?? f.level}"></span><span class="dtext">${codeIn(f.text)}</span>
-        ${f.fix ? `<span class="fix"><code>${esc(f.fix)}</code><button class="btn ghost icon" data-copy="${esc(f.fix)}" title="Copy" aria-label="Copy ${esc(f.fix)}">${COPY}</button></span>` : ""}</div>`).join("") + `</div></div>`).join("") : "";
+        ${f.fix ? `<span class="fixes">${fixes(f.fix).map((c) => `<span class="fix"><code>${esc(c)}</code><button class="btn ghost icon" data-copy="${esc(c)}" title="Copy" aria-label="Copy ${esc(c)}">${COPY}</button></span>`).join("")}</span>` : ""}</div>`).join("") + `</div></div>`).join("") : "";
   $("#doctor").innerHTML = `<div class="ch"><h3>Health check</h3><span class="note">${sum}</span><div class="end"><button class="btn sm" id="rundoctor"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3"/></svg>Check again</button></div></div>
     <div class="cb doctor">${body}<p class="hint">The same checks as <code>slopmax doctor</code>.</p></div>`;
 }
