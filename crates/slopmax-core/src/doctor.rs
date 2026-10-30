@@ -22,7 +22,8 @@ use crate::{auth, human, paths};
 const CLIPROXYAPI_PORT: u16 = 8317;
 
 /// How much a finding matters, least first.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Level {
     Ok,
     Note,
@@ -30,7 +31,7 @@ pub enum Level {
     Fail,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Finding {
     pub level: Level,
     pub text: String,
@@ -39,7 +40,7 @@ pub struct Finding {
 }
 
 /// The findings about one part of the setup.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Section {
     pub title: &'static str,
     pub findings: Vec<Finding>,

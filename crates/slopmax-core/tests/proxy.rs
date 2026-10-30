@@ -2559,3 +2559,99 @@ async fn history_says_what_resets_left_on_the_table() {
     );
     assert_eq!(left["accounts"][0]["name"], "codex0@example.com");
 }
+
+#[tokio::test]
+async fn the_api_does_what_the_cli_does_for_keys_endpoints_and_the_doctor() {
+    let mut base = String::new();
+    let h = harness_of(
+        |url| {
+            base = url.to_owned();
+            vec![account(ProviderId::Codex, "codex0", "tok-ok", 1000)]
+        },
+        |_| {},
+    )
+    .await;
+    std::fs::write(
+        h.dir.join("config.toml"),
+        format!("api_key = \"{KEY}\"\nrefresh_tokens = false\n"),
+    )
+    .unwrap();
+
+    // A key for another machine, held to some models: shown once, then
+    // listed by name, and it works at once.
+    let (status, made) = admin(&h, Method::POST, "keys", "name=laptop&models=gpt-6-*").await;
+    assert_eq!(status, 200, "{made}");
+    let key = made["key"].as_str().unwrap().to_owned();
+    assert!(key.starts_with("sm-"));
+    let (_, listed) = admin(&h, Method::GET, "keys", "").await;
+    assert_eq!(listed["keys"][0]["name"], "laptop");
+    assert_eq!(listed["keys"][0]["models"][0], "gpt-6-*");
+    assert!(listed.get("key").is_none() && listed["keys"][0].get("key").is_none());
+    let used = client()
+        .post(format!("{}/codex/responses", h.proxy))
+        .header("authorization", format!("Bearer {key}"))
+        .body(r#"{"model":"gpt-6-sol","input":[],"stream":true}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(used.status(), StatusCode::OK);
+    let (status, _) = admin(&h, Method::POST, "keys", "name=laptop").await;
+    assert_eq!(status, 400, "names are unique");
+    let (status, listed) = admin(&h, Method::POST, "keys/laptop/remove", "").await;
+    assert_eq!(status, 200);
+    assert!(listed["keys"].as_array().unwrap().is_empty());
+    let (status, _) = admin(&h, Method::POST, "keys/laptop/remove", "").await;
+    assert_eq!(status, 404);
+
+    // A compatible endpoint, as `slopmax login compat --url` adds it.
+    let form = format!("provider=compat&url={base}/local/v1&models=qwen3-*&label=box");
+    let (status, report) = admin(&h, Method::POST, "accounts", &form).await;
+    assert_eq!(status, 200, "{report}");
+    let added = report["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["provider"] == "compat")
+        .expect("listed");
+    assert_eq!(added["name"], "box");
+    let answered = chat_request(&h, "qwen3-coder").send().await.unwrap();
+    assert_eq!(answered.status(), StatusCode::OK);
+    // Subscriptions sign in with a browser, not through the API.
+    let (status, refused) = admin(&h, Method::POST, "accounts", "provider=claude").await;
+    assert_eq!(status, 400);
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("browser")
+    );
+    let (status, _) = admin(&h, Method::POST, "accounts", "provider=compat").await;
+    assert_eq!(status, 400, "an endpoint needs its url");
+
+    // An imported account can be made to refresh here.
+    h.app
+        .store
+        .update(&h.ids[0], |a| {
+            a.link = Some(slopmax_core::account::Link {
+                tool: "CLIProxyAPI".into(),
+                path: h.dir.join("elsewhere.json"),
+            })
+        })
+        .unwrap();
+    let path = format!("accounts/{}/own", h.ids[0]);
+    let (status, _) = admin(&h, Method::POST, &path, "").await;
+    assert_eq!(status, 200);
+    assert!(h.app.store.get(&h.ids[0]).unwrap().unwrap().link.is_none());
+
+    // The doctor's findings, as `slopmax doctor` prints them.
+    let (status, sections) = admin(&h, Method::GET, "doctor", "").await;
+    assert_eq!(status, 200);
+    let titles: Vec<&str> = sections
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["title"].as_str().unwrap())
+        .collect();
+    assert!(titles.contains(&"Accounts"), "{titles:?}");
+    assert!(sections[0]["findings"][0]["level"].is_string());
+}

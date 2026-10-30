@@ -206,7 +206,10 @@ The same data is available as JSON under `/slopmax/`, with the slopmax key:
 | `GET usage?range=…&by=…`         | totals by day, model, or account                                         |
 | `GET events`                     | each request as it is answered, as server-sent events                    |
 | `GET`, `POST settings`           | the strategy, session affinity, and redeem settings; `POST` takes form fields such as `strategy=round-robin&session_affinity=false`, writes config.toml, and applies them at once |
-| `POST accounts/<id>/<action>`    | `enable`, `disable`, `use`, `priority?value=N`, `label?value=…`, `redeem`, `remove` |
+| `POST accounts/<id>/<action>`    | `enable`, `disable`, `use`, `priority?value=N`, `label?value=…`, `redeem`, `own`, `remove` |
+| `POST accounts`                  | add an API key or a compatible endpoint: `provider`, `key`, and for `compat` its `url`, `dialect`, `models` |
+| `GET`, `POST keys`, `POST keys/<name>/remove` | client keys for other machines, as `slopmax key` makes them (shown once) |
+| `GET doctor`                     | the findings `slopmax doctor` prints                                     |
 
 ### Tools built for CLIProxyAPI
 

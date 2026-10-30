@@ -25,6 +25,7 @@ use crate::account::{forget, pin, unpin_all};
 use crate::config::{Config, Strategy};
 use crate::net::body;
 use crate::net::server::{Request, Response};
+use crate::provider::ProviderId;
 use crate::provider::credits::Outcome;
 use crate::time::Timestamp;
 use crate::{daemon, history, log, summary};
@@ -82,6 +83,28 @@ pub(super) async fn handle(app: Arc<App>, request: Request) -> Response {
         (&Method::GET, ["events"]) => events(&app),
         (&Method::POST, ["use", "auto"]) => unpin(&app),
         (&Method::POST, ["accounts", id, action]) => account(&app, id, action, &query).await,
+        // Adds an API key or a compatible endpoint; subscriptions sign in
+        // with a browser, through the CLI or the app.
+        (&Method::POST, ["accounts"]) => {
+            let form = match form(request, &query).await {
+                Ok(form) => form,
+                Err(response) => return response,
+            };
+            add_account(&app, &form).await
+        }
+        (&Method::GET, ["keys"]) => json_reply(StatusCode::OK, &keys(&app.config())),
+        (&Method::POST, ["keys"]) => {
+            let form = match form(request, &query).await {
+                Ok(form) => form,
+                Err(response) => return response,
+            };
+            add_key(&app, &form)
+        }
+        (&Method::POST, ["keys", name, "remove"]) => remove_key(&app, name),
+        (&Method::GET, ["doctor"]) => match crate::doctor::check(&app.config(), &app.store).await {
+            Ok(sections) => json_reply(StatusCode::OK, &sections),
+            Err(e) => error(None, StatusCode::INTERNAL_SERVER_ERROR, &format!("{e:#}")),
+        },
         _ => error(None, StatusCode::NOT_FOUND, "no such slopmax endpoint"),
     }
 }
@@ -169,6 +192,144 @@ async fn history(app: &App, query: &str) -> Response {
     match loaded {
         Ok(history) => json_reply(StatusCode::OK, &history),
         Err(e) => error(None, StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+/// The form fields of a POST, from its query and its body.
+async fn form(request: Request, query: &str) -> Result<Vec<(String, String)>, Response> {
+    let body = body::read(request.into_body(), 64 * 1024)
+        .await
+        .map_err(|e| error(None, StatusCode::BAD_REQUEST, &format!("{e}")))?;
+    let text = format!("{query}&{}", String::from_utf8_lossy(&body));
+    Ok(crate::net::form::decode(&text))
+}
+
+fn field<'a>(form: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    form.iter()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.trim())
+        .filter(|v| !v.is_empty())
+}
+
+/// `POST /slopmax/accounts` with `provider` (`anthropic`, `openai`, `xai`,
+/// or `compat`), `key`, and for `compat` its `url`, `dialect`, and
+/// `models`; `label` names it. The key is checked before it is saved.
+async fn add_account(app: &App, form: &[(String, String)]) -> Response {
+    let Some(provider) = field(form, "provider").and_then(|p| p.parse::<ProviderId>().ok()) else {
+        return error(
+            None,
+            StatusCode::BAD_REQUEST,
+            "provider is anthropic, openai, xai, or compat",
+        );
+    };
+    if provider.spec().is_subscription() {
+        let message = format!(
+            "{} accounts sign in with a browser: `slopmax login {provider}`, or the app",
+            provider.spec().title
+        );
+        return error(None, StatusCode::BAD_REQUEST, &message);
+    }
+    let endpoint = match (provider, field(form, "url")) {
+        (ProviderId::Compat, None) => {
+            return error(
+                None,
+                StatusCode::BAD_REQUEST,
+                "a compatible endpoint needs its url",
+            );
+        }
+        (ProviderId::Compat, Some(url)) => {
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                return error(
+                    None,
+                    StatusCode::BAD_REQUEST,
+                    "url is an http:// or https:// base URL",
+                );
+            }
+            let dialect = match field(form, "dialect").unwrap_or("chat") {
+                "chat" => crate::wire::Dialect::Chat,
+                "responses" => crate::wire::Dialect::Responses,
+                "messages" => crate::wire::Dialect::Messages,
+                _ => {
+                    return error(
+                        None,
+                        StatusCode::BAD_REQUEST,
+                        "dialect is chat, responses, or messages",
+                    );
+                }
+            };
+            let models = field(form, "models")
+                .unwrap_or_default()
+                .split(',')
+                .map(str::trim)
+                .filter(|m| !m.is_empty())
+                .map(str::to_owned)
+                .collect();
+            Some(crate::account::Endpoint {
+                base_url: url.trim_end_matches('/').to_owned(),
+                dialect,
+                models,
+            })
+        }
+        _ => None,
+    };
+    let options = crate::auth::LoginOptions {
+        endpoint,
+        key: Some(field(form, "key").unwrap_or_default().to_owned()),
+        ..crate::auth::LoginOptions::default()
+    };
+    let label = field(form, "label").map(str::to_owned);
+    // A key needs no one to answer anything.
+    let prompt = crate::auth::Prompt::new(|_| {});
+    match crate::auth::connect(&app.store, provider, label, options, prompt).await {
+        Ok(_) => reload(app, Ok(())),
+        Err(e) => error(None, StatusCode::BAD_REQUEST, &format!("{e:#}")),
+    }
+}
+
+/// The client keys, by name and the models each may use; the keys
+/// themselves are shown once, when made.
+fn keys(config: &Config) -> serde_json::Value {
+    let keys: Vec<_> = config
+        .keys
+        .iter()
+        .map(|k| json!({ "name": k.name, "models": k.models }))
+        .collect();
+    json!({ "keys": keys })
+}
+
+/// `POST /slopmax/keys` with `name` and, to hold it to some, `models`
+/// (patterns, comma-separated): makes a key and answers it once.
+fn add_key(app: &App, form: &[(String, String)]) -> Response {
+    let Some(name) = field(form, "name") else {
+        return error(None, StatusCode::BAD_REQUEST, "a key needs a name");
+    };
+    let models: Vec<String> = field(form, "models")
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(str::to_owned)
+        .collect();
+    match Config::add_key(&app.home.config(), name, &models) {
+        Ok(key) => {
+            app.reload_config();
+            json_reply(
+                StatusCode::OK,
+                &json!({ "name": name, "key": key, "models": models }),
+            )
+        }
+        Err(e) => error(None, StatusCode::BAD_REQUEST, &format!("{e:#}")),
+    }
+}
+
+fn remove_key(app: &App, name: &str) -> Response {
+    match Config::remove_key(&app.home.config(), name) {
+        Ok(true) => {
+            app.reload_config();
+            json_reply(StatusCode::OK, &keys(&app.config()))
+        }
+        Ok(false) => error(None, StatusCode::NOT_FOUND, "no such key"),
+        Err(e) => error(None, StatusCode::INTERNAL_SERVER_ERROR, &format!("{e:#}")),
     }
 }
 
@@ -306,6 +467,8 @@ async fn account(app: &App, id: &str, action: &str, query: &str) -> Response {
             app.store.update(&id, |a| a.label = label).map(|_| ())
         }
         "use" => pin(&app.home, &account),
+        // Refresh here, rather than follow the tool it was imported from.
+        "own" => app.store.update(&id, |a| a.link = None).map(|_| ()),
         "remove" => forget(&app.store, &app.home, &account),
         "redeem" => return redeem(app, &account, value).await,
         _ => return error(None, StatusCode::NOT_FOUND, "no such account action"),
