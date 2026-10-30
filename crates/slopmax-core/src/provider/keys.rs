@@ -334,4 +334,230 @@ mod tests {
         assert_eq!(account.name(), "OpenAI API key …WXYZ");
         assert!(account.id.starts_with("openai-"));
     }
+
+    use crate::provider::{Reading, UsageError};
+    use crate::testkit::{self, Mock};
+    use serde_json::json;
+
+    /// A model list for the right credential, 401 for any other, and 500
+    /// for the key `flaky`.
+    async fn vendor() -> Mock {
+        Mock::start(|seen| {
+            let bearer = seen.header("authorization");
+            let x_key = seen.header("x-api-key");
+            let list = json!({ "data": [{ "id": "m-1" }, { "id": "m-2" }] });
+            match (seen.route(), bearer, x_key) {
+                ("/v1/models", Some("Bearer sk-good"), None) => testkit::json(200, list),
+                ("/v1/models", None, Some("sk-ant-good"))
+                    if seen.header("anthropic-version") == Some("2023-06-01") =>
+                {
+                    testkit::json(200, list)
+                }
+                ("/v1/models", Some("Bearer flaky"), _) => testkit::reply(500, ""),
+                ("/v1/models", Some("Bearer garbled"), _) => testkit::reply(200, "not json"),
+                ("/v1/models", None, None) => testkit::json(200, json!({ "data": [] })),
+                _ => testkit::reply(401, ""),
+            }
+        })
+        .await
+    }
+
+    const VENDORS: &[&str] = &[
+        "https://api.openai.com",
+        "https://api.anthropic.com",
+        "https://api.x.ai",
+    ];
+
+    fn key_options(key: Option<&str>) -> LoginOptions {
+        LoginOptions {
+            key: key.map(Into::into),
+            ..LoginOptions::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn logging_in_checks_the_key_with_the_vendor() {
+        let mock = vendor().await;
+        let http = mock.client(VENDORS);
+        let prompt = || Prompt::new(|_| {});
+        let account = OPENAI
+            .login(&http, key_options(Some("sk-good")), prompt())
+            .await
+            .unwrap();
+        assert_eq!(account.provider, ProviderId::OpenAI);
+        assert_eq!(account.tokens.access_token, "sk-good");
+        assert_eq!(OPENAI.identity(&account).as_deref(), Some("sk-good"));
+
+        let anthropic = ANTHROPIC
+            .login(&http, key_options(Some("sk-ant-good")), prompt())
+            .await
+            .unwrap();
+        assert_eq!(anthropic.provider, ProviderId::Anthropic);
+
+        let err = XAI
+            .login(&http, key_options(Some("sk-wrong")), prompt())
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("rejected the key (401 Unauthorized)"),
+            "{err}"
+        );
+        for missing in [None, Some("")] {
+            let err = OPENAI
+                .login(&http, key_options(missing), prompt())
+                .await
+                .unwrap_err();
+            assert_eq!(err.to_string(), "no OpenAI API key entered");
+        }
+        // A vendor that cannot answer right now does not block the login.
+        let flaky = OPENAI
+            .login(&http, key_options(Some("flaky")), prompt())
+            .await
+            .unwrap();
+        assert_eq!(flaky.tokens.access_token, "flaky");
+    }
+
+    #[tokio::test]
+    async fn checks_tolerate_outages_and_open_endpoints() {
+        let mock = vendor().await;
+        let url = format!("{}/v1/models", mock.url);
+        let http = crate::net::Client::builder().plain_http().build();
+        let listed = check(&http, &url, KeyHeader::Bearer, "sk-good")
+            .await
+            .unwrap();
+        assert_eq!(listed.unwrap(), ["m-1", "m-2"]);
+        // No key, no credential header.
+        let open = check(&http, &url, KeyHeader::XApiKey, "").await.unwrap();
+        assert_eq!(open, Some(Vec::new()));
+        let garbled = check(&http, &url, KeyHeader::Bearer, "garbled")
+            .await
+            .unwrap();
+        assert_eq!(garbled, None);
+        let down = check(
+            &http,
+            "http://127.0.0.1:9/v1/models",
+            KeyHeader::Bearer,
+            "k",
+        )
+        .await
+        .unwrap();
+        assert_eq!(down, None);
+        let forbidden = Mock::start(|_| testkit::reply(403, "")).await;
+        let url = format!("{}/models", forbidden.url);
+        let err = check(&http, &url, KeyHeader::Bearer, "k")
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .ends_with("rejected the key (403 Forbidden)")
+        );
+    }
+
+    #[tokio::test]
+    async fn catalogs_list_what_the_key_can_use() {
+        let mock = vendor().await;
+        let http = mock.client(VENDORS);
+        let key = |k: &str| {
+            Account::new(
+                ProviderId::OpenAI,
+                Tokens {
+                    access_token: k.into(),
+                    ..Tokens::default()
+                },
+            )
+        };
+        let models = OPENAI.catalog(&http, &key("sk-good"), "").await.unwrap();
+        assert_eq!(models, ["m-1", "m-2"]);
+        assert!(
+            OPENAI
+                .catalog(&http, &key("flaky"), "")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(OPENAI.catalog(&http, &key("revoked"), "").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn keys_have_no_windows_refreshes_or_state() {
+        let account = Account::new(
+            ProviderId::Xai,
+            Tokens {
+                access_token: "xai-key".into(),
+                ..Tokens::default()
+            },
+        );
+        let http = crate::net::Client::builder().plain_http().build();
+        let usage: Result<Reading, UsageError> = XAI.usage(&http, &account).await;
+        let Err(UsageError::Other(e)) = usage else {
+            panic!("keys have no usage");
+        };
+        assert_eq!(e.to_string(), "xAI API has no usage windows");
+        let refreshed = XAI.refresh(&http, "rt").await.unwrap_err();
+        assert_eq!(
+            refreshed.to_string(),
+            "xAI API keys cannot be refreshed; log in again"
+        );
+        let mut identified = account.clone();
+        XAI.identify(&http, &mut identified).await;
+        assert_eq!(identified.email, None);
+        assert_eq!(XAI.api(&account), "https://api.x.ai/v1");
+        assert_eq!(XAI.dialects(&account), [Dialect::Chat]);
+        assert!(XAI.serves(&account, "grok-4"));
+        assert!(!XAI.serves(&account, "gpt-6"));
+        assert_eq!(XAI.rebind(b"{}"), None);
+        let mut body = json!({ "max_tokens": 5 });
+        XAI.shape(Dialect::Chat, &mut body);
+        assert_eq!(body, json!({ "max_tokens": 5 }));
+        assert!(XAI.limits(&HeaderMap::new(), Timestamp::now()).is_none());
+        let mut headers = HeaderMap::new();
+        XAI.show_pool(&[], &mut headers);
+        assert!(headers.is_empty());
+        assert!(XAI.credits().is_none());
+
+        let sent = XAI.headers(&HeaderMap::new(), &account, false);
+        assert_eq!(sent["authorization"], "Bearer xai-key");
+        let sent = ANTHROPIC.headers(&HeaderMap::new(), &account, false);
+        assert_eq!(sent["x-api-key"], "xai-key");
+        assert_eq!(
+            XAI.verdict(
+                StatusCode::PAYMENT_REQUIRED,
+                &HeaderMap::new(),
+                b"",
+                None,
+                Timestamp::now()
+            ),
+            Verdict::Exhausted {
+                until: None,
+                model: None
+            }
+        );
+    }
+
+    #[test]
+    fn overload_throttles_briefly() {
+        let now = Timestamp::from_second(1_000).unwrap();
+        for status in [503, 529] {
+            let verdict = metered_verdict(
+                StatusCode::from_u16(status).unwrap(),
+                &HeaderMap::new(),
+                b"overloaded",
+                now,
+            );
+            assert_eq!(verdict, Verdict::Throttled { until: None });
+        }
+        assert_eq!(
+            metered_verdict(StatusCode::FORBIDDEN, &HeaderMap::new(), b"", now),
+            Verdict::Forbidden
+        );
+        assert_eq!(
+            KeyHeader::for_dialect(Dialect::Responses),
+            KeyHeader::Bearer
+        );
+        assert_eq!(
+            KeyHeader::for_dialect(Dialect::Messages),
+            KeyHeader::XApiKey
+        );
+    }
 }

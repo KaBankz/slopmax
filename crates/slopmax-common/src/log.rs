@@ -146,4 +146,38 @@ mod tests {
     fn levels_order_by_verbosity() {
         assert!(Level::Error < Level::Warn && Level::Info < Level::Debug);
     }
+
+    #[test]
+    fn labels_line_up_and_colors_tell_levels_apart() {
+        let levels = [Level::Error, Level::Warn, Level::Info, Level::Debug];
+        let labels: Vec<&str> = levels.iter().map(|l| l.label()).collect();
+        assert_eq!(labels, ["ERROR", "WARN ", "INFO ", "DEBUG"]);
+        let mut colors: Vec<&str> = levels.iter().map(|l| l.color()).collect();
+        colors.dedup();
+        assert_eq!(colors.len(), 4);
+    }
+
+    #[test]
+    fn the_default_level_writes_warnings_and_errors_only() {
+        // Nothing in these tests calls `init`, so the default stands.
+        assert!(enabled(Level::Error));
+        assert!(enabled(Level::Warn));
+        assert!(!enabled(Level::Info));
+        assert!(!enabled(Level::Debug));
+        // Writing, plain and colored, never fails or panics.
+        write(Level::Warn, format_args!("a test warning"));
+        COLOR.store(true, Ordering::Relaxed);
+        write(Level::Error, format_args!("a colored test error"));
+        COLOR.store(false, Ordering::Relaxed);
+        crate::__log_warn!("through the macro: {}", 1);
+        crate::__log_info!("filtered out: {}", 2);
+    }
+
+    #[test]
+    fn levels_read_case_and_space_insensitively() {
+        assert_eq!(Level::parse(" WARNING "), Some(Some(Level::Warn)));
+        assert_eq!(Level::parse("Trace"), Some(Some(Level::Debug)));
+        assert_eq!(Level::parse("none"), Some(None));
+        assert_eq!(Level::parse("error"), Some(Some(Level::Error)));
+    }
 }

@@ -365,4 +365,111 @@ mod tests {
         assert!(!is_uuid("../../v1/messages?x=0b4e1f5a-9c2d-4e8f-a1"));
         assert!(!is_uuid("0b4e1f5a-9c2d-4e8f-a1b3-c5d7e9f0a2b4/x"));
     }
+
+    use crate::account::Tokens;
+    use crate::provider::ProviderId;
+    use crate::testkit::{self, Mock};
+
+    const ORG: &str = "6f1a2b3c-0000-4000-8000-123456789abc";
+    const AGENT: &str = "claude-cli/2.1.0 (external, cli)";
+
+    fn account(org: &str) -> Account {
+        let mut account = Account::new(
+            ProviderId::Claude,
+            Tokens {
+                access_token: "tok".into(),
+                ..Tokens::default()
+            },
+        );
+        account.org_id = Some(org.into());
+        account.assign_id();
+        account
+    }
+
+    #[tokio::test]
+    async fn nothing_is_listed_or_spent_before_claude_code_is_seen() {
+        let http = crate::net::Client::builder().plain_http().build();
+        let err = Credits.list(&http, &account(ORG), None).await.unwrap_err();
+        assert!(
+            err.to_string()
+                .starts_with("Claude answers limit resets to Claude Code alone")
+        );
+        let err = Credits
+            .redeem(&http, &account(ORG), None, Some("g"))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("none of its requests"));
+        assert!(Credits.needs_agent());
+        assert!(!Credits.counted());
+    }
+
+    #[tokio::test]
+    async fn failures_name_the_step_that_failed() {
+        let mock = Mock::start(|seen| match seen.route() {
+            "/api/oauth/usage" if seen.header("user-agent") == Some(AGENT) => testkit::json(
+                200,
+                json!({ "cedar_ember": { "eligible": true, "grants": [] } }),
+            ),
+            "/api/oauth/usage" => testkit::reply(503, ""),
+            _ => testkit::reply(500, ""),
+        })
+        .await;
+        let http = mock.client(&[API]);
+        let err = Credits
+            .list(&http, &account(ORG), Some("other"))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "listing limit resets failed (503 Service Unavailable)"
+        );
+        // Nothing listed: nothing to spend.
+        let outcome = Credits
+            .redeem(&http, &account(ORG), Some(AGENT), None)
+            .await
+            .unwrap();
+        assert_eq!(outcome, Outcome::NoCredit);
+        let err = Credits
+            .redeem(&http, &account(ORG), Some(AGENT), Some("grant"))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "using a limit reset failed (500 Internal Server Error)"
+        );
+        let err = Credits
+            .redeem(&http, &account("not-a-uuid"), Some(AGENT), Some("grant"))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "the account's organization is unknown; sign in again"
+        );
+    }
+
+    #[tokio::test]
+    async fn unreachable_servers_fail_after_a_retry() {
+        let http = crate::net::Client::builder()
+            .plain_http()
+            .origins(crate::net::Origins::new([(API, "http://127.0.0.1:9")]))
+            .build();
+        assert!(
+            Credits
+                .redeem(&http, &account(ORG), Some(AGENT), Some("grant"))
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn odd_usage_replies_are_errors_or_empty() {
+        let now = ts("2026-10-01T00:00:00Z");
+        assert!(available(&json!([]), now).is_err());
+        assert!(available(&json!({ "cedar_ember": "yes" }), now).is_err());
+        assert!(
+            available(&json!({ "cedar_ember": null }), now)
+                .unwrap()
+                .is_empty()
+        );
+    }
 }

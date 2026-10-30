@@ -160,4 +160,66 @@ mod tests {
             Some("2026-11-01T09:30:00Z".parse().unwrap())
         );
     }
+
+    use crate::account::Tokens;
+    use crate::provider::ProviderId;
+    use crate::testkit::{self, Mock};
+
+    fn account(workspace: Option<&str>) -> Account {
+        let mut account = Account::new(
+            ProviderId::Codex,
+            Tokens {
+                access_token: "tok".into(),
+                ..Tokens::default()
+            },
+        );
+        account.account_id = workspace.map(Into::into);
+        account
+    }
+
+    #[tokio::test]
+    async fn listing_and_redeeming_report_failures() {
+        let mock = Mock::start(|seen| match seen.route() {
+            "/wham/rate-limit-reset-credits" => testkit::reply(502, ""),
+            "/wham/rate-limit-reset-credits/consume" if seen.json().get("credit_id").is_some() => {
+                testkit::reply(409, "")
+            }
+            _ => testkit::json(200, json!({ "code": "nothing_to_reset" })),
+        })
+        .await;
+        let http = mock.client(&[BACKEND]);
+        let err = Credits.list(&http, &account(None), None).await.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "listing reset credits failed (502 Bad Gateway)"
+        );
+        let seen = &mock.seen()[0];
+        assert_eq!(seen.header("chatgpt-account-id"), None);
+        assert_eq!(seen.header("authorization"), Some("Bearer tok"));
+
+        let err = Credits
+            .redeem(&http, &account(Some("ws")), None, Some("c1"))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "redeeming a reset credit failed (409 Conflict)"
+        );
+        let outcome = Credits
+            .redeem(&http, &account(Some("ws")), None, None)
+            .await
+            .unwrap();
+        assert_eq!(outcome, Outcome::NothingToReset);
+
+        let nowhere = crate::net::Client::builder()
+            .plain_http()
+            .origins(crate::net::Origins::new([(BACKEND, "http://127.0.0.1:9")]))
+            .build();
+        assert!(
+            Credits
+                .redeem(&nowhere, &account(None), None, None)
+                .await
+                .is_err()
+        );
+    }
 }

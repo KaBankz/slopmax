@@ -332,4 +332,153 @@ mod tests {
         assert_eq!(restored, original);
         std::fs::remove_dir_all(dir).unwrap();
     }
+
+    #[test]
+    fn the_command_runs_claude_through_the_proxy_without_an_api_key() {
+        let command = ClaudeCode.command(&config(), &["-p".into(), "hi".into()]);
+        assert_eq!(command.get_program(), "claude");
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(args, ["-p", "hi"]);
+        let envs: Vec<(String, Option<String>)> = command
+            .get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.map(|v| v.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        assert!(envs.contains(&("ANTHROPIC_API_KEY".into(), None)));
+        assert!(envs.contains(&("ANTHROPIC_AUTH_TOKEN".into(), Some("sm-test".into()))));
+        assert!(envs.contains(&(
+            "ANTHROPIC_BASE_URL".into(),
+            Some("http://127.0.0.1:7567".into())
+        )));
+    }
+
+    #[test]
+    fn settings_that_are_not_an_object_are_refused() {
+        let dir = crate::testkit::temp_dir("claude-code-bad");
+        let file = dir.join("settings.json");
+        std::fs::write(&file, "[1, 2]").unwrap();
+        let error = ClaudeCode.setup(&config(), &file, &mut None).unwrap_err();
+        assert!(error.to_string().ends_with("is not a JSON object"));
+
+        std::fs::write(&file, r#"{"env": "nope"}"#).unwrap();
+        let error = ClaudeCode.setup(&config(), &file, &mut None).unwrap_err();
+        assert_eq!(error.to_string(), "settings.json `env` is not an object");
+
+        let error = ClaudeCode.undo(&file, json!("garbage")).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "the saved Claude Code settings are unreadable"
+        );
+    }
+
+    #[test]
+    fn setup_on_a_fresh_machine_creates_settings_and_undo_empties_them() {
+        let dir = crate::testkit::temp_dir("claude-code-fresh");
+        let file = dir.join("settings.json");
+        let mut saved = None;
+        ClaudeCode.setup(&config(), &file, &mut saved).unwrap();
+        let wired: Value = fsx::read_json(&file).unwrap().unwrap();
+        assert_eq!(
+            wired["env"]["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"],
+            "1"
+        );
+        ClaudeCode.undo(&file, saved.unwrap()).unwrap();
+        let restored: Value = fsx::read_json(&file).unwrap().unwrap();
+        assert_eq!(restored, json!({ "env": {} }));
+
+        // Undo after the user dropped `env` altogether leaves the file be.
+        std::fs::write(&file, r#"{"theme":"dark"}"#).unwrap();
+        ClaudeCode
+            .undo(&file, json!({ "ANTHROPIC_BASE_URL": "x" }))
+            .unwrap();
+        let after: Value = fsx::read_json(&file).unwrap().unwrap();
+        assert_eq!(after, json!({ "theme": "dark" }));
+    }
+
+    use crate::testkit::{self, Mock};
+
+    const ORIGINS: [&str; 2] = ["https://platform.claude.com", "https://api.anthropic.com"];
+
+    async fn anthropic() -> Mock {
+        Mock::start(|seen| match seen.route() {
+            "/v1/oauth/token" => testkit::json(
+                200,
+                json!({ "access_token": "fresh-access", "expires_in": 3600 }),
+            ),
+            "/api/oauth/profile"
+                if seen.header("authorization") == Some("Bearer fresh-access")
+                    || seen.header("authorization") == Some("Bearer live-access") =>
+            {
+                testkit::json(
+                    200,
+                    json!({
+                        "account": { "uuid": "acct-1", "email": "me@x.com" },
+                        "organization": { "uuid": "org-1", "organization_type": "claude_max",
+                                          "rate_limit_tier": "default_claude_max_20x" }
+                    }),
+                )
+            }
+            _ => testkit::reply(401, ""),
+        })
+        .await
+    }
+
+    fn login(access: &str, refresh: Option<&str>, expires_in_secs: i64) -> SavedLogin {
+        SavedLogin {
+            access_token: access.into(),
+            refresh_token: refresh.map(str::to_owned),
+            expires_at: Some(
+                (Timestamp::now() + crate::time::SignedDuration::from_secs(expires_in_secs))
+                    .as_millisecond(),
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_live_login_is_imported_with_its_profile() {
+        let mock = anthropic().await;
+        let http = mock.client(&ORIGINS);
+        let account = account_from(&http, login("live-access", Some("r-1"), 3600))
+            .await
+            .unwrap();
+        assert_eq!(account.tokens.access_token, "live-access");
+        assert_eq!(account.tokens.refresh_token.as_deref(), Some("r-1"));
+        assert_eq!(account.email.as_deref(), Some("me@x.com"));
+        assert_eq!(account.plan.as_deref(), Some("max 20x"));
+        assert!(account.id.starts_with("claude-"));
+        assert!(mock.seen_at("/v1/oauth/token").is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_expired_login_is_refreshed_first_and_keeps_its_refresh_token() {
+        let mock = anthropic().await;
+        let http = mock.client(&ORIGINS);
+        let account = account_from(&http, login("old-access", Some("r-1"), -60))
+            .await
+            .unwrap();
+        assert_eq!(account.tokens.access_token, "fresh-access");
+        // The answer rotated no refresh token, so the one in hand stays.
+        assert_eq!(account.tokens.refresh_token.as_deref(), Some("r-1"));
+        let refreshed = mock.seen_at("/v1/oauth/token");
+        assert_eq!(refreshed.len(), 1);
+        assert_eq!(refreshed[0].json()["refresh_token"], "r-1");
+    }
+
+    #[tokio::test]
+    async fn logins_that_cannot_be_read_are_errors() {
+        let mock = anthropic().await;
+        let http = mock.client(&ORIGINS);
+        let error = account_from(&http, login("old", None, -60))
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "login expired; log in again");
+        let error = account_from(&http, login("rejected", None, 3600))
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "could not read the Claude profile");
+    }
 }

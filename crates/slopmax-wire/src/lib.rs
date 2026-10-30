@@ -146,3 +146,119 @@ pub(crate) fn frame(out: &mut Vec<u8>, event: Option<&str>, data: &Value) {
     serde_json::to_writer(&mut *out, data).expect("values serialize");
     out.extend_from_slice(b"\n\n");
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn at(secs: i64) -> Timestamp {
+        Timestamp::from_second(secs).unwrap()
+    }
+
+    #[test]
+    fn each_format_names_its_errors_its_own_way() {
+        let messages = Dialect::Messages.error("rate_limit_error", "slow");
+        assert_eq!(messages["type"], "error");
+        assert_eq!(messages["error"]["type"], "rate_limit_error");
+        assert_eq!(messages["error"]["message"], "slow");
+        for dialect in [Dialect::Responses, Dialect::Chat] {
+            let body = dialect.error("rate_limit_error", "slow");
+            assert_eq!(body["error"]["message"], "slow", "{dialect:?}");
+            assert_eq!(body["error"]["type"], "rate_limit_error", "{dialect:?}");
+        }
+    }
+
+    #[test]
+    fn spent_pools_answer_with_each_clients_own_limit_error() {
+        let (now, until) = (at(1_000), at(4_600));
+        let (body, headers) = Dialect::Chat.limit_reached("all spent", until, now);
+        assert_eq!(body["error"]["code"], "rate_limit_exceeded");
+        assert_eq!(body["error"]["message"], "all spent");
+        assert!(headers.is_empty());
+
+        let (body, _) = Dialect::Messages.limit_reached("all spent", until, now);
+        assert_eq!(body["error"]["type"], "rate_limit_error");
+        let (body, _) = Dialect::Responses.limit_reached("all spent", until, now);
+        assert!(body.to_string().contains("usage_limit_reached"), "{body}");
+    }
+
+    #[test]
+    fn only_codex_streams_are_held_until_they_open() {
+        assert!(Dialect::Responses.holds_start());
+        assert!(!Dialect::Messages.holds_start());
+        assert!(!Dialect::Chat.holds_start());
+        let failed = json!({"type": "error", "error": {"code": "usage_limit_reached"}});
+        assert_eq!(
+            Dialect::Responses.opening(&failed),
+            Opening::Refused { exhausted: true }
+        );
+        // Claude and chat refuse before streaming: anything is content.
+        assert_eq!(Dialect::Messages.opening(&failed), Opening::Content);
+        assert_eq!(Dialect::Chat.opening(&failed), Opening::Content);
+    }
+
+    #[test]
+    fn usage_is_read_from_each_formats_events() {
+        let mut outcome = Outcome::default();
+        Dialect::Chat.observe(
+            &json!({"usage": {"prompt_tokens": 7, "completion_tokens": 2}}),
+            &mut outcome,
+        );
+        assert_eq!(
+            (outcome.usage.input_tokens, outcome.usage.output_tokens),
+            (7, 2)
+        );
+        let mut outcome = Outcome::default();
+        Dialect::Responses.observe(
+            &json!({"type": "response.completed", "response": {"usage": {
+                "input_tokens": 9, "output_tokens": 3}}}),
+            &mut outcome,
+        );
+        assert_eq!(
+            (outcome.usage.input_tokens, outcome.usage.output_tokens),
+            (9, 3)
+        );
+        let mut outcome = Outcome::default();
+        Dialect::Messages.observe(
+            &json!({"type": "message_delta", "usage": {"output_tokens": 4}}),
+            &mut outcome,
+        );
+        assert_eq!(outcome.usage.output_tokens, 4);
+    }
+
+    #[test]
+    fn formats_have_stable_names() {
+        assert_eq!(Dialect::Messages.as_str(), "messages");
+        assert_eq!(Dialect::Responses.as_str(), "responses");
+        assert_eq!(Dialect::Chat.as_str(), "chat");
+    }
+
+    #[test]
+    fn usage_adds_up_and_totals_every_kind_of_token() {
+        let mut total = Usage::default();
+        let one = Usage {
+            requests: 1,
+            input_tokens: 10,
+            output_tokens: 5,
+            cache_read_tokens: 100,
+            cache_write_tokens: 20,
+        };
+        total.add(&one);
+        total.add(&one);
+        assert_eq!(total.requests, 2);
+        assert_eq!(total.total_tokens(), 270);
+    }
+
+    #[test]
+    fn frames_are_server_sent_events() {
+        let mut out = Vec::new();
+        frame(&mut out, Some("ping"), &json!({"a": 1}));
+        frame(&mut out, None, &json!(2));
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "event: ping\ndata: {\"a\":1}\n\ndata: 2\n\n"
+        );
+    }
+}

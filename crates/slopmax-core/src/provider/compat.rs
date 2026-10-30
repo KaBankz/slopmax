@@ -179,4 +179,154 @@ mod tests {
         other.assign_id();
         assert_ne!(other.id, local.id);
     }
+
+    use crate::testkit::{self, Mock};
+    use serde_json::json;
+
+    /// An endpoint listing two models for the key `good` (by the dialect's
+    /// header), failing for `flaky`, and refusing anything else.
+    async fn server() -> Mock {
+        Mock::start(|seen| {
+            let list = json!({ "data": [{ "id": "local-1" }, { "id": "local-2" }] });
+            match (
+                seen.route(),
+                seen.header("authorization"),
+                seen.header("x-api-key"),
+            ) {
+                ("/v1/models" | "/v1/v1/models", Some("Bearer good"), _) => {
+                    testkit::json(200, list)
+                }
+                ("/anthropic/v1/models", None, Some("good")) => testkit::json(200, list),
+                (_, Some("Bearer flaky"), _) | (_, _, Some("flaky")) => testkit::reply(500, ""),
+                _ => testkit::reply(401, ""),
+            }
+        })
+        .await
+    }
+
+    fn options(base_url: String, dialect: Dialect, models: &[&str], key: &str) -> LoginOptions {
+        LoginOptions {
+            endpoint: Some(Endpoint {
+                base_url,
+                dialect,
+                models: models.iter().map(|m| m.to_string()).collect(),
+            }),
+            key: Some(key.into()),
+            ..LoginOptions::default()
+        }
+    }
+
+    async fn login(options: LoginOptions) -> Result<Account> {
+        let http = Client::builder().plain_http().build();
+        Compat.login(&http, options, Prompt::new(|_| {})).await
+    }
+
+    #[tokio::test]
+    async fn logins_list_the_models_when_none_are_named() {
+        let mock = server().await;
+        let base = format!("{}/v1/", mock.url);
+        let account = login(options(base.clone(), Dialect::Chat, &[], "good"))
+            .await
+            .unwrap();
+        let endpoint = account.endpoint.as_ref().unwrap();
+        assert_eq!(endpoint.models, ["local-1", "local-2"]);
+        assert_eq!(account.tokens.access_token, "good");
+        assert!(account.id.starts_with("compat-"));
+        assert_eq!(Compat.identity(&account), Some(format!("{base} good")));
+
+        // Anthropic-style endpoints list under /v1 with x-api-key.
+        let messages = login(options(
+            format!("{}/anthropic", mock.url),
+            Dialect::Messages,
+            &[],
+            "good",
+        ))
+        .await
+        .unwrap();
+        assert_eq!(messages.endpoint.unwrap().models.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn named_models_survive_an_endpoint_that_cannot_list() {
+        let mock = server().await;
+        let base = format!("{}/v1", mock.url);
+        let named = login(options(
+            base.clone(),
+            Dialect::Responses,
+            &["m-*", "m-1"],
+            "flaky",
+        ))
+        .await
+        .unwrap();
+        assert_eq!(named.endpoint.as_ref().unwrap().models, ["m-*", "m-1"]);
+
+        let err = login(options(base.clone(), Dialect::Chat, &[], "flaky"))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!("could not list the models at {base}; name them with --models")
+        );
+        let err = login(options(base, Dialect::Chat, &[], "wrong"))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("rejected the key"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn logins_need_an_address() {
+        let err = login(LoginOptions::default()).await.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "a compatible endpoint needs its address: --url <base url>"
+        );
+    }
+
+    #[tokio::test]
+    async fn catalogs_name_models_but_not_patterns() {
+        let local = account(&["qwen3-*", "llama4", "phi"]);
+        let http = Client::builder().plain_http().build();
+        let models = Compat.catalog(&http, &local, "").await.unwrap();
+        assert_eq!(models, ["llama4", "phi"]);
+    }
+
+    #[test]
+    fn accounts_without_an_endpoint_serve_nothing() {
+        let bare = Account::new(ProviderId::Compat, Tokens::default());
+        assert_eq!(Compat.identity(&bare), None);
+        assert_eq!(Compat.api(&bare), "");
+        assert!(Compat.dialects(&bare).is_empty());
+        assert!(!Compat.serves(&bare, "anything"));
+        let mut keyed = bare.clone();
+        keyed.tokens.access_token = "k".into();
+        // Without an endpoint the key goes as a bearer token.
+        assert_eq!(
+            Compat.headers(&HeaderMap::new(), &keyed, false)["authorization"],
+            "Bearer k"
+        );
+    }
+
+    #[test]
+    fn keys_go_in_the_header_the_dialect_expects() {
+        let mut messages = account(&["glm-*"]);
+        messages.tokens.access_token = "k".into();
+        messages.endpoint.as_mut().unwrap().dialect = Dialect::Messages;
+        let sent = Compat.headers(&HeaderMap::new(), &messages, false);
+        assert_eq!(sent["x-api-key"], "k");
+        assert!(!sent.contains_key("authorization"));
+        assert_eq!(
+            models_url(messages.endpoint.as_ref().unwrap()),
+            "http://localhost:11434/v1/v1/models"
+        );
+        assert_eq!(
+            Compat.verdict(
+                StatusCode::TOO_MANY_REQUESTS,
+                &HeaderMap::new(),
+                b"",
+                None,
+                Timestamp::now()
+            ),
+            Verdict::Throttled { until: None }
+        );
+    }
 }

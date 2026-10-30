@@ -400,4 +400,431 @@ mod tests {
         assert!(!revoked(StatusCode::BAD_GATEWAY, "invalid_grant"));
         assert!(!revoked(StatusCode::BAD_REQUEST, "malformed"));
     }
+
+    use crate::account::{Endpoint, Link};
+    use crate::testkit::{self, Mock};
+    use crate::time::SignedDuration;
+    use crate::wire::Dialect;
+    use serde_json::{Value, json};
+
+    /// Where Claude's token and profile calls go.
+    const CLAUDE: &[&str] = &["https://platform.claude.com", "https://api.anthropic.com"];
+
+    fn claude_account(access: &str, refresh: Option<&str>, expires_in: i64) -> Account {
+        let mut account = Account::new(
+            ProviderId::Claude,
+            Tokens {
+                access_token: access.into(),
+                refresh_token: refresh.map(Into::into),
+                expires_at: Some(Timestamp::now() + SignedDuration::from_secs(expires_in)),
+                ..Tokens::default()
+            },
+        );
+        account.org_id = Some("org-1".into());
+        account.assign_id();
+        account
+    }
+
+    fn store() -> Store {
+        Store::at(testkit::temp_dir("auth").join("accounts"))
+    }
+
+    /// Anthropic's token endpoint answering `status` and `token`, and its
+    /// profile endpoint naming a Max 5x plan.
+    async fn anthropic(status: u16, token: Value) -> Mock {
+        Mock::start(move |seen| match seen.route() {
+            "/v1/oauth/token" => testkit::json(status, token.clone()),
+            "/api/oauth/profile" => testkit::json(
+                200,
+                json!({
+                    "account": { "uuid": "acct-1", "email": "me@x.dev" },
+                    "organization": {
+                        "uuid": "org-1",
+                        "organization_type": "claude_max",
+                        "rate_limit_tier": "default_claude_max_5x"
+                    }
+                }),
+            ),
+            _ => testkit::reply(404, ""),
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn fresh_tokens_are_used_without_a_refresh() {
+        let mock = anthropic(200, json!({})).await;
+        let store = store();
+        let account = claude_account("live", Some("rt"), 2 * 3600);
+        let got = ensure_fresh(&mock.client(CLAUDE), &store, &account, false)
+            .await
+            .unwrap();
+        assert_eq!(got.tokens.access_token, "live");
+        assert!(mock.seen().is_empty());
+    }
+
+    #[tokio::test]
+    async fn due_tokens_are_refreshed_identified_and_saved() {
+        let mock = anthropic(
+            200,
+            json!({ "access_token": "new", "refresh_token": "rt2", "expires_in": 28800 }),
+        )
+        .await;
+        let store = store();
+        let mut account = claude_account("old", Some("rt1"), 600);
+        account.auth_error = Some("earlier failure".into());
+        store.save(&account).unwrap();
+
+        let got = ensure_fresh(&mock.client(CLAUDE), &store, &account, false)
+            .await
+            .unwrap();
+        assert_eq!(got.tokens.access_token, "new");
+        assert_eq!(got.tokens.refresh_token.as_deref(), Some("rt2"));
+        let left = got
+            .tokens
+            .expires_at
+            .unwrap()
+            .duration_since(Timestamp::now());
+        assert!(left > SignedDuration::from_hours(7), "{left:?}");
+        assert!(got.tokens.refreshed_at.is_some());
+        assert_eq!(got.auth_error, None);
+        assert_eq!(got.email.as_deref(), Some("me@x.dev"));
+        assert_eq!(got.plan.as_deref(), Some("max 5x"));
+
+        // Saved before it is handed out: the old refresh token is spent.
+        let saved = store.get(&account.id).unwrap().unwrap();
+        assert_eq!(saved.tokens.access_token, "new");
+        assert_eq!(saved.tokens.refresh_token.as_deref(), Some("rt2"));
+        assert_eq!(saved.plan.as_deref(), Some("max 5x"));
+
+        let sent = mock.seen_at("/v1/oauth/token");
+        assert_eq!(sent.len(), 1);
+        let body = sent[0].json();
+        assert_eq!(body["grant_type"], "refresh_token");
+        assert_eq!(body["refresh_token"], "rt1");
+        assert_eq!(body["client_id"], crate::provider::claude::oauth::CLIENT_ID);
+        let profile = mock.seen_at("/api/oauth/profile");
+        assert_eq!(profile[0].header("authorization"), Some("Bearer new"));
+        assert_eq!(
+            profile[0].header("anthropic-beta"),
+            Some("oauth-2025-04-20")
+        );
+    }
+
+    #[tokio::test]
+    async fn forced_refreshes_keep_tokens_the_provider_did_not_rotate() {
+        // No new refresh token, no expiry, and the profile lookup fails.
+        let mock = Mock::start(|seen| match seen.route() {
+            "/v1/oauth/token" => testkit::json(200, json!({ "access_token": "new" })),
+            _ => testkit::reply(500, "down"),
+        })
+        .await;
+        let store = store();
+        let mut account = claude_account("old", Some("rt1"), 6 * 3600);
+        account.tokens.id_token = Some("id".into());
+        account.email = Some("kept@x.dev".into());
+        let got = ensure_fresh(&mock.client(CLAUDE), &store, &account, true)
+            .await
+            .unwrap();
+        assert_eq!(got.tokens.access_token, "new");
+        assert_eq!(got.tokens.refresh_token.as_deref(), Some("rt1"));
+        assert_eq!(got.tokens.id_token.as_deref(), Some("id"));
+        assert_eq!(got.tokens.expires_at, None);
+        assert_eq!(got.email.as_deref(), Some("kept@x.dev"));
+        // The account was not stored yet; refreshing saves it.
+        assert!(store.get(&account.id).unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn a_token_another_process_rotated_is_reused() {
+        let mock = anthropic(200, json!({ "access_token": "unwanted" })).await;
+        let store = store();
+        let stale = claude_account("old", Some("rt1"), -60);
+        let mut theirs = stale.clone();
+        theirs.tokens.access_token = "theirs".into();
+        theirs.tokens.expires_at = Some(Timestamp::now() + SignedDuration::from_hours(8));
+        store.save(&theirs).unwrap();
+
+        let got = ensure_fresh(&mock.client(CLAUDE), &store, &stale, false)
+            .await
+            .unwrap();
+        assert_eq!(got.tokens.access_token, "theirs");
+        assert!(mock.seen().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_stored_copy_that_is_no_longer_due_is_not_refreshed() {
+        // Same token, but the stored copy says it was extended.
+        let mock = anthropic(200, json!({ "access_token": "unwanted" })).await;
+        let store = store();
+        let stale = claude_account("same", Some("rt1"), 60);
+        let mut stored = stale.clone();
+        stored.tokens.expires_at = Some(Timestamp::now() + SignedDuration::from_hours(8));
+        store.save(&stored).unwrap();
+        let got = ensure_fresh(&mock.client(CLAUDE), &store, &stale, false)
+            .await
+            .unwrap();
+        assert_eq!(got.tokens.expires_at, stored.tokens.expires_at);
+        assert!(mock.seen().is_empty());
+    }
+
+    #[tokio::test]
+    async fn rejected_refresh_tokens_mark_the_account() {
+        let mock = anthropic(400, json!({ "error": "invalid_grant" })).await;
+        let store = store();
+        let account = claude_account("old", Some("rt1"), 60);
+        store.save(&account).unwrap();
+        let err = ensure_fresh(&mock.client(CLAUDE), &store, &account, false)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RefreshError::Revoked(_)), "{err}");
+        assert!(err.to_string().ends_with("; log in again"));
+        let saved = store.get(&account.id).unwrap().unwrap();
+        assert!(saved.auth_error.unwrap().contains("400"));
+        assert_eq!(saved.tokens.access_token, "old");
+    }
+
+    #[tokio::test]
+    async fn passing_failures_leave_the_account_alone() {
+        let mock = Mock::start(|seen| match seen.route() {
+            "/v1/oauth/token" => testkit::reply(503, "overloaded"),
+            _ => testkit::reply(404, ""),
+        })
+        .await;
+        let store = store();
+        let account = claude_account("old", Some("rt1"), 60);
+        store.save(&account).unwrap();
+        let err = ensure_fresh(&mock.client(CLAUDE), &store, &account, false)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RefreshError::Transient(_)));
+        assert!(err.to_string().contains("503"), "{err}");
+        assert_eq!(store.get(&account.id).unwrap().unwrap().auth_error, None);
+
+        // A success that is not a token answer is passing too.
+        let garbled = Mock::start(|_| testkit::reply(200, "<html>")).await;
+        let err = ensure_fresh(&garbled.client(CLAUDE), &store, &account, false)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RefreshError::Transient(_)));
+    }
+
+    #[tokio::test]
+    async fn unreachable_token_endpoints_are_passing_failures() {
+        let http = Client::builder()
+            .plain_http()
+            .origins(Origins::new([(
+                "https://platform.claude.com",
+                "http://127.0.0.1:9",
+            )]))
+            .build();
+        let account = claude_account("old", Some("rt1"), 60);
+        let err = ensure_fresh(&http, &store(), &account, false)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RefreshError::Transient(_)));
+    }
+
+    #[tokio::test]
+    async fn accounts_without_a_refresh_token_must_log_in_again() {
+        let mock = anthropic(200, json!({})).await;
+        let account = claude_account("old", None, 60);
+        let err = ensure_fresh(&mock.client(CLAUDE), &store(), &account, false)
+            .await
+            .unwrap_err();
+        let RefreshError::Revoked(reason) = err else {
+            panic!("expected revoked");
+        };
+        assert_eq!(reason, "no refresh token stored");
+        assert!(mock.seen().is_empty());
+    }
+
+    #[tokio::test]
+    async fn api_keys_cannot_be_refreshed() {
+        let account = Account::new(
+            ProviderId::OpenAI,
+            Tokens {
+                access_token: "sk".into(),
+                refresh_token: Some("rt".into()),
+                ..Tokens::default()
+            },
+        );
+        let http = http_client(Origins::default());
+        let err = ensure_fresh(&http, &store(), &account, true)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "OpenAI API keys cannot be refreshed; log in again"
+        );
+    }
+
+    fn linked(dir: &std::path::Path, tool: &str, access: &str) -> Account {
+        let mut account = claude_account(access, Some("rt"), 3600 * 4);
+        account.link = Some(Link {
+            tool: tool.into(),
+            path: dir.join("claude-x.json"),
+        });
+        account
+    }
+
+    #[tokio::test]
+    async fn linked_accounts_wait_for_their_source_when_forced() {
+        let dir = testkit::temp_dir("link-force");
+        let file = json!({ "type": "claude", "access_token": "same", "refresh_token": "rt",
+            "expired": "2099-01-01T00:00:00Z" });
+        std::fs::write(dir.join("claude-x.json"), file.to_string()).unwrap();
+        let store = Store::at(dir.join("accounts"));
+        let account = linked(&dir, "cliproxyapi", "same");
+        store.save(&account).unwrap();
+        let http = http_client(Origins::default());
+        let err = ensure_fresh(&http, &store, &account, true)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("cliproxyapi has not refreshed this login yet"),
+            "{err}"
+        );
+
+        // Due but not expired, for an account removed meanwhile: the copy
+        // in hand serves until the source refreshes.
+        let gone = Store::at(dir.join("elsewhere"));
+        let mut soon = account.clone();
+        soon.tokens.access_token = "older".into();
+        soon.tokens.expires_at = Some(Timestamp::now() + SignedDuration::from_mins(30));
+        let got = ensure_fresh(&http, &gone, &soon, false).await.unwrap();
+        assert_eq!(got.tokens.access_token, "older");
+    }
+
+    #[tokio::test]
+    async fn links_to_unknown_tools_fail_softly() {
+        let dir = testkit::temp_dir("link-unknown");
+        let account = linked(&dir, "mystery", "x");
+        let err = ensure_fresh(&http_client(Origins::default()), &store(), &account, true)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RefreshError::Transient(_)));
+        assert!(
+            err.to_string()
+                .contains("cannot follow logins from mystery")
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_signs_in_and_merges_repeat_logins() {
+        let mock = Mock::start(|seen| match (seen.route(), seen.header("authorization")) {
+            ("/v1/models", Some("Bearer key-1")) => {
+                testkit::json(200, json!({ "data": [{ "id": "qwen3-coder" }] }))
+            }
+            _ => testkit::reply(401, ""),
+        })
+        .await;
+        let store = store();
+        let options = || LoginOptions {
+            endpoint: Some(Endpoint {
+                base_url: format!("{}/v1", mock.url),
+                dialect: Dialect::Chat,
+                models: Vec::new(),
+            }),
+            key: Some("key-1".into()),
+            ..LoginOptions::default()
+        };
+        let (account, new) = connect(
+            &store,
+            ProviderId::Compat,
+            Some("local".into()),
+            options(),
+            Prompt::new(|_| {}),
+        )
+        .await
+        .unwrap();
+        assert!(new);
+        assert_eq!(account.label.as_deref(), Some("local"));
+        assert_eq!(account.endpoint.as_ref().unwrap().models, ["qwen3-coder"]);
+        assert_eq!(store.list().unwrap().len(), 1);
+
+        let (again, new) = connect(
+            &store,
+            ProviderId::Compat,
+            None,
+            options(),
+            Prompt::new(|_| {}),
+        )
+        .await
+        .unwrap();
+        assert!(!new);
+        assert_eq!(again.id, account.id);
+        // The label set before is kept.
+        assert_eq!(again.label.as_deref(), Some("local"));
+
+        let mut wrong = options();
+        wrong.key = Some("key-2".into());
+        let err = connect(&store, ProviderId::Compat, None, wrong, Prompt::new(|_| {}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("rejected the key"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn prompts_deliver_events_and_pasted_lines() {
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = events.clone();
+        let mut bare = Prompt::new(move |e| seen.lock().unwrap().push(e));
+        bare.tell(LoginEvent::Notice("hi".into()));
+        assert_eq!(bare.pasted().await, None);
+        assert_eq!(*events.lock().unwrap(), [LoginEvent::Notice("hi".into())]);
+        assert_eq!(format!("{bare:?}"), "Prompt { pasted: false, .. }");
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut pasting = Prompt::new(|_| {}).with_pasted(rx);
+        tx.send("line".into()).unwrap();
+        drop(tx);
+        assert_eq!(pasting.pasted().await.as_deref(), Some("line"));
+        assert_eq!(pasting.pasted().await, None);
+        assert!(format!("{pasting:?}").contains("pasted: true"));
+    }
+
+    #[test]
+    fn login_options_never_print_the_key() {
+        let options = LoginOptions {
+            key: Some("sk-secret".into()),
+            no_browser: true,
+            ..LoginOptions::default()
+        };
+        let shown = format!("{options:?}");
+        assert!(!shown.contains("sk-secret"));
+        assert!(shown.contains("<redacted>"));
+        assert!(shown.contains("no_browser: true"));
+    }
+
+    #[test]
+    fn grants_become_tokens_stamped_now() {
+        let now = Timestamp::from_second(1_000).unwrap();
+        let tokens = Grant {
+            access_token: "a".into(),
+            refresh_token: Some("r".into()),
+            id_token: Some("i".into()),
+            expires_at: Some(now + SignedDuration::from_secs(60)),
+        }
+        .into_tokens(now);
+        assert_eq!(tokens.access_token, "a");
+        assert_eq!(tokens.refresh_token.as_deref(), Some("r"));
+        assert_eq!(tokens.id_token.as_deref(), Some("i"));
+        assert_eq!(tokens.refreshed_at, Some(now));
+        assert!(!tokens.is_expired(now));
+    }
+
+    #[test]
+    fn refresh_errors_read_as_what_to_do() {
+        let revoked = RefreshError::classify(StatusCode::UNAUTHORIZED, "");
+        assert_eq!(
+            revoked.to_string(),
+            "refresh token rejected (401 Unauthorized); log in again"
+        );
+        let passing = RefreshError::classify(StatusCode::BAD_GATEWAY, "upstream");
+        assert_eq!(
+            passing.to_string(),
+            "token refresh failed (502 Bad Gateway): upstream"
+        );
+    }
 }

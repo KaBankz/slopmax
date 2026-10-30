@@ -470,4 +470,370 @@ mod tests {
         assert_eq!(Tone::of_use(70.0), Tone::Warn);
         assert_eq!(Tone::of_use(90.0), Tone::Bad);
     }
+
+    fn subscription(provider: ProviderId, email: &str) -> Account {
+        let mut account = Account::new(provider, Tokens::default());
+        account.email = Some(email.into());
+        account.assign_id();
+        account
+    }
+
+    fn windowed(windows: Vec<Window>) -> AccountState {
+        AccountState {
+            limits: Limits {
+                windows,
+                ..Limits::default()
+            },
+            ..AccountState::default()
+        }
+    }
+
+    fn scoped(span: &str, model: &str, used: f64, resets_at: Option<Timestamp>) -> Window {
+        let mut window = Window::new(span, used, resets_at);
+        window.model = Some(model.into());
+        window
+    }
+
+    fn report_of(accounts: Vec<Account>, states: HashMap<String, AccountState>) -> Report {
+        build(
+            accounts,
+            |id| states.get(id).cloned().unwrap_or_default(),
+            &Pins::new(),
+            &HashMap::new(),
+            Strategy::FillFirst,
+            true,
+            ts(1_000),
+        )
+    }
+
+    use crate::limits::Limits;
+
+    #[test]
+    fn conditions_read_the_same_in_every_front_end() {
+        let now = ts(1_000);
+        let cases = [
+            (
+                Condition::SignInNeeded("revoked".into()),
+                "sign in again (revoked)",
+                Tone::Bad,
+            ),
+            (Condition::Disabled, "disabled", Tone::Muted),
+            (
+                Condition::Limited(ts(1_090)),
+                "limited · back in 1m30s",
+                Tone::Warn,
+            ),
+            (Condition::Throttled, "throttled", Tone::Warn),
+            (Condition::Active(1), "● active · 1 session", Tone::Good),
+            (Condition::Active(3), "● active · 3 sessions", Tone::Good),
+            (Condition::Ready, "ready", Tone::Good),
+        ];
+        for (condition, text, tone) in cases {
+            assert_eq!(condition.describe(now), text);
+            assert_eq!(condition.tone(), tone, "{text}");
+        }
+    }
+
+    #[test]
+    fn notes_read_the_same_in_every_front_end() {
+        let cases = [
+            (Note::Pinned, "pinned", Tone::Accent),
+            (Note::Priority(-2), "priority -2", Tone::Muted),
+            (
+                Note::Follows("cliproxyapi".into()),
+                "follows cliproxyapi",
+                Tone::Muted,
+            ),
+            (Note::ResetCredits(1), "1 limit reset", Tone::Accent),
+            (Note::ResetCredits(4), "4 limit resets", Tone::Accent),
+            (
+                Note::Served {
+                    requests: 12,
+                    tokens: 1_500_000,
+                },
+                "12 req · 1.5M tok",
+                Tone::Muted,
+            ),
+            (
+                Note::LastError("boom".into()),
+                "last error: boom",
+                Tone::Muted,
+            ),
+        ];
+        for (note, text, tone) in cases {
+            assert_eq!(note.describe(), text);
+            assert_eq!(note.tone(), tone, "{text}");
+        }
+    }
+
+    #[test]
+    fn limits_and_idle_accounts_have_their_own_conditions() {
+        let now = ts(1_000);
+        let account = subscription(ProviderId::Claude, "a@x.com");
+        let id = account.id.clone();
+        let full = windowed(vec![Window::new("5h", 100.0, Some(ts(4_600)))]);
+        let report = report_of(vec![account], HashMap::from([(id, full)]));
+        let mut account = report.accounts[0].clone();
+        assert_eq!(account.condition(now), Condition::Limited(ts(4_600)));
+        account.state = AccountState::default();
+        assert_eq!(account.condition(now), Condition::Ready);
+        // A throttle that has passed no longer counts.
+        account.state.throttled_until = Some(ts(900));
+        assert_eq!(account.condition(now), Condition::Ready);
+    }
+
+    #[test]
+    fn notes_come_in_order_and_skip_errors_the_condition_explains() {
+        let now = ts(1_000);
+        let mut account = subscription(ProviderId::Codex, "a@x.com");
+        account.priority = 5;
+        account.link = Some(crate::account::Link {
+            tool: "cliproxyapi".into(),
+            path: "/tmp/x.json".into(),
+        });
+        let id = account.id.clone();
+        let mut state = AccountState::default();
+        state.limits.reset_credits = Some(2);
+        state.usage.requests = 3;
+        state.usage.input_tokens = 1_000;
+        state.usage.output_tokens = 200;
+        state.last_error = Some("upstream 500".into());
+        let mut pins = Pins::new();
+        pins.insert(ProviderId::Codex, id.clone());
+        let report = build(
+            vec![account],
+            |_| state.clone(),
+            &pins,
+            &HashMap::from([(id, 2)]),
+            Strategy::FillFirst,
+            true,
+            now,
+        );
+        let mut account = report.accounts[0].clone();
+        assert!(account.pinned);
+        assert_eq!(account.sessions, 2);
+        assert_eq!(account.follows.as_deref(), Some("cliproxyapi"));
+        assert_eq!(
+            account.notes(now),
+            vec![
+                Note::Pinned,
+                Note::Priority(5),
+                Note::Follows("cliproxyapi".into()),
+                Note::ResetCredits(2),
+                Note::Served {
+                    requests: 3,
+                    tokens: 1_200
+                },
+                Note::LastError("upstream 500".into()),
+            ]
+        );
+
+        // Signed out: the condition says so, so the last error is dropped.
+        account.auth_error = Some("revoked".into());
+        assert!(
+            !account
+                .notes(now)
+                .iter()
+                .any(|n| matches!(n, Note::LastError(_)))
+        );
+        // Limited: likewise.
+        account.auth_error = None;
+        account.state.blocked_until = Some(ts(2_000));
+        assert!(
+            !account
+                .notes(now)
+                .iter()
+                .any(|n| matches!(n, Note::LastError(_)))
+        );
+
+        // A plain account has no notes at all.
+        account.state = AccountState::default();
+        account.pinned = false;
+        account.priority = 0;
+        account.follows = None;
+        assert!(account.notes(now).is_empty());
+    }
+
+    #[test]
+    fn windows_are_found_by_span_and_scope() {
+        let account = subscription(ProviderId::Claude, "a@x.com");
+        let id = account.id.clone();
+        let state = windowed(vec![
+            Window::new("5h", 10.0, None),
+            scoped("7d", "opus", 80.0, None),
+            Window::new("30d", 30.0, None),
+        ]);
+        let report = report_of(vec![account], HashMap::from([(id, state)]));
+        let account = &report.accounts[0];
+        assert_eq!(account.window("5h").unwrap().used, 10.0);
+        // The model's own weekly window is not the shared one.
+        assert!(account.window("7d").is_none());
+        assert_eq!(account.long_window().unwrap().span, "30d");
+        let scoped: Vec<_> = account.scoped_windows().collect();
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].model.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn keys_report_their_endpoint_and_models_and_get_no_pool() {
+        let mut key = Account::new(
+            ProviderId::Xai,
+            Tokens {
+                access_token: "xai-secret".into(),
+                ..Tokens::default()
+            },
+        );
+        key.assign_id();
+        let mut compat = Account::new(
+            ProviderId::Compat,
+            Tokens {
+                access_token: "k".into(),
+                ..Tokens::default()
+            },
+        );
+        compat.endpoint = Some(crate::account::Endpoint {
+            base_url: "http://localhost:1234/v1".into(),
+            dialect: crate::wire::Dialect::Chat,
+            models: vec!["llama-*".into()],
+        });
+        compat.assign_id();
+        let sub = subscription(ProviderId::Claude, "a@x.com");
+        let report = report_of(vec![key, compat, sub], HashMap::new());
+
+        let key = &report.accounts[0];
+        assert_eq!(key.endpoint.as_deref(), Some(ProviderId::Xai.spec().api));
+        assert_eq!(
+            key.models,
+            ProviderId::Xai
+                .spec()
+                .models
+                .iter()
+                .map(|m| m.to_string())
+                .collect::<Vec<_>>()
+        );
+        let compat = &report.accounts[1];
+        assert_eq!(compat.endpoint.as_deref(), Some("http://localhost:1234/v1"));
+        assert_eq!(compat.models, ["llama-*"]);
+        let sub = &report.accounts[2];
+        assert!(sub.endpoint.is_none());
+        assert!(sub.models.is_empty());
+
+        // Only subscriptions are pooled, and only those with an account.
+        assert_eq!(report.pools.len(), 1);
+        assert_eq!(report.pools[0].provider, ProviderId::Claude);
+        assert!(report.live);
+        assert_eq!(report.version, env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn pools_average_working_accounts_and_their_model_windows() {
+        let now = ts(1_000);
+        let a = subscription(ProviderId::Claude, "a@x.com");
+        let b = subscription(ProviderId::Claude, "b@x.com");
+        let mut off = subscription(ProviderId::Claude, "off@x.com");
+        off.disabled = true;
+        let mut out = subscription(ProviderId::Claude, "out@x.com");
+        out.auth_error = Some("revoked".into());
+        let states = HashMap::from([
+            (
+                a.id.clone(),
+                windowed(vec![
+                    Window::new("5h", 20.0, Some(ts(5_000))),
+                    Window::new("7d", 50.0, Some(ts(90_000))),
+                    scoped("7d", "opus", 60.0, Some(ts(80_000))),
+                ]),
+            ),
+            (
+                b.id.clone(),
+                windowed(vec![
+                    Window::new("5h", 40.0, Some(ts(3_000))),
+                    Window::new("7d", 30.0, Some(ts(70_000))),
+                    // Already reset: counts as unused, and its reset is past.
+                    scoped("7d", "opus", 90.0, Some(ts(500))),
+                ]),
+            ),
+            // Neither of these may sway the pool.
+            (
+                off.id.clone(),
+                windowed(vec![Window::new("5h", 100.0, None)]),
+            ),
+            (
+                out.id.clone(),
+                windowed(vec![Window::new("5h", 100.0, None)]),
+            ),
+        ]);
+        let report = report_of(vec![a, b, off, out], states);
+        assert_eq!(report.pools.len(), 1);
+        let pool = &report.pools[0];
+        assert_eq!(pool.accounts, 2);
+        assert_eq!(pool.window("5h").unwrap().used, 30.0);
+        assert_eq!(pool.long_window().unwrap().span, "7d");
+        let opus: Vec<_> = pool.scoped_windows().collect();
+        assert_eq!(opus.len(), 1);
+        assert_eq!(opus[0].model.as_deref(), Some("opus"));
+        assert_eq!(opus[0].used, 30.0);
+        assert_eq!(opus[0].resets_at, Some(ts(80_000)));
+        assert!(opus[0].used_at(now) > 0.0);
+
+        // A pool with only a monthly window reads it as the long one.
+        let c = subscription(ProviderId::Codex, "c@x.com");
+        let id = c.id.clone();
+        let report = report_of(
+            vec![c],
+            HashMap::from([(id, windowed(vec![Window::new("30d", 10.0, None)]))]),
+        );
+        assert_eq!(report.pools[0].long_window().unwrap().span, "30d");
+    }
+
+    #[test]
+    fn a_pool_with_no_working_account_is_left_out() {
+        let mut off = subscription(ProviderId::Codex, "off@x.com");
+        off.disabled = true;
+        let report = report_of(vec![off], HashMap::new());
+        assert!(report.pools.is_empty());
+    }
+
+    #[test]
+    fn with_next_names_the_account_a_new_session_gets_and_why() {
+        let now = Timestamp::now();
+        let a = subscription(ProviderId::Claude, "a@x.com");
+        let id = a.id.clone();
+        let pool = Pool::new(
+            Strategy::FillFirst,
+            SignedDuration::from_hours(1),
+            State::default(),
+        );
+        pool.sync(vec![a.clone()], Pins::new());
+        let report = build(
+            vec![a],
+            |id| pool.state(id),
+            &Pins::new(),
+            &HashMap::new(),
+            Strategy::FillFirst,
+            false,
+            now,
+        )
+        .with_next(&pool, now);
+        let next = report.pools[0].next.as_ref().unwrap();
+        assert_eq!(next.account, id);
+        assert_eq!(next.why, next.reason.text());
+    }
+
+    #[test]
+    fn reports_survive_a_json_round_trip() {
+        let account = subscription(ProviderId::Claude, "a@x.com");
+        let id = account.id.clone();
+        let state = windowed(vec![
+            Window::new("5h", 25.0, Some(ts(5_000))),
+            scoped("7d", "opus", 60.0, None),
+        ]);
+        let report = report_of(vec![account], HashMap::from([(id, state)]));
+        let json = serde_json::to_string(&report).unwrap();
+        let back: Report = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.accounts.len(), 1);
+        assert_eq!(back.accounts[0].email.as_deref(), Some("a@x.com"));
+        assert_eq!(back.accounts[0].state.limits.windows.len(), 2);
+        assert_eq!(back.pools[0].windows.len(), report.pools[0].windows.len());
+        assert_eq!(serde_json::to_string(&back).unwrap(), json);
+    }
 }

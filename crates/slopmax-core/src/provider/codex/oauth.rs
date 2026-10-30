@@ -295,4 +295,225 @@ mod tests {
         assert_eq!(account.email.as_deref(), Some("p@x.dev"));
         assert_eq!(account.account_id.as_deref(), Some("ws-2"));
     }
+
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    use crate::testkit::{self, Mock};
+
+    fn tokens() -> Value {
+        json!({
+            "access_token": jwt::encode_unsigned(&json!({ "exp": 1_900_000_000 })),
+            "refresh_token": "rt",
+            "id_token": jwt::encode_unsigned(&json!({
+                "email": "me@x.dev",
+                AUTH_CLAIM: { "chatgpt_account_id": "ws-1", "chatgpt_plan_type": "plus" }
+            })),
+        })
+    }
+
+    /// auth.openai.com: the token endpoint answers `status` with `token`;
+    /// device-code polls are pending until the `ready`th.
+    async fn openai(status: u16, token: Value, ready: usize) -> Mock {
+        let polls = AtomicUsize::new(0);
+        Mock::start(move |seen| match seen.route() {
+            "/oauth/token" => testkit::json(status, token.clone()),
+            "/api/accounts/deviceauth/usercode" => testkit::json(
+                200,
+                json!({ "device_auth_id": "dev-1", "usercode": "ABCD-1234", "interval": "0" }),
+            ),
+            "/api/accounts/deviceauth/token" => {
+                let poll = polls.fetch_add(1, Ordering::SeqCst) + 1;
+                match poll {
+                    n if n < ready => testkit::reply(if n % 2 == 0 { 404 } else { 403 }, ""),
+                    n if n == ready => testkit::json(
+                        200,
+                        json!({ "authorization_code": "dev-code", "code_verifier": "dev-verifier" }),
+                    ),
+                    _ => testkit::reply(500, "device flow broke"),
+                }
+            }
+            _ => testkit::reply(404, ""),
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn exchanges_codes_for_an_account_named_by_its_claims() {
+        let mock = openai(200, tokens(), 1).await;
+        let account = exchange(&mock.client(&[ISSUER]), "code-1", "verifier", "http://cb")
+            .await
+            .unwrap();
+        assert_eq!(account.provider, ProviderId::Codex);
+        assert_eq!(account.email.as_deref(), Some("me@x.dev"));
+        assert_eq!(account.account_id.as_deref(), Some("ws-1"));
+        assert_eq!(account.plan.as_deref(), Some("plus"));
+        assert_eq!(
+            account.tokens.expires_at,
+            Timestamp::from_second(1_900_000_000)
+        );
+        assert_eq!(account.tokens.refresh_token.as_deref(), Some("rt"));
+
+        let sent = &mock.seen_at("/oauth/token")[0];
+        let form: Vec<(String, String)> = form::decode(sent.text());
+        let field = |name: &str| {
+            form.iter()
+                .find(|(k, _)| k == name)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(field("grant_type"), Some("authorization_code"));
+        assert_eq!(field("code"), Some("code-1"));
+        assert_eq!(field("code_verifier"), Some("verifier"));
+        assert_eq!(field("redirect_uri"), Some("http://cb"));
+        assert_eq!(field("client_id"), Some(CLIENT_ID));
+    }
+
+    #[tokio::test]
+    async fn failed_exchanges_say_why() {
+        let rejected = openai(403, json!({ "error": "denied" }), 1).await;
+        let err = exchange(&rejected.client(&[ISSUER]), "c", "v", "r")
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().starts_with("token exchange failed (403"),
+            "{err}"
+        );
+        let garbled = openai(200, json!({ "id_token": "x" }), 1).await;
+        let err = exchange(&garbled.client(&[ISSUER]), "c", "v", "r")
+            .await
+            .unwrap_err();
+        assert_eq!(err.to_string(), "unexpected token response");
+    }
+
+    #[tokio::test]
+    async fn refresh_sends_json_and_classifies_failures() {
+        let ok = openai(200, tokens(), 1).await;
+        let grant = ProviderId::Codex
+            .get()
+            .refresh(&ok.client(&[ISSUER]), "rt-old")
+            .await
+            .unwrap();
+        assert!(grant.id_token.is_some());
+        assert_eq!(grant.expires_at, Timestamp::from_second(1_900_000_000));
+        let sent = ok.seen_at("/oauth/token")[0].json();
+        assert_eq!(
+            sent,
+            json!({ "client_id": CLIENT_ID, "grant_type": "refresh_token", "refresh_token": "rt-old" })
+        );
+
+        let reused = openai(
+            400,
+            json!({ "error": { "code": "refresh_token_reused" } }),
+            1,
+        )
+        .await;
+        let err = refresh(&reused.client(&[ISSUER]), "rt").await.unwrap_err();
+        assert!(matches!(err, RefreshError::Revoked(_)));
+        let down = openai(500, json!({}), 1).await;
+        let err = refresh(&down.client(&[ISSUER]), "rt").await.unwrap_err();
+        assert!(matches!(err, RefreshError::Transient(_)));
+        let garbled = openai(200, json!({}), 1).await;
+        let err = refresh(&garbled.client(&[ISSUER]), "rt").await.unwrap_err();
+        assert!(matches!(err, RefreshError::Transient(_)));
+        let nowhere = Client::builder()
+            .plain_http()
+            .origins(crate::net::Origins::new([(ISSUER, "http://127.0.0.1:9")]))
+            .build();
+        let err = refresh(&nowhere, "rt").await.unwrap_err();
+        assert!(matches!(err, RefreshError::Transient(_)));
+    }
+
+    fn recording() -> (Prompt, Arc<Mutex<Vec<LoginEvent>>>) {
+        let events: Arc<Mutex<Vec<LoginEvent>>> = Arc::default();
+        let log = events.clone();
+        (Prompt::new(move |e| log.lock().unwrap().push(e)), events)
+    }
+
+    #[tokio::test]
+    async fn device_codes_sign_in_once_approved() {
+        // Two pending polls (403, then 404), then approval.
+        let mock = openai(200, tokens(), 3).await;
+        let (prompt, events) = recording();
+        let options = LoginOptions {
+            device: true,
+            ..LoginOptions::default()
+        };
+        let account = login(&mock.client(&[ISSUER]), options, prompt)
+            .await
+            .unwrap();
+        assert_eq!(account.account_id.as_deref(), Some("ws-1"));
+        assert_eq!(
+            *events.lock().unwrap(),
+            [LoginEvent::DeviceCode {
+                url: DEVICE_VERIFY_URL.into(),
+                code: "ABCD-1234".into()
+            }]
+        );
+        let polls = mock.seen_at("/api/accounts/deviceauth/token");
+        assert_eq!(polls.len(), 3);
+        assert_eq!(
+            polls[0].json(),
+            json!({ "device_auth_id": "dev-1", "user_code": "ABCD-1234" })
+        );
+        let exchanged = mock.seen_at("/oauth/token");
+        let form: Vec<(String, String)> = form::decode(exchanged[0].text());
+        assert!(form.contains(&("code".into(), "dev-code".into())));
+        assert!(form.contains(&("code_verifier".into(), "dev-verifier".into())));
+        assert!(form.contains(&("redirect_uri".into(), DEVICE_REDIRECT_URI.into())));
+    }
+
+    #[tokio::test]
+    async fn device_logins_report_failures() {
+        // Approval never comes: the first poll fails outright.
+        let mock = openai(200, tokens(), 0).await;
+        let err = device_login(&mock.client(&[ISSUER]), &Prompt::new(|_| {}))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "device login failed (500 Internal Server Error): device flow broke"
+        );
+
+        let missing = Mock::start(|_| testkit::reply(404, "")).await;
+        let err = device_login(&missing.client(&[ISSUER]), &Prompt::new(|_| {}))
+            .await
+            .unwrap_err();
+        assert_eq!(err.to_string(), "device login is unavailable");
+    }
+
+    #[tokio::test]
+    async fn browser_logins_accept_a_pasted_redirect() {
+        let mock = openai(200, tokens(), 1).await;
+        let (paste, pasted) = tokio::sync::mpsc::unbounded_channel();
+        let prompt = Prompt::new(move |event| {
+            if let LoginEvent::Authorize { url, title, .. } = event {
+                assert_eq!(title, "ChatGPT");
+                let state = url
+                    .split('&')
+                    .find_map(|p| p.strip_prefix("state="))
+                    .unwrap()
+                    .to_owned();
+                paste
+                    .send(format!(
+                        "{}?code=browser-code&state={state}",
+                        redirect_uri()
+                    ))
+                    .unwrap();
+            }
+        })
+        .with_pasted(pasted);
+        let options = LoginOptions {
+            no_browser: true,
+            ..LoginOptions::default()
+        };
+        let account = ProviderId::Codex
+            .get()
+            .login(&mock.client(&[ISSUER]), options, prompt)
+            .await
+            .unwrap();
+        assert_eq!(account.email.as_deref(), Some("me@x.dev"));
+        let form: Vec<(String, String)> = form::decode(mock.seen_at("/oauth/token")[0].text());
+        assert!(form.contains(&("code".into(), "browser-code".into())));
+        assert!(form.contains(&("redirect_uri".into(), redirect_uri())));
+    }
 }

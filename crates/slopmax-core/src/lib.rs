@@ -28,6 +28,8 @@ pub mod report;
 pub mod route;
 pub mod service;
 pub mod summary;
+#[cfg(test)]
+mod testkit;
 pub mod usage;
 
 pub use slopmax_common::{human, ids, log, time};

@@ -405,4 +405,75 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn unknown_ids_list_the_known_ones() {
+        assert_eq!(
+            "grok".parse::<ProviderId>(),
+            Err(
+                r#"expected one of claude, codex, anthropic, openai, xai, compat, got "grok""#
+                    .into()
+            )
+        );
+    }
+
+    #[test]
+    fn edge_patterns() {
+        assert!(matches("", ""));
+        assert!(!matches("", "x"));
+        assert!(matches("a*", "a"));
+        assert!(!matches("*abc", "bc"));
+        assert!(matches("*", ""));
+        // A trailing part may not overlap a middle one.
+        assert!(!matches("ab*b*ab", "abab"));
+    }
+
+    #[test]
+    fn specs_say_how_accounts_sign_in_and_pay() {
+        assert!(ProviderId::Claude.spec().is_subscription());
+        assert!(!ProviderId::OpenAI.spec().is_subscription());
+        assert!(ProviderId::Codex.spec().device_login());
+        assert!(!ProviderId::Compat.spec().device_login());
+        assert_eq!(
+            ProviderId::Compat.spec().credential,
+            Credential::Key { optional: true }
+        );
+        assert_eq!(ProviderId::Xai.to_string(), "xai");
+    }
+
+    #[test]
+    fn refusals_become_verdicts() {
+        let at = Timestamp::from_second(5_000);
+        assert_eq!(
+            Verdict::from(Refusal::Exhausted {
+                until: at,
+                model: Some("m".into())
+            }),
+            Verdict::Exhausted {
+                until: at,
+                model: Some("m".into())
+            }
+        );
+        assert_eq!(
+            Verdict::from(Refusal::Throttled { until: at }),
+            Verdict::Throttled { until: at }
+        );
+        assert_eq!(Verdict::of_status(StatusCode::NOT_FOUND), Verdict::Final);
+    }
+
+    #[tokio::test]
+    async fn subscriptions_without_a_catalog_list_nothing() {
+        let account = Account::new(ProviderId::Claude, Default::default());
+        let http = crate::net::Client::builder().plain_http().build();
+        let models = ProviderId::Claude
+            .get()
+            .catalog(&http, &account, "")
+            .await
+            .unwrap();
+        assert!(models.is_empty());
+        assert_eq!(ProviderId::Claude.get().rebind(b"{}"), None);
+        let mut body = serde_json::json!({ "max_tokens": 1 });
+        ProviderId::Claude.get().shape(Dialect::Messages, &mut body);
+        assert_eq!(body["max_tokens"], 1);
+    }
 }

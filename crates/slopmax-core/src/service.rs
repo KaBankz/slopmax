@@ -289,4 +289,56 @@ mod tests {
         assert!(plist.contains("<key>RunAtLoad</key>\n  <true/>"));
         assert!(!plist.contains("EnvironmentVariables"));
     }
+
+    #[test]
+    fn launchd_plist_sets_slopmax_home_when_moved() {
+        let plist = launchd_plist(
+            Path::new("/bin/slopmax"),
+            Path::new("/l.log"),
+            Some(Path::new("/srv/<home>")),
+        );
+        assert!(plist.contains(
+            "<key>EnvironmentVariables</key>\n  <dict>\n    <key>SLOPMAX_HOME</key>\n    <string>/srv/&lt;home&gt;</string>"
+        ));
+        assert!(plist.contains("<string>dev.slopmax</string>"));
+        assert!(plist.ends_with("</dict>\n</plist>\n"));
+    }
+
+    #[test]
+    fn commands_report_their_stderr_when_they_fail() {
+        assert!(run("sh", &["-c", "exit 0"]).is_ok());
+        let error = run("sh", &["-c", "echo nope >&2; exit 3"]).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "sh -c echo nope >&2; exit 3 failed: nope"
+        );
+        let error = run("slopmax-no-such-program", &[]).unwrap_err();
+        assert_eq!(error.to_string(), "running slopmax-no-such-program");
+        assert!(succeeds("sh", &["-c", "exit 0"]));
+        assert!(!succeeds("sh", &["-c", "exit 1"]));
+        assert!(!succeeds("slopmax-no-such-program", &[]));
+    }
+
+    #[test]
+    fn launchd_targets_the_users_gui_domain() {
+        let domain = launchd_domain();
+        let uid = domain.strip_prefix("gui/").unwrap();
+        assert!(uid.parse::<u32>().is_ok(), "{domain}");
+        assert_eq!(launchd_target(), format!("{domain}/dev.slopmax"));
+    }
+
+    #[test]
+    fn service_files_live_where_each_manager_looks() {
+        let unit = Manager::Systemd.file();
+        assert!(unit.ends_with("systemd/user/slopmax.service"));
+        let plist = Manager::Launchd.file();
+        assert!(plist.ends_with("Library/LaunchAgents/dev.slopmax.plist"));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn lingering_is_a_linux_question() {
+        // Without loginctl there is nothing to ask.
+        assert_eq!(lingering(), None);
+    }
 }

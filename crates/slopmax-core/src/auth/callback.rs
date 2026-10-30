@@ -110,6 +110,8 @@ pub async fn receive(
     let server = match TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port))).await {
         Ok(listener) => Some(tokio::spawn(serve(listener, path, tx))),
         Err(e) => {
+            // No redirect can arrive, so waiting ends once pastes do too.
+            drop(tx);
             prompt.tell(LoginEvent::Notice(format!(
                 "port {port} is busy ({e}); paste the redirect address instead"
             )));
@@ -240,5 +242,138 @@ mod tests {
         let err =
             parse_pasted("http://x/cb?error=access_denied&error_description=nope").unwrap_err();
         assert!(err.to_string().contains("access_denied"));
+    }
+
+    #[test]
+    fn empty_codes_and_fragments_are_handled() {
+        let err = parse_pasted("http://x/cb?code=&state=s").unwrap_err();
+        assert_eq!(err.to_string(), "no code");
+        let cb = parse_pasted("http://x/cb?code=a&state=s#fragment").unwrap();
+        assert_eq!((cb.code.as_str(), cb.state.as_deref()), ("a", Some("s")));
+        // A `#` inside the code stays when the state comes separately.
+        let cb = parse_pasted("code=a%23b&state=s&other=1").unwrap();
+        assert_eq!((cb.code.as_str(), cb.state.as_deref()), ("a#b", Some("s")));
+        let cb = parse_pasted("bare-code").unwrap();
+        assert_eq!((cb.code.as_str(), cb.state), ("bare-code", None));
+    }
+
+    #[test]
+    fn desktops_have_a_browser() {
+        if cfg!(target_os = "macos") {
+            assert!(has_browser());
+        }
+    }
+
+    use std::sync::{Arc, Mutex};
+
+    use crate::net::Client;
+
+    fn free_port() -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    }
+
+    type Events = Arc<Mutex<Vec<LoginEvent>>>;
+
+    fn recording() -> (Prompt, Events) {
+        let events: Events = Arc::default();
+        let log = events.clone();
+        (Prompt::new(move |e| log.lock().unwrap().push(e)), events)
+    }
+
+    fn notices(events: &Events) -> Vec<String> {
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                LoginEvent::Notice(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// GETs `url`, retrying while the callback server starts.
+    async fn get(url: &str) -> (u16, String) {
+        let http = Client::builder().plain_http().build();
+        for _ in 0..100 {
+            if let Ok(response) = http.get(url).send().await {
+                let status = response.status().as_u16();
+                return (status, response.text().await.unwrap());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("{url} never answered");
+    }
+
+    #[tokio::test]
+    async fn the_redirect_delivers_the_code_and_a_page() {
+        let port = free_port();
+        let (mut prompt, events) = recording();
+        let waiting = tokio::spawn(async move { receive(port, "/cb", "st", &mut prompt).await });
+        let base = format!("http://127.0.0.1:{port}");
+
+        let (status, _) = get(&format!("{base}/elsewhere")).await;
+        assert_eq!(status, 404);
+        let (status, page) = get(&format!("{base}/cb?error=access_denied")).await;
+        assert_eq!(status, 200);
+        assert!(page.contains("Authorization failed"));
+        let (_, page) = get(&format!("{base}/cb?code=abc&state=st")).await;
+        assert!(page.contains("Account connected"));
+
+        let callback = waiting.await.unwrap().unwrap();
+        assert_eq!(callback.code, "abc");
+        assert_eq!(callback.state.as_deref(), Some("st"));
+        let notices = notices(&events);
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("access_denied"), "{notices:?}");
+        assert!(notices[0].ends_with("; try again"));
+    }
+
+    #[tokio::test]
+    async fn busy_ports_fall_back_to_pasted_addresses() {
+        let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = held.local_addr().unwrap().port();
+        let (tx, rx) = mpsc::unbounded_channel();
+        let (prompt, events) = recording();
+        let mut prompt = prompt.with_pasted(rx);
+        for line in [
+            "   ",
+            "http://localhost/cb?state=st",
+            "http://localhost/cb?code=pasted",
+        ] {
+            tx.send(line.to_owned()).unwrap();
+        }
+        let callback = receive(port, "/cb", "st", &mut prompt).await.unwrap();
+        // No state came back with the paste, which is accepted.
+        assert_eq!(callback.code, "pasted");
+        assert_eq!(callback.state, None);
+        let notices = notices(&events);
+        assert!(notices[0].starts_with(&format!("port {port} is busy")));
+        assert_eq!(notices[1], "no code; try again");
+        assert_eq!(notices.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_foreign_state_is_refused() {
+        let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = held.local_addr().unwrap().port();
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut prompt = Prompt::new(|_| {}).with_pasted(rx);
+        tx.send("code=abc&state=evil".into()).unwrap();
+        let err = receive(port, "/cb", "st", &mut prompt).await.unwrap_err();
+        assert_eq!(err.to_string(), "OAuth state mismatch; start over");
+    }
+
+    #[tokio::test]
+    async fn nothing_to_wait_for_is_an_error() {
+        let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = held.local_addr().unwrap().port();
+        let (mut prompt, _) = recording();
+        let err = receive(port, "/cb", "st", &mut prompt).await.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!("port {port} is busy and no redirect address can be pasted")
+        );
     }
 }

@@ -269,4 +269,198 @@ mod tests {
         apply_profile(&mut account, &Profile::default());
         assert_eq!(account.email.as_deref(), Some("me@x.dev"));
     }
+
+    use crate::auth::LoginEvent;
+    use crate::testkit::{self, Mock};
+    use serde_json::Value;
+
+    const ORIGINS: &[&str] = &["https://platform.claude.com", "https://api.anthropic.com"];
+
+    fn profile_of(value: Value) -> Profile {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn plans_read_the_organization_first() {
+        let plan = |org: Value| profile_of(json!({ "organization": org })).plan();
+        assert_eq!(
+            plan(json!({ "organization_type": "claude_team" })).as_deref(),
+            Some("team")
+        );
+        assert_eq!(
+            plan(json!({ "organization_type": "claude_max" })).as_deref(),
+            Some("max")
+        );
+        // Multipliers only qualify Max.
+        assert_eq!(
+            plan(json!({ "organization_type": "claude_pro", "rate_limit_tier": "x_5x" }))
+                .as_deref(),
+            Some("pro")
+        );
+        assert_eq!(plan(json!({})), None);
+        let max = profile_of(json!({ "account": { "has_claude_max": true } }));
+        assert_eq!(max.plan().as_deref(), Some("max"));
+    }
+
+    #[test]
+    fn profiles_fill_identity_but_skip_blanks() {
+        let mut account = Account::new(ProviderId::Claude, Tokens::default());
+        account.org_name = Some("Kept".into());
+        let profile = profile_of(json!({
+            "account": { "uuid": "acct", "email": "me@x.dev" },
+            "organization": { "uuid": "org", "name": "", "organization_type": "claude_pro" }
+        }));
+        apply_profile(&mut account, &profile);
+        assert_eq!(account.account_id.as_deref(), Some("acct"));
+        assert_eq!(account.email.as_deref(), Some("me@x.dev"));
+        assert_eq!(account.org_id.as_deref(), Some("org"));
+        assert_eq!(account.org_name.as_deref(), Some("Kept"));
+        assert_eq!(account.plan.as_deref(), Some("pro"));
+    }
+
+    /// Anthropic's token endpoint answering `token`, and a Max 20x profile.
+    async fn anthropic(status: u16, token: Value, profile: u16) -> Mock {
+        Mock::start(move |seen| match seen.route() {
+            "/v1/oauth/token" => testkit::json(status, token.clone()),
+            "/api/oauth/profile" if profile == 200 => testkit::json(
+                200,
+                json!({
+                    "account": { "email": "profile@x.dev" },
+                    "organization": {
+                        "organization_type": "claude_max",
+                        "rate_limit_tier": "default_claude_max_20x"
+                    }
+                }),
+            ),
+            "/api/oauth/profile" => testkit::reply(profile, ""),
+            _ => testkit::reply(404, ""),
+        })
+        .await
+    }
+
+    fn token_answer() -> Value {
+        json!({
+            "access_token": "at", "refresh_token": "rt", "expires_in": 28800,
+            "account": { "uuid": "acct-1", "email_address": "token@x.dev" },
+            "organization": { "uuid": "org-1", "name": "Acme" }
+        })
+    }
+
+    #[tokio::test]
+    async fn exchanges_codes_for_an_identified_account() {
+        let mock = anthropic(200, token_answer(), 200).await;
+        let pkce = Pkce::generate();
+        let account = exchange(&mock.client(ORIGINS), "the-code", "st", &pkce)
+            .await
+            .unwrap();
+        assert_eq!(account.provider, ProviderId::Claude);
+        assert_eq!(account.tokens.access_token, "at");
+        assert_eq!(account.tokens.refresh_token.as_deref(), Some("rt"));
+        assert!(account.tokens.expires_at.is_some());
+        assert_eq!(account.account_id.as_deref(), Some("acct-1"));
+        assert_eq!(account.org_id.as_deref(), Some("org-1"));
+        assert_eq!(account.org_name.as_deref(), Some("Acme"));
+        // The profile's email is the current one.
+        assert_eq!(account.email.as_deref(), Some("profile@x.dev"));
+        assert_eq!(account.plan.as_deref(), Some("max 20x"));
+        assert!(account.id.starts_with("claude-"));
+
+        let sent = mock.seen_at("/v1/oauth/token")[0].json();
+        assert_eq!(sent["grant_type"], "authorization_code");
+        assert_eq!(sent["code"], "the-code");
+        assert_eq!(sent["state"], "st");
+        assert_eq!(sent["code_verifier"], pkce.verifier.as_str());
+        assert_eq!(sent["redirect_uri"], redirect_uri());
+    }
+
+    #[tokio::test]
+    async fn a_failed_profile_lookup_keeps_the_token_identity() {
+        let mock = anthropic(200, token_answer(), 500).await;
+        let account = exchange(&mock.client(ORIGINS), "c", "s", &Pkce::generate())
+            .await
+            .unwrap();
+        assert_eq!(account.email.as_deref(), Some("token@x.dev"));
+        assert_eq!(account.plan, None);
+    }
+
+    #[tokio::test]
+    async fn failed_exchanges_say_why() {
+        let rejected = anthropic(400, json!({ "error": "invalid_grant" }), 200).await;
+        let err = exchange(&rejected.client(ORIGINS), "c", "s", &Pkce::generate())
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .starts_with("token exchange failed (400 Bad Request)"),
+            "{err}"
+        );
+        let garbled = anthropic(200, json!({ "nope": true }), 200).await;
+        let err = exchange(&garbled.client(ORIGINS), "c", "s", &Pkce::generate())
+            .await
+            .unwrap_err();
+        assert_eq!(err.to_string(), "unexpected token response");
+    }
+
+    #[tokio::test]
+    async fn refresh_classifies_the_token_endpoints_answer() {
+        let ok = anthropic(200, json!({ "access_token": "new", "expires_in": 60 }), 200).await;
+        let grant = refresh(&ok.client(ORIGINS), "rt").await.unwrap();
+        assert_eq!(grant.access_token, "new");
+        assert_eq!(grant.refresh_token, None);
+        assert!(grant.expires_at.is_some());
+        let sent = ok.seen_at("/v1/oauth/token")[0].json();
+        assert_eq!(sent["grant_type"], "refresh_token");
+        assert_eq!(sent["scope"], SCOPES);
+
+        let revoked = anthropic(400, json!({ "error": "invalid_grant" }), 200).await;
+        let err = refresh(&revoked.client(ORIGINS), "rt").await.unwrap_err();
+        assert!(matches!(err, RefreshError::Revoked(_)));
+
+        let down = anthropic(502, json!({}), 200).await;
+        let err = refresh(&down.client(ORIGINS), "rt").await.unwrap_err();
+        assert!(matches!(err, RefreshError::Transient(_)));
+
+        let garbled = anthropic(200, json!([]), 200).await;
+        let err = refresh(&garbled.client(ORIGINS), "rt").await.unwrap_err();
+        assert!(matches!(err, RefreshError::Transient(_)));
+    }
+
+    #[tokio::test]
+    async fn profiles_need_a_working_token() {
+        let mock = anthropic(200, json!({}), 401).await;
+        assert!(profile(&mock.client(ORIGINS), "at").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn logs_in_with_a_pasted_code_and_state() {
+        let mock = anthropic(200, token_answer(), 200).await;
+        let (paste, pasted) = tokio::sync::mpsc::unbounded_channel();
+        let authorized = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let shown = authorized.clone();
+        let prompt = Prompt::new(move |event| {
+            if let LoginEvent::Authorize {
+                url, opened, port, ..
+            } = event
+            {
+                let state = url.rsplit("state=").next().unwrap().to_owned();
+                // Anthropic's manual page shows `code#state`.
+                paste.send(format!("pasted-code#{state}")).unwrap();
+                *shown.lock().unwrap() = Some((opened, port));
+            }
+        })
+        .with_pasted(pasted);
+        let options = LoginOptions {
+            no_browser: true,
+            ..LoginOptions::default()
+        };
+        let account = ProviderId::Claude
+            .get()
+            .login(&mock.client(ORIGINS), options, prompt)
+            .await
+            .unwrap();
+        assert_eq!(account.tokens.access_token, "at");
+        assert_eq!(*authorized.lock().unwrap(), Some((false, CALLBACK_PORT)));
+        let sent = mock.seen_at("/v1/oauth/token")[0].json();
+        assert_eq!(sent["code"], "pasted-code");
+    }
 }

@@ -1002,3 +1002,105 @@ fn limit_reached(dialect: Dialect, provider: ProviderId, until: Timestamp) -> Re
     }
     response
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+
+    use super::*;
+
+    async fn read(response: Response) -> (u16, Value) {
+        let status = response.status().as_u16();
+        let bytes = body::read_all(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    /// The message an error reply carries, whatever its format.
+    fn message(body: &Value) -> &str {
+        body.pointer("/error/message")
+            .and_then(Value::as_str)
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn upstream_errors_are_retold_with_their_message() {
+        let bodies: [&[u8]; 5] = [
+            br#"{"error":{"message":"from error.message"}}"#,
+            br#"{"response":{"error":{"message":"from response.error"}}}"#,
+            br#"{"error":"a bare error string"}"#,
+            br#"{"detail":"a detail"}"#,
+            br#"{"message":"a message"}"#,
+        ];
+        let expected = [
+            "from error.message",
+            "from response.error",
+            "a bare error string",
+            "a detail",
+            "a message",
+        ];
+        for (body, expected) in bodies.into_iter().zip(expected) {
+            let (status, reply) = read(retold(Dialect::Chat, StatusCode::BAD_REQUEST, body)).await;
+            assert_eq!(status, 400);
+            assert_eq!(message(&reply), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failure_event_inside_a_stream_is_found() {
+        let stream = concat!(
+            "data: {\"type\":\"response.created\"}\n\n",
+            "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"overloaded now\"}}}\n\n",
+        );
+        let (status, reply) = read(retold(Dialect::Chat, StatusCode::OK, stream.as_bytes())).await;
+        assert_eq!(status, 200);
+        assert_eq!(message(&reply), "overloaded now");
+    }
+
+    #[tokio::test]
+    async fn unreadable_errors_pass_their_first_500_bytes() {
+        let long = "x".repeat(800);
+        let (_, reply) = read(retold(
+            Dialect::Chat,
+            StatusCode::BAD_GATEWAY,
+            long.as_bytes(),
+        ))
+        .await;
+        assert_eq!(message(&reply).len(), 500);
+    }
+
+    #[tokio::test]
+    async fn claude_code_hears_server_errors_as_overloaded() {
+        let body = br#"{"error":{"message":"upstream broke"}}"#;
+        let (status, reply) = read(retold(Dialect::Messages, StatusCode::BAD_GATEWAY, body)).await;
+        assert_eq!(status, 529);
+        assert_eq!(reply["error"]["type"], "overloaded_error");
+        assert_eq!(message(&reply), "upstream broke");
+        // Other formats keep the status, as do client errors.
+        let (status, _) = read(retold(Dialect::Chat, StatusCode::BAD_GATEWAY, body)).await;
+        assert_eq!(status, 502);
+        let (status, _) = read(retold(Dialect::Messages, StatusCode::NOT_FOUND, body)).await;
+        assert_eq!(status, 404);
+    }
+
+    #[test]
+    fn the_earliest_return_wins_across_steps() {
+        let at = |s| Timestamp::from_second(s).unwrap();
+        let none = |until: Option<Timestamp>, reason: &str| Unavailable {
+            until,
+            reason: reason.into(),
+        };
+        let first = sooner(None, none(Some(at(500)), "first"));
+        assert_eq!(first.until, Some(at(500)));
+        let both = sooner(Some(first.clone()), none(Some(at(300)), "second"));
+        assert_eq!(both.until, Some(at(300)));
+        // The first step's reason is kept.
+        assert_eq!(both.reason, "first");
+        assert_eq!(
+            sooner(Some(none(None, "a")), none(Some(at(9)), "b")).until,
+            Some(at(9))
+        );
+        assert_eq!(sooner(Some(first), none(None, "b")).until, Some(at(500)));
+    }
+}
