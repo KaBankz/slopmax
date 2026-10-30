@@ -70,7 +70,7 @@ CLAUDE                PLAN       5H                      WEEK                   
    pool               3 accts    ██████░░░░  57% 1h02m   ████░░░░░░  40% 1d23h   what the agents see
 
 CODEX                 PLAN       5H                      WEEK                    STATUS
- 4 me@example.com     pro        █░░░░░░░░░  12% 4h10m   ███░░░░░░░  29% 5d17h   ● active · 1 session · 3 reset credits · 9 req · 310.4k tok
+ 4 me@example.com     pro        █░░░░░░░░░  12% 4h10m   ███░░░░░░░  29% 5d17h   ● active · 1 session · 3 limit resets · 9 req · 310.4k tok
 
 XAI                   BILLING    MODELS                                          STATUS
  5 xAI API key …x9Qe  per token  grok-*                                          ready
@@ -125,11 +125,13 @@ Unused quota is lost when its window resets. The default `reset-first` strategy 
 
 ChatGPT starts a 5-hour window at an account's first request, so an account left idle after a reset gets its next reset late. With `warm_windows = true`, slopmax sends an idle ChatGPT account one tiny request as soon as its window resets, using the model Codex last used, so the next reset comes sooner when the account is needed. Claude accounts are never warmed: slopmax sends Claude only what Claude Code writes.
 
-ChatGPT accounts can hold reset credits, which reset an account's windows on the spot. slopmax redeems them:
+Claude and ChatGPT accounts can hold limit resets, which reset an account's windows on the spot. Claude's are grants, such as the one Pro and Max accounts got at Claude Opus 5.5's launch, which claude.ai lists under Limit resets; ChatGPT's are its reset credits. slopmax lists them with each account and redeems them:
 
 - on request, with `slopmax redeem <account>`;
 - in the last three hours before one would expire unused, if the account has usage to reset (`redeem_expiring_credits`, on by default);
-- when every Codex account is spent, then retries the request on the reset account (`redeem_when_exhausted`, off by default).
+- when every account of the provider is spent, then retries the request on the reset account (`redeem_when_exhausted`, off by default).
+
+Claude lists and spends limit resets for Claude Code alone, so slopmax makes those two calls with the user agent Claude Code last sent through it, and makes neither before Claude Code has sent a request.
 
 ### Usage
 
@@ -166,12 +168,12 @@ The same data is available as JSON under `/slopmax/` (`status`, `usage`, `events
 
 ### Tools built for CLIProxyAPI
 
-Apps that show a CLIProxyAPI hub's quotas can show slopmax's. In T3 Code, add a CLIProxyAPI hub to the provider settings, with `http://127.0.0.1:7567` as the hub URL and slopmax's `api_key` as the management key. T3 then lists every pooled account's windows and ChatGPT reset credits, and can redeem them.
+Apps that show a CLIProxyAPI hub's quotas can show slopmax's. In T3 Code, add a CLIProxyAPI hub to the provider settings, with `http://127.0.0.1:7567` as the hub URL and slopmax's `api_key` as the management key. T3 then lists every pooled account's windows and ChatGPT's limit resets, and can redeem them.
 
-slopmax answers the three management calls these tools make: `auth-files`, `api-call`, and `reset-quota`. CLIProxyAPI's `api-call` sends any request to any address with an account's token filled in. slopmax's answers only the usage and reset-credit calls, so the key never puts a token in a client's hands:
+slopmax answers the three management calls these tools make: `auth-files`, `api-call`, and `reset-quota`. CLIProxyAPI's `api-call` sends any request to any address with an account's token filled in. slopmax's answers only the usage and limit reset calls, so the key never puts a token in a client's hands:
 
 - Usage comes from the readings slopmax already keeps, without calling the providers.
-- Reset credits are listed by ChatGPT, and each list is reused for five minutes.
+- Limit resets are listed by ChatGPT, and each list is reused for five minutes.
 - `reset-quota` lifts slopmax's blocks on the account and reads its usage again.
 
 ## Notifications
@@ -264,7 +266,7 @@ What crosses: text, images, documents, tool definitions and calls, tool results,
 | `slopmax priority <account> <tier>`  | Higher tiers are used first; negative tiers hold an account in reserve        |
 | `slopmax enable\|disable <account>`  | Put an account in or take it out of rotation                                  |
 | `slopmax remove <account>`           | Forget an account                                                             |
-| `slopmax redeem <account>`           | Redeem a ChatGPT reset credit (`--yes` skips the prompt)                      |
+| `slopmax redeem <account>`           | Redeem a Claude or ChatGPT limit reset (`--yes` skips the prompt)             |
 | `slopmax service install\|uninstall\|status` | Run the proxy as a systemd user unit or launchd agent                 |
 | `slopmax start\|stop`                | Run the proxy in the background (through the service, if installed), or stop it |
 | `slopmax serve`                      | Run the proxy in the foreground                                               |
@@ -293,8 +295,8 @@ What crosses: text, images, documents, tool definitions and calls, tool results,
 | `session_ttl_mins`        | `60`             | Idle minutes before a session's account is forgotten                |
 | `poll_mins`               | `5`              | Minutes between usage polls per account (`0` turns polling off)     |
 | `refresh_tokens`          | `true`           | Refresh OAuth tokens before they expire                             |
-| `redeem_expiring_credits` | `true`           | Redeem a ChatGPT reset credit before it expires unused              |
-| `redeem_when_exhausted`   | `false`          | Redeem one when every Codex account is spent                        |
+| `redeem_expiring_credits` | `true`           | Redeem a limit reset before it expires unused                       |
+| `redeem_when_exhausted`   | `false`          | Redeem one when every account of a provider is spent                |
 | `websockets`              | `true`           | Relay Codex's WebSockets to ChatGPT's                               |
 | `warm_windows`            | `false`          | Start idle ChatGPT accounts' 5-hour windows as soon as they reset   |
 | `paid_overflow`           | `false`          | Let API keys take over a subscription's models once it is limited   |
@@ -319,13 +321,13 @@ The background proxy logs to `~/.slopmax/slopmax.log`. `SLOPMAX_LOG` sets the lo
 | Session stickiness     | Built in                                                                         | Opt-in                                                                      | Built in                                           |
 | Translation            | Through one common form: Messages, Responses, and Chat clients                   | Pairwise translators between many formats                                   | Responses-centered, with Claude Code inbound       |
 | Claude requests        | From Claude Code only, unchanged but for the credential                          | From any client, rewritten to pass as Claude Code                           | From any client, with Claude Code's identity added |
-| Reset credits          | On request, before expiry, and when spent (opt-in)                               | —                                                                           | Before expiry (opt-in), plus Claude reset grants   |
+| Limit resets           | Claude's and ChatGPT's: on request, before expiry, and when spent (opt-in)       | —                                                                           | Before expiry (opt-in), plus Claude reset grants   |
 | Quota for other tools  | CLIProxyAPI's quota calls, for T3 Code and others, without relaying tokens       | A management API whose `api-call` sends any request with an account's token | Its own API, for its apps                          |
 
 ## Caveats
 
 - Anthropic's terms allow Claude subscription logins in Claude Code only, and pooling subscription accounts may conflict with a provider's terms of service. slopmax serves Claude accounts to Claude Code alone and forwards its requests unchanged, but whether to pool accounts is your call.
-- Claude reset grants are not supported; only ChatGPT reset credits are.
+- Claude lists and spends limit resets for Claude Code alone. For those two calls, slopmax sends the user agent Claude Code last sent through it; everything else it sends says slopmax.
 - Requests go out through rustls, without imitating any client's TLS fingerprint.
 
 ## Development

@@ -15,8 +15,8 @@ Code outside those modules talks to a provider, agent, or format only through it
 ## Ground rules
 
 - **Forward, don't rewrite.** A request in a format the account speaks goes out as the client sent it, except for the credential (and, for Claude, the OAuth beta flag subscription tokens require). Byte-level edits go through `proxy/rawjson.rs`, which changes a value in place instead of re-serializing the body.
-- **Claude serves Claude Code.** Anthropic allows subscription logins in Claude Code only. Providers declare `agent_only: Some("claude")`, routing refuses other clients, and nothing is ever translated *into* Anthropic's format. slopmax does not imitate Claude Code or alter what it says about itself.
-- **Identify honestly.** Translated requests carry `user-agent: slopmax/<version>`, not the client's.
+- **Claude serves Claude Code.** Anthropic allows subscription logins in Claude Code only. Providers declare `agent_only: Some("claude")`, routing refuses other clients, and nothing is ever translated *into* Anthropic's format. slopmax does not imitate Claude Code or alter what it says about itself, with one exception: Claude lists and spends limit resets for Claude Code alone, so those two calls carry the user agent Claude Code last sent through the proxy, and are not made before it has sent one (`provider/claude/credits.rs`).
+- **Identify honestly.** Translated requests carry `user-agent: slopmax/<version>`, not the client's, as do the calls slopmax makes itself, but for Claude's limit resets above.
 - **Fail over before the first byte.** Once a response streams to the client it is passed through; a failure after that reaches the client in its own format.
 
 ## Crates
@@ -261,7 +261,7 @@ State a format cannot carry back is kept by slopmax: the encrypted reasoning an 
 
 - reloading accounts and pins from disk every 2 seconds, so the CLI's and the app's changes take effect (`POST /slopmax/sync` applies them at once);
 - saving pool state (windows, blocks, sessions) every 10 seconds, so a restart keeps sessions on their accounts;
-- refreshing tokens ahead of expiry, polling usage, and redeeming expiring ChatGPT reset credits;
+- refreshing tokens ahead of expiry, polling usage, listing limit resets, and redeeming those about to expire;
 - watching account conditions for notifications.
 
 ## Files
@@ -270,7 +270,7 @@ State a format cannot carry back is kept by slopmax: the encrypted reasoning an 
 ~/.slopmax/                 (SLOPMAX_HOME moves it; directories 0700, files 0600)
   config.toml
   accounts/<provider>-<hash>.json, .<id>.lock
-  state.json                windows, blocks, sessions
+  state.json                windows, blocks, sessions, limit resets, Claude Code's user agent
   pins.json                 `slopmax use`
   usage/<year>-<month>.jsonl
   setup-backup.json         what `setup` replaced

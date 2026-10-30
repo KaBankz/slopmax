@@ -6,10 +6,13 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ### Added
 
+- Claude's limit resets, such as the one Pro and Max accounts got at Claude Opus 5.5's launch, are listed and redeemed as ChatGPT's are: on request (`slopmax redeem`), in the last three hours before one would expire unused, and when every Claude account is spent (`redeem_when_exhausted`). Claude lists and spends them for Claude Code alone, so slopmax makes those two calls with the user agent Claude Code last sent through it, and neither before Claude Code has sent a request.
 - The dashboard's API can rename (`/slopmax/accounts/<id>/label`) and remove (`…/remove`) accounts, and `POST /slopmax/sync` applies changes made on disk at once instead of at the proxy's next check.
 
 ### Changed
 
+- Reset credits are now called limit resets, as claude.ai calls Claude's; on Claude, credits are money.
+- The dashboard counts an account's limit resets as listed, and offers Redeem on any account that holds one, not just ChatGPT's.
 - The source is a Cargo workspace: the `slopmax` CLI on top of `slopmax-core`, the engine it shares with the coming desktop app, and three small libraries beneath. Installing from source now names the package: `cargo install --locked --git https://github.com/KaBankz/slopmax slopmax`.
 - Removing an account through the dashboard's API also drops its pin, as `slopmax remove` does.
 - Without a running proxy, `slopmax status --refresh` shows a failed usage poll as the account's last error instead of a warning line above the table.
