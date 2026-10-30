@@ -3,304 +3,990 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>slopmax</title>
 <style>
+:root {
+  --bg: #fafafa; --panel: #fff; --line: #e7e7ea; --line2: #f0f0f2; --well: #f7f7f8;
+  --ink: #18181b; --ink2: #52525b; --muted: #71717a; --faint: #a1a1aa;
+  --track: #ececef; --meter: #5a5a62; --hover: rgba(0,0,0,.035); --sel: rgba(0,0,0,.06);
+  --good: #2f9e68; --warn: #b8740b; --bad: #d63d35; --accent: #d63370;
+  --claude: #cf7a58; --codex: #23715e; --key: #8b8b93;
+  --mix1: #1d1d1f; --mix2: #76767e; --mix3: #a9a9b0; --mix4: #d2d2d7;
+  --shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.08); --scrim: rgba(24,24,27,.32);
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0d1016; --panel: #151a22; --line: #232a35; --text: #dfe5ee; --dim: #8592a5;
-    --ok: #4cc38a; --warn: #e5b445; --bad: #ef6b6b; --accent: #7aa7ff; --track: #222a36;
-    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --bg: #0b0b0c; --panel: #121214; --line: #242428; --line2: #1c1c1f; --well: #17171a;
+    --ink: #ededef; --ink2: #b4b4bb; --muted: #8b8b93; --faint: #5e5e66;
+    --track: #26262a; --meter: #a8a8b0; --hover: rgba(255,255,255,.035); --sel: rgba(255,255,255,.07);
+    --good: #3fb57f; --warn: #e0a23b; --bad: #ef6a60;
+    --claude: #e5976f; --codex: #3a8f7a; --key: #6a6a72;
+    --mix1: #e6e6e8; --mix2: #9b9ba3; --mix3: #6a6a72; --mix4: #45454b;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.45); --scrim: rgba(0,0,0,.6);
+    color-scheme: dark;
   }
-  @media (prefers-color-scheme: light) {
-    :root { --bg: #f6f7f9; --panel: #fff; --line: #e3e7ee; --text: #1b2230; --dim: #6a7586; --track: #e8ecf2; }
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text);
-    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  header { display: flex; align-items: center; gap: 14px; padding: 14px 24px;
-    border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 1; }
-  header h1 { font-size: 17px; margin: 0; letter-spacing: .2px; }
-  header .meta { color: var(--dim); font-size: 13px; }
-  header .spacer { flex: 1; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); display: inline-block; margin-right: 6px; }
-  .dot.live { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); }
-  main { max-width: 1180px; margin: 0 auto; padding: 20px 24px 60px; display: grid; gap: 20px; }
-  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
-  section > h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .8px; color: var(--dim); margin: 0 0 12px;
-    display: flex; align-items: center; gap: 10px; }
-  section > h2 .spacer { flex: 1; }
-  table { width: 100%; border-collapse: collapse; }
-  th { text-align: left; color: var(--dim); font-weight: 500; font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
-  td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
-  tr:last-child td { border-bottom: none; }
-  .num { font-family: var(--mono); font-size: 12.5px; text-align: right; white-space: nowrap; }
-  .pool td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
-  .group td { padding-top: 16px; color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: .8px; border-bottom: none; }
-  .name { font-weight: 550; }
-  .sub { color: var(--dim); font-size: 12px; }
-  .bar { display: flex; align-items: center; gap: 8px; min-width: 190px; }
-  .track { flex: 1; height: 7px; background: var(--track); border-radius: 4px; overflow: hidden; }
-  .fill { height: 100%; border-radius: 4px; }
-  .pct { font-family: var(--mono); font-size: 12px; width: 38px; text-align: right; }
-  .reset { font-family: var(--mono); font-size: 11.5px; color: var(--dim); width: 54px; }
-  .chip { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; white-space: nowrap;
-    background: color-mix(in srgb, currentColor 14%, transparent); }
-  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); } .off { color: var(--dim); }
-  .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
-  .tag { font-size: 11.5px; color: var(--dim); border: 1px solid var(--line); border-radius: 4px; padding: 0 6px; }
-  .tag.pin { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
-  button, select, input { font: inherit; color: var(--text); background: transparent; border: 1px solid var(--line);
-    border-radius: 6px; padding: 3px 9px; cursor: pointer; }
-  button:hover { border-color: var(--accent); }
-  button:disabled { opacity: .5; cursor: default; }
-  .actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
-  .actions button { font-size: 12px; padding: 2px 8px; }
-  .chart .row { display: grid; grid-template-columns: 170px 1fr 230px; gap: 12px; align-items: center; padding: 4px 0; }
-  .chart .label { font-family: var(--mono); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .chart .vals { font-family: var(--mono); font-size: 12px; color: var(--dim); text-align: right; white-space: nowrap; }
-  .chart .total { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 8px; font-weight: 600; }
-  .chart .total .vals { color: var(--text); }
-  .empty { color: var(--dim); padding: 10px 0; }
-  .log { max-height: 420px; overflow: auto; }
-  .log td { padding: 5px 8px; font-size: 12.5px; }
-  .gate { max-width: 460px; margin: 15vh auto; text-align: center; }
-  .gate input { width: 100%; padding: 8px 10px; margin: 14px 0; font-family: var(--mono); }
-  .toast { position: fixed; bottom: 18px; right: 18px; background: var(--panel); border: 1px solid var(--line);
-    border-radius: 8px; padding: 10px 14px; max-width: 420px; display: none; }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 13.5px/1.5 var(--sans);
+  -webkit-font-smoothing: antialiased; }
+.num, td.n, .fig { font-variant-numeric: tabular-nums; }
+button, input { font: inherit; color: inherit; }
+code, .mono { font-family: var(--mono); font-size: .92em; }
+[hidden] { display: none !important; }
+.grow { flex: 1; }
+.muted { color: var(--muted); }
+.faint { color: var(--faint); }
+.good { color: var(--good); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+
+/* Controls: one height, quiet until hovered. */
+.btn { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 7px;
+  border: 1px solid var(--line); background: var(--panel); cursor: pointer; font-weight: 500; font-size: 13px;
+  white-space: nowrap; transition: background .12s, border-color .12s; }
+.btn:hover { background: var(--hover); border-color: color-mix(in srgb, var(--ink) 18%, var(--line)); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.primary { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+.btn.primary:hover { background: color-mix(in srgb, var(--ink) 86%, var(--panel)); }
+.btn.danger { background: var(--bad); border-color: var(--bad); color: #fff; }
+.btn.ghost { border-color: transparent; background: transparent; }
+.btn.ghost:hover { background: var(--hover); }
+.btn.icon { width: 30px; padding: 0; justify-content: center; }
+.btn.sm { height: 28px; padding: 0 10px; font-size: 12.5px; }
+.btn svg { width: 15px; height: 15px; flex: none; }
+.btn.busy svg { animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 2px; }
+.seg { display: inline-flex; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--well); }
+.seg button { height: 26px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; cursor: pointer;
+  color: var(--muted); font-weight: 500; font-size: 12.5px; }
+.seg button.on { background: var(--panel); color: var(--ink); box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgba(0,0,0,.05); }
+.switch { position: relative; width: 32px; height: 18px; flex: none; border-radius: 9px; border: 0; padding: 0;
+  background: var(--track); cursor: pointer; transition: background .15s; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s; }
+.switch[aria-checked="true"] { background: var(--ink); }
+.switch[aria-checked="true"]::after { transform: translateX(14px); background: var(--panel); }
+.field { height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); width: 100%; }
+.field:focus { outline: none; border-color: color-mix(in srgb, var(--ink) 40%, var(--line)); }
+
+/* Frame */
+.wrap { max-width: 1240px; margin: 0 auto; padding: 0 32px; }
+.top { position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(1.4) blur(10px); -webkit-backdrop-filter: saturate(1.4) blur(10px); border-bottom: 1px solid var(--line); }
+.top .wrap { display: flex; align-items: center; gap: 14px; height: 56px; }
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 650; font-size: 15px; letter-spacing: -.01em; }
+.brand svg { width: 20px; height: 20px; }
+.brand .ver { font-weight: 450; font-size: 12px; color: var(--faint); }
+.nav { display: flex; gap: 2px; margin-left: 14px; }
+.nav a { color: var(--muted); text-decoration: none; font-size: 13px; padding: 5px 10px; border-radius: 6px; font-weight: 500; }
+.nav a:hover { color: var(--ink); background: var(--hover); }
+.live { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--muted); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; display: inline-block; }
+.dot.good { background: var(--good); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+.live .dot.good { box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 18%, transparent); }
+.endpoint { font-family: var(--mono); font-size: 12px; font-weight: 450; color: var(--ink2); }
+.endpoint .lbl { font-family: var(--sans); color: var(--faint); font-size: 12px; }
+main.wrap { padding-top: 8px; padding-bottom: 64px; }
+section { padding-top: 40px; scroll-margin-top: 56px; }
+.shead { display: flex; align-items: baseline; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+.shead h2 { margin: 0; font-size: 17px; font-weight: 640; letter-spacing: -.015em; }
+.shead .lede { color: var(--muted); font-size: 13px; }
+.shead .end { margin-left: auto; display: flex; align-items: center; gap: 10px; align-self: center; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.card + .card, .grid + .card, .card + .grid, .grid + .grid { margin-top: 16px; }
+.grid { display: grid; gap: 16px; }
+.grid > .card { margin-top: 0; }
+#settings > .card { align-self: start; }
+.g2 { grid-template-columns: 1fr 1fr; } .g21 { grid-template-columns: 1.6fr 1fr; }
+.ch { display: flex; align-items: center; gap: 10px; padding: 14px 18px 0; min-height: 44px; }
+.ch h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.ch .note { color: var(--muted); font-size: 12px; }
+.ch .end { margin-left: auto; display: flex; gap: 14px; align-items: center; }
+.cb { padding: 12px 18px 16px; }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 8px; height: 8px; border-radius: 2px; display: inline-block; flex: none; }
+.pdot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+.p-claude, .p-anthropic { background: var(--claude); } .p-codex, .p-openai { background: var(--codex); }
+.p-xai, .p-compat { background: var(--key); }
+.empty { color: var(--muted); padding: 28px 18px; text-align: center; font-size: 13px; }
+.empty b { display: block; color: var(--ink); font-weight: 550; margin-bottom: 2px; }
+
+/* Summary line */
+.summary { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.summary b { font-weight: 550; }
+
+/* Providers */
+.prov + .prov { margin-top: 16px; }
+.phead { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line2); }
+.phead h3 { margin: 0; font-size: 14px; font-weight: 620; }
+.phead .meta { color: var(--muted); font-size: 12.5px; }
+.pool { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); border-bottom: 1px solid var(--line2); }
+.pw { padding: 14px 18px 16px; }
+.pw + .pw { border-left: 1px solid var(--line2); }
+.pw .lbl { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; }
+.pw .big { font-size: 22px; font-weight: 620; letter-spacing: -.02em; margin: 2px 0 8px; font-variant-numeric: tabular-nums; }
+.pw .big small { font-size: 12.5px; font-weight: 450; color: var(--muted); letter-spacing: 0; margin-left: 4px; }
+.segs { display: flex; gap: 3px; height: 6px; }
+.segs > div { flex: 1; background: var(--track); border-radius: 3px; overflow: hidden; }
+.segs i { display: block; height: 100%; background: var(--meter); border-radius: 3px; }
+.sub { font-size: 12px; color: var(--muted); margin-top: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sub .t { color: var(--faint); }
+.fill-warn { background: var(--warn) !important; } .fill-bad { background: var(--bad) !important; }
+
+.rows { --cols: 3; }
+.row { display: grid; grid-template-columns: minmax(220px, 1.25fr) repeat(var(--cols), minmax(150px, 1fr)) 30px;
+  gap: 24px; padding: 14px 18px; align-items: start; position: relative; }
+.row + .row { border-top: 1px solid var(--line2); }
+.row.th { padding-top: 10px; padding-bottom: 8px; font-size: 12px; color: var(--muted); align-items: end; }
+.row.off .win, .row.off .who .name { opacity: .5; }
+.who .name { font-weight: 560; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.who .name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.who .state { display: flex; align-items: center; gap: 7px; margin-top: 3px; font-size: 12.5px; color: var(--ink2); }
+.who .meta { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.chip { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; font-size: 11px;
+  font-weight: 500; color: var(--ink2); background: var(--sel); white-space: nowrap; }
+.win .wt { display: flex; align-items: baseline; gap: 8px; }
+.win .wt b { font-weight: 600; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+.win .wt .pace { font-size: 12px; color: var(--muted); margin-left: auto; white-space: nowrap; }
+.win .wt .pace.warn { color: var(--warn); }
+.meter { position: relative; height: 4px; background: var(--track); border-radius: 2px; margin-top: 6px; }
+.meter i { position: absolute; inset: 0 auto 0 0; background: var(--meter); border-radius: 2px; }
+.meter u { position: absolute; top: -3px; width: 1.5px; height: 10px; background: var(--faint); border-radius: 1px; }
+.win .sub { margin-top: 6px; }
+.win.none { color: var(--faint); font-size: 12px; padding-top: 2px; }
+.kebab { justify-self: end; }
+
+/* Limit resets */
+.resets { border-top: 1px solid var(--line2); background: var(--well); border-radius: 0 0 10px 10px; padding: 12px 18px 14px; }
+.resets .rh { display: flex; align-items: baseline; gap: 4px 10px; margin-bottom: 6px; flex-wrap: wrap; }
+.resets .rh b { font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+.resets .rh span { font-size: 12px; color: var(--muted); }
+.credit { display: grid; grid-template-columns: minmax(180px, 1.1fr) minmax(200px, 1.6fr) minmax(170px, 1fr) auto; gap: 16px;
+  align-items: center; padding: 7px 0; font-size: 12.5px; }
+.credit + .credit { border-top: 1px solid var(--line); }
+.credit .acct { display: flex; align-items: center; gap: 8px; font-weight: 520; min-width: 0; }
+.credit .acct span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.credit .title { color: var(--ink2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.credit .exp { font-variant-numeric: tabular-nums; }
+.credit .exp .faint { margin-left: 6px; }
+
+/* KPIs */
+.kpis { display: grid; grid-template-columns: repeat(5, 1fr); }
+.kpi { padding: 16px 18px 15px; min-width: 0; }
+.kpi + .kpi { border-left: 1px solid var(--line2); }
+.kpi .k { font-size: 12px; color: var(--muted); }
+.kpi .v { font-size: 24px; font-weight: 620; letter-spacing: -.025em; margin: 4px 0 2px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.kpi .d { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Charts */
+.chart { position: relative; }
+.chart svg { display: block; width: 100%; overflow: visible; }
+.chart text { fill: var(--faint); font: 11px var(--sans); font-variant-numeric: tabular-nums; }
+.chart .grid line { stroke: var(--line2); }
+.chart .base { stroke: var(--line); }
+.chart .band { fill: var(--hover); opacity: 0; }
+.chart .band.on { opacity: 1; }
+.tip { position: fixed; z-index: 50; pointer-events: none; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; box-shadow: var(--shadow); padding: 8px 10px; font-size: 12px; min-width: 160px; opacity: 0;
+  transition: opacity .08s; }
+.tip.on { opacity: 1; }
+.tip .tt { font-weight: 600; margin-bottom: 4px; }
+.tip .tr { display: flex; align-items: center; gap: 7px; color: var(--ink2); line-height: 1.7; }
+.tip .tr b { margin-left: auto; padding-left: 16px; font-weight: 550; color: var(--ink); font-variant-numeric: tabular-nums; }
+.tip .tr.sum { border-top: 1px solid var(--line2); margin-top: 3px; padding-top: 3px; }
+
+/* Tables */
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-weight: 500; font-size: 12px; color: var(--muted); padding: 0 12px 8px; white-space: nowrap; }
+td { padding: 9px 12px; border-top: 1px solid var(--line2); white-space: nowrap; }
+th:first-child, td:first-child { padding-left: 18px; } th:last-child, td:last-child { padding-right: 18px; }
+th.n, td.n { text-align: right; }
+td.n { font-variant-numeric: tabular-nums; }
+.tbl { padding-top: 6px; overflow-x: auto; }
+.nm { display: flex; align-items: center; gap: 8px; font-weight: 520; max-width: 280px; }
+.nm span { overflow: hidden; text-overflow: ellipsis; }
+.share { display: flex; align-items: center; gap: 10px; justify-content: flex-end; }
+.share .bar { width: 110px; height: 4px; border-radius: 2px; background: var(--track); position: relative; }
+.share .bar i { position: absolute; inset: 0 auto 0 0; border-radius: 2px; background: var(--meter); }
+.share span { width: 34px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+tr.total td { font-weight: 600; }
+
+/* Token mix */
+.mixbar { display: flex; gap: 2px; height: 10px; margin: 6px 0 14px; }
+.mixbar i { border-radius: 2px; min-width: 2px; }
+.mixl { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 24px; font-size: 12.5px; }
+.mixl div { display: flex; align-items: center; gap: 8px; }
+.mixl b { margin-left: auto; font-weight: 550; font-variant-numeric: tabular-nums; }
+.mixl em { font-style: normal; color: var(--faint); width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+.pairs { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; border-top: 1px solid var(--line2); margin-top: 16px; padding-top: 14px; }
+.pairs .k { font-size: 12px; color: var(--muted); }
+.pairs .v { font-size: 17px; font-weight: 600; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.list .li { display: grid; grid-template-columns: minmax(0, 1fr) 90px 64px; gap: 12px; align-items: center; padding: 6px 0; font-size: 12.5px; }
+.list .li span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list .li b { font-weight: 550; text-align: right; font-variant-numeric: tabular-nums; }
+.list .bar { height: 4px; border-radius: 2px; background: var(--track); position: relative; }
+.list .bar i { position: absolute; inset: 0 auto 0 0; border-radius: 2px; background: var(--meter); }
+.sublabel { font-size: 12px; color: var(--muted); margin: 14px 0 4px; }
+.sublabel:first-child { margin-top: 0; }
+
+/* Routing */
+.opts { display: grid; gap: 8px; }
+.opt { display: flex; gap: 12px; align-items: flex-start; padding: 11px 14px; border: 1px solid var(--line); border-radius: 8px;
+  cursor: pointer; background: var(--panel); text-align: left; width: 100%; transition: border-color .12s, background .12s; }
+.opt:hover { background: var(--hover); }
+.opt.on { border-color: color-mix(in srgb, var(--ink) 55%, var(--line)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 55%, var(--line)) inset; }
+.opt .radio { width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid var(--faint); margin-top: 2px; flex: none; position: relative; }
+.opt.on .radio { border-color: var(--ink); }
+.opt.on .radio::after { content: ""; position: absolute; inset: 2.5px; border-radius: 50%; background: var(--ink); }
+.opt b { font-weight: 560; display: block; }
+.opt span { color: var(--muted); font-size: 12.5px; }
+.opt .def { font-family: var(--sans); color: var(--faint); font-weight: 450; margin-left: 6px; font-size: 12px; }
+.set { display: flex; gap: 16px; align-items: flex-start; padding: 13px 0; }
+.set + .set { border-top: 1px solid var(--line2); }
+.set .t { font-weight: 550; }
+.set .d { color: var(--muted); font-size: 12.5px; margin-top: 2px; max-width: 520px; }
+.set .switch { margin-top: 2px; margin-left: auto; }
+.ttl { display: inline-flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12.5px; color: var(--muted); }
+.ttl .field { width: 64px; height: 28px; text-align: right; font-variant-numeric: tabular-nums; }
+.group-t { font-size: 12px; color: var(--muted); font-weight: 500; margin: 18px 0 0; }
+.group-t:first-child { margin-top: 0; }
+
+/* Feed */
+.feed { max-height: 460px; overflow: auto; }
+.feed thead th { position: sticky; top: 0; background: var(--panel); padding-top: 10px; z-index: 1; box-shadow: inset 0 -1px 0 var(--line2); }
+.feed td { padding-top: 7px; padding-bottom: 7px; font-size: 12.5px; }
+.feed .nm { font-weight: 450; }
+.feed tr.new td { animation: flash 1.2s ease-out; }
+@keyframes flash { from { background: var(--sel); } to { background: transparent; } }
+.status { display: inline-flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+
+/* Menus, dialogs, toasts */
+.menu { position: fixed; z-index: 40; min-width: 220px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 9px; box-shadow: var(--shadow); padding: 4px; }
+.menu button { display: flex; width: 100%; align-items: center; gap: 10px; height: 30px; padding: 0 10px; border: 0;
+  background: transparent; border-radius: 6px; cursor: pointer; text-align: left; font-size: 13px; }
+.menu button:hover { background: var(--hover); }
+.menu button .hint { margin-left: auto; color: var(--faint); font-size: 12px; }
+.menu button.danger { color: var(--bad); }
+.menu hr { border: 0; border-top: 1px solid var(--line2); margin: 4px 0; }
+.scrim { position: fixed; inset: 0; z-index: 60; background: var(--scrim); display: grid; place-items: center; padding: 20px; }
+.dialog { width: 420px; max-width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: var(--shadow); padding: 20px; }
+.dialog h4 { margin: 0 0 6px; font-size: 15px; font-weight: 620; }
+.dialog p { margin: 0 0 6px; color: var(--ink2); }
+.dialog .facts { margin: 12px 0 4px; padding: 10px 12px; background: var(--well); border-radius: 8px; font-size: 12.5px; }
+.dialog .facts div { display: flex; justify-content: space-between; padding: 2px 0; }
+.dialog .facts b { font-weight: 550; font-variant-numeric: tabular-nums; }
+.dialog .field { margin-top: 10px; }
+.dialog .acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.toasts { position: fixed; right: 20px; bottom: 20px; z-index: 70; display: grid; gap: 8px; }
+.toast { background: var(--ink); color: var(--panel); padding: 9px 14px; border-radius: 8px; font-size: 13px;
+  box-shadow: var(--shadow); max-width: 420px; animation: rise .18s ease-out; }
+.toast.err { background: var(--bad); color: #fff; }
+@keyframes rise { from { transform: translateY(6px); opacity: 0; } }
+.gate { max-width: 400px; margin: 18vh auto; padding: 28px; }
+.gate h1 { font-size: 17px; margin: 14px 0 6px; }
+.gate p { color: var(--muted); margin: 0 0 16px; }
+.gate .row2 { display: flex; gap: 8px; }
+footer.wrap { color: var(--faint); font-size: 12px; padding-bottom: 40px; }
+
+@media (max-width: 1100px) {
+  .nav { display: none; }
+  .kpis { grid-template-columns: repeat(6, 1fr); }
+  .kpi { grid-column: span 2; }
+  .kpi:nth-child(n+4) { grid-column: span 3; border-top: 1px solid var(--line2); }
+  .kpi:nth-child(4) { border-left: 0; }
+}
+@media (max-width: 960px) {
+  .wrap { padding: 0 20px; }
+  .g2, .g21 { grid-template-columns: 1fr; }
+  .row { grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); gap: 12px 20px; }
+  .row .who { grid-column: 1 / -1; padding-right: 40px; }
+  .row .kebab { position: absolute; top: 12px; right: 14px; }
+  .row.th { display: none; }
+  .win .lbl2 { display: block; }
+  .credit { grid-template-columns: 1fr auto; gap: 2px 16px; }
+  .credit .title { grid-column: 1; grid-row: 2; }
+  .credit .exp { grid-column: 1; grid-row: 3; }
+  .credit .btn { grid-column: 2; grid-row: 1 / 4; }
+  .endpoint .lbl { display: none; }
+  th.x, td.x { display: none; }
+}
+.lbl2 { display: none; font-size: 11.5px; color: var(--muted); margin-bottom: 2px; }
 </style>
 </head>
 <body>
-<div id="gate" class="gate" hidden>
-  <h1>slopmax</h1>
-  <p class="sub">Open the dashboard with <code>slopmax dashboard</code>, or enter the <code>api_key</code> from <code>~/.slopmax/config.toml</code>.</p>
-  <input id="key" type="password" placeholder="sm-…" autocomplete="off">
-  <button id="enter">Open</button>
+<div id="gate" class="gate card" hidden>
+  <svg width="28" height="28" viewBox="0 0 20 20" aria-hidden="true"><rect width="20" height="20" rx="5" fill="var(--accent)"/><path d="M6 14V10M10 14V6M14 14v-6" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>
+  <h1>Open the slopmax dashboard</h1>
+  <p>Run <code>slopmax dashboard</code>, which opens this page with its key, or paste the <code>api_key</code> from <code>~/.slopmax/config.toml</code>.</p>
+  <form class="row2" id="gateform"><input class="field mono" id="keyin" type="password" placeholder="sm-…" autocomplete="off" spellcheck="false"><button class="btn primary">Open</button></form>
 </div>
+
 <div id="app" hidden>
-  <header>
-    <h1>slopmax</h1>
-    <span class="meta" id="meta"></span>
-    <span class="spacer"></span>
-    <span class="meta"><span class="dot" id="live"></span><span id="livetext">connecting</span></span>
-    <button id="refresh" title="Poll every account's usage now">Refresh usage</button>
-  </header>
-  <main>
-    <section>
-      <h2>Accounts <span class="spacer"></span><button id="auto" title="Let slopmax choose accounts again">Clear pins</button></h2>
-      <table id="accounts"></table>
-    </section>
-    <section>
-      <h2>Usage
-        <span class="spacer"></span>
-        <select id="range"><option value="today">Today</option><option value="7d" selected>7 days</option><option value="30d">30 days</option><option value="all">All time</option></select>
-        <select id="by"><option value="day">by day</option><option value="model">by model</option><option value="account">by account</option></select>
-      </h2>
-      <div id="usage" class="chart"></div>
-      <p class="sub">API cost is what these requests would cost at pay-as-you-go prices. A trailing + leaves out models without a price.</p>
-    </section>
-    <section>
-      <h2>Live requests</h2>
-      <div class="log"><table>
-        <thead><tr><th>Time</th><th>Account</th><th>Model</th><th>Status</th><th class="num">In</th><th class="num">Cached</th><th class="num">Out</th><th class="num">First byte</th><th class="num">Total</th></tr></thead>
-        <tbody id="log"><tr><td colspan="9" class="empty">Requests appear here as they are answered.</td></tr></tbody>
-      </table></div>
-    </section>
-  </main>
+<header class="top"><div class="wrap">
+  <div class="brand">
+    <svg viewBox="0 0 20 20" aria-hidden="true"><rect width="20" height="20" rx="5" fill="var(--accent)"/><path d="M6 14V10M10 14V6M14 14v-6" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>
+    slopmax <span class="ver" id="ver"></span>
+  </div>
+  <nav class="nav"><a href="#accounts">Accounts</a><a href="#usage">Usage</a><a href="#routing">Routing</a><a href="#requests">Requests</a></nav>
+  <div class="grow"></div>
+  <span class="live" id="live"><span class="dot"></span><span>Connecting</span></span>
+  <button class="btn ghost endpoint" id="copy" title="Copy the endpoint your agents use"><span class="lbl">Endpoint</span> <span id="origin"></span>
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5v-2a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg></button>
+  <button class="btn" id="refresh" title="Poll every account's usage and limit resets now">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3"/></svg>Refresh</button>
+</div></header>
+
+<main class="wrap">
+  <section id="accounts">
+    <div class="shead"><h2>Accounts</h2><div class="summary" id="summary"></div>
+      <div class="end"><span class="muted" style="font-size:12px" id="updated"></span><button class="btn sm" id="unpin" hidden>Clear pin</button></div></div>
+    <div id="providers"></div>
+  </section>
+
+  <section id="usage">
+    <div class="shead"><h2>Usage</h2><span class="lede">Everything that went through slopmax, valued at API prices.</span>
+      <div class="end"><div class="seg" id="range"><button data-r="today">Today</button><button data-r="7d" class="on">7 days</button><button data-r="30d">30 days</button></div></div></div>
+    <div id="analytics"></div>
+  </section>
+
+  <section id="routing">
+    <div class="shead"><h2>Routing</h2><span class="lede">Written to config.toml and applied at once.</span></div>
+    <div class="grid g2" id="settings"></div>
+  </section>
+
+  <section id="requests">
+    <div class="shead"><h2>Live requests</h2><span class="lede" id="feedcount">Answered and failed requests as they happen.</span>
+      <div class="end"><button class="btn sm" id="clearfeed">Clear</button></div></div>
+    <div class="card feed"><table>
+      <thead><tr><th>Time</th><th>Account</th><th>Model</th><th>Agent</th><th>Status</th><th class="n">Input</th><th class="n">Cache read</th><th class="n">Cache write</th><th class="n">Output</th><th class="n">First byte</th><th class="n">Total</th></tr></thead>
+      <tbody id="feed"></tbody></table>
+      <div class="empty" id="feedempty"><b>Waiting for requests</b>Each request appears here the moment it is answered.</div>
+    </div>
+  </section>
+</main>
+<footer class="wrap" id="foot"></footer>
 </div>
-<div class="toast" id="toast"></div>
+<div class="tip" id="tip"></div>
+<div class="toasts" id="toasts"></div>
+
 <script>
 "use strict";
-const $ = (id) => document.getElementById(id);
-const SUBSCRIPTIONS = ["claude", "codex"];
+const $ = (s, root = document) => root.querySelector(s);
+const $$ = (s, root = document) => [...root.querySelectorAll(s)];
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const TITLES = { claude: "Claude", codex: "ChatGPT", anthropic: "Anthropic API", openai: "OpenAI API", xai: "xAI API", compat: "Compatible API" };
 const ORDER = ["claude", "codex", "anthropic", "openai", "xai", "compat"];
+const SUBSCRIPTIONS = ["claude", "codex"];
+const SPANS = { "5h": 5 * 3600e3, "7d": 7 * 86400e3, "30d": 30 * 86400e3 };
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const STRATEGY_NAMES = { "reset-first": "Reset first", "fill-first": "Fill first", "least-used": "Least used", "round-robin": "Round robin" };
+
 let key = sessionStorage.getItem("slopmax-key") || "";
-let report = null;
+let report = null, settings = null, hist = null, range = "7d", polledAt = 0;
 let names = {};
 
 // The key arrives in the URL fragment, which browsers never send anywhere.
-const fragment = new URLSearchParams(location.hash.slice(1));
-if (fragment.get("key")) {
-  key = fragment.get("key");
-  sessionStorage.setItem("slopmax-key", key);
-  history.replaceState(null, "", location.pathname);
+{
+  const fragment = new URLSearchParams(location.hash.slice(1));
+  if (fragment.get("key")) {
+    key = fragment.get("key");
+    sessionStorage.setItem("slopmax-key", key);
+    window.history.replaceState(null, "", location.pathname);
+  }
 }
 
-async function api(method, path) {
-  const res = await fetch(path, { method, headers: { authorization: "Bearer " + key } });
-  if (res.status === 401) { lock(); throw new Error("the key was not accepted"); }
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body?.error?.message || res.statusText);
-  return body;
+async function api(method, path, body) {
+  const headers = { authorization: "Bearer " + key };
+  if (body) headers["content-type"] = "application/x-www-form-urlencoded";
+  const res = await fetch("/slopmax/" + path, { method, headers, body });
+  if (res.status === 401) { lock(); throw new Error("The key was not accepted."); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error?.message || res.statusText);
+  return data;
 }
 
-function lock() {
-  sessionStorage.removeItem("slopmax-key");
-  $("app").hidden = true; $("gate").hidden = false;
-}
-
-function toast(text) {
-  const t = $("toast"); t.textContent = text; t.style.display = "block";
-  clearTimeout(toast.timer); toast.timer = setTimeout(() => (t.style.display = "none"), 5000);
-}
-
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-
-function compact(n) {
-  if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
-  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
-  if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
-  return String(n);
-}
-
-function duration(ms) {
+// ---------- Formatting ----------
+function dur(ms) {
   const s = Math.max(0, Math.floor(ms / 1000));
-  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
   if (d) return `${d}d${h}h`;
   if (h) return `${h}h${String(m).padStart(2, "0")}m`;
   if (m) return `${m}m${String(s % 60).padStart(2, "0")}s`;
-  return `${s}s`;
+  return `${s % 60}s`;
+}
+const until = (at) => (at - Date.now() > 0 ? dur(at - Date.now()) : "now");
+const dayNo = (t) => { const d = new Date(t); return Math.floor((t - d.getTimezoneOffset() * 60e3) / 86400e3); };
+const hm = (d) => `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+// `00:20` today, `Fri 00:20` this week, else `Nov 13`.
+function clock(t) {
+  const d = new Date(t), diff = dayNo(t) - dayNo(Date.now());
+  if (diff === 0) return hm(d);
+  if (diff > 0 && diff < 7) return `${WEEKDAYS[d.getDay()]} ${hm(d)}`;
+  return `${MONTHS[d.getMonth()]} ${d.getDate()}`;
+}
+function dateTime(t) { const d = new Date(t); return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${hm(d)}`; }
+function ago(t) {
+  const s = (Date.now() - t) / 1000;
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+function compact(n) {
+  n = n || 0;
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
+  return String(Math.round(n));
+}
+const axisCompact = (n) => compact(n).replace(".0", "");
+const int = (n) => (n || 0).toLocaleString("en-US");
+const money = (x, dp = 2) => "$" + (x || 0).toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp });
+const pct = (x) => (x == null ? "—" : `${Math.round(x * 100)}%`);
+const secs = (ms) => (ms == null ? "—" : ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(ms < 10e3 ? 2 : 1)} s`);
+const tokensOf = (t) => (t.input || 0) + (t.output || 0) + (t.cache_read || 0) + (t.cache_write || 0);
+const ts = (s) => (s ? Date.parse(s) : null);
+
+// ---------- Accounts ----------
+function windowTitle(w) {
+  const span = { "5h": "5-hour", "7d": "Weekly", "30d": "Monthly" }[w.span] || w.span;
+  return w.model ? `${span} · ${w.model}` : span;
+}
+const slotKey = (w) => `${w.span}|${w.model || ""}`;
+function usedNow(w) { const r = ts(w.resets_at); return r && r <= Date.now() ? 0 : w.used; }
+const tone = (used) => (used >= 90 ? "bad" : used >= 70 ? "warn" : "");
+
+// The window's use against an even spend until it resets, as the app says it.
+function pace(w, used) {
+  const length = SPANS[w.span], reset = ts(w.resets_at);
+  if (!length || !reset || reset <= Date.now()) return null;
+  const passed = length - (reset - Date.now()), elapsed = passed / length;
+  if (elapsed < 0.03 || elapsed >= 1 || used >= 100) return null;
+  const ahead = used - elapsed * 100;
+  if (Math.abs(ahead) < 5) return { elapsed, text: "On pace", tone: "" };
+  if (ahead > 0) return { elapsed, text: `Runs out ~${clock(Date.now() + (100 - used) / (used / passed))}`, tone: "warn" };
+  return { elapsed, text: `${Math.round(-ahead)}% in reserve`, tone: "" };
 }
 
-const level = (pct) => (pct >= 90 ? "var(--bad)" : pct >= 70 ? "var(--warn)" : "var(--ok)");
-const time = (t) => (t ? Date.parse(t) : 0);
-
-function usedAt(w, now) {
-  const reset = time(w.resets_at);
-  return reset && reset <= now ? 0 : w.used;
-}
-
-function windowCell(w, now) {
-  if (!w) return `<td><span class="sub">—</span></td>`;
-  const used = usedAt(w, now), reset = time(w.resets_at);
-  const left = used > 0 && reset > now ? duration(reset - now) : "";
-  return `<td><div class="bar"><div class="track"><div class="fill" style="width:${Math.min(100, used)}%;background:${level(used)}"></div></div>
-    <span class="pct">${Math.round(used)}%</span><span class="reset">${left}</span></div></td>`;
-}
-
-function limitedUntil(state, now) {
-  let until = time(state.blocked_until) > now ? time(state.blocked_until) : 0;
-  for (const w of state.limits?.windows || []) {
-    if (!w.model && usedAt(w, now) >= 100 && time(w.resets_at) > now) until = Math.max(until, time(w.resets_at));
+function limitedUntil(a) {
+  const now = Date.now(), st = a.state;
+  let at = ts(st.blocked_until);
+  if (at && at <= now) at = null;
+  for (const w of st.limits?.windows || []) {
+    const r = ts(w.resets_at);
+    if (!w.model && w.used >= 100 && (!r || r > now)) at = Math.max(at || 0, r || now + 3600e3);
   }
-  return until;
+  return at;
+}
+function condition(a) {
+  if (a.auth_error) return { text: "Sign in again", tone: "bad", detail: a.auth_error };
+  if (a.disabled) return { text: "Disabled", tone: "" };
+  const lim = limitedUntil(a);
+  if (lim) return { text: `Limited · back in <span data-until="${lim}">${until(lim)}</span>`, tone: "warn", limited: true };
+  if (ts(a.state.throttled_until) > Date.now()) return { text: "Throttled", tone: "warn" };
+  if (a.sessions > 0) return { text: `Active · ${a.sessions} session${a.sessions > 1 ? "s" : ""}`, tone: "good", ready: true };
+  return { text: "Ready", tone: "good", ready: true };
+}
+function credits(a) {
+  const list = a.state.credits;
+  if (list) return list.credits.filter((c) => !c.expires_at || ts(c.expires_at) > Date.now());
+  return Array.from({ length: a.state.limits?.reset_credits || 0 }, () => ({}));
 }
 
-function status(a, now) {
-  const s = a.state;
-  if (a.auth_error) return ["bad", "sign in again"];
-  if (a.disabled) return ["off", "disabled"];
-  const until = limitedUntil(s, now);
-  if (until) return ["warn", `limited · back in ${duration(until - now)}`];
-  if (time(s.throttled_until) > now) return ["warn", "throttled"];
-  if (a.sessions > 0) return ["ok", `● active · ${a.sessions} session${a.sessions === 1 ? "" : "s"}`];
-  return ["ok", "ready"];
+function resetText(w) {
+  const r = ts(w.resets_at);
+  if (!r || r <= Date.now() || usedNow(w) <= 0) return `<span class="t">Not started</span>`;
+  return `Resets in <span data-until="${r}">${until(r)}</span> <span class="t">· ${clock(r)}</span>`;
 }
 
 function renderAccounts() {
   if (!report) return;
-  const now = Date.now();
-  $("meta").textContent = `v${report.version} · ${report.strategy}`;
-  if (!report.accounts.length) {
-    $("accounts").innerHTML = `<tr><td class="empty">No accounts yet. Add one with <code>slopmax login claude</code> or <code>slopmax login codex</code>.</td></tr>`;
+  const accounts = report.accounts;
+  const subs = accounts.filter((a) => SUBSCRIPTIONS.includes(a.provider));
+  const keys = accounts.filter((a) => !SUBSCRIPTIONS.includes(a.provider));
+  const conds = accounts.map(condition);
+  const ready = conds.filter((c) => c.ready).length, limited = conds.filter((c) => c.limited).length;
+  const signed = conds.filter((c) => c.tone === "bad").length;
+  const resets = subs.reduce((n, a) => n + credits(a).length, 0);
+  const lead = limited || signed ? "warn" : "good";
+  $("#summary").innerHTML = accounts.length
+    ? `<span class="dot ${lead}"></span><b>${ready} of ${accounts.length} account${accounts.length > 1 ? "s" : ""} ready</b>` +
+      (limited ? `<span class="muted">${limited} limited</span>` : "") +
+      (signed ? `<span class="muted">${signed} signed out</span>` : "") +
+      (resets ? `<span class="muted">· ${resets} limit reset${resets > 1 ? "s" : ""} banked</span>` : "")
+    : "";
+  $("#unpin").hidden = !accounts.some((a) => a.pinned);
+  let html = "";
+  for (const p of ORDER.filter((p) => SUBSCRIPTIONS.includes(p))) {
+    const group = subs.filter((a) => a.provider === p);
+    if (group.length) html += providerCard(p, group, report.pools.find((x) => x.provider === p));
+  }
+  if (keys.length) html += keysCard(keys);
+  if (!accounts.length) html = `<div class="card empty"><b>No accounts yet</b>Add one with <code>slopmax login claude</code> or <code>slopmax login codex</code>, and it shows up here.</div>`;
+  $("#providers").innerHTML = html;
+}
+
+function providerCard(p, group, pool) {
+  const ready = group.filter((a) => condition(a).ready).length;
+  // Columns: every window any account reports, shared ones first.
+  const order = { "5h": 0, "7d": 1, "30d": 2 };
+  const slots = [];
+  for (const a of group) for (const w of a.state.limits?.windows || [])
+    if (!slots.some((s) => slotKey(s) === slotKey(w))) slots.push(w);
+  slots.sort((x, y) => (!!x.model - !!y.model) || (order[x.span] ?? 9) - (order[y.span] ?? 9) || String(x.model).localeCompare(y.model));
+  const cols = Math.max(slots.length, 1);
+  const working = group.filter((a) => !a.disabled && !a.auth_error);
+  let poolHtml = "";
+  if (pool && pool.windows.length) {
+    poolHtml = `<div class="pool">` + pool.windows.map((w) => {
+      const used = usedNow(w);
+      const segs = working.map((a) => {
+        const own = (a.state.limits?.windows || []).find((x) => slotKey(x) === slotKey(w));
+        const u = own ? usedNow(own) : 0;
+        return `<div data-tip="${esc(a.name)}|${Math.round(u)}% used"><i class="${u >= 90 ? "fill-bad" : u >= 70 ? "fill-warn" : ""}" style="width:${Math.min(100, u)}%"></i></div>`;
+      }).join("");
+      return `<div class="pw"><div class="lbl"><span>${windowTitle(w)}</span><span>${working.length} account${working.length > 1 ? "s" : ""}</span></div>
+        <div class="big">${Math.round(used)}%<small>used</small></div><div class="segs">${segs}</div>
+        <div class="sub">${resetText(w)}</div></div>`;
+    }).join("") + `</div>`;
+  }
+  const head = `<div class="row th"><div>Account</div>${slots.map((s) => `<div>${windowTitle(s)}</div>`).join("") || "<div>Usage</div>"}<div></div></div>`;
+  const rows = group.map((a) => accountRow(a, slots)).join("");
+  const all = group.flatMap((a) => credits(a).map((c) => ({ a, c })))
+    .sort((x, y) => (ts(x.c.expires_at) || Infinity) - (ts(y.c.expires_at) || Infinity));
+  let resetsHtml = "";
+  if (all.length) {
+    const auto = settings?.redeem_expiring_credits !== false;
+    resetsHtml = `<div class="resets"><div class="rh"><b>Limit resets</b><span>Each one resets an account's windows on the spot.${auto ? " slopmax redeems one by itself in its last three hours if the account has usage to reset." : ""}</span></div>` +
+      all.map(({ a, c }) => {
+        const exp = ts(c.expires_at), soon = exp && exp - Date.now() < 3 * 86400e3;
+        return `<div class="credit"><div class="acct"><span class="pdot p-${p}"></span><span>${esc(a.name)}</span></div>
+          <div class="title">${esc(c.title || "Limit reset")}${c.granted_at ? ` <span class="faint">· granted ${clock(ts(c.granted_at))}</span>` : ""}</div>
+          <div class="exp ${soon ? "warn" : ""}">${exp ? `Expires in <span data-until="${exp}">${until(exp)}</span><span class="faint">${dateTime(exp)}</span>` : `<span class="muted">Expiry not listed yet</span>`}</div>
+          <button class="btn sm" data-redeem="${esc(a.id)}" data-credit="${esc(c.id || "")}">Redeem…</button></div>`;
+      }).join("") + `</div>`;
+  }
+  const pinned = group.find((a) => a.pinned);
+  return `<div class="card prov">
+    <div class="phead"><span class="pdot p-${p}"></span><h3>${TITLES[p]}</h3><span class="meta">${ready} of ${group.length} ready</span>
+      <span class="grow"></span><span class="meta">${pinned ? `New sessions go to ${esc(pinned.name)}` : pool ? "Pool · what the agents see" : ""}</span></div>
+    ${poolHtml}<div class="rows" style="--cols:${cols}">${head}${rows}</div>${resetsHtml}</div>`;
+}
+
+function accountRow(a, slots) {
+  const c = condition(a), st = a.state;
+  const windows = st.limits?.windows || [];
+  const cells = slots.map((s) => {
+    const w = windows.find((x) => slotKey(x) === slotKey(s));
+    if (!w) return `<div class="win none"><span class="lbl2">${windowTitle(s)}</span>—</div>`;
+    const used = usedNow(w), pc = pace(w, used), t = tone(used);
+    return `<div class="win"><span class="lbl2">${windowTitle(w)}</span><div class="wt"><b class="${t}">${Math.round(used)}%</b>${pc ? `<span class="pace ${pc.tone}">${pc.text}</span>` : ""}</div>
+      <div class="meter"><i class="${t ? "fill-" + t : ""}" style="width:${Math.min(100, used)}%"></i>${pc ? `<u style="left:${(pc.elapsed * 100).toFixed(1)}%" data-tip="Even pace|${Math.round(pc.elapsed * 100)}% of the window has passed"></u>` : ""}</div>
+      <div class="sub">${resetText(w)}</div></div>`;
+  }).join("") || `<div class="win none">${st.limits?.observed_at ? "No windows reported" : "Not read yet"}</div>`;
+  const meta = [];
+  if (a.plan) meta.push(esc(a.plan));
+  if (st.last_used) meta.push(`used ${ago(ts(st.last_used))}`);
+  if (a.priority) meta.push(`priority ${a.priority}`);
+  if (a.follows) meta.push(`follows ${esc(a.follows)}`);
+  const n = credits(a).length;
+  if (n) meta.push(`${n} limit reset${n > 1 ? "s" : ""}`);
+  const signin = a.auth_error ? `<div class="meta">${esc(a.auth_error)} · run <code>slopmax login ${a.provider}</code></div>` : "";
+  const err = !a.auth_error && !c.limited && st.last_error ? `<div class="meta warn" title="${esc(st.last_error)}">Last error: ${esc(st.last_error.slice(0, 80))}</div>` : "";
+  return `<div class="row ${a.disabled ? "off" : ""}">
+    <div class="who"><div class="name"><span title="${esc(a.email || a.name)}">${esc(a.name)}</span>${a.pinned ? `<span class="chip">Pinned</span>` : ""}</div>
+      <div class="state"><span class="dot ${c.tone}"></span><span title="${esc(c.detail || "")}">${c.text}</span></div>
+      ${meta.length ? `<div class="meta">${meta.join(" · ")}</div>` : ""}${signin}${err}</div>
+    ${cells}<button class="btn ghost icon kebab" data-menu="${esc(a.id)}" title="Account actions" aria-label="Account actions">${DOTS}</button></div>`;
+}
+
+function keysCard(keys) {
+  return `<div class="card prov"><div class="phead"><span class="pdot p-compat"></span><h3>API keys</h3><span class="meta">Billed per token; used for models no subscription serves${settings?.paid_overflow ? ", and when every subscription is limited" : ""}</span></div>
+    <div class="rows" style="--cols:2"><div class="row th"><div>Key</div><div>Endpoint</div><div>Models</div><div></div></div>` +
+    keys.map((a) => {
+      const c = condition(a);
+      return `<div class="row ${a.disabled ? "off" : ""}"><div class="who"><div class="name"><span class="pdot p-${a.provider}"></span><span>${esc(a.name)}</span></div>
+        <div class="state"><span class="dot ${c.tone}"></span>${c.text}<span class="muted">· ${TITLES[a.provider] || a.provider}${a.priority ? ` · priority ${a.priority}` : ""}</span></div></div>
+        <div class="win"><span class="lbl2">Endpoint</span><span class="mono muted">${esc(a.endpoint || "—")}</span></div>
+        <div class="win"><span class="lbl2">Models</span><span class="muted">${esc(a.models.slice(0, 4).join(", ") || "—")}${a.models.length > 4 ? ` +${a.models.length - 4}` : ""}</span></div>
+        <button class="btn ghost icon kebab" data-menu="${esc(a.id)}" aria-label="Account actions">${DOTS}</button></div>`;
+    }).join("") + `</div></div>`;
+}
+const DOTS = `<svg viewBox="0 0 16 16" fill="currentColor"><circle cx="3.5" cy="8" r="1.3"/><circle cx="8" cy="8" r="1.3"/><circle cx="12.5" cy="8" r="1.3"/></svg>`;
+
+// ---------- Account actions ----------
+const account = (id) => report.accounts.find((a) => a.id === id);
+function openMenu(btn) {
+  closeMenu();
+  const a = account(btn.dataset.menu);
+  if (!a) return;
+  const n = SUBSCRIPTIONS.includes(a.provider) ? credits(a).length : 0;
+  const m = document.createElement("div");
+  m.className = "menu"; m.id = "menu";
+  m.innerHTML = [
+    a.pinned ? `<button data-do="unpin">Stop pinning<span class="hint">back to ${STRATEGY_NAMES[report.strategy] || report.strategy}</span></button>`
+      : `<button data-do="use" ${a.disabled || a.auth_error ? "disabled" : ""}>Use for new sessions</button>`,
+    n ? `<button data-do="redeem">Redeem a limit reset…<span class="hint">${n} left</span></button>` : "",
+    `<button data-do="priority">Set priority…<span class="hint">${a.priority}</span></button>`,
+    `<button data-do="label">Rename…</button>`,
+    `<button data-do="${a.disabled ? "enable" : "disable"}">${a.disabled ? "Enable" : "Disable"}</button>`,
+    `<hr><button data-do="remove" class="danger">Remove…</button>`,
+  ].join("");
+  m.dataset.id = a.id;
+  document.body.append(m);
+  const r = btn.getBoundingClientRect();
+  const left = Math.min(r.right - m.offsetWidth, innerWidth - m.offsetWidth - 8);
+  const top = r.bottom + 4 + m.offsetHeight > innerHeight ? r.top - m.offsetHeight - 4 : r.bottom + 4;
+  m.style.left = Math.max(8, left) + "px"; m.style.top = top + "px";
+}
+function closeMenu() { $("#menu")?.remove(); }
+
+async function act(id, action, value) {
+  const q = value != null ? `?value=${encodeURIComponent(value)}` : "";
+  const data = await api("POST", `accounts/${encodeURIComponent(id)}/${action}${q}`);
+  setReport(data.report || data);
+  return data;
+}
+
+async function menuAction(id, what) {
+  closeMenu();
+  const a = account(id);
+  try {
+    if (what === "use") { await act(id, "use"); toast(`New ${TITLES[a.provider]} sessions go to ${a.name}.`); }
+    else if (what === "unpin") { setReport(await api("POST", "use/auto")); toast(`slopmax chooses accounts again.`); }
+    else if (what === "enable" || what === "disable") { await act(id, what); toast(`${a.name} ${what}d.`); }
+    else if (what === "redeem") await redeem(id, "");
+    else if (what === "priority") {
+      const v = await ask({ title: "Set priority", body: `Higher tiers are used first; within a tier the strategy decides. ${esc(a.name)} is at ${a.priority}.`, input: String(a.priority), confirm: "Save", type: "number" });
+      if (v != null && v.trim() !== "") { await act(id, "priority", v.trim()); toast(`${a.name} is at priority ${v.trim()}.`); }
+    } else if (what === "label") {
+      const v = await ask({ title: "Rename account", body: "A name for this account here and in the CLI. Leave it empty to show its email again.", input: a.name === a.email ? "" : a.name, confirm: "Save", placeholder: a.email || "" });
+      if (v != null) { await act(id, "label", v); toast("Renamed."); }
+    } else if (what === "remove") {
+      const ok = await ask({ title: `Remove ${esc(a.name)}?`, body: "slopmax forgets this account and its tokens. Its sessions move to other accounts. You can sign in again later.", confirm: "Remove", danger: true });
+      if (ok != null) { await act(id, "remove"); toast(`${a.name} removed.`); }
+    }
+  } catch (e) { toast(e.message, true); }
+}
+
+const OUTCOMES = {
+  reset: (a) => `Redeemed. ${a.name}'s windows are reset.`,
+  nothing_to_reset: () => "Nothing was used, so the limit reset was kept.",
+  no_credit: () => "This account has no limit reset left.",
+  already_redeemed: () => "That limit reset was already redeemed.",
+  declined: (a) => `${TITLES[a.provider]} would not spend it now; the limit reset was kept.`,
+};
+async function redeem(id, credit) {
+  const a = account(id);
+  const c = credits(a).find((x) => x.id === credit) || credits(a)[0] || {};
+  const wins = (a.state.limits?.windows || []).map((w) => `<div><span>${windowTitle(w)}</span><b>${Math.round(usedNow(w))}% used</b></div>`).join("");
+  const exp = ts(c.expires_at);
+  const ok = await ask({
+    title: "Redeem a limit reset?",
+    body: `This spends ${c.title ? `“${esc(c.title)}”` : "one limit reset"} on <b>${esc(a.name)}</b> and resets its windows now.${exp ? ` It would expire ${dateTime(exp)}.` : ""}`,
+    facts: wins, confirm: "Redeem",
+  });
+  if (ok == null) return;
+  try {
+    const data = await act(id, "redeem", credit || null);
+    toast((OUTCOMES[data.outcome] || (() => `Redeem: ${data.outcome}`))(a), data.outcome !== "reset" && data.outcome !== "nothing_to_reset");
+  } catch (e) { toast(e.message, true); }
+}
+
+// A small modal: confirm, or ask for one value. Resolves null when cancelled.
+function ask({ title, body = "", facts = "", input, confirm = "OK", danger = false, type = "text", placeholder = "" }) {
+  return new Promise((resolve) => {
+    const s = document.createElement("div");
+    s.className = "scrim";
+    s.innerHTML = `<form class="dialog" role="dialog" aria-modal="true"><h4>${title}</h4><p>${body}</p>
+      ${facts ? `<div class="facts">${facts}</div>` : ""}
+      ${input != null ? `<input class="field" type="${type}" value="${esc(input)}" placeholder="${esc(placeholder)}" autocomplete="off">` : ""}
+      <div class="acts"><button type="button" class="btn" data-x>Cancel</button><button class="btn ${danger ? "danger" : "primary"}">${confirm}</button></div></form>`;
+    const done = (v) => { s.remove(); document.removeEventListener("keydown", onKey); resolve(v); };
+    const onKey = (e) => e.key === "Escape" && done(null);
+    s.addEventListener("click", (e) => (e.target === s || e.target.matches("[data-x]")) && done(null));
+    $("form", s).addEventListener("submit", (e) => { e.preventDefault(); done(input != null ? $("input", s).value : ""); });
+    document.addEventListener("keydown", onKey);
+    document.body.append(s);
+    ($("input", s) || $(".btn.primary, .btn.danger", s)).focus();
+  });
+}
+
+function toast(text, err = false) {
+  const t = document.createElement("div");
+  t.className = "toast" + (err ? " err" : "");
+  t.textContent = text;
+  $("#toasts").append(t);
+  setTimeout(() => t.remove(), 4500);
+}
+
+// ---------- Tooltip ----------
+const tip = $("#tip");
+function showTip(e, html) {
+  tip.innerHTML = html; tip.classList.add("on");
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = e.clientX + 14, y = e.clientY + 14;
+  if (x + w > innerWidth - 8) x = e.clientX - w - 14;
+  if (y + h > innerHeight - 8) y = e.clientY - h - 14;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+const hideTip = () => tip.classList.remove("on");
+const tipRow = (sw, name, val, cls = "") => `<div class="tr ${cls}">${sw ? `<span class="sw" style="background:${sw}"></span>` : ""}${name}<b>${val}</b></div>`;
+document.addEventListener("mouseover", (e) => {
+  const el = e.target.closest("[data-tip]");
+  if (!el) return;
+  const [t, d] = el.dataset.tip.split("|");
+  const move = (ev) => showTip(ev, `<div class="tt">${esc(t)}</div><div class="muted">${esc(d || "")}</div>`);
+  move(e);
+  el.addEventListener("mousemove", move);
+  el.addEventListener("mouseleave", () => { hideTip(); el.removeEventListener("mousemove", move); }, { once: true });
+});
+
+// ---------- Charts ----------
+function niceStep(max, ticks = 4) {
+  if (max <= 0) return 1;
+  const raw = max / ticks, mag = 10 ** Math.floor(Math.log10(raw));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * mag >= raw) return m * mag;
+  return 10 * mag;
+}
+// Stacked columns, one per bucket. series: [{name, color, values}].
+function columns(host, { labels, series, fmt, axis = fmt, height = 220, title = (i) => labels[i], extra }) {
+  const W = Math.max(280, host.clientWidth), H = height, L = 48, R = 4, T = 8, B = 24;
+  const n = labels.length, iw = W - L - R, ih = H - T - B, band = iw / n;
+  const bw = Math.max(2, Math.min(28, band * 0.6));
+  const sums = labels.map((_, i) => series.reduce((s, se) => s + (se.values[i] || 0), 0));
+  const step = niceStep(Math.max(...sums, 0)), top = step * Math.max(1, Math.ceil(Math.max(...sums, 0) / step));
+  const y = (v) => T + ih - (v / top) * ih;
+  let svg = `<g class="grid">`;
+  for (let v = 0; v <= top + 1e-9; v += step) svg += `<line x1="${L}" x2="${W - R}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}"/><text x="${L - 10}" y="${y(v) + 3.5}" text-anchor="end">${axis(v)}</text>`;
+  svg += `</g>`;
+  const every = Math.max(1, Math.ceil(n / Math.floor(iw / 58)));
+  for (let i = 0; i < n; i++) {
+    const cx = L + band * i + band / 2, x = cx - bw / 2;
+    svg += `<rect class="band" data-i="${i}" x="${L + band * i}" y="${T}" width="${band}" height="${ih}"/>`;
+    let base = T + ih;
+    series.forEach((se, k) => {
+      const v = se.values[i] || 0;
+      if (v <= 0) return;
+      let h = (v / top) * ih;
+      const last = !series.slice(k + 1).some((s) => (s.values[i] || 0) > 0);
+      const gap = base < T + ih ? 2 : 0;
+      h = Math.max(1, h - gap);
+      const yy = base - gap - h, r = last ? Math.min(3, h, bw / 2) : 0;
+      svg += r ? `<path fill="${se.color}" d="M${x},${base - gap}V${yy + r}Q${x},${yy} ${x + r},${yy}H${x + bw - r}Q${x + bw},${yy} ${x + bw},${yy + r}V${base - gap}Z"/>`
+        : `<rect fill="${se.color}" x="${x}" y="${yy}" width="${bw}" height="${h}"/>`;
+      base = yy;
+    });
+    if (i % every === 0) svg += `<text x="${cx}" y="${H - 6}" text-anchor="middle">${esc(labels[i])}</text>`;
+  }
+  svg += `<line class="base" x1="${L}" x2="${W - R}" y1="${T + ih + .5}" y2="${T + ih + .5}"/>`;
+  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" height="${H}">${svg}<rect x="${L}" y="${T}" width="${iw}" height="${ih}" fill="transparent" class="hit"/></svg>`;
+  const s = $("svg", host);
+  let on = -1;
+  s.onmousemove = (e) => {
+    const p = s.getBoundingClientRect(), i = Math.floor((e.clientX - p.left - L) / band);
+    if (i < 0 || i >= n) { s.onmouseleave(); return; }
+    if (i !== on) { $$(".band", s).forEach((b) => b.classList.toggle("on", +b.dataset.i === i)); on = i; }
+    const rows = series.length > 1
+      ? series.map((se) => tipRow(se.color, se.name, fmt(se.values[i] || 0))).join("") + tipRow("", "Total", fmt(sums[i]), "sum")
+      : tipRow(series[0].color, series[0].name, fmt(sums[i]));
+    showTip(e, `<div class="tt">${esc(title(i))}</div>${rows}${extra ? extra(i) : ""}`);
+  };
+  s.onmouseleave = () => { on = -1; $$(".band", s).forEach((b) => b.classList.remove("on")); hideTip(); };
+}
+
+function heatmap(host, grid) {
+  const W = Math.max(300, host.clientWidth), L = 34, T = 4, B = 20, cols = 24, rows = 7, gap = 3;
+  const cw = (W - L - (cols - 1) * gap) / cols, ch = Math.min(22, cw), H = T + rows * (ch + gap) + B;
+  const max = Math.max(1, ...grid.flat());
+  const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  let svg = "";
+  grid.forEach((row, d) => {
+    const yy = T + d * (ch + gap);
+    svg += `<text x="0" y="${yy + ch / 2 + 4}">${days[d]}</text>`;
+    row.forEach((v, h) => {
+      const op = v ? 0.12 + 0.82 * Math.sqrt(v / max) : 0;
+      svg += `<rect x="${L + h * (cw + gap)}" y="${yy}" width="${cw}" height="${ch}" rx="3" fill="${v ? "var(--ink)" : "var(--track)"}" ${v ? `fill-opacity="${op.toFixed(2)}"` : ""} data-tip="${days[d]} ${String(h).padStart(2, "0")}:00|${int(v)} request${v === 1 ? "" : "s"}"/>`;
+    });
+  });
+  for (const h of [0, 6, 12, 18]) svg += `<text x="${L + h * (cw + gap)}" y="${H - 5}">${String(h).padStart(2, "0")}:00</text>`;
+  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" height="${H}">${svg}</svg>`;
+}
+
+// ---------- Analytics ----------
+const COLOR = (p) => `var(--${["claude", "anthropic"].includes(p) ? "claude" : ["codex", "openai"].includes(p) ? "codex" : "key"})`;
+const plus = (t) => (t.unpriced ? "+" : "");
+
+function renderHistory() {
+  const h = hist, root = $("#analytics");
+  if (!h) return;
+  const t = h.total, tokens = tokensOf(t);
+  const failedShare = t.requests + (t.failed || 0) ? (t.failed || 0) / (t.requests + (t.failed || 0)) : 0;
+  const kpi = (k, v, d) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div><div class="d">${d}</div></div>`;
+  const span = { today: "today", "7d": "over 7 days", "30d": "over 30 days" }[range];
+  let html = `<div class="card kpis">
+    ${kpi("Tokens", compact(tokens), t.requests ? `${compact(t.input + t.output)} fresh · ${compact(t.cache_read)} from cache` : "None yet")}
+    ${kpi("API value", money(t.cost) + plus(t), h.monthly != null ? `${money(h.monthly)} a month at this pace` : t.unpriced ? `${int(t.unpriced)} requests unpriced` : "What the API would charge")}
+    ${kpi("Requests", int(t.requests), `${int(h.sessions)} conversation${h.sessions === 1 ? "" : "s"}${t.failed ? ` · ${int(t.failed)} failed` : ""}`)}
+    ${kpi("Saved by failover", int(h.rescued), "answered by another account")}
+    ${kpi("Cache hit", pct(h.cached), h.cache_saved ? `saved ${money(h.cache_saved, 0)} at API prices` : "Share of input read from cache")}
+  </div>`;
+  if (!t.requests && !t.failed) {
+    root.innerHTML = html + `<div class="card empty" style="margin-top:16px"><b>No requests ${span}</b>Point an agent at <span class="mono">${esc(location.origin)}</span> with <code>slopmax setup claude</code> or <code>slopmax setup codex</code>, and its usage shows up here.</div>`;
     return;
   }
-  let html = "", index = 0;
-  for (const provider of ORDER) {
-    const accounts = report.accounts.filter((a) => a.provider === provider);
-    if (!accounts.length) continue;
-    const subscription = SUBSCRIPTIONS.includes(provider);
-    html += `<tr class="group"><td colspan="2">${provider}</td>` +
-      (subscription ? `<td>5 hours</td><td>Week</td>` : `<td colspan="2">Models</td>`) + `<td>Status</td><td></td></tr>`;
-    for (const a of accounts) {
-      index++;
-      const shared = (a.state.limits?.windows || []).filter((w) => !w.model);
-      const span = (name) => shared.find((w) => w.span === name);
-      const [tone, text] = status(a, now);
-      const tags = [];
-      if (a.pinned) tags.push(`<span class="tag pin">pinned</span>`);
-      if (a.priority) tags.push(`<span class="tag">priority ${a.priority}</span>`);
-      if (a.follows) tags.push(`<span class="tag">follows ${esc(a.follows)}</span>`);
-      // As listed, once they are; until then, as the usage counts them.
-      const resets = a.state.credits
-        ? a.state.credits.credits.filter((c) => !c.expires_at || time(c.expires_at) > now).length
-        : a.state.limits?.reset_credits || 0;
-      if (resets) tags.push(`<span class="tag">${resets} limit reset${resets === 1 ? "" : "s"}</span>`);
-      if (a.state.usage?.requests) tags.push(`<span class="tag">${a.state.usage.requests} req · ${compact(a.state.usage.input_tokens + a.state.usage.output_tokens + a.state.usage.cache_read_tokens + a.state.usage.cache_write_tokens)} tok</span>`);
-      for (const w of (a.state.limits?.windows || []).filter((w) => w.model)) {
-        tags.push(`<span class="tag">${esc(w.span)} ${esc(w.model)} ${Math.round(usedAt(w, now))}%</span>`);
-      }
-      const middle = subscription
-        ? windowCell(span("5h"), now) + windowCell(span("7d") || span("30d"), now)
-        : `<td colspan="2" class="sub">${esc((a.models || []).join(", ") || "—")}</td>`;
-      html += `<tr>
-        <td class="sub num">${index}</td>
-        <td><div class="name">${esc(a.name)}</div><div class="sub">${esc(a.plan || (subscription ? "" : "per token"))}</div>${tags.length ? `<div class="tags">${tags.join("")}</div>` : ""}</td>
-        ${middle}
-        <td><span class="chip ${tone}" title="${esc(a.auth_error || a.state.last_error || "")}">${esc(text)}</span></td>
-        <td><div class="actions">
-          <button data-act="use" data-id="${a.id}" title="Prefer this account for new sessions">Use</button>
-          <button data-act="${a.disabled ? "enable" : "disable"}" data-id="${a.id}">${a.disabled ? "Enable" : "Disable"}</button>
-          <button data-act="priority" data-id="${a.id}" data-value="${a.priority + 1}" title="Raise priority">▲</button>
-          <button data-act="priority" data-id="${a.id}" data-value="${a.priority - 1}" title="Lower priority">▼</button>
-          ${resets ? `<button data-act="redeem" data-id="${a.id}" title="Redeem a limit reset now">Redeem</button>` : ""}
-        </div></td></tr>`;
-    }
-    // The provider's working accounts read as one, as the agents see them.
-    const pool = (report.pools || []).find((p) => p.provider === provider);
-    if (pool && pool.accounts > 1) {
-      const win = (span) => pool.windows.find((w) => w.span === span);
-      html += `<tr class="pool">
-        <td></td>
-        <td><div class="name">pool</div><div class="sub">${pool.accounts} accounts as one</div></td>
-        ${windowCell(win("5h"), now)}${windowCell(win("7d") || win("30d"), now)}
-        <td><span class="sub">what the agents see</span></td><td></td></tr>`;
-    }
-  }
-  $("accounts").innerHTML = html;
+  const legend = h.providers.map((p) => `<span><i class="sw" style="background:${COLOR(p)}"></i>${TITLES[p] || p}</span>`).join("");
+  html += `<div class="card"><div class="ch"><h3>Tokens</h3><span class="note">${range === "today" ? "by hour" : "by day"}, every kind counted</span><div class="end"><div class="legend">${legend}</div></div></div><div class="cb"><div class="chart" id="c-tokens"></div></div></div>
+  <div class="grid g2">
+    <div class="card"><div class="ch"><h3>API value</h3><span class="note">${money(t.cost)}${plus(t)} ${span}</span></div><div class="cb"><div class="chart" id="c-cost"></div></div></div>
+    <div class="card"><div class="ch"><h3>Requests</h3><span class="note">${(failedShare * 100).toFixed(1)}% failed · ${int(h.rescued)} saved by failover</span><div class="end"><div class="legend"><span><i class="sw" style="background:var(--meter)"></i>Answered</span><span><i class="sw" style="background:var(--bad)"></i>Failed</span></div></div></div><div class="cb"><div class="chart" id="c-req"></div></div></div>
+  </div>`;
+  // By account
+  const maxTok = Math.max(1, ...h.accounts.map((a) => tokensOf(a.totals)));
+  const sumTok = h.accounts.reduce((s, a) => s + tokensOf(a.totals), 0) || 1;
+  const share = (v, all, max) => `<div class="share"><div class="bar"><i style="width:${(v / max * 100).toFixed(1)}%"></i></div><span>${Math.round(v / all * 100)}%</span></div>`;
+  html += `<div class="card"><div class="ch"><h3>By account</h3><span class="note">Who served what</span></div><div class="tbl"><table>
+    <thead><tr><th>Account</th><th class="n">Requests</th><th class="n">Failed</th><th class="n x">Input</th><th class="n x">Cache read</th><th class="n x">Output</th><th class="n">Tokens</th><th class="n">API value</th><th class="n">Share of tokens</th></tr></thead><tbody>` +
+    h.accounts.map((a) => { const x = a.totals, tk = tokensOf(x);
+      return `<tr><td><div class="nm"><span class="pdot p-${a.provider}"></span><span>${esc(a.name || "No account could take it")}</span></div></td><td class="n">${int(x.requests)}</td><td class="n ${x.failed ? "" : "faint"}">${int(x.failed || 0)}</td>
+      <td class="n x">${compact(x.input)}</td><td class="n x">${compact(x.cache_read)}</td><td class="n x">${compact(x.output)}</td><td class="n"><b style="font-weight:550">${compact(tk)}</b></td><td class="n">${money(x.cost)}${plus(x)}</td><td class="n">${share(tk, sumTok, maxTok)}</td></tr>`; }).join("") +
+    `</tbody></table></div></div>`;
+  // Models and token mix
+  const speed = Object.fromEntries(h.speeds.map((s) => [s.model, s.tokens_per_second]));
+  const mmax = Math.max(1, ...h.models.map((m) => tokensOf(m.totals)));
+  const msum = h.models.reduce((s, m) => s + tokensOf(m.totals), 0) || 1;
+  const mix = [["Input", t.input, "var(--mix1)"], ["Cache write", t.cache_write, "var(--mix2)"], ["Cache read", t.cache_read, "var(--mix3)"], ["Output", t.output, "var(--mix4)"]];
+  html += `<div class="grid g21">
+    <div class="card"><div class="ch"><h3>Models</h3><span class="note">Most tokens first</span></div><div class="tbl"><table>
+      <thead><tr><th>Model</th><th class="n">Requests</th><th class="n">Tokens</th><th class="n">Output speed</th><th class="n">API value</th><th class="n">Share</th></tr></thead><tbody>` +
+      h.models.map((m) => { const x = m.totals, tk = tokensOf(x);
+        return `<tr><td><div class="nm"><span class="pdot p-${m.provider}"></span><span class="mono">${esc(m.name)}</span></div></td><td class="n">${int(x.requests)}</td><td class="n">${compact(tk)}</td><td class="n">${speed[m.name] ? Math.round(speed[m.name]) + " tok/s" : "<span class='faint'>—</span>"}</td><td class="n">${x.unpriced && !x.cost ? "<span class='faint'>unpriced</span>" : money(x.cost) + plus(x)}</td><td class="n">${share(tk, msum, mmax)}</td></tr>`; }).join("") +
+      `</tbody></table></div></div>
+    <div class="card"><div class="ch"><h3>Token mix</h3><span class="note">${compact(tokens)} tokens</span></div><div class="cb">
+      <div class="mixbar">${mix.map(([n, v, c]) => (v ? `<i style="flex:${v};background:${c}" data-tip="${n}|${int(v)} tokens · ${(v / tokens * 100).toFixed(1)}%"></i>` : "")).join("")}</div>
+      <div class="mixl">${mix.map(([n, v, c]) => `<div><span class="sw" style="background:${c}"></span>${n}<b>${compact(v)}</b><em>${tokens ? Math.round(v / tokens * 100) : 0}%</em></div>`).join("")}</div>
+      <div class="pairs"><div><div class="k">Context per request</div><div class="v">${compact((t.input + t.cache_read + t.cache_write) / Math.max(1, t.requests))}</div></div>
+        <div><div class="k">Output per request</div><div class="v">${compact(t.output / Math.max(1, t.requests))}</div></div>
+        <div><div class="k">Cache saved</div><div class="v">${money(h.cache_saved)}</div></div>
+        <div><div class="k">First byte, median</div><div class="v">${secs(h.first_byte)}</div></div></div>
+    </div></div></div>`;
+  // Activity and agents
+  const amax = Math.max(1, ...h.agents.map((a) => tokensOf(a.totals)));
+  const agents = h.agents.map((a) => `<div class="li"><span>${esc(a.name)} <span class="faint">· ${int(a.totals.requests)} req</span></span><div class="bar"><i style="width:${(tokensOf(a.totals) / amax * 100).toFixed(1)}%"></i></div><b>${compact(tokensOf(a.totals))}</b></div>`).join("") || `<div class="muted">None yet</div>`;
+  const smax = Math.max(1, ...h.speeds.map((s) => s.tokens_per_second));
+  const speeds = h.speeds.map((s) => `<div class="li"><span class="mono">${esc(s.model)}</span><div class="bar"><i style="width:${(s.tokens_per_second / smax * 100).toFixed(1)}%"></i></div><b>${Math.round(s.tokens_per_second)} tok/s</b></div>`).join("");
+  html += range === "today"
+    // A day says little about the week's rhythm: agents and speeds side by side.
+    ? `<div class="grid g2"><div class="card"><div class="ch"><h3>Agents</h3><span class="note">Tokens by the agent that sent them</span></div><div class="cb list">${agents}</div></div>
+       <div class="card"><div class="ch"><h3>Output speed</h3><span class="note">Median, once an answer begins</span></div><div class="cb list">${speeds || `<div class="muted">Not enough long answers yet</div>`}</div></div></div>`
+    : `<div class="grid g21">
+    <div class="card"><div class="ch"><h3>When you work</h3><span class="note">Answers by weekday and hour, warmups left out</span></div><div class="cb"><div class="chart" id="c-heat"></div></div></div>
+    <div class="card"><div class="ch"><h3>Agents</h3><span class="note">Tokens by the agent that sent them</span></div><div class="cb list">${agents}
+      ${speeds ? `<div class="sublabel">Output speed, median</div>${speeds}` : ""}</div></div></div>`;
+  root.innerHTML = html;
+  drawCharts();
 }
 
-function costLabel(t) {
-  if (!t.unpriced) return "$" + t.cost.toFixed(2);
-  if (t.unpriced === t.requests) return "—";
-  return "$" + t.cost.toFixed(2) + "+";
+function drawCharts() {
+  const h = hist;
+  if (!h || !$("#c-tokens")) return;
+  const labels = h.buckets.map((b) => b.label);
+  const title = (i) => (range === "today" ? `${labels[i]}–${String((i + 1) % 24).padStart(2, "0")}:00` : labels[i]);
+  columns($("#c-tokens"), { labels, title, height: 240, fmt: (v) => compact(v) + " tokens", axis: axisCompact,
+    series: h.providers.map((p, k) => ({ name: TITLES[p] || p, color: COLOR(p), values: h.buckets.map((b) => b.tokens[k] || 0) })),
+    extra: (i) => tipRow("", "Requests", int(h.buckets[i].requests)) + (h.buckets[i].cached != null ? tipRow("", "From cache", pct(h.buckets[i].cached)) : "") });
+  columns($("#c-cost"), { labels, title, fmt: (v) => money(v), axis: (v) => money(v, v < 10 && v % 1 ? 2 : 0),
+    series: [{ name: "API value", color: "var(--meter)", values: h.buckets.map((b) => b.cost) }] });
+  columns($("#c-req"), { labels, title, fmt: int, axis: int,
+    series: [{ name: "Answered", color: "var(--meter)", values: h.buckets.map((b) => b.requests) },
+      { name: "Failed", color: "var(--bad)", values: h.buckets.map((b) => b.failed) }],
+    extra: (i) => { const b = h.buckets[i]; return tipRow("", "Saved by failover", int(b.rescued)) + (b.first_byte ? tipRow("", "First byte, median", secs(b.first_byte[0])) : ""); } });
+  if ($("#c-heat")) heatmap($("#c-heat"), h.activity);
 }
 
-async function loadUsage() {
-  const range = $("range").value, by = $("by").value;
-  let summary;
-  try { summary = await api("GET", `/slopmax/usage?range=${range}&by=${by}`); }
-  catch (e) { $("usage").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
-  let rows = Object.entries(summary.rows);
-  if (!rows.length) { $("usage").innerHTML = `<div class="empty">No requests recorded for this period.</div>`; return; }
-  const priced = rows.some(([, t]) => t.cost > 0);
-  const measure = (t) => (priced ? t.cost : t.requests);
-  if (by !== "day") rows.sort((a, b) => measure(b[1]) - measure(a[1]));
-  const top = Math.max(...rows.map(([, t]) => measure(t)), 1e-9);
-  const values = (t) => `${t.requests} req · ${compact(t.input + t.cache_read + t.cache_write)} in · ${compact(t.output)} out · ${costLabel(t)}`;
-  $("usage").innerHTML = rows.map(([label, t]) => `<div class="row">
-      <span class="label" title="${esc(label)}">${esc(label)}</span>
-      <div class="track"><div class="fill" style="width:${(measure(t) / top) * 100}%;background:var(--accent)"></div></div>
-      <span class="vals">${values(t)}</span></div>`).join("") +
-    `<div class="row total"><span class="label">total</span><span></span><span class="vals">${values(summary.total)}</span></div>`;
+async function loadHistory() {
+  try { hist = await api("GET", `history?range=${range}`); renderHistory(); }
+  catch (e) { $("#analytics").innerHTML = `<div class="card empty"><b>Usage did not load</b>${esc(e.message)}</div>`; }
 }
 
-function logRow(e) {
-  const at = new Date(e.at);
-  const tone = e.status < 400 ? "ok" : e.status === 429 ? "warn" : "bad";
-  const seconds = (ms) => (ms == null ? "—" : (ms / 1000).toFixed(1) + "s");
-  return `<tr><td class="num">${at.toLocaleTimeString()}</td><td>${esc(names[e.account] || e.account)}</td>
-    <td>${esc(e.model || "—")}</td><td><span class="${tone}">${e.status}</span>${e.attempts > 1 ? ` <span class="sub">(${e.attempts} tries)</span>` : ""}</td>
-    <td class="num">${compact(e.input || 0)}</td><td class="num">${compact(e.cache_read || 0)}</td><td class="num">${compact(e.output || 0)}</td>
-    <td class="num">${seconds(e.first_byte_ms)}</td><td class="num">${seconds(e.ms)}</td></tr>`;
+// ---------- Settings ----------
+const TOGGLES = [
+  ["Sessions", [
+    ["session_affinity", "Session affinity", "Keeps a session on the account that started it, so the provider's prompt cache stays warm. Off, the strategy places every request. One request can say otherwise with the <code>x-slopmax-affinity: on|off</code> header."],
+  ]],
+  ["Limit resets", [
+    ["redeem_expiring_credits", "Redeem resets before they expire", "In a reset's last three hours, redeem it if the account has usage to reset, rather than let it lapse."],
+    ["redeem_when_exhausted", "Redeem when every account is spent", "Instead of failing the request, redeem a banked reset and retry on that account."],
+  ]],
+  ["Capacity", [
+    ["warm_windows", "Warm ChatGPT windows", "Send an idle ChatGPT account one tiny request as soon as its window resets, so its next reset comes sooner. Claude accounts are never warmed."],
+    ["paid_overflow", "Overflow to API keys", "Let API keys serve a subscription's models once every subscription account is limited."],
+  ]],
+];
+function renderSettings() {
+  const s = settings;
+  if (!s) return;
+  const strat = `<div class="card"><div class="ch"><h3>Strategy</h3><span class="note">Where a new session goes, within the highest priority tier</span></div><div class="cb"><div class="opts">` +
+    s.strategies.map((x) => `<button class="opt ${x.id === s.strategy ? "on" : ""}" data-strategy="${x.id}" role="radio" aria-checked="${x.id === s.strategy}"><span class="radio"></span><div><b>${STRATEGY_NAMES[x.id] || x.id}${x.id === "reset-first" ? `<span class="def">default</span>` : ""}</b><span>${esc(x.summary)}</span></div></button>`).join("") +
+    `</div><p class="muted" style="font-size:12.5px;margin:12px 0 0">A pinned account takes new sessions first while it can serve. When a provider refuses a request, slopmax sets the account aside and retries on the next one.</p></div></div>`;
+  const toggles = `<div class="card"><div class="cb" style="padding-top:16px">` + TOGGLES.map(([group, items]) =>
+    `<div class="group-t">${group}</div>` + items.map(([k, t, d]) => `<div class="set"><div><div class="t">${t}</div><div class="d">${d}</div>
+      ${k === "session_affinity" ? `<label class="ttl">Forget a session after <input class="field" type="number" min="1" id="ttl" value="${s.session_ttl_mins}"> idle minutes</label>` : ""}</div>
+      <button class="switch" role="switch" aria-checked="${!!s[k]}" data-set="${k}" aria-label="${t}"></button></div>`).join("")).join("") + `</div></div>`;
+  $("#settings").innerHTML = strat + toggles;
+}
+async function changeSetting(form, done) {
+  try { settings = await api("POST", "settings", form); renderSettings(); if (report) report.strategy = settings.strategy; toast(done); }
+  catch (e) { toast(e.message, true); renderSettings(); }
 }
 
+// ---------- Live feed ----------
+let feedCount = 0;
+const AGENTS = { claude: "Claude Code", codex: "Codex", slopmax: "Warmup" };
+function feedRow(e) {
+  const ok = e.status >= 200 && e.status < 400;
+  const failover = (e.attempts || 1) > 1;
+  return `<tr class="new"><td class="faint" style="font-variant-numeric:tabular-nums">${hm(new Date(ts(e.at) || Date.now()))}:${String(new Date(ts(e.at) || Date.now()).getSeconds()).padStart(2, "0")}</td>
+    <td><div class="nm"><span class="pdot p-${esc(e.provider)}"></span><span>${esc(names[e.account] || e.account || "No account could take it")}</span></div></td>
+    <td class="mono">${esc(e.model || "—")}</td><td class="muted">${esc(AGENTS[e.agent] || e.agent || "—")}</td>
+    <td><span class="status"><span class="dot ${ok ? "good" : "bad"}"></span><span class="${ok ? "" : "bad"}">${e.status}</span>${failover ? `<span class="chip" title="${e.attempts} attempts">after failover</span>` : ""}</span></td>
+    ${[e.input, e.cache_read, e.cache_write, e.output].map((v) => `<td class="n ${v ? "" : "faint"}">${compact(v)}</td>`).join("")}
+    <td class="n">${secs(e.first_byte_ms)}</td><td class="n">${secs(e.ms)}</td></tr>`;
+}
+function addEvent(e) {
+  const body = $("#feed");
+  body.insertAdjacentHTML("afterbegin", feedRow(e));
+  while (body.children.length > 200) body.lastElementChild.remove();
+  feedCount++;
+  $("#feedempty").hidden = true;
+  $("#feedcount").textContent = `${int(feedCount)} since this page opened.`;
+  staleHistory();
+}
+let historyTimer = 0;
+function staleHistory() {
+  if (historyTimer) return;
+  historyTimer = setTimeout(() => { historyTimer = 0; loadHistory(); loadStatus(); }, 8000);
+}
+function setLive(state) {
+  const [cls, text] = { live: ["good", "Running"], down: ["bad", "Reconnecting"], wait: ["", "Connecting"] }[state];
+  $("#live").innerHTML = `<span class="dot ${cls}"></span><span>${text}</span>`;
+}
 async function follow() {
-  const log = $("log");
   let backoff = 1000;
   for (;;) {
     try {
       const res = await fetch("/slopmax/events", { headers: { authorization: "Bearer " + key } });
+      if (res.status === 401) return lock();
       if (!res.ok || !res.body) throw new Error(res.statusText);
-      $("live").className = "dot live"; $("livetext").textContent = "live";
+      setLive("live");
       backoff = 1000;
       const reader = res.body.getReader(), decoder = new TextDecoder();
       let buffer = "";
@@ -312,66 +998,106 @@ async function follow() {
         while ((cut = buffer.indexOf("\n\n")) >= 0) {
           const frame = buffer.slice(0, cut); buffer = buffer.slice(cut + 2);
           const data = frame.split("\n").filter((l) => l.startsWith("data: ")).map((l) => l.slice(6)).join("");
-          if (!data) continue;
-          if (log.querySelector(".empty")) log.innerHTML = "";
-          log.insertAdjacentHTML("afterbegin", logRow(JSON.parse(data)));
-          while (log.children.length > 200) log.lastElementChild.remove();
+          if (data) try { addEvent(JSON.parse(data)); } catch { /* not an entry */ }
         }
       }
-    } catch (e) { /* reconnect below */ }
-    $("live").className = "dot"; $("livetext").textContent = "reconnecting";
+    } catch { /* reconnect below */ }
+    setLive("down");
     await new Promise((r) => setTimeout(r, backoff));
     backoff = Math.min(backoff * 2, 15000);
   }
 }
 
-async function loadStatus() {
-  try {
-    report = await api("GET", "/slopmax/status");
-    names = Object.fromEntries(report.accounts.map((a) => [a.id, a.name]));
-    renderAccounts();
-  } catch (e) { toast(e.message); }
+// ---------- Loading ----------
+function setReport(r) {
+  report = r;
+  names = Object.fromEntries(r.accounts.map((a) => [a.id, a.name]));
+  polledAt = Date.now();
+  $("#ver").textContent = r.version;
+  $("#foot").innerHTML = `slopmax ${esc(r.version)} · ${r.live ? "serving" : "not serving"} on <span class="mono">${esc(location.origin)}</span> · strategy ${STRATEGY_NAMES[r.strategy] || r.strategy}`;
+  if (!$("#menu") && !$(".scrim")) renderAccounts();
+  tick();
+}
+async function loadStatus() { try { setReport(await api("GET", "status")); } catch (e) { toast(e.message, true); } }
+async function loadSettings() { try { settings = await api("GET", "settings"); renderSettings(); renderAccounts(); } catch (e) { toast(e.message, true); } }
+
+function tick() {
+  for (const el of $$("[data-until]")) el.textContent = until(+el.dataset.until);
+  if (polledAt) $("#updated").textContent = `Updated ${ago(polledAt)}`;
 }
 
-$("accounts").addEventListener("click", async (event) => {
-  const button = event.target.closest("button[data-act]");
-  if (!button) return;
-  const { act, id, value } = button.dataset;
-  if (act === "redeem" && !confirm("Redeem a limit reset now? It resets this account's usage windows.")) return;
-  button.disabled = true;
-  try {
-    const path = `/slopmax/accounts/${encodeURIComponent(id)}/${act}` + (act === "priority" ? `?value=${value}` : "");
-    const result = await api("POST", path);
-    report = result.report || result;
-    if (result.outcome) toast(`Redeem: ${result.outcome.replace(/_/g, " ")}`);
-    renderAccounts();
-  } catch (e) { toast(e.message); button.disabled = false; }
+function lock() {
+  sessionStorage.removeItem("slopmax-key");
+  $("#app").hidden = true; $("#gate").hidden = false;
+}
+
+// ---------- Events ----------
+document.addEventListener("click", async (e) => {
+  const t = e.target;
+  const menuBtn = t.closest("[data-menu]");
+  if (menuBtn) { e.stopPropagation(); $("#menu")?.dataset.id === menuBtn.dataset.menu ? closeMenu() : openMenu(menuBtn); return; }
+  const item = t.closest("#menu [data-do]");
+  if (item) return menuAction($("#menu").dataset.id, item.dataset.do);
+  if (!t.closest("#menu")) closeMenu();
+  const r = t.closest("[data-redeem]");
+  if (r) return redeem(r.dataset.redeem, r.dataset.credit);
+  const st = t.closest("[data-strategy]");
+  if (st && st.dataset.strategy !== settings.strategy) return changeSetting(`strategy=${st.dataset.strategy}`, `New sessions now go by ${STRATEGY_NAMES[st.dataset.strategy]?.toLowerCase() || st.dataset.strategy}.`);
+  const sw = t.closest("[data-set]");
+  if (sw) {
+    const k = sw.dataset.set, on = sw.getAttribute("aria-checked") !== "true";
+    sw.setAttribute("aria-checked", on);
+    const name = TOGGLES.flatMap((g) => g[1]).find((x) => x[0] === k)[1];
+    return changeSetting(`${k}=${on}`, `${name} ${on ? "on" : "off"}.`);
+  }
+  const rg = t.closest("#range [data-r]");
+  if (rg && rg.dataset.r !== range) {
+    range = rg.dataset.r;
+    $$("#range button").forEach((b) => b.classList.toggle("on", b === rg));
+    return loadHistory();
+  }
 });
-
-$("auto").onclick = async () => { try { report = await api("POST", "/slopmax/use/auto"); renderAccounts(); } catch (e) { toast(e.message); } };
-$("refresh").onclick = async () => {
-  const b = $("refresh"); b.disabled = true; b.textContent = "Refreshing…";
-  try { report = await api("POST", "/slopmax/refresh"); renderAccounts(); } catch (e) { toast(e.message); }
-  b.disabled = false; b.textContent = "Refresh usage";
+document.addEventListener("change", (e) => {
+  if (e.target.id === "ttl") {
+    const v = parseInt(e.target.value, 10);
+    if (v > 0) changeSetting(`session_ttl_mins=${v}`, `Idle sessions are forgotten after ${v} minutes.`);
+  }
+});
+document.addEventListener("keydown", (e) => e.key === "Escape" && closeMenu());
+addEventListener("scroll", closeMenu, { passive: true });
+$("#refresh").onclick = async () => {
+  const b = $("#refresh");
+  b.disabled = true; b.classList.add("busy");
+  try { setReport(await api("POST", "refresh")); toast("Usage and limit resets read again."); }
+  catch (e) { toast(e.message, true); }
+  b.disabled = false; b.classList.remove("busy");
 };
-$("range").onchange = loadUsage;
-$("by").onchange = loadUsage;
-$("enter").onclick = () => { key = $("key").value.trim(); sessionStorage.setItem("slopmax-key", key); start(); };
-$("key").onkeydown = (e) => { if (e.key === "Enter") $("enter").click(); };
+$("#copy").onclick = async () => {
+  try { await navigator.clipboard.writeText(location.origin); toast(`Copied ${location.origin}`); }
+  catch { toast(location.origin); }
+};
+$("#unpin").onclick = async () => { try { setReport(await api("POST", "use/auto")); toast("slopmax chooses accounts again."); } catch (e) { toast(e.message, true); } };
+$("#clearfeed").onclick = () => { $("#feed").innerHTML = ""; feedCount = 0; $("#feedempty").hidden = false; $("#feedcount").textContent = "Answered and failed requests as they happen."; };
+$("#gateform").onsubmit = (e) => {
+  e.preventDefault();
+  key = $("#keyin").value.trim();
+  if (!key) return;
+  sessionStorage.setItem("slopmax-key", key);
+  start();
+};
+let resizeTimer;
+addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(drawCharts, 120); });
 
-let started = false;
 function start() {
-  if (!key) { lock(); return; }
-  $("gate").hidden = true; $("app").hidden = false;
-  loadStatus(); loadUsage();
-  if (started) return;
-  started = true;
-  follow();
-  setInterval(loadStatus, 5000);
-  setInterval(renderAccounts, 1000);
-  setInterval(loadUsage, 60000);
+  $("#gate").hidden = true; $("#app").hidden = false;
+  $("#origin").textContent = location.origin;
+  setLive("wait");
+  loadStatus(); loadSettings(); loadHistory(); follow();
+  setInterval(tick, 1000);
+  setInterval(loadStatus, 15000);
+  setInterval(loadHistory, 120000);
 }
-start();
+if (key) start(); else lock();
 </script>
 </body>
 </html>
