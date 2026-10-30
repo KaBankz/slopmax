@@ -122,7 +122,7 @@ pub async fn run(config: &Config, store: &Store, answers: Answers, plan: Plan) -
     );
 
     step("Accounts");
-    accounts(store, answers, &plan).await?;
+    let missed = accounts(store, answers, &plan).await?;
     let connected = store.list()?;
     if connected.is_empty() {
         // Unattended, finding nothing to pool is a failure the caller must
@@ -187,6 +187,11 @@ pub async fn run(config: &Config, store: &Store, answers: Answers, plan: Plan) -
         },
         ui::bold(config.base_url()),
     );
+    // Unattended, a part of the setup that was asked for and did nothing is
+    // a failure the caller must see, though the rest went through.
+    if answers == Answers::Defaults && !missed.is_empty() {
+        bail!("set up, but not all that was asked: {}", missed.join("; "));
+    }
     Ok(())
 }
 
@@ -206,13 +211,24 @@ fn offer(provider: ProviderId) -> &'static str {
     }
 }
 
-async fn accounts(store: &Store, answers: Answers, plan: &Plan) -> Result<()> {
+/// Connects what the plan asks for, or what is chosen at the terminal.
+/// Returns what was asked for by flag and added nothing.
+async fn accounts(store: &Store, answers: Answers, plan: &Plan) -> Result<Vec<String>> {
     let http = auth::http_client(Origins::default());
+    let mut missed = Vec::new();
     match &plan.import {
         Some(sources) => {
             for source in sources {
                 let found = import::discover(&http, *source).await;
-                report_saved(import::save(store, found, false));
+                if report_saved(import::save(store, found, false)) == 0 {
+                    let name = match source {
+                        Source::All => "all",
+                        Source::ClaudeCode => "claude-code",
+                        Source::Codex => "codex",
+                        Source::Cliproxyapi => "cliproxyapi",
+                    };
+                    missed.push(format!("--import {name} found no login to take"));
+                }
             }
         }
         None => offer_imports(store, answers, &http).await?,
@@ -236,7 +252,10 @@ async fn accounts(store: &Store, answers: Answers, plan: &Plan) -> Result<()> {
                         ui::dim(format!("from {var}"))
                     );
                 }
-                Err(e) => println!("    {} {var}: {e:#}", ui::yellow("skipped")),
+                Err(e) => {
+                    println!("    {} {var}: {e:#}", ui::yellow("skipped"));
+                    missed.push(format!("{var} was not added"));
+                }
             }
         }
     }
@@ -265,8 +284,11 @@ async fn accounts(store: &Store, answers: Answers, plan: &Plan) -> Result<()> {
                 .collect()
         }
     };
+    let asked = plan.login.is_some();
     for provider in chosen {
-        add(store, provider, answers).await?;
+        if !add(store, provider, answers).await? && asked {
+            missed.push(format!("--login {provider} did not sign in"));
+        }
     }
     let connected = store.list()?;
     let mut counts: Vec<String> = Vec::new();
@@ -279,7 +301,7 @@ async fn accounts(store: &Store, answers: Answers, plan: &Plan) -> Result<()> {
     if !counts.is_empty() {
         println!("  {} {}", ui::dim("connected:"), counts.join(", "));
     }
-    Ok(())
+    Ok(missed)
 }
 
 /// Offers the logins found on this machine: CLIProxyAPI's (linked, so
@@ -325,19 +347,26 @@ async fn offer_imports(
     Ok(())
 }
 
-fn report_saved(saved: Vec<import::Saved>) {
+/// Prints what was imported; returns how many accounts were.
+fn report_saved(saved: Vec<import::Saved>) -> usize {
+    let mut added = 0;
     for item in saved {
         match item.account {
-            Ok((account, _)) => println!("    {} {}", ui::green("+"), ui::bold(account.name())),
+            Ok((account, _)) => {
+                added += 1;
+                println!("    {} {}", ui::green("+"), ui::bold(account.name()));
+            }
             Err(e) => println!("    {} {e:#}", ui::dim("skipped:")),
         }
     }
+    added
 }
 
 /// Signs in to `provider`, or takes its key or endpoint; at a terminal,
-/// offers to add another of a subscription.
-async fn add(store: &Store, provider: ProviderId, answers: Answers) -> Result<()> {
+/// offers to add another of a subscription. Returns whether any was added.
+async fn add(store: &Store, provider: ProviderId, answers: Answers) -> Result<bool> {
     let title = provider.spec().title;
+    let mut added = false;
     loop {
         println!("\n  {}", ui::bold(title));
         let mut options = LoginOptions::default();
@@ -354,7 +383,7 @@ async fn add(store: &Store, provider: ProviderId, answers: Answers) -> Result<()
             }
             let url = term::ask("  Base URL, e.g. http://localhost:11434/v1:", "")?;
             if url.is_empty() {
-                return Ok(());
+                return Ok(added);
             }
             let dialect = term::ask("  Its API: chat, responses, or messages", "chat")?;
             let dialect = match dialect.as_str() {
@@ -368,14 +397,15 @@ async fn add(store: &Store, provider: ProviderId, answers: Answers) -> Result<()
                 models: Vec::new(),
             });
         }
-        if let Err(e) = login(store, provider, None, options).await {
-            println!("    {} {e:#}", ui::yellow("not added:"));
+        match login(store, provider, None, options).await {
+            Ok(()) => added = true,
+            Err(e) => println!("    {} {e:#}", ui::yellow("not added:")),
         }
         let more = provider.spec().is_subscription()
             && answers == Answers::Ask
             && term::confirm(&format!("  Add another {title} account?"), false)?;
         if !more {
-            return Ok(());
+            return Ok(added);
         }
     }
 }

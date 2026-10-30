@@ -1262,3 +1262,35 @@ fn unattended_setup_leaves_alone_an_agent_it_has_no_account_for() {
     assert!(toml.contains(&format!("127.0.0.1:{}", s.port)), "{toml}");
     s.run(&["stop"]).ok();
 }
+
+#[test]
+fn unattended_setup_that_misses_part_of_what_was_asked_says_so() {
+    let s = Sandbox::new("init-partial");
+    write(
+        &s.home.join(".cli-proxy-api/codex-a.json"),
+        &json!({"type": "codex", "access_token": "tok-a", "refresh_token": "ref-a",
+                "email": "a@x.dev", "account_id": "ws-a"})
+        .to_string(),
+    );
+    // CLIProxyAPI has a login; Codex's own home has none.
+    let out = s.run(&[
+        "setup",
+        "--yes",
+        "--import",
+        "cliproxyapi,codex",
+        "--agents",
+        "none",
+        "--no-service",
+    ]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(
+        out.stdout.contains("Done."),
+        "the rest went through: {out:?}"
+    );
+    assert!(
+        out.stderr.contains("--import codex found no login to take"),
+        "{out:?}"
+    );
+    assert_eq!(s.store().list().unwrap().len(), 1);
+    s.run(&["stop"]).ok();
+}
