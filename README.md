@@ -211,6 +211,12 @@ The same data is available as JSON under `/slopmax/`, with the slopmax key:
 | `GET`, `POST keys`, `POST keys/<name>/remove` | client keys for other machines, as `slopmax key` makes them (shown once) |
 | `GET doctor`                     | the findings `slopmax doctor` prints                                     |
 
+### Desktop app
+
+On macOS, `slopmax.app` puts the same things in a window and a menu bar panel: every account's windows and resets, where new sessions go, usage and what was left on the table, routing settings, client keys, and the doctor's findings. It is a front end to the same engine, so anything it changes the CLI can change too, and the other way round. It posts the [nudges](#notifications) as native notifications.
+
+Build it from a checkout with `crates/slopmax-desktop-gpui/macos/bundle.sh` (it leaves `target/release/slopmax.app`, with the CLI inside). macOS posts notifications only for an app with a bundle identifier, so a bare `cargo run` of the app works but stays silent.
+
 ### Tools built for CLIProxyAPI
 
 Apps that show a CLIProxyAPI hub's quotas can show slopmax's. In T3 Code, add a CLIProxyAPI hub to the provider settings, with `http://127.0.0.1:7567` as the hub URL and slopmax's `api_key` as the management key. T3 then lists every pooled account's windows and ChatGPT's limit resets, and can redeem them.
