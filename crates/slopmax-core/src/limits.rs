@@ -212,8 +212,15 @@ impl Limits {
             .filter(spare)
             .filter_map(|w| w.upcoming_reset(now))
             .min();
+        // Worth saving only with real room left in it.
+        let week_ending = self
+            .shared()
+            .filter(|w| w.span != "5h" && w.used_at(now) <= 100.0 - URGENT_SPARE)
+            .filter_map(|w| w.upcoming_reset(now))
+            .filter(|at| *at <= now + URGENT)
+            .min();
         Urgency {
-            week_ending: long.filter(|at| *at <= now + URGENT),
+            week_ending,
             short,
             long,
         }
@@ -230,6 +237,8 @@ impl Limits {
 /// How close a long window's reset must be for its spare quota to come
 /// before every 5-hour window's.
 pub const URGENT: SignedDuration = SignedDuration::from_hours(24);
+/// The room, in percent of a long window, that makes its reset urgent.
+pub const URGENT_SPARE: f64 = 10.0;
 
 /// When an account's spare capacity is lost, as [`Limits::urgency`] orders
 /// it: compare the fields in order, `None` last.
@@ -514,6 +523,16 @@ mod tests {
         };
         assert_eq!(ending.expiring_at(ts(1000)), Some(ts(9000)));
         assert_eq!(ending.urgency(ts(1000)).short, Some(ts(2000)));
+        // With too little room left, a week ending is nothing to save.
+        let spent = Limits {
+            windows: vec![
+                Window::new("5h", 40.0, Some(ts(2000))),
+                Window::new("7d", 95.0, Some(ts(9000))),
+            ],
+            ..Limits::default()
+        };
+        assert_eq!(spent.urgency(ts(1000)).week_ending, None);
+        assert_eq!(spent.expiring_at(ts(1000)), Some(ts(2000)));
         let idle = Limits {
             windows: vec![Window::new("5h", 0.0, None)],
             ..Limits::default()

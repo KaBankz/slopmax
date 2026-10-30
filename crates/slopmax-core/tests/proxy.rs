@@ -2379,12 +2379,24 @@ async fn passing_server_errors_are_retried_once_on_the_same_account() {
     assert_eq!(tokens, ["Bearer tok-flaky", "Bearer tok-flaky"]);
     assert!(h.app.pool.state(&h.ids[0]).blocked_until.is_none());
 
-    // An error that persists reaches the client after the one retry.
+    // An error that persists moves the request to the next account,
+    // which is not set aside for it.
     let h = harness(ProviderId::Codex, &["tok-down", "tok-ok"]).await;
+    assert_eq!(served_by(&h, codex_in(&h, "s")).await, "acct-codex1");
+    assert_eq!(
+        responses(&h).len(),
+        3,
+        "twice on the first, once on the next"
+    );
+    assert!(!h.app.pool.state(&h.ids[0]).is_blocked(Timestamp::now()));
+    assert!(h.app.pool.state(&h.ids[0]).throttled_until.is_none());
+
+    // When every account answers so, the client gets the error.
+    let h = harness(ProviderId::Codex, &["tok-down", "tok-down"]).await;
     let response = codex_in(&h, "s").send().await.unwrap();
     assert_eq!(response.status(), 502);
     assert!(response.text().await.unwrap().contains("bad gateway"));
-    assert_eq!(responses(&h).len(), 2);
+    assert_eq!(responses(&h).len(), 4);
 }
 
 async fn admin(h: &Harness, method: Method, path: &str, form: &str) -> (StatusCode, Value) {

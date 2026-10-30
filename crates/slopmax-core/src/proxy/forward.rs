@@ -658,12 +658,23 @@ async fn attempt(
                 return Attempt::Failed(Some(failure));
             }
             // Tried once more on the same account, which keeps the
-            // session's cache, before the error goes back to the agent.
+            // session's cache, then on the next account. The account is not
+            // set aside: an outage of the whole provider would otherwise
+            // turn into slopmax refusing every request.
             Verdict::Final if transient(failure.status) && !retried => {
                 retried = true;
                 log::info!("{id}: retrying after a passing server error");
                 tokio::time::sleep(TRANSIENT_WAIT).await;
                 continue;
+            }
+            Verdict::Final if transient(failure.status) => {
+                log::info!(
+                    "{id}: answered {} twice; trying another account",
+                    failure.status.as_u16()
+                );
+                app.pool
+                    .record_error(&id, &format!("server error {}", failure.status.as_u16()));
+                return Attempt::Failed(Some(failure));
             }
             Verdict::StaleState | Verdict::Final => {
                 return Attempt::Done(failure.into_response(app));
