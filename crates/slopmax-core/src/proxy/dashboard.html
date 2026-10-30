@@ -560,7 +560,7 @@ function nudgeView(n) {
   if (n.event === "quota-unused") {
     const w = a && (a.state.limits?.windows || []).find((x) => !x.model && x.span === "7d");
     const unused = w ? Math.round(100 - usedNow(w)) : null;
-    const worth = /about (\$[\d,.]+)/.exec(n.message || "")?.[1];
+    const worth = n.worth >= 0.5 ? `$${Math.round(n.worth)}` : null;
     return { text: `<b>${esc(n.account)}</b>'s week resets in ${when}${unused != null ? ` with ${unused}% unused` : ""}`,
       sub: `${worth ? `About ${worth} of its plan. ` : ""}Work sent there before then costs nothing extra.`,
       plain: `${n.account}'s week resets in ${at ? until(at) : "soon"}${unused != null ? ` with ${unused}% unused` : ""}. Work sent there before then costs nothing extra.`,
