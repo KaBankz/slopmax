@@ -474,7 +474,7 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
     }
     match m.command.name {
         "setup" if !m.value("agent").unwrap_or_default().is_empty() => {
-            setup(&config, agent_named(m)?, m.flag("undo"))?;
+            setup(&config, &store, agent_named(m)?, m.flag("undo")).await?;
         }
         "setup" => {
             if m.flag("undo") {
@@ -763,7 +763,7 @@ fn agent_named(m: &args::Matches) -> Result<&'static dyn Agent> {
     agent::find(&name).with_context(|| format!("unknown agent {name:?}"))
 }
 
-fn setup(config: &Config, agent: &dyn Agent, undo: bool) -> Result<()> {
+async fn setup(config: &Config, store: &Store, agent: &dyn Agent, undo: bool) -> Result<()> {
     let app = agent.title();
     if undo {
         let path = agent::undo(agent)?;
@@ -780,12 +780,24 @@ fn setup(config: &Config, agent: &dyn Agent, undo: bool) -> Result<()> {
         ui::dim(format!("({})", path.display()))
     );
     println!("{}", ui::dim(agent.setup_note()));
-    println!(
-        "{}",
-        ui::dim(
-            "Start the proxy with `slopmax start` (or `slopmax service install`). Undo with `--undo`."
-        )
-    );
+    if !agent::servable(agent, &store.list()?) {
+        let provider = agent.provider();
+        println!(
+            "{} no {} account is connected to serve it; until one is, its requests fail. \
+             Add one with `slopmax login {provider}`, or undo with `--undo`.",
+            ui::yellow("Note:"),
+            provider.spec().title,
+        );
+    }
+    let next = if slopmax_core::background::Daemon::new(config)
+        .is_running()
+        .await
+    {
+        "Undo with `--undo`."
+    } else {
+        "Start the proxy with `slopmax start` (or `slopmax service install`). Undo with `--undo`."
+    };
+    println!("{}", ui::dim(next));
     Ok(())
 }
 

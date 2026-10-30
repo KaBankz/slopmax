@@ -89,13 +89,25 @@ pub async fn check(config: &Config, store: &Store) -> Result<Vec<Section>> {
 /// an error for every request it sends.
 fn unserved(sections: &mut [Section], config: &Config, accounts: &[crate::account::Account]) {
     for agent in crate::agent::AGENTS {
-        if crate::agent::wiring(agent, config) != crate::agent::Wiring::Slopmax
-            || crate::agent::servable(agent, accounts)
-        {
+        if crate::agent::servable(agent, accounts) {
             continue;
         }
+        let wired = crate::agent::wiring(agent, config) == crate::agent::Wiring::Slopmax;
         if let Some(section) = sections.iter_mut().find(|s| s.title == agent.title()) {
             let provider = agent.provider();
+            // Wiring it now would only break it.
+            let first = format!(
+                "slopmax login {provider}, then slopmax setup {}",
+                agent.id()
+            );
+            for finding in &mut section.findings {
+                if finding.fix.as_deref() == Some(&format!("slopmax setup {}", agent.id())) {
+                    finding.fix = Some(first.clone());
+                }
+            }
+            if !wired {
+                continue;
+            }
             section.add(
                 Level::Fail,
                 format!(
@@ -362,7 +374,10 @@ fn cliproxyapi(accounts: &[Account], port: u16) -> Section {
     if running {
         s.add(
             Level::Note,
-            format!("still running and refreshing {linked} accounts slopmax follows"),
+            format!(
+                "still running and refreshing {linked} account{} slopmax follows",
+                if linked == 1 { "" } else { "s" }
+            ),
             Some("once you stop CLIProxyAPI: slopmax own all"),
         );
     } else {
@@ -814,7 +829,7 @@ mod tests {
         let running = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = running.local_addr().unwrap().port();
         let s = cliproxyapi(&accounts, port);
-        let f = finding(&s, "still running and refreshing 1 accounts");
+        let f = finding(&s, "still running and refreshing 1 account slopmax");
         assert_eq!(f.level, Level::Note);
     }
 

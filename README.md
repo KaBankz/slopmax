@@ -186,8 +186,8 @@ total                 508    398.3k    229.7k      114.4M         2.9M    $39.98
 A subscription's weekly quota that goes unused is lost at the reset, and with it that part of the fee. slopmax notes each window that resets with how much of it was used (in `~/.slopmax/windows.jsonl`), and values the unused part of each week at the plan's price: Claude Pro $20, Max 5x $100, Max 20x $200, ChatGPT Plus $20, Pro $200, and Team $30 a month, or what you pay, under `[plan_prices]`:
 
 ```
-Left on the table: $61.66, 20% unused on average, across 16 weeks
-  work@example.com               $48.46  26% unused over 4
+Left on the table: $39.74, 20% unused on average, across 16 weekly windows
+  work@example.com               $24.23  26% unused over 4
   me@example.com                  $9.05  49% unused over 4
 ```
 

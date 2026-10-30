@@ -100,7 +100,9 @@ pub(super) async fn handle(app: Arc<App>, request: Request) -> Response {
             };
             add_key(&app, &form)
         }
-        (&Method::POST, ["keys", name, "remove"]) => remove_key(&app, name),
+        (&Method::POST, ["keys", name, "remove"]) => {
+            remove_key(&app, &crate::net::form::percent_decode(name))
+        }
         (&Method::GET, ["doctor"]) => match crate::doctor::check(&app.config(), &app.store).await {
             Ok(sections) => json_reply(StatusCode::OK, &sections),
             Err(e) => error(None, StatusCode::INTERNAL_SERVER_ERROR, &format!("{e:#}")),

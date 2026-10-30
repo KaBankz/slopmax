@@ -112,7 +112,7 @@ fn print_left(left: &waste::Left) {
         return;
     }
     let windows = format!(
-        "{} week{}",
+        "{} weekly window{}",
         left.windows,
         if left.windows == 1 { "" } else { "s" }
     );

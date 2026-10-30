@@ -2614,6 +2614,11 @@ async fn the_api_does_what_the_cli_does_for_keys_endpoints_and_the_doctor() {
     assert!(listed["keys"].as_array().unwrap().is_empty());
     let (status, _) = admin(&h, Method::POST, "keys/laptop/remove", "").await;
     assert_eq!(status, 404);
+    // A name with spaces or slashes is revoked by its encoded name.
+    let (status, _) = admin(&h, Method::POST, "keys", "name=work%20laptop%2F2").await;
+    assert_eq!(status, 200);
+    let (status, _) = admin(&h, Method::POST, "keys/work%20laptop%2F2/remove", "").await;
+    assert_eq!(status, 200);
 
     // A compatible endpoint, as `slopmax login compat --url` adds it.
     let form = format!("provider=compat&url={base}/local/v1&models=qwen3-*&label=box");

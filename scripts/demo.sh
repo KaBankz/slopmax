@@ -105,7 +105,8 @@ with open(f"{home}/state.json", "w") as f:
 
 # Four weeks of windows that reset, with how much of each was used: what
 # was left on the table.
-plans = {"claude": ["max 20x", "max 5x"], "codex": ["pro", "plus"]}
+# Each account's plan, as the bench rig gave it.
+plan_of = {i: json.load(open(f"{home}/accounts/{i}.json")).get("plan") for i in ids}
 weekly = {"claude": [[62, 88, 100, 45], [97, 100, 93, 100]],
           "codex": [[100, 100, 96, 100], [38, 55, 71, 40]]}
 with open(f"{home}/windows.jsonl", "w") as f:
@@ -115,7 +116,7 @@ with open(f"{home}/windows.jsonl", "w") as f:
             for back, used in enumerate(weeks):
                 ended = now - (back + 1) * 7 * 86_400 + 3_600 * (n + 1)
                 f.write(json.dumps({"ended_at": at(ended - now), "account": account,
-                                    "provider": provider, "plan": plans[provider][n],
+                                    "provider": provider, "plan": plan_of[account],
                                     "span": "7d", "used": used}) + "\n")
 
 # Thirty days of requests in the ledger, for the app's charts, as the proxy
@@ -184,6 +185,17 @@ for back in range(29, -1, -1):
                         # Another account was limited first.
                         entry["attempts"] = 2
                     emit(at, entry)
+# Each account's all-time counters, from the ledger it was given.
+for account, entry in state["accounts"].items():
+    mine = [e for month in ledger.values() for _, e in month
+            if e.get("account") == account and e.get("status") == 200 and e.get("input")]
+    entry["usage"] = {"requests": len(mine),
+                      "input_tokens": sum(e["input"] for e in mine),
+                      "output_tokens": sum(e["output"] for e in mine),
+                      "cache_read_tokens": sum(e.get("cache_read", 0) for e in mine),
+                      "cache_write_tokens": sum(e.get("cache_write", 0) for e in mine)}
+with open(f"{home}/state.json", "w") as f:
+    json.dump(state, f, indent=2)
 os.makedirs(f"{home}/usage", exist_ok=True)
 for month, entries in ledger.items():
     with open(f"{home}/usage/{month}.jsonl", "w") as f:
