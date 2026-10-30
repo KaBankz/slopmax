@@ -336,11 +336,21 @@ pub(super) async fn forward(
         }
     };
     let inbound = Inbound::new(target, parts, body);
-    if let (Some(key), Some(model)) = (&client, &inbound.model)
-        && !key.allows(model)
-    {
-        let message = format!("the key {:?} may not use {model}", key.name);
-        return error(Some(dialect), StatusCode::FORBIDDEN, &message);
+    if let Some(key) = client.as_ref().filter(|k| !k.models.is_empty()) {
+        let refused = match &inbound.model {
+            Some(model) if !key.allows(model) => {
+                format!("the key {:?} may not use {model}", key.name)
+            }
+            Some(_) => String::new(),
+            // A compressed or unreadable body could name any model.
+            None => format!(
+                "the key {:?} may use only some models, and this request names none slopmax can read",
+                key.name
+            ),
+        };
+        if !refused.is_empty() {
+            return error(Some(dialect), StatusCode::FORBIDDEN, &refused);
+        }
     }
     let steps = match inbound.plan(&app) {
         Ok(steps) => steps,

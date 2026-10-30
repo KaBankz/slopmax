@@ -21,6 +21,7 @@ use tokio::sync::mpsc;
 use super::{App, Target, error};
 use crate::account::Account;
 use crate::agent;
+use crate::config::ClientKey;
 use crate::ledger::Entry;
 use crate::limits::Refusal;
 use crate::log;
@@ -44,7 +45,12 @@ type Socket = TokioIo<Upgraded>;
 
 /// Answers a WebSocket handshake on Codex's path: relays it, or refuses
 /// with 426 so Codex streams over HTTP instead.
-pub(super) async fn accept(app: Arc<App>, target: Target, mut request: Request) -> Response {
+pub(super) async fn accept(
+    app: Arc<App>,
+    target: Target,
+    mut request: Request,
+    client: Option<&ClientKey>,
+) -> Response {
     let headers = request.headers().clone();
     let refuse = |why: &str| {
         log::info!("websocket refused ({why}); Codex will stream over HTTP");
@@ -55,6 +61,11 @@ pub(super) async fn accept(app: Arc<App>, target: Target, mut request: Request) 
     }
     if target.provider != Some(ProviderId::Codex) || !target.by_model {
         return refuse("only Codex's /responses is relayed");
+    }
+    // A socket carries many requests, each naming its own model; a key
+    // held to some models is checked request by request, over HTTP.
+    if client.is_some_and(|key| !key.models.is_empty()) {
+        return refuse("the key is held to some models");
     }
     let Some(key) = text(&headers, "sec-websocket-key").map(str::to_owned) else {
         return error(None, StatusCode::BAD_REQUEST, "missing Sec-WebSocket-Key");

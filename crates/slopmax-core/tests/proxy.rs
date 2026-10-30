@@ -1842,6 +1842,31 @@ async fn client_keys_are_held_to_their_models() {
             .unwrap()
             .contains("laptop")
     );
+    // A body slopmax cannot read could name any model, so it is refused.
+    let packed = client()
+        .post(format!("{}/codex/responses", h.proxy))
+        .header("authorization", "Bearer sm-laptop")
+        .header("content-encoding", "zstd")
+        .body("(compressed)")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(packed.status(), StatusCode::FORBIDDEN);
+    // A socket would carry requests for any model: Codex is sent to HTTP,
+    // where each is checked.
+    let socket = client()
+        .get(format!("{}/codex/responses", h.proxy))
+        .header("authorization", "Bearer sm-laptop")
+        .header("upgrade", "websocket")
+        .header("connection", "Upgrade")
+        .header("sec-websocket-version", "13")
+        .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .header("x-codex-routing-hint", "model=gpt-6-sol")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(socket.status(), StatusCode::UPGRADE_REQUIRED);
+    assert!(!paths(&h).iter().any(|p| p.starts_with("ws ")));
     // Client keys never reach slopmax's own API.
     let status = client()
         .get(format!("{}/slopmax/status", h.proxy))

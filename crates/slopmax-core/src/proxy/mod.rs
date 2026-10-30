@@ -312,7 +312,7 @@ async fn proxy(app: Arc<App>, request: Request) -> Response {
     // Codex's sockets are relayed when they can be; refusing a handshake
     // with 426 makes Codex stream over HTTP at once instead of retrying.
     if is_websocket(request.headers()) {
-        return socket::accept(app, target, request).await;
+        return socket::accept(app, target, request, client.as_ref()).await;
     }
     forward::forward(app, target, request, client).await
 }
