@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "description": "Time, ids, the logger, and short formats for people",
+  "//": "No dependencies beyond effect. node:crypto, node:buffer, and node:process (both Bun and Node have them) are used in ids.ts, log.ts, and time.ts only.",
   "exports": {
     ".": "./src/index.ts"
   },

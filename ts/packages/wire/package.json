@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "description": "API formats and translation between them; no I/O",
+  "//": "No dependencies beyond effect and @slopmax/common. node:buffer (Bun and Node both have it) is used in responses/compaction.ts only, for base64. JSON.rawJSON and the JSON.parse reviver's source text (Bun, Node 21+) keep numbers as serde_json has them (src/json.ts).",
   "exports": {
     ".": "./src/index.ts"
   },
