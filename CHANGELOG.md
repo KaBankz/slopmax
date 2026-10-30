@@ -8,6 +8,12 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 - Claude's limit resets, such as the one Pro and Max accounts got at Claude Opus 5.5's launch, are listed and redeemed as ChatGPT's are: on request (`slopmax redeem`), in the last three hours before one would expire unused, and when every Claude account is spent (`redeem_when_exhausted`). Claude lists and spends them for Claude Code alone, so slopmax makes those two calls with the user agent Claude Code last sent through it, and neither before Claude Code has sent a request.
 - The dashboard's API can rename (`/slopmax/accounts/<id>/label`) and remove (`…/remove`) accounts, and `POST /slopmax/sync` applies changes made on disk at once instead of at the proxy's next check.
+- A `round-robin` strategy hands each new session to the account handed one longest ago. An agent's housekeeping, such as Claude Code listing models before a session, takes no turn.
+- `session_affinity = false` places every request by the strategy, for load balancing at the cost of the prompt cache. A request can decide for itself with the header `x-slopmax-affinity: on` or `off`. The session's last account is still remembered, so state another account minted is dropped when a request lands elsewhere. slopmax's own `x-slopmax-*` headers never reach a provider.
+- A passing server error (500, 502, 503, 504, or 529) is retried once on the same account, keeping the session's cache, before it reaches the client.
+- The proxy applies a changed config.toml without a restart; only the address needs one. Background tasks such as polling and redeeming read the config each time they run.
+- `GET` and `POST /slopmax/settings` read and change the strategy, session affinity, and the redeem settings while the proxy runs, keeping config.toml's comments. `GET /slopmax/history` serves the same usage analytics the desktop app charts: tokens, cost, failovers, caching, speed, and the split by account, model, and agent.
+- API prices for GPT-6 Sol and Luna, so ChatGPT usage is costed beside Claude's.
 
 ### Changed
 

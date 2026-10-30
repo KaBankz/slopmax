@@ -2,7 +2,7 @@
 
 # slopmax
 
-slopmax pools your Claude and ChatGPT subscriptions behind one local proxy, so Claude Code and Codex keep working when an account runs out. Each session stays on one account until that account is spent, then moves to the next. New sessions go to the quota that resets soonest, so less of it goes unused.
+slopmax pools your Claude and ChatGPT subscriptions behind one local proxy, so Claude Code and Codex keep working when an account runs out. Each session stays on one account until that account is spent, then moves to the next. New sessions go to the quota that resets soonest, so less of it goes unused; or fill accounts in order, balance them, or take turns.
 
 - One Rust binary under 6 MB. No runtime, database, or browser extension.
 - Signs in with each provider's own OAuth flow, or takes over logins from Claude Code, Codex, and CLIProxyAPI. A guided `slopmax init` does it all, and `slopmax doctor` says what to fix.
@@ -101,7 +101,9 @@ Any other client can use the proxy as an OpenAI- or Anthropic-style API at `http
 
 Each request names its session: Claude Code's session id, Codex's `session-id`, or for other clients a session header or `prompt_cache_key`. A session stays on its account for as long as that account can serve it, which keeps prompt caches warm. It moves only when the account refuses, fills up, or signs out, and it is forgotten after `session_ttl_mins` idle minutes. A new session goes to the account chosen with `slopmax use`, if that one can serve. Otherwise it goes to the highest priority tier, and within the tier the strategy decides.
 
-When the provider refuses a request (a rejected 5-hour or weekly window, `usage_limit_reached`, an invalid token), slopmax sets that account aside, until its reset when its quota is spent, and retries on the next one. ChatGPT sometimes refuses inside a stream that has already started with a 200, so slopmax holds the first moments of a Codex stream back to catch that. Failover happens only before the agent has received anything; once a response starts streaming, it passes through untouched. When every account is spent, the agent gets its own native usage-limit error with the earliest reset time, and shows it as usual.
+Session affinity is what keeps prompt caching working, so it is on by default. With `session_affinity = false` every request is placed by the strategy instead, which spreads load across accounts at the cost of the cache; a client can decide per request by sending `x-slopmax-affinity: off` (or `on`, when the config turns it off). Claude Code sends extra headers from `ANTHROPIC_CUSTOM_HEADERS`. slopmax still remembers which account a session used last, so account-bound state is dropped when a request lands elsewhere, and its own `x-slopmax-*` headers never reach a provider.
+
+When the provider refuses a request (a rejected 5-hour or weekly window, `usage_limit_reached`, an invalid token), slopmax sets that account aside, until its reset when its quota is spent, and retries on the next one. ChatGPT sometimes refuses inside a stream that has already started with a 200, so slopmax holds the first moments of a Codex stream back to catch that. A passing server error (500, 502, 503, 504, or Anthropic's 529) is retried once on the same account, which keeps the session's cache, before it reaches the agent. Failover happens only before the agent has received anything; once a response starts streaming, it passes through untouched. When every account is spent, the agent gets its own native usage-limit error with the earliest reset time, and shows it as usual.
 
 Codex talks to ChatGPT over a WebSocket when it can, which keeps the conversation warm upstream and starts answers sooner than HTTP streaming. slopmax relays the socket to ChatGPT's own on one account, reading usage from the rate-limit events ChatGPT sends on it. A socket stays on its account; if that account runs out mid-turn, slopmax closes the socket, and Codex retries on a new one that opens on another account. Models that need translation, and `websockets = false`, send Codex back to HTTP streaming.
 
@@ -121,7 +123,16 @@ slopmax aims to make several accounts of one provider feel like a single account
 
 ### Resets
 
-Unused quota is lost when its window resets. The default `reset-first` strategy therefore puts new sessions on the account whose started window resets soonest, earliest deadline first, and saves fresh windows for later. `fill-first` drains accounts in priority order instead, and `least-used` spreads sessions across the least used accounts. A block lasts until the provider's stated reset, unless a fresh reading shows room sooner.
+Unused quota is lost when its window resets. The default strategy therefore spends the quota about to expire. All four place new sessions (or, without affinity, every request) within the highest priority tier:
+
+| `strategy`    | Places a new session on                                   | Good for                        |
+| ------------- | --------------------------------------------------------- | ------------------------------- |
+| `reset-first` | the account whose started window resets soonest           | wasting no quota (the default)  |
+| `fill-first`  | the oldest account, until it is limited                   | plain failover, a fixed order   |
+| `least-used`  | the account with the most room left                       | keeping accounts level          |
+| `round-robin` | the account handed a request longest ago                  | even load across accounts       |
+
+An agent's housekeeping, such as Claude Code listing models before a session, takes no turn from `round-robin`. A block lasts until the provider's stated reset, unless a fresh reading shows room sooner.
 
 ChatGPT starts a 5-hour window at an account's first request, so an account left idle after a reset gets its next reset late. With `warm_windows = true`, slopmax sends an idle ChatGPT account one tiny request as soon as its window resets, using the model Codex last used, so the next reset comes sooner when the account is needed. Claude accounts are never warmed: slopmax sends Claude only what Claude Code writes.
 
@@ -158,13 +169,22 @@ gpt-6-sol              96     88.1k     41.7k       12.0M            0          
 total                 508    398.3k    229.7k      114.4M         2.9M    $39.98+
 ```
 
-`API cost` is what the same tokens would cost on the pay-as-you-go API, at Anthropic's list prices and any you set under `[prices]` in the config. Requests to models without a price are counted apart and marked `+`. Group `--by day`, `model`, or `account`, over `today`, `7d`, `30d`, or `all`, or print `--json`.
+`API cost` is what the same tokens would cost on the pay-as-you-go API, at Anthropic's and OpenAI's list prices and any you set under `[prices]` in the config. Requests to models without a price are counted apart and marked `+`. Group `--by day`, `model`, or `account`, over `today`, `7d`, `30d`, or `all`, or print `--json`.
 
 ## Dashboard
 
 `slopmax dashboard` opens a page that shows every account's windows and reset countdowns, usage and cost by day, model, or account, and a live feed of answered requests. It can enable, disable, pin, reprioritize, and redeem. The page is one file built into the binary and loads nothing from elsewhere. It takes the slopmax key from its address's `#fragment`, which browsers never send to a server. On a remote machine, forward the port first (`ssh -L 7567:127.0.0.1:7567 host`).
 
-The same data is available as JSON under `/slopmax/` (`status`, `usage`, `events`, `accounts/<id>/<action>`), with the slopmax key. `status` includes each provider's pool, the usage the agents see.
+The same data is available as JSON under `/slopmax/`, with the slopmax key:
+
+| Endpoint                         | Gives                                                                    |
+| -------------------------------- | ------------------------------------------------------------------------ |
+| `GET status`, `POST refresh`     | every account's windows, blocks, sessions, and limit resets, and each provider's pool (the usage the agents see) |
+| `GET history?range=today\|7d\|30d` | tokens, cost, failovers, caching, and speed over time, by account, model, and agent |
+| `GET usage?range=…&by=…`         | totals by day, model, or account                                         |
+| `GET events`                     | each request as it is answered, as server-sent events                    |
+| `GET`, `POST settings`           | the strategy, session affinity, and redeem settings; `POST` takes form fields such as `strategy=round-robin&session_affinity=false`, writes config.toml, and applies them at once |
+| `POST accounts/<id>/<action>`    | `enable`, `disable`, `use`, `priority?value=N`, `label?value=…`, `redeem`, `remove` |
 
 ### Tools built for CLIProxyAPI
 
@@ -291,7 +311,8 @@ What crosses: text, images, documents, tool definitions and calls, tool results,
 | ------------------------- | ---------------- | ------------------------------------------------------------------- |
 | `listen`                  | `127.0.0.1:7567` | Proxy address                                                       |
 | `api_key`                 | generated        | Key clients present to the proxy                                    |
-| `strategy`                | `reset-first`    | `reset-first`, `fill-first`, or `least-used`                        |
+| `strategy`                | `reset-first`    | `reset-first`, `fill-first`, `least-used`, or `round-robin`         |
+| `session_affinity`        | `true`           | Keep a session on its account for the prompt cache (a request can say otherwise with `x-slopmax-affinity`) |
 | `session_ttl_mins`        | `60`             | Idle minutes before a session's account is forgotten                |
 | `poll_mins`               | `5`              | Minutes between usage polls per account (`0` turns polling off)     |
 | `refresh_tokens`          | `true`           | Refresh OAuth tokens before they expire                             |
@@ -306,7 +327,7 @@ What crosses: text, images, documents, tool definitions and calls, tool results,
 | `[notify]`                | none             | Webhook, command, and events for notifications                      |
 | `[[keys]]`                | none             | Client keys, made with `slopmax key add`, each possibly limited to some models |
 
-The background proxy logs to `~/.slopmax/slopmax.log`. `SLOPMAX_LOG` sets the log level, for example `SLOPMAX_LOG=debug`.
+The proxy applies a changed config.toml within two seconds, without a restart; only `listen` needs one. The background proxy logs to `~/.slopmax/slopmax.log`. `SLOPMAX_LOG` sets the log level, for example `SLOPMAX_LOG=debug`.
 
 ## How slopmax compares
 
@@ -316,9 +337,11 @@ The background proxy logs to `~/.slopmax/slopmax.log`. `SLOPMAX_LOG` sets the lo
 | ---------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------- |
 | Built with             | Rust: one binary of about 6 MB, about 7 MB of memory when idle                   | Go: a 69 MB binary                                                          | TypeScript on Bun, with a desktop app              |
 | Setup                  | `slopmax init` walks through it; `slopmax doctor` checks it                      | A config file and login flags                                               | Desktop app and CLI                                |
-| Default account choice | The used quota that resets soonest, so less of it goes to waste                  | Round-robin within priority tiers                                           | One active account, switching at 80% used          |
+| Default account choice | The used quota that resets soonest, so less of it goes to waste; or fill-first, least-used, round-robin | Round-robin or fill-first within priority tiers                  | One active account, switching at 80% used          |
 | Usage data             | Usage endpoints and response headers; agents are shown the pool's combined usage | Response headers, kept for display                                          | Usage endpoint and response headers                |
-| Session stickiness     | Built in                                                                         | Opt-in                                                                      | Built in                                           |
+| Session stickiness     | Built in; off for the proxy or one request (`x-slopmax-affinity`)                | Opt-in                                                                      | Built in                                           |
+| Retries                | Failover on limits and revoked logins; a server error retried once on the same account | Retries on listed statuses across accounts                         | Failover on limits                                 |
+| Config changes         | Applied live, also from the dashboard and the app                                | Hot reload                                                                  | From its app                                       |
 | Translation            | Through one common form: Messages, Responses, and Chat clients                   | Pairwise translators between many formats                                   | Responses-centered, with Claude Code inbound       |
 | Claude requests        | From Claude Code only, unchanged but for the credential                          | From any client, rewritten to pass as Claude Code                           | From any client, with Claude Code's identity added |
 | Limit resets           | Claude's and ChatGPT's: on request, before expiry, and when spent (opt-in)       | —                                                                           | Before expiry (opt-in), plus Claude reset grants   |

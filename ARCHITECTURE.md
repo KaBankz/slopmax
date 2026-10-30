@@ -69,7 +69,8 @@ slopmax-core/src/
   provider/     the Provider trait and Spec; claude/, codex/, keys.rs, compat.rs
   agent/        the Agent trait; claude_code.rs, codex.rs
   route.rs      model → steps: providers, accounts, and model names to try, in order
-  pool.rs       account health, session affinity, and placement strategies
+  pool.rs       account health, session affinity (and opting out of it), and placement
+                strategies; `Routing` is the part of the config it follows
   limits.rs     usage windows and refusals, shared by the provider parsers
   proxy/        mod.rs (App, the handler, keys), forward.rs (the failover loop), sse.rs and
                 start.rs (stream taps and holds), transcode.rs (translated streams), socket.rs
@@ -78,7 +79,8 @@ slopmax-core/src/
                 warm.rs (window warmups), rawjson.rs (in-place JSON edits)
   daemon.rs     the long-running proxy and its background tasks
   background.rs the proxy seen from outside: its client, starting it, the login service
-  ledger.rs     the usage ledger; summary.rs totals it; pricing.rs prices it
+  ledger.rs     the usage ledger; summary.rs totals it; history.rs charts it (for the
+                app and the dashboard alike); pricing.rs prices it
   notify.rs     webhook and command notifications from account changes
   report.rs     the status report; doctor.rs the setup checks; service.rs systemd and launchd
   paths.rs      Home: a slopmax directory and its files (the proxy carries its own)
@@ -95,7 +97,7 @@ slopmax-common/src/ time.rs, log.rs, ids.rs, human.rs: small in-house replacemen
 2. **`proxy::route`** reads the path into a `Target`: the client's format, the provider the path belongs to (`/claude/*`, `/codex/*`, or `/v1/*` by shape), and whether the body's model picks the provider.
 3. **`forward::Inbound`** buffers the body (so it can be replayed on another account) and reads the agent, the session, and the model from it.
 4. **`route::plan`** turns the model into `Step`s: each provider with an account that serves the model, subscriptions first, then paid overflow, selectors, aliases, and fallbacks. It drops accounts that may not serve this client (`agent_only`) or that speak a format it cannot be translated into.
-5. **`Pool::pick`** chooses an account for each step: the session's own account if it can still serve, else the `slopmax use` pin, else the strategy within the top priority tier.
+5. **`Pool::pick`** chooses an account for each step: the session's own account if it can still serve (unless affinity is off for the proxy or, by `x-slopmax-affinity`, the request), else the `slopmax use` pin, else the strategy within the top priority tier. The session's last account is remembered either way, so a move is known and account-bound state dropped.
 6. **`forward::attempt`** refreshes the token if due, then builds the outbound request. If the account speaks the client's format it is the client's own request with the credential swapped (`Provider::headers`, `Provider::rebind` when the session moved). If not, `wire::translate` decodes it into the common form and encodes it for the account's API (`Provider::shape` adds last touches).
 7. **The answer.** Rate-limit headers update the account's windows (`Provider::limits`). A refusal is classified by `Provider::verdict` into a `Verdict` (exhausted, throttled, unauthorized, stale state, or final), which decides whether to block the account and try the next. For Codex the first moments of the stream are held (`proxy/start.rs`) to catch refusals inside a 200.
 8. **Streaming back.** `proxy/sse.rs`'s `Tapped` watches the stream for token usage and records the request in the ledger when it ends. A translated answer also passes through `proxy/transcode.rs`, which reads the upstream's events and writes the client's.
@@ -259,7 +261,7 @@ State a format cannot carry back is kept by slopmax: the encrypted reasoning an 
 
 `daemon::run` binds the listener and starts the background tasks:
 
-- reloading accounts and pins from disk every 2 seconds, so the CLI's and the app's changes take effect (`POST /slopmax/sync` applies them at once);
+- reloading accounts and pins from disk every 2 seconds, and config.toml when it changed, so the CLI's and the app's changes take effect (`POST /slopmax/sync` applies them at once). `App::config` is swapped whole; only the listener is bound for good;
 - saving pool state (windows, blocks, sessions) every 10 seconds, so a restart keeps sessions on their accounts;
 - refreshing tokens ahead of expiry, polling usage, listing limit resets, and redeeming those about to expire;
 - watching account conditions for notifications.
