@@ -45,6 +45,9 @@ pub struct Group {
     /// claude0 · its quota resets soonest`; a warning when none can take
     /// one.
     pub next: Label,
+    /// The same, short, for the menu bar panel: `New sessions → claude0 ·
+    /// its quota resets soonest`.
+    pub next_short: Label,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -507,7 +510,8 @@ pub fn groups(report: &Report, now: Timestamp) -> Vec<Group> {
                     |pool| pool.accounts,
                 ),
                 credits: pool_credits(&accounts, now),
-                next: next_line(next, &accounts, now),
+                next: next_line(next, &accounts, now, false),
+                next_short: next_line(next, &accounts, now, true),
                 weighted: shares.is_some(),
             })
         })
@@ -516,12 +520,27 @@ pub fn groups(report: &Report, now: Timestamp) -> Vec<Group> {
 
 /// Where a new session goes, worded: the account and why, or, when none
 /// can take one, when the soonest is back.
-fn next_line(next: Option<&NextReport>, accounts: &[&AccountReport], now: Timestamp) -> Label {
+/// With `short`, an account goes by its address's local part.
+fn next_line(
+    next: Option<&NextReport>,
+    accounts: &[&AccountReport],
+    now: Timestamp,
+    short: bool,
+) -> Label {
+    let call = |name: &str| {
+        if short {
+            short_name(name)
+        } else {
+            name.to_owned()
+        }
+    };
     if let Some(next) = next {
-        let name = accounts
-            .iter()
-            .find(|a| a.id == next.account)
-            .map_or(next.account.as_str(), |a| a.name.as_str());
+        let name = call(
+            accounts
+                .iter()
+                .find(|a| a.id == next.account)
+                .map_or(next.account.as_str(), |a| a.name.as_str()),
+        );
         return Label {
             text: format!("New sessions → {name} · {}", next.why),
             tone: Tone::Muted,
@@ -538,8 +557,9 @@ fn next_line(next: Option<&NextReport>, accounts: &[&AccountReport], now: Timest
     Label {
         text: match back {
             Some((until, name)) => format!(
-                "No account can take a new session until {}, when {name} is back",
-                clock(until, now, until.local_offset())
+                "No account can take a new session until {}, when {} is back",
+                clock(until, now, until.local_offset()),
+                call(name)
             ),
             None => "No account can take a new session".to_owned(),
         },
@@ -832,13 +852,14 @@ pub fn minutes(mins: u64) -> String {
     }
 }
 
-/// What weekly resets left unused over a range, in a line: `4 weeks · 62%
-/// unused on average`.
+/// What weekly resets left unused over a range, in a line, as the
+/// dashboard and `slopmax usage` say it: `4 weekly windows · 62% unused on
+/// average across them`.
 pub fn left_line(windows: u64, unused: f64) -> String {
     match windows {
-        0 => "No week reset in this range".to_owned(),
-        1 => format!("1 week · {unused:.0}% unused"),
-        n => format!("{n} weeks · {unused:.0}% unused on average"),
+        0 => "No weekly window reset in this range".to_owned(),
+        1 => format!("1 weekly window · {unused:.0}% unused"),
+        n => format!("{n} weekly windows · {unused:.0}% unused on average across them"),
     }
 }
 
@@ -1134,6 +1155,19 @@ fn row(account: &AccountReport, slots: &[Slot], now: Timestamp) -> Row {
     }
 }
 
+/// `1,312`.
+fn grouped(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, digit) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
+
 /// `max 20x` as `Max 20x`: each word capitalized.
 fn title_case(text: &str) -> String {
     text.split(' ')
@@ -1200,7 +1234,7 @@ fn note(note: &Note) -> Label {
     let text = match note {
         Note::Served { requests, tokens } => format!(
             "{} {}, {} tokens all time",
-            requests,
+            grouped(*requests),
             if *requests == 1 {
                 "request"
             } else {
@@ -1526,6 +1560,10 @@ mod tests {
                 tone: Tone::Muted,
             }
         );
+        assert_eq!(
+            group.next_short.text,
+            "New sessions → b · its quota resets soonest"
+        );
         let next: Vec<bool> = group.accounts.iter().map(|row| row.next).collect();
         assert_eq!(next, [false, true]);
     }
@@ -1574,6 +1612,9 @@ mod tests {
         assert_eq!(rows[0].status.text, "ready · pinned");
         let notes: Vec<&str> = rows[0].notes.iter().map(|n| n.text.as_str()).collect();
         assert_eq!(notes, ["120 requests, 5.2M tokens all time"]);
+        assert_eq!(grouped(1_312), "1,312");
+        assert_eq!(grouped(999), "999");
+        assert_eq!(grouped(1_000_000), "1,000,000");
         assert_eq!(rows[1].status.text, "disabled");
     }
 
@@ -1701,9 +1742,12 @@ mod tests {
 
     #[test]
     fn what_resets_left_reads_as_a_line() {
-        assert_eq!(left_line(0, 0.), "No week reset in this range");
-        assert_eq!(left_line(1, 38.4), "1 week · 38% unused");
-        assert_eq!(left_line(4, 26.), "4 weeks · 26% unused on average");
+        assert_eq!(left_line(0, 0.), "No weekly window reset in this range");
+        assert_eq!(left_line(1, 38.4), "1 weekly window · 38% unused");
+        assert_eq!(
+            left_line(4, 26.),
+            "4 weekly windows · 26% unused on average across them"
+        );
     }
 
     #[test]

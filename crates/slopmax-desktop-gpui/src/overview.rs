@@ -133,7 +133,7 @@ impl Main {
                         stat(
                             "Saved by failover",
                             grouped(today.rescued),
-                            "taken by another account",
+                            "answered by another account",
                             c,
                         ),
                     ],

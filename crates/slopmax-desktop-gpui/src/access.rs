@@ -250,7 +250,6 @@ impl Main {
             } else {
                 h_flex().child(
                     push(SharedString::from(format!("ask-revoke-{i}")), "Revoke…")
-                        .link()
                         .accessibility_label(format!("Revoke the key {}…", key.name))
                         .on_click(cx.listener(move |main, _, _, cx| {
                             main.access.revoking = Some(name.clone());
@@ -422,7 +421,7 @@ impl Main {
                         .child(
                             div()
                                 .px(px(6.))
-                                .py(px(2.))
+                                .py(px(1.))
                                 .rounded(px(4.))
                                 .bg(c.well)
                                 .border_1()
@@ -437,38 +436,39 @@ impl Main {
                                 IconName::Copy,
                                 "Copy the command",
                             )
+                            .size(px(20.))
                             .on_click(move |_, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
                             }),
                         )
                 });
+                // Each part of the row as tall as a line, so the dot sits
+                // by the first line of its finding; the fix in a column of
+                // its own at the right.
+                let line = px(20.);
                 card = card.child(
                     ui::row(first, c)
                         .items_start()
-                        .when(i > 0, |row| row.border_t_0())
                         .child(
                             div()
                                 .w(px(120.))
                                 .flex_shrink_0()
-                                .pt(px(1.))
+                                .min_h(line)
+                                .flex()
+                                .items_center()
                                 .text_color(c.muted)
                                 .when(i == 0, |label| label.child(part.title)),
                         )
-                        .child(div().pt(px(7.)).child(dot(c.tone(tone))))
+                        .child(div().h(line).flex().items_center().child(dot(c.tone(tone))))
                         .child(
-                            h_flex()
+                            div()
                                 .flex_1()
                                 .min_w_0()
-                                .flex_wrap()
-                                .gap(px(10.))
+                                .line_height(line)
                                 // The CLI's words, as a window sets them.
-                                .child(
-                                    div()
-                                        .pt(px(1.))
-                                        .child(ui::sentence(&finding.text.replace('`', ""))),
-                                )
-                                .children(fix),
-                        ),
+                                .child(ui::sentence(&finding.text.replace('`', ""))),
+                        )
+                        .children(fix.map(|fix| fix.flex_shrink_0().min_h(line))),
                 );
                 first = false;
             }

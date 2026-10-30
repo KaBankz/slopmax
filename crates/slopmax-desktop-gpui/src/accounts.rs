@@ -474,20 +474,9 @@ fn limit(gauge: Option<&Gauge>, faded: bool, c: &Colors) -> Div {
             )
         }),
     )
-    .child(
-        v_flex()
-            .gap(px(2.))
-            .child(caption(
-                match &g.resets_in {
-                    Some(left) => format!("Resets in {left}"),
-                    None => "Nothing to reset".to_owned(),
-                },
-                c,
-            ))
-            .children(
-                pace.map(|pace| caption(&pace.label.text, c).text_color(c.tone(pace.label.tone))),
-            ),
-    )
+    .child(v_flex().gap(px(2.)).child(caption(resets(g), c)).children(
+        pace.map(|pace| caption(&pace.label.text, c).text_color(c.tone(pace.label.tone))),
+    ))
 }
 
 /// The way to an account's reset credits: their count, and a chevron that

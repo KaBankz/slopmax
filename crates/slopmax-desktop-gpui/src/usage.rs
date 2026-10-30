@@ -185,7 +185,7 @@ fn performance(history: &History, c: &Colors) -> Div {
                     stat(
                         "Saved by failover",
                         grouped(history.rescued),
-                        "taken by another account",
+                        "answered by another account",
                         c,
                     ),
                     stat(
@@ -1156,7 +1156,7 @@ fn left(history: &History, c: &Colors) -> Div {
             )
             .child(explain);
     }
-    const WIDTHS: [f32; 3] = [56., 72., 76.];
+    const WIDTHS: [f32; 3] = [104., 72., 76.];
     let numbers = |cells: [String; 3]| {
         h_flex().flex_shrink_0().gap(px(16.)).children(
             cells
@@ -1176,7 +1176,7 @@ fn left(history: &History, c: &Colors) -> Div {
                 caption(
                     format!(
                         "{} on plans without a known price left out",
-                        count(left.unpriced, "week")
+                        count(left.unpriced, "weekly window")
                     ),
                     c,
                 )
@@ -1193,7 +1193,9 @@ fn left(history: &History, c: &Colors) -> Div {
         .text_color(c.muted)
         .child(div().w(px(260.)).flex_shrink_0().child("Account"))
         .child(div().flex_1().child("Unused at reset"))
-        .child(numbers(["Weeks", "Unused", "Left"].map(str::to_owned)));
+        .child(numbers(
+            ["Weekly windows", "Unused", "Left"].map(str::to_owned),
+        ));
     let rows = left.accounts.iter().map(|account| {
         h_flex()
             .px(px(16.))

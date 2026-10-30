@@ -420,7 +420,7 @@ fn pool(group: &Group, attention: &[view::Attention], c: &Colors) -> impl IntoEl
                 .as_deref()
                 .map(|credits| caption(ui::sentence(credits), c)),
         )
-        .child(crate::overview::next(&group.next, c))
+        .child(crate::overview::next(&group.next_short, c))
 }
 
 /// The most a panel lists of what wants a look; the rest are counted.

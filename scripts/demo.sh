@@ -114,7 +114,8 @@ with open(f"{home}/windows.jsonl", "w") as f:
         accounts = [i for i in ids if i.startswith(provider)]
         for n, (account, weeks) in enumerate(zip(accounts, used_by_account)):
             for back, used in enumerate(weeks):
-                ended = now - (back + 1) * 7 * 86_400 + 3_600 * (n + 1)
+                # The latest ended a few days ago, inside a week's range.
+                ended = now - back * 7 * 86_400 - 86_400 * (n + 2)
                 f.write(json.dumps({"ended_at": at(ended - now), "account": account,
                                     "provider": provider, "plan": plan_of[account],
                                     "span": "7d", "used": used}) + "\n")

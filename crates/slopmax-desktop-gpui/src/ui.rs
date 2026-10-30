@@ -174,13 +174,10 @@ pub(crate) fn label(label: &Label, c: &Colors) -> Div {
 
 /// The core's words, set as `slopmax status` sets them, as a window's:
 /// without the dot that leads an active account, as the window draws its
-/// own; capitalized; and with commas where the terminal sets parts apart
-/// with dots.
+/// own; and capitalized. Parts stay set apart with dots, as the dashboard
+/// sets them: `Limited · back in 1h19m`.
 pub(crate) fn sentence(text: &str) -> String {
-    let text = text
-        .trim_start_matches('●')
-        .trim_start()
-        .replace(" · ", ", ");
+    let text = text.trim_start_matches('●').trim_start();
     let mut chars = text.chars();
     chars.next().map_or_else(String::new, |first| {
         first.to_uppercase().chain(chars).collect()
@@ -465,9 +462,9 @@ mod tests {
     #[test]
     fn the_cores_words_read_as_a_sentence() {
         assert_eq!(sentence("ready"), "Ready");
-        assert_eq!(sentence("● active · 2 sessions"), "Active, 2 sessions");
-        assert_eq!(sentence("limited · back in 1h"), "Limited, back in 1h");
-        assert_eq!(sentence("120 req · 5.2M tok"), "120 req, 5.2M tok");
+        assert_eq!(sentence("● active · 2 sessions"), "Active · 2 sessions");
+        assert_eq!(sentence("limited · back in 1h"), "Limited · back in 1h");
+        assert_eq!(sentence("120 req · 5.2M tok"), "120 req · 5.2M tok");
         assert_eq!(sentence(""), "");
     }
 }
