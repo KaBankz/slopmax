@@ -101,6 +101,33 @@ pub fn plan_monthly(
     })
 }
 
+/// How much usage each plan allows, against the smallest of its provider:
+/// Claude's Max plans are sold as 5 and 20 times Pro. ChatGPT states no
+/// such ratio, so its plans have none here.
+const CAPACITY: &[(ProviderId, &str, f64)] = &[
+    (ProviderId::Claude, "pro", 1.0),
+    (ProviderId::Claude, "max 5x", 5.0),
+    (ProviderId::Claude, "max 20x", 20.0),
+];
+
+/// Each account's share of its pool's capacity, by plan, in the order
+/// given; `None` unless every plan's size is known, as a mean weighted by
+/// guesses would mislead more than a plain one.
+pub fn shares(provider: ProviderId, plans: &[Option<&str>]) -> Option<Vec<f64>> {
+    let sizes: Vec<f64> = plans
+        .iter()
+        .map(|plan| {
+            let plan = (*plan)?.trim().to_ascii_lowercase();
+            CAPACITY
+                .iter()
+                .find(|(p, name, _)| *p == provider && *name == plan)
+                .map(|(.., size)| *size)
+        })
+        .collect::<Option<_>>()?;
+    let total: f64 = sizes.iter().sum();
+    (total > 0.0).then(|| sizes.iter().map(|s| s / total).collect())
+}
+
 /// The price of `model`: the user's own if they set one, else the list
 /// price.
 pub fn price(model: &str, custom: &BTreeMap<String, Custom>) -> Option<Price> {
@@ -164,6 +191,15 @@ mod tests {
         assert!(list("claude-opus-5-6").is_none());
         assert!(list("claude-opus-5-5-fast").is_none());
         assert!(list("gpt-6-sol-pro").is_none());
+    }
+
+    #[test]
+    fn shares_follow_plan_sizes_only_when_every_one_is_known() {
+        let shares = shares(ProviderId::Claude, &[Some("max 20x"), Some("Max 5x")]).unwrap();
+        assert_eq!(shares, [0.8, 0.2]);
+        assert!(super::shares(ProviderId::Claude, &[Some("max 20x"), None]).is_none());
+        assert!(super::shares(ProviderId::Codex, &[Some("pro"), Some("plus")]).is_none());
+        assert!(super::shares(ProviderId::Claude, &[]).is_none());
     }
 
     #[test]

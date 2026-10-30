@@ -685,15 +685,19 @@ impl Pool {
     pub fn pooled(&self, provider: ProviderId, now: Timestamp) -> Vec<PoolWindow> {
         let inner = self.lock();
         let unknown = AccountState::default();
-        let accounts = inner
+        let working: Vec<&Account> = inner
             .accounts
             .iter()
             .filter(|a| a.provider == provider && !a.disabled && a.auth_error.is_none())
-            .map(|a| {
-                let state = inner.states.get(&a.id).unwrap_or(&unknown);
-                (&state.limits, state.is_blocked(now))
-            });
-        crate::limits::pooled(accounts, now)
+            .collect();
+        let plans: Vec<Option<&str>> = working.iter().map(|a| a.plan.as_deref()).collect();
+        let shares =
+            crate::pricing::shares(provider, &plans).unwrap_or_else(|| vec![1.0; working.len()]);
+        let accounts = working.iter().zip(shares).map(|(a, share)| {
+            let state = inner.states.get(&a.id).unwrap_or(&unknown);
+            (&state.limits, state.is_blocked(now), share)
+        });
+        crate::limits::pooled_by(accounts, now)
     }
 
     pub fn state(&self, id: &str) -> AccountState {

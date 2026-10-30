@@ -281,29 +281,39 @@ pub fn pooled<'a>(
     accounts: impl IntoIterator<Item = (&'a Limits, bool)>,
     now: Timestamp,
 ) -> Vec<PoolWindow> {
-    let accounts: Vec<(&Limits, bool)> = accounts.into_iter().collect();
+    pooled_by(accounts.into_iter().map(|(l, b)| (l, b, 1.0)), now)
+}
+
+/// [`pooled`], each account weighted by its share of the pool's capacity,
+/// so a large plan's usage counts for more than a small one's.
+pub fn pooled_by<'a>(
+    accounts: impl IntoIterator<Item = (&'a Limits, bool, f64)>,
+    now: Timestamp,
+) -> Vec<PoolWindow> {
+    let accounts: Vec<(&Limits, bool, f64)> = accounts.into_iter().collect();
     let mut windows = Vec::new();
     for span in ["5h", "7d", "30d"] {
-        let readings: Vec<(f64, Option<Timestamp>)> = accounts
+        let readings: Vec<(f64, Option<Timestamp>, f64)> = accounts
             .iter()
-            .filter_map(|(limits, blocked)| {
+            .filter_map(|(limits, blocked, weight)| {
                 let window = limits.shared().find(|w| w.span == span)?;
                 let shortest = limits.shared().map(|w| span_rank(&w.span)).min();
                 let used = match blocked {
                     true if shortest == Some(span_rank(span)) => 100.0,
                     _ => window.used_at(now),
                 };
-                Some((used, window.upcoming_reset(now)))
+                Some((used, window.upcoming_reset(now), *weight))
             })
             .collect();
-        if readings.is_empty() {
+        let weight: f64 = readings.iter().map(|r| r.2).sum();
+        if readings.is_empty() || weight <= 0.0 {
             continue;
         }
-        let used = readings.iter().map(|(used, _)| used).sum::<f64>() / readings.len() as f64;
+        let used = readings.iter().map(|(used, _, w)| used * w).sum::<f64>() / weight;
         let resets_at = readings
             .iter()
-            .filter(|(used, _)| *used > 0.0)
-            .filter_map(|(_, reset)| *reset)
+            .filter(|(used, ..)| *used > 0.0)
+            .filter_map(|(_, reset, _)| *reset)
             .min();
         windows.push(PoolWindow {
             span,
@@ -435,6 +445,13 @@ mod tests {
         let pool = pooled([(&busy, false), (&unknown, false)], now);
         assert_eq!(pool[0].used, 90.0);
         assert!(pooled([(&unknown, false)], now).is_empty());
+        // Weighted, a large plan's usage counts for more.
+        let weighted = pooled_by([(&busy, false, 0.8), (&fresh, false, 0.2)], now);
+        let plain = pooled([(&busy, false), (&fresh, false)], now);
+        assert!(
+            weighted[0].used > plain[0].used,
+            "{weighted:?} vs {plain:?}"
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! Account status: what `slopmax status` and the app show, and what
 //! `/slopmax/status` serves.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -45,6 +45,11 @@ pub struct PoolReport {
     /// The account a new session would get now, when one can serve.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next: Option<NextReport>,
+    /// Each account's share of the pool's capacity, by id, when every
+    /// plan's size is known; the windows are then weighted by it. Empty,
+    /// they are a plain average of the accounts.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub shares: BTreeMap<String, f64>,
 }
 
 /// Where a new session would go, and why, worded for people.
@@ -372,10 +377,14 @@ fn pool(provider: ProviderId, accounts: &[AccountReport], now: Timestamp) -> Opt
     if working.is_empty() {
         return None;
     }
-    let mut windows: Vec<Window> = limits::pooled(
+    let plans: Vec<Option<&str>> = working.iter().map(|a| a.plan.as_deref()).collect();
+    let shares = crate::pricing::shares(provider, &plans);
+    let weights = shares.clone().unwrap_or_else(|| vec![1.0; working.len()]);
+    let mut windows: Vec<Window> = limits::pooled_by(
         working
             .iter()
-            .map(|a| (&a.state.limits, a.state.is_blocked(now))),
+            .zip(&weights)
+            .map(|(a, w)| (&a.state.limits, a.state.is_blocked(now), *w)),
         now,
     )
     .into_iter()
@@ -390,26 +399,36 @@ fn pool(provider: ProviderId, accounts: &[AccountReport], now: Timestamp) -> Opt
     scoped.sort_unstable();
     scoped.dedup();
     for (span, model) in scoped {
-        let readings: Vec<&Window> = working
+        let readings: Vec<(&Window, f64)> = working
             .iter()
-            .flat_map(|a| &a.state.limits.windows)
-            .filter(|w| w.span == span && w.model.as_deref() == Some(model))
+            .zip(&weights)
+            .flat_map(|(a, w)| a.state.limits.windows.iter().map(move |win| (win, *w)))
+            .filter(|(w, _)| w.span == span && w.model.as_deref() == Some(model))
             .collect();
-        let used = readings.iter().map(|w| w.used_at(now)).sum::<f64>() / readings.len() as f64;
+        let weight: f64 = readings.iter().map(|r| r.1).sum();
+        let used = readings
+            .iter()
+            .map(|(w, s)| w.used_at(now) * s)
+            .sum::<f64>()
+            / weight;
         let resets_at = readings
             .iter()
-            .filter(|w| w.used_at(now) > 0.0)
-            .filter_map(|w| w.upcoming_reset(now))
+            .filter(|(w, _)| w.used_at(now) > 0.0)
+            .filter_map(|(w, _)| w.upcoming_reset(now))
             .min();
         let mut window = Window::new(span, used, resets_at);
         window.model = Some(model.to_owned());
         windows.push(window);
     }
+    let shares = shares
+        .map(|shares| working.iter().map(|a| a.id.clone()).zip(shares).collect())
+        .unwrap_or_default();
     Some(PoolReport {
         provider,
         accounts: working.len(),
         windows,
         next: None,
+        shares,
     })
 }
 
