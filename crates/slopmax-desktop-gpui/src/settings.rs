@@ -1,8 +1,9 @@
 //! The Agents page, which points Claude Code and Codex at slopmax, and the
 //! Settings page: how the window looks, the proxy and starting at login,
-//! how requests find their account, adding accounts, and when reset
-//! credits are redeemed. Each is a titled panel of rows: a setting's name
-//! and what it does on the left, its control on the right.
+//! how requests find their account, when reset credits are redeemed,
+//! notifications, and the rest of what changes while the proxy runs. Each
+//! is a titled panel of rows: a setting's name and what it does on the
+//! left, its control on the right.
 
 use std::sync::Arc;
 
@@ -14,13 +15,12 @@ use gpui_kit::*;
 use slopmax_app::view::{self, Label};
 use slopmax_app::{App as Slopmax, Proxy, Setting};
 use slopmax_core::config::{Config, Strategy};
-use slopmax_core::provider::ProviderId;
 use slopmax_core::report::Tone;
 
+use crate::Main;
 use crate::prefs::{Appearance, Prefs};
 use crate::theme::{self, Colors, tabular};
-use crate::ui::{self, caption, field, label, panel, push, section, segmented};
-use crate::{KEYS, Main};
+use crate::ui::{self, caption, label, panel, push, section, segmented};
 
 impl Main {
     pub(crate) fn agents(&self, c: &Colors) -> Div {
@@ -73,7 +73,6 @@ impl Main {
             .child(appearance(c, cx))
             .child(self.proxy(c))
             .child(routing(&self.app, &self.snapshot.config, c))
-            .child(self.adding(c, cx))
             .child(redeeming(&self.app, &self.snapshot.config, c))
             .child(notifications(&self.app, self.snapshot.notifications, c))
             .child(advanced(&self.app, &self.snapshot.config, c))
@@ -163,76 +162,6 @@ impl Main {
                         }),
                     c,
                 )),
-        )
-    }
-
-    /// Ways to add an account: signing in, importing, or an API key.
-    fn adding(&self, c: &Colors, cx: &mut Context<Self>) -> impl IntoElement {
-        let (claude, chatgpt, import) = (self.app.clone(), self.app.clone(), self.app.clone());
-        let (app, key, provider) = (self.app.clone(), self.key.clone(), self.key_provider);
-        section("Add an account", None, c).child(
-            panel(c)
-                .child(setting(
-                    true,
-                    "Sign in",
-                    "With your browser, as the agent's own sign-in does.",
-                    h_flex()
-                        .gap(px(8.))
-                        .child(
-                            push("sign-in-claude", "Claude")
-                                .on_click(move |_, _, _| claude.sign_in(ProviderId::Claude)),
-                        )
-                        .child(
-                            push("sign-in-chatgpt", "ChatGPT")
-                                .on_click(move |_, _, _| chatgpt.sign_in(ProviderId::Codex)),
-                        ),
-                    c,
-                ))
-                .child(setting(
-                    false,
-                    "Import",
-                    "Logins Claude Code, Codex, or CLIProxyAPI already have.",
-                    push("import", "Import").on_click(move |_, _, _| import.import()),
-                    c,
-                ))
-                .child(
-                    ui::row(false, c)
-                        .flex_col()
-                        .items_stretch()
-                        .gap(px(12.))
-                        .child(name(
-                            "API key",
-                            "A key bills by the token; slopmax spends subscriptions first.",
-                            c,
-                        ))
-                        .child(
-                            h_flex()
-                                .gap(px(8.))
-                                .child(segmented(
-                                    "key",
-                                    KEYS.map(|provider| (provider, provider.spec().title)),
-                                    self.key_provider,
-                                    |main: &mut Main, provider, cx| {
-                                        main.key_provider = provider;
-                                        cx.notify();
-                                    },
-                                    c,
-                                    cx,
-                                ))
-                                .child(div().flex_1().child(field(&self.key)))
-                                .child(push("add-key", "Add key").primary().on_click(
-                                    move |_, window, cx| {
-                                        let value = key.read(cx).value().to_string();
-                                        if !value.is_empty() {
-                                            app.add_key(provider, value);
-                                            key.update(cx, |input, cx| {
-                                                input.set_value("", window, cx);
-                                            });
-                                        }
-                                    },
-                                )),
-                        ),
-                ),
         )
     }
 }
@@ -499,7 +428,7 @@ fn advanced(app: &Arc<Slopmax>, config: &Config, c: &Colors) -> impl IntoElement
 }
 
 /// A setting's name over what it does.
-fn name(title: &str, detail: impl AsRef<str>, c: &Colors) -> Div {
+pub(crate) fn name(title: &str, detail: impl AsRef<str>, c: &Colors) -> Div {
     v_flex()
         .flex_1()
         .min_w_0()
@@ -514,7 +443,7 @@ fn name(title: &str, detail: impl AsRef<str>, c: &Colors) -> Div {
 }
 
 /// A row of settings: the setting, what it does, and its control.
-fn setting(
+pub(crate) fn setting(
     first: bool,
     title: &str,
     detail: impl AsRef<str>,

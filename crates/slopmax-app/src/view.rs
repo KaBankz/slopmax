@@ -92,6 +92,9 @@ pub struct Credits {
 pub struct CreditLine {
     /// `Expires Oct 9`, or that it does not.
     pub expires: String,
+    /// `Expires in 2d23h · Oct 9`, or that it does not, as the dashboard
+    /// says it.
+    pub line: String,
     /// `in 2d23h`.
     pub left: Option<String>,
     /// `Granted Sep 21`, when the provider says.
@@ -234,8 +237,17 @@ pub struct Attention {
     /// The account's id.
     pub account: String,
     pub text: String,
+    /// The same, short, for the menu bar panel: who, by the local part of
+    /// their address, and what and when, which a narrow line keeps whole.
+    pub who: String,
+    pub what: String,
     pub tone: Tone,
     pub remedy: Remedy,
+}
+
+/// An account's name, short: an address's local part.
+fn short_name(name: &str) -> String {
+    name.split('@').next().unwrap_or(name).to_owned()
 }
 
 /// What wants a look, most pressing first: an account signed out, one
@@ -245,10 +257,12 @@ pub struct Attention {
 pub fn attention(report: &Report, now: Timestamp) -> Vec<Attention> {
     let mut found = Vec::new();
     for account in report.accounts.iter().filter(|a| !a.disabled) {
-        let note = |text: String, tone, remedy| Attention {
+        let note = |text: String, what: String, tone, remedy| Attention {
             provider: account.provider,
             account: account.id.clone(),
             text,
+            who: short_name(&account.name),
+            what,
             tone,
             remedy,
         };
@@ -257,6 +271,7 @@ pub fn attention(report: &Report, now: Timestamp) -> Vec<Attention> {
             Condition::SignInNeeded(_) => {
                 found.push(note(
                     format!("{} needs signing in again", account.name),
+                    "sign in again".to_owned(),
                     Tone::Bad,
                     Remedy::SignIn,
                 ));
@@ -266,6 +281,11 @@ pub fn attention(report: &Report, now: Timestamp) -> Vec<Attention> {
                 format!(
                     "{} is limited until {}, and holds {}",
                     account.name,
+                    clock(until, now, until.local_offset()),
+                    credit_count(credits)
+                ),
+                format!(
+                    "limited until {}, {} held",
                     clock(until, now, until.local_offset()),
                     credit_count(credits)
                 ),
@@ -291,6 +311,7 @@ pub fn attention(report: &Report, now: Timestamp) -> Vec<Attention> {
                         account.name,
                         lowercase_first(&pace.label.text)
                     ),
+                    format!("{title} {}", lowercase_first(&pace.label.text)),
                     Tone::Warn,
                     Remedy::Look,
                 ));
@@ -314,19 +335,20 @@ pub fn attention(report: &Report, now: Timestamp) -> Vec<Attention> {
                     clock(at, now, at.local_offset()),
                     if held { "; auto-redeem is off" } else { "" }
                 ),
+                format!("reset expires in {}", human::until(at, now)),
                 Tone::Warn,
                 Remedy::Redeem,
             ));
         }
     }
-    add_nudges(&mut found, report);
+    add_nudges(&mut found, report, now);
     found.sort_by_key(|a| a.tone != Tone::Bad);
     found
 }
 
 /// Adds the report's nudges to what wants a look, leaving out a limit
 /// reset the list already offers to redeem.
-fn add_nudges(found: &mut Vec<Attention>, report: &Report) {
+fn add_nudges(found: &mut Vec<Attention>, report: &Report, now: Timestamp) {
     for nudge in &report.nudges {
         let Some(account) = nudge
             .account
@@ -334,6 +356,16 @@ fn add_nudges(found: &mut Vec<Attention>, report: &Report) {
             .and_then(|name| report.accounts.iter().find(|a| a.name == name))
         else {
             continue;
+        };
+        let until = nudge.until.unwrap_or(now);
+        let item = |text: String, what: String, remedy| Attention {
+            provider: account.provider,
+            account: account.id.clone(),
+            text,
+            who: short_name(&account.name),
+            what,
+            tone: Tone::Warn,
+            remedy,
         };
         let item = match nudge.event {
             // The list may already offer to redeem it, above.
@@ -344,24 +376,59 @@ fn add_nudges(found: &mut Vec<Attention>, report: &Report) {
             {
                 continue;
             }
-            Kind::ResetExpiring => Attention {
-                provider: account.provider,
-                account: account.id.clone(),
-                text: first_sentence(&nudge.message),
-                tone: Tone::Warn,
-                remedy: Remedy::Redeem,
-            },
+            Kind::ResetExpiring => item(
+                first_sentence(&nudge.message),
+                format!("reset expires in {}", human::until(until, now)),
+                Remedy::Redeem,
+            ),
             // Quota about to go to waste: amber, as on the dashboard.
-            Kind::QuotaUnused => Attention {
-                provider: account.provider,
-                account: account.id.clone(),
-                text: first_sentence(&nudge.message),
-                tone: Tone::Warn,
-                remedy: Remedy::Look,
-            },
+            Kind::QuotaUnused => {
+                let (period, unused) = unused_at_reset(account, now);
+                let worth = nudge
+                    .worth
+                    .filter(|d| *d >= 0.5)
+                    .map(|d| format!(", about ${d:.0} of its plan"))
+                    .unwrap_or_default();
+                item(
+                    format!(
+                        "{}'s {period} resets in {} · {} with {unused:.0}% of it unused{worth}",
+                        account.name,
+                        human::until(until, now),
+                        clock(until, now, until.local_offset()),
+                    ),
+                    format!(
+                        "{period} ends in {}, {unused:.0}% unused",
+                        human::until(until, now)
+                    ),
+                    Remedy::Look,
+                )
+            }
             _ => continue,
         };
         found.push(item);
+    }
+}
+
+/// An account's long window, `week` or `month`, and how much of it is
+/// unused, in percent.
+fn unused_at_reset(account: &AccountReport, now: Timestamp) -> (&'static str, f64) {
+    let long = account
+        .state
+        .limits
+        .windows
+        .iter()
+        .filter(|w| w.model.is_none())
+        .find(|w| matches!(w.span.as_str(), "7d" | "30d"));
+    match long {
+        Some(window) => (
+            if window.span == "30d" {
+                "month"
+            } else {
+                "week"
+            },
+            100.0 - window.used_at(now).clamp(0.0, 100.0),
+        ),
+        None => ("week", 0.0),
     }
 }
 
@@ -605,6 +672,14 @@ fn credit_line(credit: &Credit, now: Timestamp) -> CreditLine {
     CreditLine {
         expires: match expires {
             Some(at) => format!("Expires {}", clock(at, now, at.local_offset())),
+            None => "Does not expire".to_owned(),
+        },
+        line: match expires {
+            Some(at) => format!(
+                "Expires in {} · {}",
+                human::until(at, now),
+                clock(at, now, at.local_offset())
+            ),
             None => "Does not expire".to_owned(),
         },
         left: expires.map(|at| format!("in {}", human::until(at, now))),
@@ -1533,10 +1608,18 @@ mod tests {
         ];
         let items = attention(&report, now);
         let unused = items.iter().find(|a| a.remedy == Remedy::Look).unwrap();
-        assert_eq!(
-            unused.text,
-            "b@x.dev's week resets in 19h59m · 19:12 with 79% of it unused, about $4 of its plan"
+        // Its words are the window's own, its time with the day it falls
+        // on, as every other line has it.
+        assert!(
+            unused
+                .text
+                .starts_with("b@x.dev's week resets in 16h23m · ")
+                && unused.text.ends_with(" with 90% of it unused"),
+            "{}",
+            unused.text
         );
+        assert_eq!(unused.who, "b");
+        assert_eq!(unused.what, "week ends in 16h23m, 90% unused");
         assert_eq!(unused.tone, Tone::Warn, "amber, as on the dashboard");
         assert_eq!(unused.account, report.accounts[1].id);
         let reset = items.iter().find(|a| a.remedy == Remedy::Redeem).unwrap();
@@ -1564,15 +1647,17 @@ mod tests {
             provider: ProviderId::Claude,
             account: report.accounts[0].id.clone(),
             text: "already offered".to_owned(),
+            who: "a".to_owned(),
+            what: "reset expires in 1h".to_owned(),
             tone: Tone::Warn,
             remedy: Remedy::Redeem,
         };
         let mut found = vec![already.clone()];
-        add_nudges(&mut found, &report);
+        add_nudges(&mut found, &report, now);
         assert_eq!(found, [already]);
         // Without it, the nudge is offered.
         let mut found = Vec::new();
-        add_nudges(&mut found, &report);
+        add_nudges(&mut found, &report, now);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].remedy, Remedy::Redeem);
     }

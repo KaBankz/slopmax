@@ -30,7 +30,6 @@ use std::time::{Duration, Instant};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::input::{self, InputState};
-use gpui_kit::component::menu::DropdownMenu as _;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{ActiveTheme as _, Disableable, TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -170,7 +169,7 @@ fn main() -> anyhow::Result<()> {
         theme::init(cx);
         cx.on_action(|_: &OpenWindow, cx| open_window(cx));
         cx.on_action(|_: &OpenSettings, cx| show(Section::Settings, cx));
-        cx.on_action(|_: &AddKey, cx| show(Section::Settings, cx));
+        cx.on_action(|_: &AddKey, cx| show(Section::Access, cx));
         cx.on_action(|_: &Refresh, cx| cx.global::<Shared>().app.refresh());
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.on_action(|_: &Hide, cx| cx.hide());
@@ -916,17 +915,12 @@ impl Main {
                             .disabled(!running)
                             .on_click(move |_, _, _| app.refresh()),
                     )
+                    // Every way to add one is on the Access page.
                     .child(
                         push("add", "Add account")
                             .icon(IconName::Plus)
                             .primary()
-                            .dropdown_menu_with_anchor(Anchor::TopRight, |menu, _, _| {
-                                menu.menu("Sign in with Claude…", Box::new(SignInClaude))
-                                    .menu("Sign in with ChatGPT…", Box::new(SignInChatGpt))
-                                    .separator()
-                                    .menu("Import logins", Box::new(ImportLogins))
-                                    .menu("Add an API key…", Box::new(AddKey))
-                            }),
+                            .on_click(cx.listener(|main, _, _, cx| main.go(Section::Access, cx))),
                     )
             }
             Section::Usage | Section::Performance => tools.child(segmented(

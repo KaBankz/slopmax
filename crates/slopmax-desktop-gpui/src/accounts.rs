@@ -314,16 +314,13 @@ impl Main {
                 .gap(px(12.))
                 .children(held.as_deref().map(|why| caption(why, c)))
                 .child(
-                    push(
-                        SharedString::from(format!("ask-redeem-{id}")),
-                        "Redeem one…",
-                    )
-                    .disabled(held.is_some())
-                    .accessibility_label(format!("Redeem a limit reset on {}…", row.name))
-                    .on_click(cx.listener(move |main, _, _, cx| {
-                        main.confirming = Some(id.clone());
-                        cx.notify();
-                    })),
+                    push(SharedString::from(format!("ask-redeem-{id}")), "Redeem…")
+                        .disabled(held.is_some())
+                        .accessibility_label(format!("Redeem a limit reset on {}…", row.name))
+                        .on_click(cx.listener(move |main, _, _, cx| {
+                            main.confirming = Some(id.clone());
+                            cx.notify();
+                        })),
                 )
         };
         let mut well = v_flex()
@@ -364,12 +361,7 @@ impl Main {
                     .text_size(px(ui::SMALL))
                     .text_color(if soon { c.warn } else { c.fg })
                     .when(soon, |line| line.child(dot(c.warn)))
-                    .child(credit.expires.clone())
-                    .children(credit.left.as_ref().map(|left| {
-                        div()
-                            .text_color(if soon { c.warn } else { c.muted })
-                            .child(left.clone())
-                    }))
+                    .child(credit.line.clone())
                     .child(div().flex_1())
                     .children(
                         credit

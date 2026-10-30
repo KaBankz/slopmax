@@ -1,7 +1,7 @@
-//! The Access page, what `slopmax keys` and `slopmax login compat` do:
-//! client keys for other machines and tools, the new one shown once, and
-//! compatible endpoints to add. And the Diagnostics page, the setup checks
-//! `slopmax doctor` runs, each with its fix to copy.
+//! The Access page, every way in and out: adding an account (signing in,
+//! importing, an API key, or a compatible endpoint), and client keys for
+//! other machines and tools, the new one shown once. And the Diagnostics
+//! page, the setup checks `slopmax doctor` runs, each with its fix to copy.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::ButtonVariants as _;
@@ -13,9 +13,12 @@ use slopmax_app::view;
 use slopmax_app::{Doctor, NewEndpoint};
 use slopmax_core::wire::Dialect;
 
-use crate::Main;
+use slopmax_core::provider::ProviderId;
+
+use crate::settings::{name, setting};
 use crate::theme::{Colors, MONO};
 use crate::ui::{self, caption, dot, field, panel, push, section, segmented, tool};
+use crate::{KEYS, Main};
 
 /// The APIs a compatible endpoint may speak.
 const DIALECTS: [(Dialect, &str); 3] = [
@@ -71,11 +74,83 @@ impl Main {
         v_flex()
             .gap(px(32.))
             .child(div().max_w(px(560.)).text_color(c.muted).child(
-                "Keys let other machines and tools reach slopmax; endpoints are more APIs for \
-                 slopmax to send requests to.",
+                "The accounts slopmax sends requests to, and the keys other machines and \
+                 tools reach it with.",
             ))
+            .child(self.adding(c, cx))
             .child(self.client_keys(c, cx))
-            .child(self.endpoint(c, cx))
+    }
+
+    /// Ways to add an account, in one place: signing in, importing, an API
+    /// key, or a compatible endpoint.
+    fn adding(&self, c: &Colors, cx: &mut Context<Self>) -> impl IntoElement {
+        let (claude, chatgpt, import) = (self.app.clone(), self.app.clone(), self.app.clone());
+        let (app, key, provider) = (self.app.clone(), self.key.clone(), self.key_provider);
+        section("Add an account", None, c).child(
+            panel(c)
+                .child(setting(
+                    true,
+                    "Sign in",
+                    "With your browser, as the agent's own sign-in does.",
+                    h_flex()
+                        .gap(px(8.))
+                        .child(
+                            push("sign-in-claude", "Claude")
+                                .on_click(move |_, _, _| claude.sign_in(ProviderId::Claude)),
+                        )
+                        .child(
+                            push("sign-in-chatgpt", "ChatGPT")
+                                .on_click(move |_, _, _| chatgpt.sign_in(ProviderId::Codex)),
+                        ),
+                    c,
+                ))
+                .child(setting(
+                    false,
+                    "Import",
+                    "Logins Claude Code, Codex, or CLIProxyAPI already have.",
+                    push("import", "Import").on_click(move |_, _, _| import.import()),
+                    c,
+                ))
+                .child(
+                    ui::row(false, c)
+                        .flex_col()
+                        .items_stretch()
+                        .gap(px(12.))
+                        .child(name(
+                            "API key",
+                            "A key bills by the token; slopmax spends subscriptions first.",
+                            c,
+                        ))
+                        .child(
+                            h_flex()
+                                .gap(px(8.))
+                                .child(segmented(
+                                    "key",
+                                    KEYS.map(|provider| (provider, provider.spec().title)),
+                                    self.key_provider,
+                                    |main: &mut Main, provider, cx| {
+                                        main.key_provider = provider;
+                                        cx.notify();
+                                    },
+                                    c,
+                                    cx,
+                                ))
+                                .child(div().flex_1().child(field(&self.key)))
+                                .child(push("add-key", "Add key").primary().on_click(
+                                    move |_, window, cx| {
+                                        let value = key.read(cx).value().to_string();
+                                        if !value.is_empty() {
+                                            app.add_key(provider, value);
+                                            key.update(cx, |input, cx| {
+                                                input.set_value("", window, cx);
+                                            });
+                                        }
+                                    },
+                                )),
+                        ),
+                )
+                .child(self.endpoint(c, cx)),
+        )
     }
 
     /// The client keys: each by name and the models it may use, the one
@@ -175,6 +250,7 @@ impl Main {
             } else {
                 h_flex().child(
                     push(SharedString::from(format!("ask-revoke-{i}")), "Revoke…")
+                        .link()
                         .accessibility_label(format!("Revoke the key {}…", key.name))
                         .on_click(cx.listener(move |main, _, _, cx| {
                             main.access.revoking = Some(name.clone());
@@ -214,7 +290,7 @@ impl Main {
                     .gap(px(8.))
                     .child(div().w(px(200.)).flex_shrink_0().child(field(&fields.0)))
                     .child(div().flex_1().min_w_0().child(field(&fields.1)))
-                    .child(push("make-key", "Make key").primary().on_click(
+                    .child(push("make-key", "Create key").primary().on_click(
                         move |_, window, cx| {
                             let name = fields.0.read(cx).value().trim().to_owned();
                             if name.is_empty() {
@@ -235,7 +311,7 @@ impl Main {
 
     /// A compatible endpoint to add: where it is, the API it speaks, the
     /// models it serves, and its key.
-    fn endpoint(&self, c: &Colors, cx: &mut Context<Self>) -> impl IntoElement {
+    fn endpoint(&self, c: &Colors, cx: &mut Context<Self>) -> Div {
         let fields = &self.access;
         let (url, models, key, label) = (
             fields.url.clone(),
@@ -256,70 +332,70 @@ impl Main {
                 )
                 .child(div().flex_1().min_w_0().child(control))
         };
-        section("Compatible endpoint", None, c).child(
-            panel(c).child(
-                ui::row(true, c)
-                    .flex_col()
-                    .items_stretch()
-                    .gap(px(12.))
+        ui::row(false, c)
+            .flex_col()
+            .items_stretch()
+            .gap(px(12.))
+            .child(
+                v_flex()
+                    .gap(px(2.))
                     .child(
-                        v_flex()
-                            .gap(px(2.))
-                            .child(
-                                div()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child("Add an endpoint"),
-                            )
-                            .child(caption(
-                                "An API that speaks OpenAI's or Anthropic's format, such as a \
+                        div()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Compatible endpoint"),
+                    )
+                    .child(caption(
+                        "An API that speaks OpenAI's or Anthropic's format, such as a \
                                  local model server or a gateway. Its key is checked before it \
                                  is saved.",
-                                c,
-                            )),
-                    )
-                    .child(line("Address", field(&url).into_any_element()))
-                    .child(line(
-                        "API",
-                        h_flex()
-                            .child(segmented(
-                                "dialect",
-                                DIALECTS,
-                                dialect,
-                                |main: &mut Main, dialect, cx| {
-                                    main.access.dialect = dialect;
-                                    cx.notify();
-                                },
-                                c,
-                                cx,
-                            ))
-                            .into_any_element(),
-                    ))
-                    .child(line("Models", field(&models).into_any_element()))
-                    .child(line("Key", field(&key).into_any_element()))
-                    .child(line("Name", field(&label).into_any_element()))
-                    .child(h_flex().justify_end().child(
-                        push("add-endpoint", "Add endpoint").primary().on_click(
-                            move |_, window, cx| {
-                                if url.read(cx).value().trim().is_empty() {
-                                    return;
-                                }
-                                let endpoint = NewEndpoint {
-                                    url: take(&url, window, cx),
-                                    dialect,
-                                    models: view::patterns(&take(&models, window, cx)),
-                                    key: take(&key, window, cx),
-                                    label: Some(take(&label, window, cx)).filter(|l| !l.is_empty()),
-                                };
-                                app.add_endpoint(endpoint);
-                            },
-                        ),
+                        c,
                     )),
-            ),
-        )
+            )
+            .child(line("Address", field(&url).into_any_element()))
+            .child(line(
+                "API",
+                h_flex()
+                    .child(segmented(
+                        "dialect",
+                        DIALECTS,
+                        dialect,
+                        |main: &mut Main, dialect, cx| {
+                            main.access.dialect = dialect;
+                            cx.notify();
+                        },
+                        c,
+                        cx,
+                    ))
+                    .into_any_element(),
+            ))
+            .child(line("Models", field(&models).into_any_element()))
+            .child(line("Key", field(&key).into_any_element()))
+            .child(line("Name", field(&label).into_any_element()))
+            .child(
+                h_flex().justify_end().child(
+                    push("add-endpoint", "Add endpoint").primary().on_click(
+                        move |_, window, cx| {
+                            if url.read(cx).value().trim().is_empty() {
+                                return;
+                            }
+                            let endpoint = NewEndpoint {
+                                url: take(&url, window, cx),
+                                dialect,
+                                models: view::patterns(&take(&models, window, cx)),
+                                key: take(&key, window, cx),
+                                label: Some(take(&label, window, cx)).filter(|l| !l.is_empty()),
+                            };
+                            app.add_endpoint(endpoint);
+                        },
+                    ),
+                ),
+            )
     }
 
-    /// The setup checks: each part of the setup with its findings, a dot
-    /// for how each stands, and the fix to copy.
+    /// The setup checks, in one card as the dashboard's health check has
+    /// them: each part of the setup in a column at the left, beside its
+    /// findings, a dot for how each stands, and the command that fixes it
+    /// on a chip to copy.
     pub(crate) fn diagnostics(&self, c: &Colors) -> Div {
         let sections = match &self.snapshot.doctor {
             Doctor::NotRun | Doctor::Running => {
@@ -334,56 +410,77 @@ impl Main {
             }
             Doctor::Done(sections) => sections,
         };
-        let mut page = v_flex().gap(px(32.)).child(
-            div()
-                .max_w(px(560.))
-                .text_color(c.muted)
-                .child("The checks slopmax doctor runs, with what to do about each."),
-        );
+        let mut card = panel(c);
+        let mut first = true;
         for (s, part) in sections.iter().enumerate() {
-            let mut list = panel(c);
             for (i, finding) in part.findings.iter().enumerate() {
                 let tone = view::level_tone(finding.level);
                 let fix = finding.fix.clone().map(|fix| {
                     let copy = fix.clone();
                     h_flex()
-                        .gap(px(6.))
+                        .gap(px(4.))
                         .child(
                             div()
-                                .min_w_0()
+                                .px(px(6.))
+                                .py(px(2.))
+                                .rounded(px(4.))
+                                .bg(c.well)
+                                .border_1()
+                                .border_color(c.border)
                                 .font_family(MONO)
                                 .text_size(px(ui::SMALL))
-                                .text_color(c.muted)
                                 .child(fix),
                         )
                         .child(
                             tool(
                                 SharedString::from(format!("copy-fix-{s}-{i}")),
                                 IconName::Copy,
-                                "Copy the fix",
+                                "Copy the command",
                             )
                             .on_click(move |_, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(copy.clone()));
                             }),
                         )
                 });
-                list = list.child(
-                    ui::row(i == 0, c)
+                card = card.child(
+                    ui::row(first, c)
                         .items_start()
+                        .when(i > 0, |row| row.border_t_0())
+                        .child(
+                            div()
+                                .w(px(120.))
+                                .flex_shrink_0()
+                                .pt(px(1.))
+                                .text_color(c.muted)
+                                .when(i == 0, |label| label.child(part.title)),
+                        )
                         .child(div().pt(px(7.)).child(dot(c.tone(tone))))
                         .child(
-                            v_flex()
+                            h_flex()
                                 .flex_1()
                                 .min_w_0()
-                                .gap(px(2.))
+                                .flex_wrap()
+                                .gap(px(10.))
                                 // The CLI's words, as a window sets them.
-                                .child(ui::sentence(&finding.text.replace('`', "")))
+                                .child(
+                                    div()
+                                        .pt(px(1.))
+                                        .child(ui::sentence(&finding.text.replace('`', ""))),
+                                )
                                 .children(fix),
                         ),
                 );
+                first = false;
             }
-            page = page.child(section(part.title, None, c).child(list));
         }
-        page
+        v_flex()
+            .gap(px(16.))
+            .child(
+                div()
+                    .max_w(px(560.))
+                    .text_color(c.muted)
+                    .child("The checks slopmax doctor runs, with what to do about each."),
+            )
+            .child(card)
     }
 }

@@ -269,7 +269,7 @@ impl Render for Panel {
             );
         }
         for group in pools {
-            body = body.child(pool(group, &c));
+            body = body.child(pool(group, &attention, &c));
         }
         if let Some(today) = self.snapshot.today.as_ref() {
             body = body.child(today_section(today, &c));
@@ -324,17 +324,19 @@ fn part(c: &Colors) -> Div {
 
 /// A subscription: its windows across the pool, the accounts that want a
 /// look, and its reset credits. A click opens its page.
-fn pool(group: &Group, c: &Colors) -> impl IntoElement {
+fn pool(group: &Group, attention: &[view::Attention], c: &Colors) -> impl IntoElement {
     let provider = group.provider;
     let enabled: Vec<_> = group.accounts.iter().filter(|r| !r.disabled).collect();
     let ready = enabled
         .iter()
         .filter(|r| r.status.tone == Tone::Good)
         .count();
-    // Only accounts out of service show by name; the rest are counted.
+    // Only accounts out of service show by name, and only those Needs
+    // attention, above, does not already; the rest are counted.
     let troubled: Vec<_> = enabled
         .iter()
         .filter(|r| matches!(r.status.tone, Tone::Warn | Tone::Bad))
+        .filter(|r| !attention.iter().any(|a| a.account == r.id))
         .collect();
     let hover = c.hover;
     part(c)
@@ -421,10 +423,15 @@ fn pool(group: &Group, c: &Colors) -> impl IntoElement {
         .child(crate::overview::next(&group.next, c))
 }
 
-/// What wants a look, a line apiece; a click opens the Overview, which
-/// offers what to do about each.
+/// The most a panel lists of what wants a look; the rest are counted.
+const NEEDS: usize = 3;
+
+/// What wants a look, a short line apiece that leads with what and when,
+/// the first few of them; a click opens the Overview, which lists them all
+/// and offers what to do about each.
 fn needs(items: &[view::Attention], c: &Colors) -> impl IntoElement {
     let hover = c.hover;
+    let more = items.len().saturating_sub(NEEDS);
     part(c)
         .id("needs")
         .gap(px(6.))
@@ -438,13 +445,37 @@ fn needs(items: &[view::Attention], c: &Colors) -> impl IntoElement {
                 .font_weight(FontWeight::MEDIUM)
                 .child("Needs attention"),
         )
-        .children(items.iter().map(|item| {
+        .children(items.iter().take(NEEDS).map(|item| {
+            // The name gives way before what and when do.
             h_flex()
                 .gap(px(8.))
                 .text_size(px(ui::SMALL))
                 .child(dot(c.tone(item.tone)))
-                .child(div().min_w_0().truncate().child(item.text.clone()))
+                .child(
+                    h_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap(px(5.))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_shrink(1.)
+                                .truncate()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(item.who.clone()),
+                        )
+                        .child(div().flex_shrink_0().text_color(c.faint).child("·"))
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .text_color(c.muted)
+                                .child(item.what.clone()),
+                        ),
+                )
         }))
+        .when(more > 0, |part| {
+            part.child(caption(format!("+{more} more"), c).pl(px(14.)))
+        })
 }
 
 /// Today's totals over its hours; a click opens the Usage page.
