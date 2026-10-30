@@ -391,10 +391,22 @@ pub(super) async fn forward(
             return error(Some(dialect), StatusCode::FORBIDDEN, &refused);
         }
     }
-    let steps = match inbound.plan(&app) {
+    let mut steps = match inbound.plan(&app) {
         Ok(steps) => steps,
         Err(no) => return refusal(dialect, &inbound.parts.headers, no),
     };
+    // Aliases and fallbacks may name other models than the one asked for;
+    // a key held to some models reaches those alone.
+    if let Some(key) = client.as_ref().filter(|k| !k.models.is_empty()) {
+        steps.retain(|step| step.model.is_empty() || key.allows(&step.model));
+        if steps.is_empty() {
+            let message = format!(
+                "the key {:?} may not use the models this request is routed to",
+                key.name
+            );
+            return error(Some(dialect), StatusCode::FORBIDDEN, &message);
+        }
+    }
     // Only an API that speaks Messages can count Messages tokens.
     if inbound.target.path.starts_with("/v1/messages/count_tokens")
         && !speaks(&app, &steps[0], dialect)

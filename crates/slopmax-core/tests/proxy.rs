@@ -1821,8 +1821,24 @@ async fn client_keys_are_held_to_their_models() {
             key: "sm-laptop".into(),
             models: vec!["gpt-6-*".into()],
         });
+        // An alias that leads outside what the key may use.
+        config
+            .aliases
+            .insert("gpt-6-cheap".into(), "gpt-5-mini".into());
     })
     .await;
+    let aliased = client()
+        .post(format!("{}/codex/responses", h.proxy))
+        .header("authorization", "Bearer sm-laptop")
+        .body(r#"{"model":"gpt-6-cheap","input":[],"stream":true}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        aliased.status(),
+        StatusCode::FORBIDDEN,
+        "routed past the key"
+    );
     let with = |model: &str| {
         client()
             .post(format!("{}/codex/responses", h.proxy))
