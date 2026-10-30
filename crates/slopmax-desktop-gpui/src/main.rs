@@ -11,6 +11,7 @@ mod accounts;
 mod assets;
 mod motion;
 mod native;
+mod notifications;
 mod overview;
 mod panel;
 mod prefs;
@@ -145,7 +146,9 @@ struct Shared {
 impl Global for Shared {}
 
 fn main() -> anyhow::Result<()> {
-    let app = Arc::new(Slopmax::start()?);
+    // Drawing the pages to images posts nothing.
+    let shooting = std::env::var_os("SLOPMAX_SHOTS").is_some();
+    let app = Arc::new(Slopmax::start_with(!shooting)?);
     // Closing the window leaves the menu bar item, whose panel quits the
     // app; clicking the Dock icon opens the window again.
     let application = gpui_kit::application()
@@ -188,6 +191,9 @@ fn main() -> anyhow::Result<()> {
             panel: None,
         });
         open_window(cx);
+        if !shooting {
+            notify(cx);
+        }
         #[cfg(feature = "shots")]
         shots::start(cx);
     });
@@ -195,6 +201,18 @@ fn main() -> anyhow::Result<()> {
 }
 
 /// The usual shortcuts, and the sidebar's arrow keys.
+/// Posts the nudges slopmax-app hands over as the system's notifications.
+fn notify(cx: &mut App) {
+    if let Some(mut alerts) = cx.global::<Shared>().app.alerts() {
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            while let Some(alert) = alerts.recv().await {
+                cx.update(|_| notifications::post(&alert));
+            }
+        })
+        .detach();
+    }
+}
+
 fn keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
@@ -686,6 +704,7 @@ impl Main {
                 .iter()
                 .filter(|a| a.provider == group.provider)
                 .map(|a| a.tone)
+                .filter(|tone| matches!(tone, Tone::Warn | Tone::Bad))
                 .max_by_key(|tone| *tone == Tone::Bad);
             let trailing = match alert {
                 Some(tone) => dot(c.tone(tone)).into_any_element(),

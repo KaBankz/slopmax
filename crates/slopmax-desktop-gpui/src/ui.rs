@@ -342,6 +342,62 @@ pub(crate) fn segmented<V: 'static, T: Copy + PartialEq + 'static>(
     track
 }
 
+/// What pressing a button does, if it does anything.
+pub(crate) type Press = Option<Box<dyn Fn(&mut App)>>;
+
+/// A number to step through, as tall as every control: a button down, the
+/// value, a button up. A button with nowhere to go is faint and does
+/// nothing.
+pub(crate) fn stepper(
+    id: &str,
+    title: &str,
+    value: String,
+    down: Press,
+    up: Press,
+    c: &Colors,
+) -> Div {
+    let button = |name: &str, glyph: IconName, verb: &str, press: Press| {
+        let hover = c.hover;
+        let enabled = press.is_some();
+        div()
+            .id(SharedString::from(format!("{id}-{name}")))
+            .size(px(CONTROL - 2.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(6.))
+            .role(Role::Button)
+            .aria_label(format!("{verb} {title}"))
+            .child(icon(glyph, 13., if enabled { c.fg } else { c.faint }))
+            .when_some(press, |button, press| {
+                button
+                    .cursor_pointer()
+                    .hover(move |button| button.bg(hover))
+                    .on_click(move |_, _, cx| press(cx))
+            })
+    };
+    h_flex()
+        .flex_shrink_0()
+        .h(px(CONTROL))
+        .rounded(px(7.))
+        .bg(c.well)
+        .border_1()
+        .border_color(c.border)
+        .child(button("down", IconName::Minus, "Less", down))
+        .child(
+            div()
+                .min_w(px(64.))
+                .flex()
+                .justify_center()
+                .text_size(px(SMALL))
+                .font_weight(FontWeight::MEDIUM)
+                .font_features(tabular())
+                .text_color(c.fg)
+                .child(value),
+        )
+        .child(button("up", IconName::Plus, "More", up))
+}
+
 /// A strip the window is dragged by, as by its title bar, and zoomed by a
 /// double click. Windows answers both itself, from the strip's area.
 pub(crate) fn drag_region(id: &'static str) -> Stateful<Div> {

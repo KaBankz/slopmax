@@ -8,6 +8,7 @@
 //! menu bar line, [`history`] the charts of past use) and calls [`App`]'s
 //! methods, none of which block.
 
+pub mod alerts;
 pub use slopmax_core::history;
 pub mod view;
 
@@ -69,6 +70,8 @@ pub struct Snapshot {
     /// The configuration as config.toml has it now, which the Settings
     /// page changes with [`App::set`].
     pub config: Config,
+    /// Whether nudges are posted as notifications.
+    pub notifications: bool,
 }
 
 /// A setting the app changes while the proxy runs, which it applies at
@@ -83,6 +86,14 @@ pub enum Setting {
     RedeemExpiringCredits(bool),
     /// Whether one is redeemed once every account is spent.
     RedeemWhenExhausted(bool),
+    /// Idle minutes before a session's account is forgotten.
+    SessionTtlMins(u64),
+    /// Whether idle ChatGPT accounts' windows are started as they reset.
+    WarmWindows(bool),
+    /// Whether API keys take over once subscriptions are limited.
+    PaidOverflow(bool),
+    /// Minutes between usage polls; 0 turns them off.
+    PollMins(u64),
 }
 
 impl Setting {
@@ -93,19 +104,33 @@ impl Setting {
             Self::SessionAffinity(_) => "session_affinity",
             Self::RedeemExpiringCredits(_) => "redeem_expiring_credits",
             Self::RedeemWhenExhausted(_) => "redeem_when_exhausted",
+            Self::SessionTtlMins(_) => "session_ttl_mins",
+            Self::WarmWindows(_) => "warm_windows",
+            Self::PaidOverflow(_) => "paid_overflow",
+            Self::PollMins(_) => "poll_mins",
+        }
+    }
+
+    /// Its value as `slopmax config` takes it.
+    fn value(self) -> String {
+        match self {
+            Self::Strategy(strategy) => strategy.to_string(),
+            Self::SessionAffinity(on)
+            | Self::RedeemExpiringCredits(on)
+            | Self::RedeemWhenExhausted(on)
+            | Self::WarmWindows(on)
+            | Self::PaidOverflow(on) => on.to_string(),
+            Self::SessionTtlMins(mins) | Self::PollMins(mins) => mins.to_string(),
         }
     }
 
     /// Writes it into the config at `path`, keeping the file's comments,
-    /// and returns the config that makes.
+    /// and returns the config that makes. It is checked as `slopmax
+    /// config` checks it.
     pub fn write(self, path: &Path) -> Result<Config> {
-        let key = self.key();
-        match self {
-            Self::Strategy(strategy) => Config::set(path, &[(key, strategy.to_string().into())]),
-            Self::SessionAffinity(on)
-            | Self::RedeemExpiringCredits(on)
-            | Self::RedeemWhenExhausted(on) => Config::set(path, &[(key, on.into())]),
-        }
+        let (key, value) = slopmax_core::config::live_value(self.key(), &self.value())
+            .map_err(anyhow::Error::msg)?;
+        Config::set(path, &[(key, value)])
     }
 }
 
@@ -160,10 +185,16 @@ pub struct Notice {
 pub struct App {
     shared: Arc<Shared>,
     runtime: Runtime,
+    /// New nudges to post, until a UI takes them.
+    heard: Mutex<Option<mpsc::UnboundedReceiver<alerts::Alert>>>,
 }
 
 struct Shared {
     config: Config,
+    /// The nudges told, and whether to tell them; none while the app
+    /// posts nothing.
+    told: Option<Mutex<alerts::Told>>,
+    alerts: mpsc::UnboundedSender<alerts::Alert>,
     home: Home,
     store: Store,
     /// The slopmax CLI that runs the proxy, normally the one the app ships.
@@ -179,8 +210,15 @@ struct Shared {
 
 impl App {
     /// Loads the configuration, starts the proxy if none is running, and
-    /// begins watching it.
+    /// begins watching it, handing nudges to the UI to post (see
+    /// [`App::alerts`]).
     pub fn start() -> Result<Self> {
+        Self::start_with(true)
+    }
+
+    /// As [`App::start`]; without `notify`, no nudge is handed to the UI
+    /// or marked as told, as while drawing the pages to images.
+    pub fn start_with(notify: bool) -> Result<Self> {
         let config = Config::load()?;
         config.apply()?;
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -189,6 +227,9 @@ impl App {
             .enable_all()
             .build()
             .context("starting the app's runtime")?;
+        let home = Home::current();
+        let (alerts, heard) = mpsc::unbounded_channel();
+        let told = alerts::Told::load(&alerts::Told::path(&home));
         let (snapshot, _) = watch::channel(Snapshot {
             proxy: Proxy::Checking,
             address: config.base_url(),
@@ -201,9 +242,12 @@ impl App {
             today: None,
             redeeming: None,
             config: config.clone(),
+            notifications: told.enabled,
         });
         let shared = Arc::new(Shared {
-            home: Home::current(),
+            home,
+            told: notify.then(|| Mutex::new(told)),
+            alerts,
             store: Store::open(),
             cli: bundled_cli(),
             config,
@@ -215,7 +259,11 @@ impl App {
         });
         runtime.spawn(watch_over(shared.clone()));
         runtime.spawn(start_proxy(shared.clone()));
-        Ok(Self { shared, runtime })
+        Ok(Self {
+            shared,
+            runtime,
+            heard: Mutex::new(Some(heard)),
+        })
     }
 
     /// Changes to the snapshot, for a UI to redraw on. Works under any
@@ -473,6 +521,22 @@ impl App {
         });
     }
 
+    /// The nudges to post as notifications, as they come, while they are
+    /// on; once, for the UI that posts them. Works under any executor.
+    pub fn alerts(&self) -> Option<mpsc::UnboundedReceiver<alerts::Alert>> {
+        lock(&self.heard).take()
+    }
+
+    /// Turns notifications on or off, for this and later runs.
+    pub fn set_notifications(&self, on: bool) {
+        if let Some(told) = &self.shared.told {
+            let mut told = lock(told);
+            told.enabled = on;
+            told.save(&alerts::Told::path(&self.shared.home));
+        }
+        self.shared.update(|s| s.notifications = on);
+    }
+
     /// Polls every account's usage now.
     pub fn refresh(&self) {
         let shared = self.shared.clone();
@@ -510,12 +574,14 @@ impl App {
                 .map(|a| (a.id.clone(), a.name.clone()))
                 .collect();
             let worker = shared.clone();
+            // The plans' prices as config.toml has them now.
+            let prices = shared.snapshot.borrow().config.clone();
             let loaded = tokio::task::spawn_blocking(move || {
                 history::load(
                     &worker.home,
                     range,
                     slopmax_core::time::Timestamp::now(),
-                    &history::Prices::of(&worker.config),
+                    &history::Prices::of(&prices),
                     &names,
                 )
             })
@@ -675,6 +741,9 @@ async fn watch_over(shared: Arc<Shared>) {
                 .await
                 .ok(),
         };
+        if let Some(report) = &report {
+            tell(&shared, report);
+        }
         shared.update(|s| {
             s.report = report;
             if s.notice
@@ -716,6 +785,26 @@ async fn watch_over(shared: Arc<Shared>) {
             () = tokio::time::sleep(POLL) => {}
             () = shared.look.notified() => {}
         }
+    }
+}
+
+/// Hands the UI the nudges `report` calls for that were not told before,
+/// if notifications are on, and remembers them as told.
+fn tell(shared: &Shared, report: &Report) {
+    let Some(told) = &shared.told else { return };
+    let config = shared.snapshot.borrow().config.clone();
+    let now = slopmax_core::time::Timestamp::now();
+    let found = alerts::nudges(report, &config, now);
+    let mut told = lock(told);
+    let (changed, new) = told.fresh(found, now);
+    if changed {
+        told.save(&alerts::Told::path(&shared.home));
+    }
+    if !told.enabled {
+        return;
+    }
+    for (key, event) in new {
+        let _ = shared.alerts.send(alerts::Alert::of(key, &event));
     }
 }
 
@@ -850,6 +939,24 @@ mod tests {
     }
 
     #[test]
+    fn advanced_settings_are_checked_as_the_cli_checks_them() {
+        let path = config_file(CONFIG);
+        let config = Setting::SessionTtlMins(120).write(&path).unwrap();
+        assert_eq!(config.session_ttl_mins, 120);
+        let config = Setting::PollMins(0).write(&path).unwrap();
+        assert_eq!(config.poll_mins, 0);
+        let config = Setting::WarmWindows(true).write(&path).unwrap();
+        assert!(config.warm_windows);
+        let config = Setting::PaidOverflow(true).write(&path).unwrap();
+        assert!(config.paid_overflow);
+        // A session must keep its account for some time.
+        let error = Setting::SessionTtlMins(0).write(&path).unwrap_err();
+        assert!(error.to_string().contains("minutes"), "{error}");
+        assert_eq!(Config::load_from(&path).unwrap().session_ttl_mins, 120);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
     fn each_setting_has_its_key() {
         let keys = [
             Setting::Strategy(Strategy::ResetFirst),
@@ -900,6 +1007,7 @@ mod tests {
             today: None,
             redeeming: None,
             config: Config::default(),
+            notifications: true,
         }
     }
 

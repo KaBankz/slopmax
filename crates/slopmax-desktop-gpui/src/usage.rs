@@ -14,6 +14,7 @@ use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use slopmax_app::history::{self, Bucket, History, Range};
+use slopmax_app::view;
 use slopmax_core::human;
 use slopmax_core::summary::Totals;
 
@@ -155,6 +156,7 @@ fn page(history: &History, c: &Colors) -> Div {
             page.child(activity(history, c))
         })
         .child(accounts(history, c))
+        .child(left(history, c))
 }
 
 fn performance(history: &History, c: &Colors) -> Div {
@@ -1112,6 +1114,100 @@ fn accounts(history: &History, c: &Colors) -> Div {
             ])),
     );
     section("Accounts", None, c).child(table)
+}
+
+/// What weekly resets threw away over the range: the share of each plan's
+/// fee its unused quota stood for, in all and by account. A measure, so it
+/// keeps to neutrals.
+fn left(history: &History, c: &Colors) -> Div {
+    let left = &history.left;
+    let explain = caption(
+        "The share of each plan's weekly fee that resets threw away, at plan list prices or \
+         [plan_prices] in config.toml.",
+        c,
+    );
+    let section = section("Left on the table", None, c);
+    if left.windows == 0 {
+        return section
+            .child(
+                panel(c)
+                    .p(px(16.))
+                    .child(caption(view::left_line(0, 0.), c)),
+            )
+            .child(explain);
+    }
+    const WIDTHS: [f32; 3] = [56., 72., 76.];
+    let numbers = |cells: [String; 3]| {
+        h_flex().flex_shrink_0().gap(px(16.)).children(
+            cells
+                .into_iter()
+                .zip(WIDTHS)
+                .map(|(text, width)| cell(text, width)),
+        )
+    };
+    let summary = h_flex()
+        .p(px(16.))
+        .gap(px(16.))
+        .items_end()
+        .child(figure(dollars(left.dollars), ui::TITLE, c))
+        .child(caption(view::left_line(left.windows, left.unused), c).pb(px(3.)))
+        .when(left.unpriced > 0, |line| {
+            line.child(div().flex_1()).child(
+                caption(
+                    format!(
+                        "{} on plans without a known price left out",
+                        count(left.unpriced, "week")
+                    ),
+                    c,
+                )
+                .pb(px(3.)),
+            )
+        });
+    let head = h_flex()
+        .px(px(16.))
+        .py(px(8.))
+        .gap(px(16.))
+        .border_t_1()
+        .border_color(c.separator)
+        .text_size(px(ui::SMALL))
+        .text_color(c.muted)
+        .child(div().w(px(260.)).flex_shrink_0().child("Account"))
+        .child(div().flex_1().child("Unused at reset"))
+        .child(numbers(["Weeks", "Unused", "Left"].map(str::to_owned)));
+    let rows = left.accounts.iter().map(|account| {
+        h_flex()
+            .px(px(16.))
+            .py(px(10.))
+            .gap(px(16.))
+            .border_t_1()
+            .border_color(c.separator)
+            .child(
+                h_flex()
+                    .w(px(260.))
+                    .flex_shrink_0()
+                    .gap(px(8.))
+                    .child(div().min_w_0().truncate().child(account.name.clone()))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_color(c.muted)
+                            .child(account.provider.spec().title),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .child(meter((account.unused / 100.) as f32, c.meter, c)),
+            )
+            .child(numbers([
+                grouped(account.windows),
+                format!("{:.0}%", account.unused),
+                dollars(account.dollars),
+            ]))
+    });
+    section
+        .child(panel(c).child(summary).child(head).children(rows))
+        .child(explain)
 }
 
 /// `12,345`.

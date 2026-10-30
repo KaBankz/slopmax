@@ -49,8 +49,21 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
 objc2-foundation = { version = "0.3", default-features = false, features = [
   "std",
   "NSArray",
+  "NSBundle",
   "NSEnumerator",
+  "NSError",
   "NSString",
+] }
+# Nudges as the system's own notifications.
+objc2-user-notifications = { version = "0.3", default-features = false, features = [
+  "std",
+  "bitflags",
+  "block2",
+  "UNNotificationContent",
+  "UNNotificationRequest",
+  "UNNotificationSound",
+  "UNNotificationTrigger",
+  "UNUserNotificationCenter",
 ] }
 
 [lints]

@@ -75,6 +75,8 @@ impl Main {
             .child(routing(&self.app, &self.snapshot.config, c))
             .child(self.adding(c, cx))
             .child(redeeming(&self.app, &self.snapshot.config, c))
+            .child(notifications(&self.app, self.snapshot.notifications, c))
+            .child(advanced(&self.app, &self.snapshot.config, c))
     }
 
     /// The proxy: whether it runs, where agents reach it, its dashboard,
@@ -387,6 +389,113 @@ fn redeeming(app: &Arc<Slopmax>, config: &Config, c: &Colors) -> impl IntoElemen
                 c,
             )),
     )
+}
+
+/// Whether slopmax tells you, in a notification, of a limit reset about to
+/// lapse or a week about to reset with quota to spare. A copy outside the
+/// installed app cannot post them, and says so.
+fn notifications(app: &Arc<Slopmax>, on: bool, c: &Colors) -> impl IntoElement {
+    let app = app.clone();
+    let unavailable = crate::notifications::unavailable();
+    section("Notifications", None, c).child(
+        panel(c).child(setting(
+            true,
+            "Notify me",
+            unavailable.unwrap_or(
+                "When a limit reset is about to lapse unredeemed, or a week is about to reset with \
+             quota to spare.",
+            ),
+            Switch::new("notifications")
+                .checked(on && unavailable.is_none())
+                .disabled(unavailable.is_some())
+                .accessibility_label("Notifications")
+                .on_click(move |on, _, _| app.set_notifications(*on)),
+            c,
+        )),
+    )
+}
+
+/// The rest of what can change while the proxy runs, as `slopmax config`
+/// changes it.
+fn advanced(app: &Arc<Slopmax>, config: &Config, c: &Colors) -> impl IntoElement {
+    let minutes = |name: &'static str,
+                   title: &'static str,
+                   steps: &'static [u64],
+                   current: u64,
+                   show: fn(u64) -> String,
+                   setting: fn(u64) -> Setting| {
+        let press = |up: bool| -> ui::Press {
+            let next = view::step(steps, current, up)?;
+            let app = app.clone();
+            Some(Box::new(move |_: &mut App| app.set(setting(next))))
+        };
+        ui::stepper(name, title, show(current), press(false), press(true), c)
+    };
+    section("Advanced", None, c)
+        .child(
+            panel(c)
+                .child(setting(
+                    true,
+                    "Session timeout",
+                    view::live_detail("session_ttl_mins"),
+                    minutes(
+                        "session-ttl",
+                        "session timeout",
+                        view::SESSION_TTL_STEPS,
+                        config.session_ttl_mins,
+                        view::minutes,
+                        Setting::SessionTtlMins,
+                    ),
+                    c,
+                ))
+                .child(setting(
+                    false,
+                    "Usage polling",
+                    view::live_detail("poll_mins"),
+                    minutes(
+                        "poll",
+                        "usage polling",
+                        view::POLL_STEPS,
+                        config.poll_mins,
+                        |mins| match mins {
+                            0 => "Off".to_owned(),
+                            mins => view::minutes(mins),
+                        },
+                        Setting::PollMins,
+                    ),
+                    c,
+                ))
+                .child(setting(
+                    false,
+                    "Warm idle windows",
+                    view::live_detail("warm_windows"),
+                    toggle(
+                        app,
+                        "warm-windows",
+                        "Warm idle windows",
+                        config.warm_windows,
+                        Setting::WarmWindows,
+                    ),
+                    c,
+                ))
+                .child(setting(
+                    false,
+                    "Paid overflow",
+                    view::live_detail("paid_overflow"),
+                    toggle(
+                        app,
+                        "paid-overflow",
+                        "Paid overflow",
+                        config.paid_overflow,
+                        Setting::PaidOverflow,
+                    ),
+                    c,
+                )),
+        )
+        .child(caption(
+            "Each is saved to config.toml and applied at once; slopmax config changes them too.",
+            c,
+        ))
 }
 
 /// A setting's name over what it does.

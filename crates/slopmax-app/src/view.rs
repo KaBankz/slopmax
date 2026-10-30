@@ -8,6 +8,7 @@ use slopmax_core::config::{Config, Strategy};
 use slopmax_core::daemon::CREDIT_EXPIRY_LEAD;
 use slopmax_core::human;
 use slopmax_core::limits::Window;
+use slopmax_core::notify::Kind;
 use slopmax_core::provider::ProviderId;
 use slopmax_core::provider::credits::Credit;
 use slopmax_core::report::{AccountReport, Condition, NextReport, Note, Report, Tone};
@@ -301,8 +302,57 @@ pub fn attention(report: &Report, now: Timestamp) -> Vec<Attention> {
             ));
         }
     }
+    add_nudges(&mut found, report);
     found.sort_by_key(|a| a.tone != Tone::Bad);
     found
+}
+
+/// Adds the report's nudges to what wants a look, leaving out a limit
+/// reset the list already offers to redeem.
+fn add_nudges(found: &mut Vec<Attention>, report: &Report) {
+    for nudge in &report.nudges {
+        let Some(account) = nudge
+            .account
+            .as_deref()
+            .and_then(|name| report.accounts.iter().find(|a| a.name == name))
+        else {
+            continue;
+        };
+        let item = match nudge.event {
+            // The list may already offer to redeem it, above.
+            Kind::ResetExpiring
+                if found
+                    .iter()
+                    .any(|f| f.account == account.id && f.remedy == Remedy::Redeem) =>
+            {
+                continue;
+            }
+            Kind::ResetExpiring => Attention {
+                provider: account.provider,
+                account: account.id.clone(),
+                text: first_sentence(&nudge.message),
+                tone: Tone::Warn,
+                remedy: Remedy::Redeem,
+            },
+            // Quota to spare is a chance, not a fault.
+            Kind::QuotaUnused => Attention {
+                provider: account.provider,
+                account: account.id.clone(),
+                text: first_sentence(&nudge.message),
+                tone: Tone::Muted,
+                remedy: Remedy::Look,
+            },
+            _ => continue,
+        };
+        found.push(item);
+    }
+}
+
+/// A message's first sentence, without its full stop or the marks around
+/// a command.
+fn first_sentence(message: &str) -> String {
+    let first = message.split(". ").next().unwrap_or(message);
+    first.trim_end_matches('.').replace('`', "")
 }
 
 /// The accounts grouped by provider, in the order requests try them.
@@ -618,6 +668,69 @@ pub fn setting_changed(setting: Setting) -> String {
         Setting::RedeemWhenExhausted(false) => {
             "Once every account is spent, the pool waits for a reset.".to_owned()
         }
+        Setting::SessionTtlMins(mins) => format!(
+            "A session keeps its account through {} idle.",
+            minutes(mins)
+        ),
+        Setting::WarmWindows(true) => "Idle ChatGPT windows start as they reset.".to_owned(),
+        Setting::WarmWindows(false) => "Idle windows wait for their first request.".to_owned(),
+        Setting::PaidOverflow(true) => {
+            "API keys take over once subscriptions are limited.".to_owned()
+        }
+        Setting::PaidOverflow(false) => {
+            "API keys serve a subscription's models only when asked for by name.".to_owned()
+        }
+        Setting::PollMins(0) => "slopmax no longer polls usage.".to_owned(),
+        Setting::PollMins(mins) => format!("slopmax polls usage every {}.", minutes(mins)),
+    }
+}
+
+/// A live setting's description, as `slopmax config` lists it, as a
+/// sentence.
+pub fn live_detail(name: &str) -> String {
+    let phrase = slopmax_core::config::LIVE
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map_or("", |(_, phrase)| phrase);
+    let mut chars = phrase.chars();
+    match chars.next() {
+        Some(first) => format!("{}{}.", first.to_uppercase(), chars.as_str()),
+        None => String::new(),
+    }
+}
+
+/// The idle minutes a session may keep its account, as Settings offers
+/// them.
+pub const SESSION_TTL_STEPS: &[u64] = &[5, 15, 30, 60, 120, 240, 480, 1_440];
+/// The minutes between usage polls, as Settings offers them; 0 is off.
+pub const POLL_STEPS: &[u64] = &[0, 1, 2, 5, 10, 15, 30, 60];
+
+/// The step after `current` among `steps`, `up` or down, if there is one.
+/// A value set by hand between two steps goes to the nearer one that way.
+pub fn step(steps: &[u64], current: u64, up: bool) -> Option<u64> {
+    if up {
+        steps.iter().copied().find(|s| *s > current)
+    } else {
+        steps.iter().rev().copied().find(|s| *s < current)
+    }
+}
+
+/// `45 min`, `2 h`, `1 day`.
+pub fn minutes(mins: u64) -> String {
+    match mins {
+        1_440 => "1 day".to_owned(),
+        m if m >= 60 && m % 60 == 0 => format!("{} h", m / 60),
+        m => format!("{m} min"),
+    }
+}
+
+/// What weekly resets left unused over a range, in a line: `4 weeks · 62%
+/// unused on average`.
+pub fn left_line(windows: u64, unused: f64) -> String {
+    match windows {
+        0 => "No week reset in this range".to_owned(),
+        1 => format!("1 week · {unused:.0}% unused"),
+        n => format!("{n} weeks · {unused:.0}% unused on average"),
     }
 }
 
@@ -1295,6 +1408,125 @@ mod tests {
     }
 
     #[test]
+    fn nudges_join_what_wants_a_look_once() {
+        use slopmax_core::notify::Event;
+        let now = ts(1_000);
+        let mut report = report(now);
+        let nudge = |kind, account: &str, message: &str| Event {
+            event: kind,
+            provider: Some(ProviderId::Claude),
+            account: Some(account.to_owned()),
+            until: Some(ts(60_000)),
+            message: message.to_owned(),
+            at: now,
+            worth: None,
+        };
+        report.nudges = vec![
+            nudge(
+                Kind::QuotaUnused,
+                "b@x.dev",
+                "b@x.dev's week resets in 19h59m (19:12) with 79% of it unused, about $4 of its \
+                 plan. Work sent there before then costs nothing extra.",
+            ),
+            nudge(
+                Kind::ResetExpiring,
+                "a@x.dev",
+                "A limit reset on a@x.dev expires in 18h (18:10); redeem it with `slopmax redeem \
+                 a@x.dev` before it is lost.",
+            ),
+            nudge(Kind::QuotaUnused, "nobody@x.dev", "Gone."),
+        ];
+        let items = attention(&report, now);
+        let unused = items.iter().find(|a| a.remedy == Remedy::Look).unwrap();
+        assert_eq!(
+            unused.text,
+            "b@x.dev's week resets in 19h59m (19:12) with 79% of it unused, about $4 of its plan"
+        );
+        assert_eq!(unused.tone, Tone::Muted, "a chance, not a fault");
+        assert_eq!(unused.account, report.accounts[1].id);
+        let reset = items.iter().find(|a| a.remedy == Remedy::Redeem).unwrap();
+        assert!(!reset.text.contains('`'), "{}", reset.text);
+        assert_eq!(reset.account, report.accounts[0].id);
+        // An account it cannot find is left out.
+        assert_eq!(items.len(), 2);
+    }
+
+    #[test]
+    fn a_reset_already_offered_is_not_offered_twice() {
+        use slopmax_core::notify::Event;
+        let now = ts(1_000);
+        let mut report = report(now);
+        report.nudges = vec![Event {
+            event: Kind::ResetExpiring,
+            provider: Some(ProviderId::Claude),
+            account: Some("a@x.dev".to_owned()),
+            until: Some(ts(60_000)),
+            message: "A limit reset on a@x.dev expires soon.".to_owned(),
+            at: now,
+            worth: None,
+        }];
+        let already = Attention {
+            provider: ProviderId::Claude,
+            account: report.accounts[0].id.clone(),
+            text: "already offered".to_owned(),
+            tone: Tone::Warn,
+            remedy: Remedy::Redeem,
+        };
+        let mut found = vec![already.clone()];
+        add_nudges(&mut found, &report);
+        assert_eq!(found, [already]);
+        // Without it, the nudge is offered.
+        let mut found = Vec::new();
+        add_nudges(&mut found, &report);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].remedy, Remedy::Redeem);
+    }
+
+    #[test]
+    fn advanced_settings_step_and_read() {
+        assert_eq!(step(SESSION_TTL_STEPS, 60, true), Some(120));
+        assert_eq!(step(SESSION_TTL_STEPS, 60, false), Some(30));
+        // Set by hand between two steps, it goes to the nearer one each way.
+        assert_eq!(step(SESSION_TTL_STEPS, 45, true), Some(60));
+        assert_eq!(step(SESSION_TTL_STEPS, 45, false), Some(30));
+        assert_eq!(step(SESSION_TTL_STEPS, 1_440, true), None);
+        assert_eq!(step(POLL_STEPS, 0, false), None);
+        assert_eq!(step(POLL_STEPS, 0, true), Some(1));
+        assert_eq!(minutes(45), "45 min");
+        assert_eq!(minutes(120), "2 h");
+        assert_eq!(minutes(1_440), "1 day");
+        assert_eq!(
+            live_detail("session_ttl_mins"),
+            "Idle minutes before a session's account is forgotten."
+        );
+        assert_eq!(live_detail("no_such_setting"), "");
+        assert_eq!(
+            setting_changed(Setting::PollMins(0)),
+            "slopmax no longer polls usage."
+        );
+        assert_eq!(
+            setting_changed(Setting::SessionTtlMins(120)),
+            "A session keeps its account through 2 h idle."
+        );
+        for setting in [
+            Setting::WarmWindows(true),
+            Setting::WarmWindows(false),
+            Setting::PaidOverflow(true),
+            Setting::PaidOverflow(false),
+            Setting::PollMins(5),
+        ] {
+            assert!(setting_changed(setting).ends_with('.'));
+        }
+    }
+
+    #[test]
+    fn what_resets_left_reads_as_a_line() {
+        assert_eq!(left_line(0, 0.), "No week reset in this range");
+        assert_eq!(left_line(1, 38.4), "1 week · 38% unused");
+        assert_eq!(left_line(4, 26.), "4 weeks · 26% unused on average");
+    }
+
+    #[test]
     fn the_menu_bar_without_pools_shows_the_name() {
         let report = report_of(ts(1_000), Vec::new());
         assert_eq!(menu_bar(&report, ts(1_000)), "slopmax");
@@ -1399,6 +1631,7 @@ mod tests {
             today: None,
             redeeming: None,
             config: Config::default(),
+            notifications: true,
         }
     }
 
