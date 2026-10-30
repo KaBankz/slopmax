@@ -106,6 +106,13 @@ async fn mock(log: Log, mut request: Request) -> Response {
         (Method::POST, "/wham/rate-limit-reset-credits/consume") => {
             reply(StatusCode::OK, &[], json!({ "code": "reset" }).to_string())
         }
+        (Method::GET, "/api/oauth/usage") => mock_claude_resets(headers),
+        (Method::POST, path)
+            if path.starts_with("/api/organizations/") && path.ends_with("/reset_rate_limits") =>
+        {
+            let reset = json!({ "result": "reset", "resets_left": 0, "cleared": ["five_hour", "seven_day"] });
+            reply(StatusCode::OK, &[], reset.to_string())
+        }
         (Method::POST, "/xai/v1/chat/completions") => {
             keyed(headers, "Bearer key-xai", chat_answer())
         }
@@ -337,6 +344,33 @@ fn mock_codex(log: &Log, headers: &HeaderMap) -> Response {
         ),
         _ => reply(StatusCode::UNAUTHORIZED, &[], ""),
     }
+}
+
+/// Claude's usage, with its limit resets: two grants for `tok-ok`, the one
+/// expiring later named next, listed only to Claude Code, as Claude does.
+fn mock_claude_resets(headers: &HeaderMap) -> Response {
+    let at = |hours| (Timestamp::now() + SignedDuration::from_hours(hours)).to_string();
+    let claude_code = headers
+        .get("user-agent")
+        .is_some_and(|agent| agent.to_str().unwrap().starts_with("claude-cli/"));
+    let status = if !claude_code {
+        json!({ "eligible": false, "ineligible_reason": "surface", "grants": [] })
+    } else if headers["authorization"] == "Bearer tok-ok" {
+        json!({
+            "eligible": true,
+            "grants": [
+                { "id": "older", "resets_total": 1, "resets_left": 1, "ends_at": at(30) },
+                { "id": "launch", "label": "Model launch: one usage-limit reset",
+                  "resets_total": 1, "resets_left": 1, "starts_at": at(-24 * 15), "ends_at": at(24 * 15) },
+            ],
+            "next_grant_id": "launch",
+        })
+    } else {
+        json!({ "eligible": false, "ineligible_reason": "no_grant" })
+    };
+    let usage =
+        json!({ "five_hour": { "utilization": 25.0, "resets_at": at(2) }, "cedar_ember": status });
+    reply(StatusCode::OK, &[], usage.to_string())
 }
 
 /// `tok-expiring` holds a credit that lapses within the hour; every other
@@ -846,6 +880,95 @@ async fn credits_about_to_expire_are_redeemed_on_used_accounts() {
     assert_eq!(reset.reset_credits, Some(1));
     assert_eq!(reset.windows[0].used, 0.0);
     assert_eq!(h.app.pool.state(&h.ids[1]).limits.reset_credits, Some(2));
+}
+
+#[tokio::test]
+async fn claude_limit_resets_are_listed_and_spent_as_claude_code() {
+    const ORG: &str = "0b4e1f5a-9c2d-4e8f-a1b3-c5d7e9f0a2b4";
+    const AGENT: &str = "claude-cli/2.1.287 (external, cli)";
+    let h = harness_of(
+        |_| {
+            let mut account = account(ProviderId::Claude, "claude0", "tok-ok", 1000);
+            account.org_id = Some(ORG.into());
+            account.assign_id();
+            vec![account]
+        },
+        |_| {},
+    )
+    .await;
+    let listings = |h: &Harness| -> Vec<Seen> {
+        h.log
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|s| s.path.starts_with("/api/oauth/usage"))
+            .cloned()
+            .collect()
+    };
+
+    // Claude answers Claude Code alone, so nothing is asked before slopmax
+    // has seen it.
+    slopmax_core::daemon::list_credits(&h.app, false).await;
+    assert!(listings(&h).is_empty());
+    let response = claude_request(&h).send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(h.app.pool.agent(ProviderId::Claude).as_deref(), Some(AGENT));
+    let (saved, _) = h.app.pool.snapshot(Timestamp::now());
+    assert_eq!(saved.agents[&ProviderId::Claude], AGENT);
+
+    // Listed with the usage, as Claude Code lists them: the next grant first.
+    slopmax_core::daemon::list_credits(&h.app, false).await;
+    let listed = listings(&h);
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        listed[0].path,
+        "/api/oauth/usage?cedar_ember=1&skip_spend=1"
+    );
+    assert_eq!(listed[0].headers["user-agent"], AGENT);
+    assert_eq!(listed[0].headers["anthropic-beta"], "oauth-2025-04-20");
+    let now = Timestamp::now();
+    let state = h.app.pool.state(&h.ids[0]);
+    let credits: Vec<&Credit> = state.unexpired_credits(now).collect();
+    let ids: Vec<&str> = credits.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(ids, ["launch", "older"]);
+    assert_eq!(
+        credits[0].title.as_deref(),
+        Some("Model launch: one usage-limit reset")
+    );
+    // Not again within the hour.
+    slopmax_core::daemon::list_credits(&h.app, false).await;
+    assert_eq!(listings(&h).len(), 1);
+
+    // Redeeming without naming one spends the grant Claude names next.
+    let reply: Value = client()
+        .post(format!("{}/slopmax/accounts/{}/redeem", h.proxy, h.ids[0]))
+        .header("authorization", format!("Bearer {KEY}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(reply["outcome"], "reset");
+    let claim = h.log.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(
+        claim.path,
+        format!("/api/organizations/{ORG}/reset_rate_limits")
+    );
+    assert_eq!(claim.headers["user-agent"], AGENT);
+    assert_eq!(claim.headers["authorization"], "Bearer tok-ok");
+    let body: Value = serde_json::from_slice(&claim.body).unwrap();
+    assert_eq!(body["program"], "cedar_ember");
+    assert_eq!(body["grant_id"], "launch");
+    assert!(body["request_id"].is_string());
+    let left: Vec<String> = h
+        .app
+        .pool
+        .state(&h.ids[0])
+        .unexpired_credits(Timestamp::now())
+        .map(|c| c.id.clone())
+        .collect();
+    assert_eq!(left, ["older"]);
 }
 
 #[tokio::test]

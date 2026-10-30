@@ -59,6 +59,7 @@ impl ResetCredits for Credits {
         &'a self,
         http: &'a Client,
         account: &'a Account,
+        _agent: Option<&'a str>,
     ) -> BoxFuture<'a, Result<Vec<Credit>>> {
         Box::pin(list(http, account))
     }
@@ -67,6 +68,7 @@ impl ResetCredits for Credits {
         &'a self,
         http: &'a Client,
         account: &'a Account,
+        _agent: Option<&'a str>,
         credit: Option<&'a str>,
     ) -> BoxFuture<'a, Result<Outcome>> {
         Box::pin(redeem(http, account, credit))

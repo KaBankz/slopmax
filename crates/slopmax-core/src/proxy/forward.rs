@@ -704,6 +704,10 @@ fn count_tokens(inbound: &Inbound) -> Response {
 /// grants them. Returns the account that can serve again, if any.
 async fn rescue(app: &App, provider: ProviderId) -> Option<String> {
     let credits = provider.get().credits()?;
+    let agent = app.pool.agent(provider);
+    if credits.needs_agent() && agent.is_none() {
+        return None;
+    }
     let _redeeming = app.redeeming.lock().await;
     let now = Timestamp::now();
     let accounts: Vec<Account> = app
@@ -738,7 +742,12 @@ async fn rescue(app: &App, provider: ProviderId) -> Option<String> {
         let state = app.pool.state(&account.id);
         let credit = state.unexpired_credits(now).next().map(|c| c.id.clone());
         match credits
-            .redeem(&app.auth_http, &account, credit.as_deref())
+            .redeem(
+                &app.auth_http,
+                &account,
+                agent.as_deref(),
+                credit.as_deref(),
+            )
             .await
         {
             Ok(Outcome::Reset) => {

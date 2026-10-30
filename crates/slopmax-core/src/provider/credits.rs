@@ -37,22 +37,44 @@ pub enum Outcome {
     NothingToReset,
     NoCredit,
     AlreadyRedeemed,
+    /// The provider would not spend one now, as while it is paused or
+    /// cooling down, so the credit was kept.
+    Declined,
 }
 
 /// A provider's reset credits.
+///
+/// `agent` is the user agent of the provider's own client, as slopmax last
+/// saw it in a request, for a provider that answers that client alone.
 pub trait ResetCredits: Send + Sync {
-    /// Unspent credits, soonest-expiring first.
+    /// Whether the provider's usage reports how many credits an account
+    /// holds, so they are listed as that count changes. Those of a provider
+    /// whose usage does not are listed every hour instead.
+    fn counted(&self) -> bool {
+        true
+    }
+
+    /// Whether it answers its own client alone, so nothing can be listed or
+    /// redeemed until slopmax has seen that client's user agent.
+    fn needs_agent(&self) -> bool {
+        false
+    }
+
+    /// Unspent credits, in the order to spend them: soonest-expiring
+    /// first, or the one the provider names next.
     fn list<'a>(
         &'a self,
         http: &'a Client,
         account: &'a Account,
+        agent: Option<&'a str>,
     ) -> BoxFuture<'a, Result<Vec<Credit>>>;
 
-    /// Redeems `credit`, or one the provider chooses.
+    /// Redeems `credit`, or the one the provider would spend next.
     fn redeem<'a>(
         &'a self,
         http: &'a Client,
         account: &'a Account,
+        agent: Option<&'a str>,
         credit: Option<&'a str>,
     ) -> BoxFuture<'a, Result<Outcome>>;
 }

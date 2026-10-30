@@ -364,14 +364,17 @@ impl App {
         let id = id.to_owned();
         shared.update(|s| s.redeeming = Some(id.clone()));
         self.runtime.spawn(async move {
-            let name = {
+            let (name, provider) = {
                 let snapshot = shared.snapshot.borrow();
                 let account = snapshot
                     .report
                     .iter()
                     .flat_map(|r| &r.accounts)
                     .find(|a| a.id == id);
-                account.map_or_else(|| id.clone(), |a| a.name.clone())
+                (
+                    account.map_or_else(|| id.clone(), |a| a.name.clone()),
+                    account.map_or("Its provider", |a| a.provider.spec().title),
+                )
             };
             let result = Daemon::new(&shared.config).redeem(&id).await;
             shared.update(|s| s.redeeming = None);
@@ -385,6 +388,9 @@ impl App {
                         }
                         Outcome::NoCredit => format!("{name} has no reset credit left."),
                         Outcome::AlreadyRedeemed => "That credit was already redeemed.".to_owned(),
+                        Outcome::Declined => format!(
+                            "{provider} would not spend one on {name} right now, so it was kept."
+                        ),
                     };
                     shared.tell(text, outcome == Outcome::NoCredit);
                 }

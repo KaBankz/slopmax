@@ -250,6 +250,9 @@ async fn proxy(app: Arc<App>, request: Request) -> Response {
     if let Some(version) = crate::provider::codex::wire::client_version(request.headers()) {
         *app.codex_version.lock().unwrap_or_else(|p| p.into_inner()) = Some(version);
     }
+    if let Some(agent) = crate::provider::claude::wire::client_agent(request.headers()) {
+        app.pool.saw_agent(ProviderId::Claude, agent);
+    }
     // Codex's sockets are relayed when they can be; refusing a handshake
     // with 426 makes Codex stream over HTTP at once instead of retrying.
     if is_websocket(request.headers()) {

@@ -243,9 +243,13 @@ async fn redeem(app: &App, account: &crate::account::Account, credit: Option<Str
             "the account needs signing in again",
         );
     };
+    let agent = app.pool.agent(account.provider);
     let credit = match credit {
         Some(credit) => credit,
-        None => match credits.list(&app.auth_http, &account).await {
+        None => match credits
+            .list(&app.auth_http, &account, agent.as_deref())
+            .await
+        {
             Ok(listed) => {
                 let soonest = listed.first().map(|c| c.id.clone());
                 app.pool
@@ -264,7 +268,7 @@ async fn redeem(app: &App, account: &crate::account::Account, credit: Option<Str
         },
     };
     match credits
-        .redeem(&app.auth_http, &account, Some(&credit))
+        .redeem(&app.auth_http, &account, agent.as_deref(), Some(&credit))
         .await
     {
         Ok(outcome) => {

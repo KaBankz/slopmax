@@ -27,6 +27,10 @@ pub const CREDIT_EXPIRY_LEAD: SignedDuration = SignedDuration::from_hours(3);
 /// when one is granted, spent, or expires, which the usage count and the
 /// expiry dates already tell.
 const LIST_CREDITS_EVERY: SignedDuration = SignedDuration::from_hours(6);
+/// How often the credits of a provider whose usage does not count them, as
+/// Claude's, are listed: a new one shows within the hour. A failed listing
+/// waits as long, since it asks the usage endpoint, which rate-limits.
+const LIST_UNCOUNTED_EVERY: SignedDuration = SignedDuration::from_hours(1);
 /// How soon a new count from the usage has the credits listed again, at the
 /// earliest.
 const LIST_CREDITS_GAP: SignedDuration = SignedDuration::from_mins(10);
@@ -254,28 +258,38 @@ pub async fn poll_one(app: &App, account: &Account) {
     }
 }
 
-/// Lists the reset credits of each account that has some, when its list is
-/// due: never listed, listed [`LIST_CREDITS_EVERY`] ago, or no longer
-/// matching the count its usage reports. `force` lists them all now.
+/// Lists the reset credits of each account that may have some, when its
+/// list is due: never listed, listed [`LIST_CREDITS_EVERY`] ago, or no
+/// longer matching the count its usage reports; or, for a provider whose
+/// usage keeps no count, listed [`LIST_UNCOUNTED_EVERY`] ago. `force` lists
+/// them all now.
 pub async fn list_credits(app: &App, force: bool) {
     let now = Timestamp::now();
     for account in app.pool.accounts() {
         let Some(credits) = account.provider.get().credits() else {
             continue;
         };
+        let agent = app.pool.agent(account.provider);
         let state = app.pool.state(&account.id);
         let counted = state.limits.reset_credits;
+        let none = credits.counted() && counted.unwrap_or(0) == 0 && state.credits_left(now) == 0;
         if account.disabled
             || account.auth_error.is_some()
-            || (counted.unwrap_or(0) == 0 && state.credits_left(now) == 0)
+            || none
+            || (credits.needs_agent() && agent.is_none())
         {
             continue;
         }
+        let every = if credits.counted() {
+            LIST_CREDITS_EVERY
+        } else {
+            LIST_UNCOUNTED_EVERY
+        };
         let due = match &state.credits {
             None => true,
             Some(list) => {
                 let age = now.duration_since(list.listed_at);
-                age >= LIST_CREDITS_EVERY || (age >= LIST_CREDITS_GAP && list.counted != counted)
+                age >= every || (age >= LIST_CREDITS_GAP && list.counted != counted)
             }
         };
         if !force && !due {
@@ -284,9 +298,18 @@ pub async fn list_credits(app: &App, force: bool) {
         let Some(account) = app.ready(&account).await else {
             continue;
         };
-        match credits.list(&app.auth_http, &account).await {
+        match credits
+            .list(&app.auth_http, &account, agent.as_deref())
+            .await
+        {
             Ok(listed) => app.pool.record_credits(&account.id, listed, now),
-            Err(e) => log::warn!("{}: listing reset credits: {e:#}", account.id),
+            Err(e) => {
+                log::warn!("{}: listing reset credits: {e:#}", account.id);
+                if !credits.counted() {
+                    let kept = state.unexpired_credits(now).cloned().collect();
+                    app.pool.record_credits(&account.id, kept, now);
+                }
+            }
         }
     }
 }
@@ -296,9 +319,12 @@ pub async fn list_credits(app: &App, force: bool) {
 pub async fn redeem_expiring(app: &App) {
     let now = Timestamp::now();
     for account in app.pool.accounts() {
+        let Some(credits) = account.provider.get().credits() else {
+            continue;
+        };
         let state = app.pool.state(&account.id);
         let used = state.limits.windows.iter().any(|w| w.used_at(now) > 0.0);
-        if account.provider.get().credits().is_none()
+        if (credits.needs_agent() && app.pool.agent(account.provider).is_none())
             || account.disabled
             || account.auth_error.is_some()
             || state.credits_left(now) == 0
@@ -339,7 +365,10 @@ async fn redeem_if_expiring(
     let Some(credits) = account.provider.get().credits() else {
         return Ok(None);
     };
-    let available = credits.list(&app.auth_http, account).await?;
+    let agent = app.pool.agent(account.provider);
+    let available = credits
+        .list(&app.auth_http, account, agent.as_deref())
+        .await?;
     app.pool.record_credits(&account.id, available.clone(), now);
     let expiring = available.first().filter(|c| {
         c.expires_at
@@ -349,7 +378,7 @@ async fn redeem_if_expiring(
         return Ok(None);
     };
     let outcome = credits
-        .redeem(&app.auth_http, account, Some(&credit.id))
+        .redeem(&app.auth_http, account, agent.as_deref(), Some(&credit.id))
         .await?;
     Ok(Some((outcome, credit.id.clone())))
 }

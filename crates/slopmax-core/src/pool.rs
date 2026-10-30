@@ -137,6 +137,10 @@ pub struct State {
     /// Kept so a restart does not move sessions (and lose their caches).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     sessions: Vec<SavedSession>,
+    /// Each provider's own client, as its user agent was last seen in a
+    /// request: Claude answers its limit resets to Claude Code alone.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agents: BTreeMap<ProviderId, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -193,6 +197,7 @@ struct Inner {
     states: HashMap<String, AccountState>,
     sessions: HashMap<(ProviderId, String), Binding>,
     pins: Pins,
+    agents: BTreeMap<ProviderId, String>,
     dirty: bool,
 }
 
@@ -222,6 +227,7 @@ impl Pool {
         let inner = Inner {
             states: state.accounts.into_iter().collect(),
             sessions,
+            agents: state.agents,
             ..Inner::default()
         };
         Self {
@@ -259,6 +265,20 @@ impl Pool {
 
     pub fn pins(&self) -> Pins {
         self.lock().pins.clone()
+    }
+
+    /// The user agent of `provider`'s own client, as last seen in a request.
+    pub fn agent(&self, provider: ProviderId) -> Option<String> {
+        self.lock().agents.get(&provider).cloned()
+    }
+
+    /// Notes the user agent of a request from `provider`'s own client.
+    pub fn saw_agent(&self, provider: ProviderId, agent: &str) {
+        let mut inner = self.lock();
+        if inner.agents.get(&provider).map(String::as_str) != Some(agent) {
+            inner.agents.insert(provider, agent.to_owned());
+            inner.dirty = true;
+        }
     }
 
     /// Chooses an account for a request.
@@ -554,7 +574,15 @@ impl Pool {
                 last_used: b.last_used,
             })
             .collect();
-        (State { accounts, sessions }, dirty)
+        let agents = inner.agents.clone();
+        (
+            State {
+                accounts,
+                sessions,
+                agents,
+            },
+            dirty,
+        )
     }
 
     /// The account each live session is bound to, for display.

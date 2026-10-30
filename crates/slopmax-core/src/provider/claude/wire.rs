@@ -37,6 +37,13 @@ pub fn upstream_headers(client: &HeaderMap, access_token: &str) -> HeaderMap {
     headers
 }
 
+/// Claude Code's user agent, like `claude-cli/2.1.291 (external, cli)`, if
+/// it sent the request.
+pub fn client_agent(headers: &HeaderMap) -> Option<&str> {
+    let agent = headers.get("user-agent")?.to_str().ok()?;
+    (agent.starts_with("claude-cli/") && agent.len() <= 200).then_some(agent)
+}
+
 fn insert(headers: &mut HeaderMap, name: &'static str, value: &str) {
     if let Ok(value) = HeaderValue::from_str(value) {
         headers.insert(HeaderName::from_static(name), value);
@@ -60,6 +67,22 @@ mod tests {
             with_oauth_beta(Some("oauth-2025-04-20,x")),
             "oauth-2025-04-20,x"
         );
+    }
+
+    #[test]
+    fn claude_code_is_known_by_its_agent() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(client_agent(&headers), None);
+        headers.insert(
+            "user-agent",
+            HeaderValue::from_static("claude-cli/2.1.291 (external, cli)"),
+        );
+        assert_eq!(
+            client_agent(&headers),
+            Some("claude-cli/2.1.291 (external, cli)")
+        );
+        headers.insert("user-agent", HeaderValue::from_static("curl/8.7.1"));
+        assert_eq!(client_agent(&headers), None);
     }
 
     #[test]

@@ -9,13 +9,14 @@ use slopmax_core::account::{self, Store};
 use slopmax_core::auth::{self, LoginOptions};
 use slopmax_core::background::Daemon;
 use slopmax_core::config::Config;
-use slopmax_core::human;
 use slopmax_core::import::{self, Source};
 use slopmax_core::net::Origins;
-use slopmax_core::paths::Home;
+use slopmax_core::paths::{self, Home};
+use slopmax_core::pool::State;
 use slopmax_core::provider::credits::Outcome;
 use slopmax_core::provider::{Billing, Credential, ProviderId};
 use slopmax_core::time::Timestamp;
+use slopmax_core::{fsx, human};
 
 pub(super) async fn login(
     store: &Store,
@@ -208,7 +209,11 @@ pub(super) async fn redeem(config: &Config, store: &Store, query: &str, yes: boo
     } else {
         account
     };
-    let available = credits.list(&http, &account).await?;
+    // As the proxy last saw the provider's own client, which some answer
+    // alone.
+    let state: State = fsx::read_json(&paths::state_file())?.unwrap_or_default();
+    let agent = state.agents.get(&account.provider).map(String::as_str);
+    let available = credits.list(&http, &account, agent).await?;
     let Some(next) = available.first() else {
         println!("{} has no reset credits.", ui::bold(account.name()));
         return Ok(());
@@ -227,7 +232,10 @@ pub(super) async fn redeem(config: &Config, store: &Store, query: &str, yes: boo
     if !yes && !term::confirm("Reset its usage windows now?", false)? {
         return Ok(());
     }
-    match credits.redeem(&http, &account, Some(&next.id)).await? {
+    match credits
+        .redeem(&http, &account, agent, Some(&next.id))
+        .await?
+    {
         Outcome::Reset => {
             println!("Reset the usage windows on {}.", ui::bold(account.name()));
             // Let a running proxy pick up the fresh windows right away.
@@ -236,6 +244,10 @@ pub(super) async fn redeem(config: &Config, store: &Store, query: &str, yes: boo
         Outcome::NothingToReset => println!("Nothing to reset right now; the credit was kept."),
         Outcome::NoCredit => println!("No credit was available."),
         Outcome::AlreadyRedeemed => println!("That credit was already redeemed."),
+        Outcome::Declined => println!(
+            "{} would not spend one right now, so it was kept.",
+            account.provider.spec().title
+        ),
     }
     Ok(())
 }

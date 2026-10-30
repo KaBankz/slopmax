@@ -1,5 +1,6 @@
 //! Claude Pro/Max subscriptions, as used by Claude Code.
 
+mod credits;
 pub mod limits;
 pub mod oauth;
 pub mod wire;
@@ -7,6 +8,7 @@ pub mod wire;
 use anyhow::Result;
 use http::{HeaderMap, StatusCode};
 
+use super::credits::ResetCredits;
 use super::{Billing, BoxFuture, Credential, Provider, Reading, Spec, UsageError, Verdict};
 use crate::account::Account;
 use crate::auth::{Grant, LoginOptions, Prompt, RefreshError};
@@ -15,7 +17,7 @@ use crate::net::Client;
 use crate::time::{SignedDuration, Timestamp};
 use crate::wire::Dialect;
 
-/// Anthropic's API: Messages, the OAuth profile, and usage.
+/// Anthropic's API: Messages, the OAuth profile, usage, and limit resets.
 pub const API: &str = "https://api.anthropic.com";
 
 pub struct Claude;
@@ -89,6 +91,10 @@ impl Provider for Claude {
 
     fn show_pool(&self, windows: &[PoolWindow], headers: &mut HeaderMap) {
         limits::pool_headers(windows, headers);
+    }
+
+    fn credits(&self) -> Option<&dyn ResetCredits> {
+        Some(&credits::Credits)
     }
 
     fn verdict(

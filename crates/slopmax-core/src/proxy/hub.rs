@@ -327,8 +327,9 @@ async fn credits(app: &App, account: &Account) -> Result<Vec<Credit>, (StatusCod
         return Ok(state.unexpired_credits(now).cloned().collect());
     }
     let ready = app.ready(account).await.ok_or_else(signed_out)?;
+    let agent = app.pool.agent(account.provider);
     let credits = lister
-        .list(&app.auth_http, &ready)
+        .list(&app.auth_http, &ready, agent.as_deref())
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
     app.pool.record_credits(&account.id, credits.clone(), now);
@@ -353,8 +354,9 @@ async fn consume(app: &App, account: &Account, data: &str) -> Answer {
     };
     let _redeeming = app.redeeming.lock().await;
     let ready = app.ready(account).await.ok_or_else(signed_out)?;
+    let agent = app.pool.agent(account.provider);
     let outcome = credits
-        .redeem(&app.auth_http, &ready, Some(&credit_id))
+        .redeem(&app.auth_http, &ready, agent.as_deref(), Some(&credit_id))
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
     if outcome == Outcome::Reset {
