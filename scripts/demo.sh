@@ -35,6 +35,8 @@ api_key = "bench"
 listen = "$listen"
 poll_mins = 0
 refresh_tokens = false
+# So the reset lapsing within the day is left to you, as a nudge says.
+redeem_expiring_credits = false
 EOF
 up() { until curl -fs -o /dev/null "http://$listen/healthz"; do sleep 0.1; done; }
 # A proxy left on the demo's port (say, one the app started for an earlier
@@ -76,7 +78,9 @@ def fable(used, resets_in):
 looks = {
     "claude": [windows(82, 7_500, 47, 259_200) + fable(64, 259_200),
                windows(12, 14_400, 30, 432_000) + fable(18, 432_000)],
-    "codex": [windows(100, 4_800, 64, 172_800), windows(35, 10_800, 21, 518_400)],
+    # The second ChatGPT account's week resets within the day, mostly
+    # unused: worth a nudge.
+    "codex": [windows(100, 4_800, 64, 172_800), windows(35, 10_800, 21, 72_000)],
 }
 served = {"requests": 120, "input_tokens": 900_000, "output_tokens": 80_000,
           "cache_read_tokens": 4_000_000, "cache_write_tokens": 200_000}
@@ -98,6 +102,21 @@ for provider, shapes in looks.items():
         state["accounts"][account] = entry
 with open(f"{home}/state.json", "w") as f:
     json.dump(state, f, indent=2)
+
+# Four weeks of windows that reset, with how much of each was used: what
+# was left on the table.
+plans = {"claude": ["max 20x", "max 5x"], "codex": ["pro", "plus"]}
+weekly = {"claude": [[62, 88, 100, 45], [97, 100, 93, 100]],
+          "codex": [[100, 100, 96, 100], [38, 55, 71, 40]]}
+with open(f"{home}/windows.jsonl", "w") as f:
+    for provider, used_by_account in weekly.items():
+        accounts = [i for i in ids if i.startswith(provider)]
+        for n, (account, weeks) in enumerate(zip(accounts, used_by_account)):
+            for back, used in enumerate(weeks):
+                ended = now - (back + 1) * 7 * 86_400 + 3_600 * (n + 1)
+                f.write(json.dumps({"ended_at": at(ended - now), "account": account,
+                                    "provider": provider, "plan": plans[provider][n],
+                                    "span": "7d", "used": used}) + "\n")
 
 # Thirty days of requests in the ledger, for the app's charts, as the proxy
 # writes them: agents' sessions, busier on weekdays and in working hours,

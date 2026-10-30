@@ -13,6 +13,9 @@ use crate::time::{SignedDuration, Timestamp};
 
 /// The periods a summary covers, counted in local days.
 pub const RANGES: &[&str] = &["today", "7d", "30d", "all"];
+/// The row, by account, of failures no account could take.
+pub const NO_ACCOUNT: &str = "(no account free)";
+
 /// How a summary groups requests.
 pub const GROUPS: &[&str] = &["day", "model", "account"];
 
@@ -127,6 +130,8 @@ pub fn build(
     let key = |entry: &Entry| -> String {
         match by {
             "model" => entry.model.clone().unwrap_or_else(|| "-".into()),
+            // Failures that reached no account: every one was limited.
+            "account" if entry.account.is_empty() => NO_ACCOUNT.to_owned(),
             "account" => names
                 .get(&entry.account)
                 .cloned()

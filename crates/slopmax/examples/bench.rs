@@ -150,7 +150,7 @@ fn credit_list(token: &str) -> Response {
     let at = |hours: i64| (started + SignedDuration::from_hours(hours)).to_string();
     // Granted, then expiring, in hours from the start.
     let dates: &[(i64, i64)] = match token {
-        "bench-codex-0" => &[(-27 * 24 - 5, 2 * 24 + 19), (-6 * 24, 24 * 24)],
+        "bench-codex-0" => &[(-27 * 24 - 5, 19), (-6 * 24, 24 * 24)],
         "bench-codex-1" => &[(-12 * 24, 18 * 24), (-30, 29 * 24 - 6)],
         _ => &[],
     };
@@ -309,16 +309,23 @@ async fn proxy(listen: SocketAddr, upstream: &str, home: &str) -> Result<()> {
             let org = 100 * provider as usize + i;
             account.org_id = Some(format!("00000000-0000-4000-8000-{org:012}"));
             account.account_id = Some(format!("acct-{provider}-{i}"));
+            // Plans, for what unused quota is worth.
+            let plans = match provider {
+                ProviderId::Claude => ["max 20x", "max 5x"],
+                _ => ["pro", "plus"],
+            };
+            account.plan = Some(plans[i].into());
             account.assign_id();
             store.upsert(account).context("saving a bench account")?;
         }
     }
+    // The home's own settings, but for what keeps the rig to itself.
     let config = Config {
         listen,
         api_key: "bench".into(),
         refresh_tokens: false,
         poll_mins: 0,
-        ..Config::default()
+        ..Config::load_from(&home.config()).unwrap_or_default()
     };
     let origins = Origins::new([
         ("https://api.anthropic.com", upstream),
