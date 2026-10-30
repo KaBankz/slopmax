@@ -112,6 +112,12 @@ impl Inbound {
             .map_err(String::as_str)
     }
 
+    /// Whether the request is an agent's housekeeping, such as listing
+    /// models or counting tokens, rather than work for a model to do.
+    fn housekeeping(&self) -> bool {
+        self.parts.method != http::Method::POST || self.target.path.contains("/count_tokens")
+    }
+
     /// Whether a Chat client asked for a usage chunk at the end.
     fn wants_usage(&self) -> bool {
         let path = [Seg::Key("stream_options"), Seg::Key("include_usage")];
@@ -356,6 +362,7 @@ pub(super) async fn forward(
                 provider: step.provider,
                 session: inbound.session.as_deref(),
                 affinity: inbound.affinity,
+                housekeeping: inbound.housekeeping(),
                 model: Some(step.model.as_str()).filter(|m| !m.is_empty()),
                 candidates: Some(&step.accounts),
                 exclude: &tried,

@@ -107,6 +107,7 @@ pub(super) async fn accept(app: Arc<App>, target: Target, mut request: Request) 
         provider: ProviderId::Codex,
         session: session.as_deref(),
         affinity: super::affinity(&headers),
+        housekeeping: false,
         model: model.as_deref(),
         candidates: Some(&candidates),
         exclude: &[],

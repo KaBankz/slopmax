@@ -193,6 +193,9 @@ pub struct Pick<'a> {
     pub session: Option<&'a str>,
     /// The request's own say on session affinity, over the pool's.
     pub affinity: Option<bool>,
+    /// An agent's housekeeping (listing models, counting tokens) rather
+    /// than work: it takes no turn from round-robin.
+    pub housekeeping: bool,
     pub model: Option<&'a str>,
     /// The accounts that may serve it, when routing narrowed them down.
     pub candidates: Option<&'a [String]>,
@@ -395,9 +398,11 @@ impl Pool {
             });
         };
         let moved_from = bound.filter(|id| *id != account.id);
-        inner.picks += 1;
-        let picks = inner.picks;
-        inner.picked.insert(account.id.clone(), picks);
+        if !req.housekeeping {
+            inner.picks += 1;
+            let picks = inner.picks;
+            inner.picked.insert(account.id.clone(), picks);
+        }
         if let Some(key) = session_key {
             inner.sessions.insert(
                 key,
@@ -732,6 +737,7 @@ mod tests {
         let req = Pick {
             provider: ProviderId::Claude,
             affinity: None,
+            housekeeping: false,
             session,
             model: None,
             candidates: None,
@@ -771,6 +777,7 @@ mod tests {
         let req = |affinity| Pick {
             provider: ProviderId::Claude,
             affinity,
+            housekeeping: false,
             session: Some("s"),
             model: None,
             candidates: None,
@@ -894,6 +901,7 @@ mod tests {
         let req = Pick {
             provider: ProviderId::Claude,
             affinity: None,
+            housekeeping: false,
             session: Some("s1"),
             model: None,
             candidates: None,
@@ -952,6 +960,7 @@ mod tests {
         let req = Pick {
             provider: ProviderId::Claude,
             affinity: None,
+            housekeeping: false,
             session: Some("s"),
             model: None,
             candidates: None,
@@ -1022,6 +1031,7 @@ mod tests {
         let req = |model| Pick {
             provider: ProviderId::Claude,
             affinity: None,
+            housekeeping: false,
             session: None,
             model: Some(model),
             candidates: None,
@@ -1069,6 +1079,7 @@ mod tests {
         let req = Pick {
             provider: ProviderId::Claude,
             affinity: None,
+            housekeeping: false,
             session: None,
             model: None,
             candidates: None,
