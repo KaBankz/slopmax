@@ -76,10 +76,38 @@ pub async fn check(config: &Config, store: &Store) -> Result<Vec<Section>> {
         network(&http).await,
         files(&paths::accounts_dir()),
     ];
+    let mut sections = sections;
+    unserved(&mut sections, config, &accounts);
     Ok(sections
         .into_iter()
         .filter(|s| !s.findings.is_empty())
         .collect())
+}
+
+/// An agent wired to slopmax with no account to serve its own models gets
+/// an error for every request it sends.
+fn unserved(sections: &mut [Section], config: &Config, accounts: &[crate::account::Account]) {
+    for agent in crate::agent::AGENTS {
+        if crate::agent::wiring(agent, config) != crate::agent::Wiring::Slopmax
+            || crate::agent::servable(agent, accounts)
+        {
+            continue;
+        }
+        if let Some(section) = sections.iter_mut().find(|s| s.title == agent.title()) {
+            let provider = agent.provider();
+            section.add(
+                Level::Fail,
+                format!(
+                    "points at slopmax, but no {} account is connected to serve it",
+                    provider.spec().title
+                ),
+                Some(&format!(
+                    "slopmax login {provider}, or `slopmax setup {} --undo`",
+                    agent.id()
+                )),
+            );
+        }
+    }
 }
 
 async fn proxy(config: &Config, service: Option<Status>) -> Section {

@@ -147,22 +147,44 @@ pub async fn run(config: &Config, store: &Store, answers: Answers, plan: Plan) -
 
     step("Agents");
     for agent in AGENTS {
-        let wanted = match &plan.agents {
-            Some(list) => list.iter().any(|a| a.id() == agent.id()),
-            None => true,
-        };
-        if wanted {
-            wire(&config, agent, answers)?;
+        let named = plan
+            .agents
+            .as_ref()
+            .map(|list| list.iter().any(|a| a.id() == agent.id()));
+        if named == Some(false) {
+            continue;
         }
+        // An agent pointed at slopmax with nothing to serve its own models
+        // stops working; unless asked for by name, it is left as it is.
+        if !agent::servable(agent, &connected) {
+            let title = agent.provider().spec().title;
+            if named.is_none() {
+                println!(
+                    "  {} left as it is: no {title} account to serve it. `slopmax setup {}` wires it once there is one.",
+                    agent.title(),
+                    agent.id()
+                );
+                continue;
+            }
+            println!(
+                "  {} {} has no {title} account to serve it yet.",
+                ui::yellow("note:"),
+                agent.title()
+            );
+        }
+        wire(&config, agent, answers)?;
     }
 
     step("Background");
     background(&config, answers, &plan).await?;
 
     println!(
-        "\n{} {} accounts behind {}.\n  Restart Claude Code, Codex, and the apps that run them. `slopmax` shows each\n  account's usage, `slopmax dashboard` opens the dashboard, and `slopmax doctor`\n  checks the setup.",
+        "\n{} {} behind {}.\n  Restart Claude Code, Codex, and the apps that run them. `slopmax` shows each\n  account's usage, `slopmax dashboard` opens the dashboard, and `slopmax doctor`\n  checks the setup.",
         ui::green("Done."),
-        connected.len(),
+        match connected.len() {
+            1 => "1 account".to_owned(),
+            n => format!("{n} accounts"),
+        },
         ui::bold(config.base_url()),
     );
     Ok(())

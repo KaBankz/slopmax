@@ -110,6 +110,18 @@ pub trait Agent: Send + Sync {
 }
 
 /// Where an agent's own config sends it.
+/// Whether any of `accounts` can serve `agent`'s own models: an account of
+/// its provider, or an API key that backs it.
+pub fn servable(agent: &dyn Agent, accounts: &[crate::account::Account]) -> bool {
+    accounts.iter().any(|a| {
+        a.provider == agent.provider()
+            || matches!(
+                a.provider.spec().billing,
+                crate::provider::Billing::Metered { backs: Some(p) } if p == agent.provider()
+            )
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Wiring {
     /// Through this slopmax.

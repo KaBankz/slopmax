@@ -1224,6 +1224,41 @@ fn unattended_setup_imports_routes_wires_and_starts_the_proxy() {
     assert_eq!(s.store().list().unwrap().len(), 1);
     assert_eq!(s.stub_calls(), "");
 
+    // Claude Code was wired by name with no Claude account to serve it:
+    // the doctor says so.
+    let doctor = s.run(&["doctor"]);
+    assert!(
+        doctor
+            .stdout
+            .contains("points at slopmax, but no Claude account is connected"),
+        "{doctor:?}"
+    );
+
     let out = s.run(&["stop"]).ok();
     assert!(out.stdout.contains("slopmax stopped"), "{out:?}");
+}
+
+#[test]
+fn unattended_setup_leaves_alone_an_agent_it_has_no_account_for() {
+    let s = Sandbox::new("init-unserved");
+    write(
+        &s.home.join(".cli-proxy-api/codex-a.json"),
+        &json!({"type": "codex", "access_token": "tok-a", "refresh_token": "ref-a",
+                "email": "a@x.dev", "account_id": "ws-a"})
+        .to_string(),
+    );
+    let out = s
+        .run(&["setup", "--yes", "--import", "cliproxyapi", "--no-service"])
+        .ok();
+    let text = &out.stdout;
+    assert!(
+        text.contains("Claude Code left as it is: no Claude account to serve it."),
+        "{text}"
+    );
+    assert!(text.contains("1 account behind"), "{text}");
+    // Claude Code keeps working as it did; Codex goes through slopmax.
+    assert!(!s.claude.join("settings.json").exists());
+    let toml = std::fs::read_to_string(s.codex.join("config.toml")).unwrap();
+    assert!(toml.contains(&format!("127.0.0.1:{}", s.port)), "{toml}");
+    s.run(&["stop"]).ok();
 }
