@@ -1109,16 +1109,20 @@ fn service_commands_find_no_manager_in_the_sandbox() {
 }
 
 #[test]
-fn setup_with_nothing_to_import_stops_early() {
+fn unattended_setup_with_nothing_to_pool_fails_and_says_what_to_add() {
     let s = Sandbox::new("init");
     for args in [
         &["setup", "--yes", "--import", "none"][..],
         &["init", "--import", "none"][..],
     ] {
-        let out = s.run(args).ok();
+        let out = s.run(args);
+        assert_eq!(out.code, 1, "{out:?}");
         assert!(out.stdout.contains("slopmax setup"), "{out:?}");
-        assert!(out.stdout.contains("No accounts yet"), "{out:?}");
         assert!(!out.stdout.contains("Routing"), "{out:?}");
+        let stderr = &out.stderr;
+        assert!(stderr.contains("no accounts are connected"), "{out:?}");
+        assert!(stderr.contains("--import claude-code,codex"), "{out:?}");
+        assert!(stderr.contains("--keys-from-env"), "{out:?}");
     }
     assert_eq!(s.stub_calls(), "");
 }

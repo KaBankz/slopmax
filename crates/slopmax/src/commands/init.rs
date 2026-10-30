@@ -125,6 +125,17 @@ pub async fn run(config: &Config, store: &Store, answers: Answers, plan: Plan) -
     accounts(store, answers, &plan).await?;
     let connected = store.list()?;
     if connected.is_empty() {
+        // Unattended, finding nothing to pool is a failure the caller must
+        // see; at a terminal, the person chose to add nothing yet.
+        if answers == Answers::Defaults {
+            bail!(
+                "no accounts are connected, so there is nothing to proxy. Add one of:\n  \
+                 --import claude-code,codex   use the logins Claude Code and Codex have here\n  \
+                 --import cliproxyapi         use CLIProxyAPI's logins\n  \
+                 --login claude,codex         sign in (a device code for ChatGPT without a browser)\n  \
+                 --keys-from-env              add ANTHROPIC_API_KEY, OPENAI_API_KEY, XAI_API_KEY"
+            );
+        }
         println!(
             "\n  No accounts yet. Run `slopmax setup` again, or add one with `slopmax login claude`\n  or `slopmax login codex`."
         );
