@@ -41,8 +41,8 @@ type Answer = Result<Value, (StatusCode, String)>;
 
 /// Answers a request under `/v0/management/`.
 pub(super) async fn handle(app: Arc<App>, request: Request) -> Response {
-    if !authorized(&app.config, request.headers())
-        && !has_management_key(&app.config, request.headers())
+    if !authorized(&app.config(), request.headers())
+        && !has_management_key(&app.config(), request.headers())
     {
         return fail(
             StatusCode::UNAUTHORIZED,
@@ -381,7 +381,7 @@ fn reset_quota(app: Arc<App>, index: &str) -> Response {
     };
     let models = app.pool.clear_blocks(&account.id);
     let id = account.id.clone();
-    if app.config.poll_mins > 0 && account.auth_error.is_none() {
+    if app.config().poll_mins > 0 && account.auth_error.is_none() {
         tokio::spawn(async move { daemon::poll_one(&app, &account).await });
     }
     json_reply(

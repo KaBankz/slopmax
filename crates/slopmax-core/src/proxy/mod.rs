@@ -17,7 +17,7 @@ mod transcode;
 pub mod warm;
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -37,7 +37,7 @@ use crate::net::body;
 use crate::net::server::{Request, Response};
 use crate::net::{Client, Origins};
 use crate::paths::Home;
-use crate::pool::{Pins, Pool, State as PoolState};
+use crate::pool::{Pins, Pool, Routing, State as PoolState};
 use crate::provider::ProviderId;
 use crate::report::{self, Report};
 use crate::time::{SignedDuration, Timestamp};
@@ -45,7 +45,8 @@ use crate::wire::Dialect;
 
 /// Shared state for request handlers and background tasks.
 pub struct App {
-    pub config: Config,
+    /// The config, swapped whole when config.toml changes.
+    config: RwLock<Arc<Config>>,
     /// The slopmax directory this proxy reads and writes.
     pub home: Home,
     pub store: Store,
@@ -73,6 +74,8 @@ pub struct App {
     codex_model: Mutex<Option<String>>,
     /// When each account was last warmed.
     warmed: Mutex<HashMap<String, Instant>>,
+    /// config.toml as last read, to tell when it changes.
+    config_text: Mutex<Option<String>>,
 }
 
 impl App {
@@ -87,6 +90,7 @@ impl App {
             .find(|e| e.provider == ProviderId::Codex)
             .and_then(|e| e.model);
         let ledger = Ledger::start(home.usage());
+        let config_text = std::fs::read_to_string(home.config()).ok();
         let http = Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .read_timeout(Duration::from_secs(600))
@@ -97,8 +101,9 @@ impl App {
             SignedDuration::from_mins(config.session_ttl_mins as i64),
             state,
         );
+        pool.set_routing(Routing::of(&config));
         Arc::new(Self {
-            config,
+            config: RwLock::new(Arc::new(config)),
             home,
             store,
             pool,
@@ -113,7 +118,50 @@ impl App {
             events: broadcast::channel(256).0,
             codex_model: Mutex::new(codex_model),
             warmed: Default::default(),
+            config_text: Mutex::new(config_text),
         })
+    }
+
+    /// The config as it stands.
+    pub fn config(&self) -> Arc<Config> {
+        self.config
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    /// Applies a changed config to requests from now on. The address, the
+    /// upstream proxy, and which background tasks run are set at start, so
+    /// changing those needs a restart; everything else applies at once.
+    pub fn set_config(&self, config: Config) {
+        self.pool.set_routing(Routing::of(&config));
+        *self.config.write().unwrap_or_else(|p| p.into_inner()) = Arc::new(config);
+    }
+
+    /// Applies config.toml if it changed since it was last read. A config
+    /// that does not parse is logged and left unapplied.
+    pub fn reload_config(&self) {
+        let Ok(text) = std::fs::read_to_string(self.home.config()) else {
+            return;
+        };
+        let mut seen = self.config_text.lock().unwrap_or_else(|p| p.into_inner());
+        if seen.as_deref() == Some(text.as_str()) {
+            return;
+        }
+        match toml_edit::de::from_str::<Config>(&text) {
+            Ok(mut config) => {
+                let current = self.config();
+                // Bound at start: the listener stays where it is.
+                config.listen = current.listen;
+                if config.api_key.is_empty() {
+                    config.api_key.clone_from(&current.api_key);
+                }
+                log::info!("config.toml changed; applying it");
+                self.set_config(config);
+            }
+            Err(e) => log::warn!("config.toml is invalid, keeping the last good one: {e}"),
+        }
+        *seen = Some(text);
     }
 
     /// Reloads accounts and pins from disk, picking up logins, removals,
@@ -135,7 +183,7 @@ impl App {
             .unwrap_or_else(|| picked.clone());
         // Following a linked account's source is read-only, so it happens
         // even when refreshing is off.
-        if !self.config.refresh_tokens && account.link.is_none() {
+        if !self.config().refresh_tokens && account.link.is_none() {
             return Some(account);
         }
         match auth::ensure_fresh(&self.auth_http, &self.store, &account, false).await {
@@ -194,7 +242,7 @@ impl App {
             |id| self.pool.state(id),
             &self.pool.pins(),
             &self.pool.session_counts(now),
-            self.config.strategy,
+            self.config().strategy,
             true,
             now,
         )
@@ -215,7 +263,7 @@ pub async fn handle(app: Arc<App>, request: Request) -> Response {
         (&Method::GET, "/v1/models")
             if models::wants_list(request.headers(), request.uri().query().unwrap_or("")) =>
         {
-            match caller(&app.config, request.headers()) {
+            match caller(&app.config(), request.headers()) {
                 Some(Caller::Owner) => models::list(&app, None).await,
                 Some(Caller::Client(key)) => {
                     let key = key.clone();
@@ -242,7 +290,7 @@ async fn proxy(app: Arc<App>, request: Request) -> Response {
         );
     };
     let dialect = target.dialect;
-    let client = match caller(&app.config, request.headers()) {
+    let client = match caller(&app.config(), request.headers()) {
         Some(Caller::Owner) => None,
         Some(Caller::Client(key)) => Some(key.clone()),
         None => return unauthorized(Some(dialect)),
@@ -438,7 +486,9 @@ pub(crate) fn forwardable(client: &HeaderMap) -> HeaderMap {
     let mut headers = HeaderMap::with_capacity(client.len());
     for (name, value) in client {
         let name_str = name.as_str();
+        // slopmax's own headers are for slopmax alone.
         let skip = HOP_BY_HOP.contains(&name_str)
+            || name_str.starts_with("x-slopmax-")
             || matches!(
                 name_str,
                 "host" | "content-length" | "authorization" | "x-api-key" | "cookie"
@@ -448,6 +498,18 @@ pub(crate) fn forwardable(client: &HeaderMap) -> HeaderMap {
         }
     }
     headers
+}
+
+/// A request's own say on session affinity: `x-slopmax-affinity: off`
+/// places it by the strategy alone, `on` keeps it on its session's
+/// account even when the config turns affinity off.
+pub(crate) fn affinity(headers: &HeaderMap) -> Option<bool> {
+    let value = headers.get("x-slopmax-affinity")?.to_str().ok()?.trim();
+    match value.to_ascii_lowercase().as_str() {
+        "on" | "true" | "1" | "yes" => Some(true),
+        "off" | "false" | "0" | "no" => Some(false),
+        _ => None,
+    }
 }
 
 /// Upstream response headers safe to return to the agent.

@@ -22,11 +22,12 @@ use tokio::sync::{broadcast, mpsc};
 
 use super::{App, authorized, error, json_reply};
 use crate::account::{forget, pin, unpin_all};
+use crate::config::{Config, Strategy};
 use crate::net::body;
 use crate::net::server::{Request, Response};
 use crate::provider::credits::Outcome;
 use crate::time::Timestamp;
-use crate::{daemon, log, summary};
+use crate::{daemon, history, log, summary};
 
 const DASHBOARD: &str = include_str!("dashboard.html");
 /// How often an idle feed says it is still there.
@@ -40,7 +41,7 @@ pub(super) async fn handle(app: Arc<App>, request: Request) -> Response {
     if method == Method::GET && path == "/slopmax/dashboard" {
         return dashboard();
     }
-    if !authorized(&app.config, request.headers()) {
+    if !authorized(&app.config(), request.headers()) {
         return error(
             None,
             StatusCode::UNAUTHORIZED,
@@ -64,6 +65,17 @@ pub(super) async fn handle(app: Arc<App>, request: Request) -> Response {
             json_reply(StatusCode::OK, &json!({ "status": "stopping" }))
         }
         (&Method::GET, ["usage"]) => usage(&app, &query),
+        (&Method::GET, ["history"]) => history(&app, &query).await,
+        (&Method::GET, ["settings"]) => json_reply(StatusCode::OK, &settings(&app.config())),
+        (&Method::POST, ["settings"]) => {
+            let body = match body::read(request.into_body(), 64 * 1024).await {
+                Ok(body) => body,
+                Err(e) => return error(None, StatusCode::BAD_REQUEST, &format!("{e}")),
+            };
+            // The fields come in the query, the form body, or both.
+            let form = format!("{query}&{}", String::from_utf8_lossy(&body));
+            change_settings(&app, &form)
+        }
         (&Method::GET, ["events"]) => events(&app),
         (&Method::POST, ["use", "auto"]) => unpin(&app),
         (&Method::POST, ["accounts", id, action]) => account(&app, id, action, &query).await,
@@ -123,9 +135,134 @@ fn usage(app: &App, query: &str) -> Response {
         .into_iter()
         .map(|a| (a.id.clone(), a.name()))
         .collect();
-    let report = summary::build(&app.home.usage(), since, &by, &app.config.prices, &names);
+    let report = summary::build(&app.home.usage(), since, &by, &app.config().prices, &names);
     json_reply(StatusCode::OK, &report)
 }
+
+/// `?range=today|7d|30d` → what went through slopmax over the range, as
+/// the desktop app charts it.
+async fn history(app: &App, query: &str) -> Response {
+    let range = crate::net::form::decode(query)
+        .into_iter()
+        .find_map(|(k, v)| (k == "range").then_some(v))
+        .unwrap_or_else(|| "7d".to_owned());
+    let Some(range) = history::Range::parse(&range) else {
+        return error(None, StatusCode::BAD_REQUEST, "range is today, 7d, or 30d");
+    };
+    let names: HashMap<String, String> = app
+        .pool
+        .accounts()
+        .into_iter()
+        .map(|a| (a.id.clone(), a.name()))
+        .collect();
+    let dir = app.home.usage();
+    let prices = app.config().prices.clone();
+    // Reading a month of the ledger takes a moment: off the request threads.
+    let loaded = tokio::task::spawn_blocking(move || {
+        history::load(&dir, range, Timestamp::now(), &prices, &names)
+    })
+    .await;
+    match loaded {
+        Ok(history) => json_reply(StatusCode::OK, &history),
+        Err(e) => error(None, StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+/// The settings a front end may change while the proxy runs.
+fn settings(config: &Config) -> serde_json::Value {
+    let strategies: Vec<_> = Strategy::ALL
+        .iter()
+        .map(|s| json!({ "id": s.to_string(), "summary": s.summary() }))
+        .collect();
+    json!({
+        "strategy": config.strategy,
+        "strategies": strategies,
+        "session_affinity": config.session_affinity,
+        "session_ttl_mins": config.session_ttl_mins,
+        "redeem_expiring_credits": config.redeem_expiring_credits,
+        "redeem_when_exhausted": config.redeem_when_exhausted,
+        "warm_windows": config.warm_windows,
+        "paid_overflow": config.paid_overflow,
+    })
+}
+
+/// `POST /slopmax/settings` with any of [`settings`]' fields as form
+/// values: writes them to config.toml, keeping its comments, and applies
+/// them at once.
+fn change_settings(app: &App, form: &str) -> Response {
+    let mut values: Vec<(&str, toml_edit::Value)> = Vec::new();
+    for (key, value) in crate::net::form::decode(form) {
+        let value = value.trim();
+        let parsed = match key.as_str() {
+            "strategy" => match Strategy::parse(value) {
+                Some(strategy) => toml_edit::Value::from(strategy.to_string()),
+                None => {
+                    let names: Vec<String> = Strategy::ALL.iter().map(|s| s.to_string()).collect();
+                    let message = format!("strategy is one of {}", names.join(", "));
+                    return error(None, StatusCode::BAD_REQUEST, &message);
+                }
+            },
+            "session_ttl_mins" => match value.parse::<i64>() {
+                Ok(mins) if mins > 0 => toml_edit::Value::from(mins),
+                _ => {
+                    return error(
+                        None,
+                        StatusCode::BAD_REQUEST,
+                        "session_ttl_mins is a number of minutes",
+                    );
+                }
+            },
+            "session_affinity"
+            | "redeem_expiring_credits"
+            | "redeem_when_exhausted"
+            | "warm_windows"
+            | "paid_overflow" => match value {
+                "true" | "on" | "1" => toml_edit::Value::from(true),
+                "false" | "off" | "0" => toml_edit::Value::from(false),
+                _ => {
+                    let message = format!("{key} is true or false");
+                    return error(None, StatusCode::BAD_REQUEST, &message);
+                }
+            },
+            "" => continue,
+            _ => {
+                let message = format!("{key} is not a setting slopmax changes while it runs");
+                return error(None, StatusCode::BAD_REQUEST, &message);
+            }
+        };
+        let key: &'static str = SETTABLE.iter().find(|k| **k == key).expect("matched above");
+        values.push((key, parsed));
+    }
+    if values.is_empty() {
+        return error(None, StatusCode::BAD_REQUEST, "no settings to change");
+    }
+    let path = app.home.config();
+    match Config::set(&path, &values) {
+        Ok(mut config) => {
+            let current = app.config();
+            config.listen = current.listen;
+            config.api_key.clone_from(&current.api_key);
+            log::info!("settings changed from the API");
+            json_reply(StatusCode::OK, &{
+                let reply = settings(&config);
+                app.set_config(config);
+                reply
+            })
+        }
+        Err(e) => error(None, StatusCode::BAD_REQUEST, &format!("{e:#}")),
+    }
+}
+
+/// The settings [`change_settings`] takes.
+const SETTABLE: &[&str] = &[
+    "strategy",
+    "session_ttl_mins",
+    "session_affinity",
+    "redeem_expiring_credits",
+    "redeem_when_exhausted",
+    "warm_windows",
+    "paid_overflow",
+];
 
 /// A server-sent event for each request answered from now on.
 fn events(app: &App) -> Response {

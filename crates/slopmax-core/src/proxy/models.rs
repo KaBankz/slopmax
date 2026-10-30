@@ -60,7 +60,7 @@ pub(super) async fn list(app: &Arc<App>, key: Option<&ClientKey>) -> Response {
             models.entry(id).or_insert(owner);
         }
     }
-    for alias in app.config.aliases.keys() {
+    for alias in app.config().aliases.keys() {
         models.entry(alias.clone()).or_insert("slopmax");
     }
     if let Some(key) = key {

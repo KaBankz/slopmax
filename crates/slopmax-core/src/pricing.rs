@@ -59,6 +59,14 @@ const CLAUDE: &[(&str, f64, f64, f64)] = &[
     ("claude-haiku-4-5", 1.0, 5.0, 0.10),
 ];
 
+/// OpenAI API list prices as of 2026-09-22, when GPT-6's were halved.
+/// Cached input is a tenth of input, and caching costs nothing extra.
+const OPENAI: &[(&str, f64, f64, f64)] = &[
+    // (model, input, output, cache read)
+    ("gpt-6-sol", 2.0, 10.0, 0.20),
+    ("gpt-6-luna", 0.10, 0.50, 0.01),
+];
+
 /// The price of `model`: the user's own if they set one, else the list
 /// price.
 pub fn price(model: &str, custom: &BTreeMap<String, Custom>) -> Option<Price> {
@@ -67,14 +75,16 @@ pub fn price(model: &str, custom: &BTreeMap<String, Custom>) -> Option<Price> {
     if let Some((_, price)) = custom.iter().find(|(id, _)| is_model(model, id)) {
         return Some((*price).into());
     }
-    CLAUDE
-        .iter()
-        .find(|(id, ..)| is_model(model, id))
-        .map(|&(_, input, output, cache_read)| Price {
+    let claude = CLAUDE.iter().map(|row| (row, 1.25));
+    let openai = OPENAI.iter().map(|row| (row, 1.0));
+    claude
+        .chain(openai)
+        .find(|((id, ..), _)| is_model(model, id))
+        .map(|(&(_, input, output, cache_read), write)| Price {
             input,
             output,
             cache_read,
-            cache_write: input * 1.25,
+            cache_write: input * write,
         })
 }
 
@@ -119,7 +129,17 @@ mod tests {
         // An unknown version is not priced as its predecessor.
         assert!(list("claude-opus-5-6").is_none());
         assert!(list("claude-opus-5-5-fast").is_none());
-        assert!(list("gpt-6-sol").is_none());
+        assert!(list("gpt-6-sol-pro").is_none());
+    }
+
+    #[test]
+    fn openai_prices_charge_nothing_extra_to_cache() {
+        let sol = list("gpt-6-sol").unwrap();
+        assert_eq!(
+            (sol.input, sol.output, sol.cache_read, sol.cache_write),
+            (2.0, 10.0, 0.20, 2.0)
+        );
+        assert_eq!(list("gpt-6-luna").unwrap().output, 0.50);
     }
 
     #[test]

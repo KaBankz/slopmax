@@ -27,6 +27,11 @@ pub struct Config {
     pub strategy: Strategy,
     /// Minutes a session stays pinned to its account after its last request.
     pub session_ttl_mins: u64,
+    /// Keep each session on the account it started on while that account
+    /// can serve, so its prompt cache stays warm. Off, every request is
+    /// placed by the strategy. A request can say otherwise with the
+    /// `x-slopmax-affinity: on|off` header.
+    pub session_affinity: bool,
     /// Minutes between background usage polls per account (0 disables).
     pub poll_mins: u64,
     /// Whether the proxy refreshes OAuth tokens. Disable only while another
@@ -99,6 +104,7 @@ impl Default for Config {
             api_key: String::new(),
             strategy: Strategy::default(),
             session_ttl_mins: 60,
+            session_affinity: true,
             poll_mins: 5,
             refresh_tokens: true,
             redeem_expiring_credits: true,
@@ -128,6 +134,32 @@ pub enum Strategy {
     FillFirst,
     /// Spread sessions across accounts, preferring the least used.
     LeastUsed,
+    /// Hand each new session (each request, without affinity) to the next
+    /// account in turn.
+    RoundRobin,
+}
+
+impl Strategy {
+    pub const ALL: [Strategy; 4] = [
+        Strategy::ResetFirst,
+        Strategy::FillFirst,
+        Strategy::LeastUsed,
+        Strategy::RoundRobin,
+    ];
+
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.to_string() == name)
+    }
+
+    /// What it does, in a phrase for people.
+    pub fn summary(self) -> &'static str {
+        match self {
+            Self::ResetFirst => "Spend the quota that resets soonest, so none is lost",
+            Self::FillFirst => "Use accounts in priority order; fail over when one is limited",
+            Self::LeastUsed => "Balance load toward the least used account",
+            Self::RoundRobin => "Take turns across accounts",
+        }
+    }
 }
 
 impl fmt::Display for Strategy {
@@ -136,6 +168,7 @@ impl fmt::Display for Strategy {
             Self::ResetFirst => "reset-first",
             Self::FillFirst => "fill-first",
             Self::LeastUsed => "least-used",
+            Self::RoundRobin => "round-robin",
         })
     }
 }
@@ -228,6 +261,30 @@ impl Config {
         Ok(true)
     }
 
+    /// Sets top-level settings in the config at `path`, keeping the file's
+    /// comments, and returns the config they make. Nothing is written if
+    /// the result is not a valid config.
+    pub fn set(path: &Path, values: &[(&str, toml_edit::Value)]) -> Result<Self> {
+        let mut doc = match std::fs::read_to_string(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => DocumentMut::new(),
+            _ => Self::document(path)?,
+        };
+        for (key, value) in values {
+            let mut value = value.clone();
+            // A comment beside the old value stays beside the new one.
+            if let Some(old) = doc.get(key).and_then(|item| item.as_value()) {
+                *value.decor_mut() = old.decor().clone();
+            }
+            doc[*key] = toml_edit::Item::Value(value);
+        }
+        let text = doc.to_string();
+        let config = toml_edit::de::from_str::<Self>(&text)
+            .with_context(|| format!("invalid setting for {}", path.display()))?;
+        fsx::write_private(path, text.as_bytes())
+            .with_context(|| format!("writing {}", path.display()))?;
+        Ok(config)
+    }
+
     fn document(path: &Path) -> Result<DocumentMut> {
         let text =
             std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
@@ -281,9 +338,16 @@ api_key = "{api_key}"
 
 # How a new session picks its account:
 #   reset-first  spend the quota that resets soonest, so none is lost
-#   fill-first   drain accounts in priority order
+#   fill-first   drain accounts in priority order (plain failover)
 #   least-used   spread sessions over the least used accounts
+#   round-robin  hand sessions to each account in turn
 # strategy = "reset-first"
+
+# Keep a session on the account it started on while that account can serve,
+# so the provider's prompt cache stays warm. Off, every request is placed by
+# the strategy (load balancing, at the cost of the cache). A client can
+# decide per request with the header `x-slopmax-affinity: on` or `off`.
+# session_affinity = true
 
 # Minutes a session stays on its account after its last request.
 # session_ttl_mins = 60

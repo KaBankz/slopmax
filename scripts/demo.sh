@@ -37,6 +37,14 @@ poll_mins = 0
 refresh_tokens = false
 EOF
 up() { until curl -fs -o /dev/null "http://$listen/healthz"; do sleep 0.1; done; }
+# A proxy left on the demo's port (say, one the app started for an earlier
+# demo) would answer for this one.
+for addr in "$upstream" "$listen"; do
+  if curl -fs -o /dev/null "http://$addr/healthz"; then
+    echo "something already listens on $addr; stop it, or set UPSTREAM_PORT and DEMO_PORT" >&2
+    exit 1
+  fi
+done
 
 "$bench" upstream "$upstream" 2>/dev/null &
 pids+=($!)

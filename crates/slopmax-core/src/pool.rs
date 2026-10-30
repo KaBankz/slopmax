@@ -11,6 +11,11 @@
 //!   longer serve (refused, exhausted, disabled, or signed out). Moving a
 //!   session merely because another account looks cooler throws away the
 //!   provider-side prompt cache, which costs far more than it saves.
+//!
+//! Session affinity can be turned off, for the whole proxy or one request.
+//! Every request is then placed afresh, which spreads load at the cost of
+//! the cache, but the session's last account is still remembered: state
+//! another account minted must be dropped when a request lands elsewhere.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
@@ -160,12 +165,34 @@ struct Binding {
     last_used: Timestamp,
 }
 
+/// How the pool places requests; the config's, and changed with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Routing {
+    pub strategy: Strategy,
+    /// How long a session is remembered after its last request.
+    pub session_ttl: SignedDuration,
+    /// Whether a session stays on its account while that account can serve.
+    pub affinity: bool,
+}
+
+impl Routing {
+    pub fn of(config: &crate::config::Config) -> Self {
+        Self {
+            strategy: config.strategy,
+            session_ttl: SignedDuration::from_mins(config.session_ttl_mins as i64),
+            affinity: config.session_affinity,
+        }
+    }
+}
+
 /// A request for an account.
 #[derive(Debug, Clone, Copy)]
 pub struct Pick<'a> {
     pub provider: ProviderId,
     /// Conversation id from the agent, used to keep a session on one account.
     pub session: Option<&'a str>,
+    /// The request's own say on session affinity, over the pool's.
+    pub affinity: Option<bool>,
     pub model: Option<&'a str>,
     /// The accounts that may serve it, when routing narrowed them down.
     pub candidates: Option<&'a [String]>,
@@ -198,14 +225,17 @@ struct Inner {
     sessions: HashMap<(ProviderId, String), Binding>,
     pins: Pins,
     agents: BTreeMap<ProviderId, String>,
+    /// When each account was last handed a request, as a count of picks:
+    /// round-robin hands the next to the one handed one longest ago.
+    picked: HashMap<String, u64>,
+    picks: u64,
     dirty: bool,
 }
 
 /// Thread-safe pool shared by the proxy and its background tasks.
 #[derive(Debug)]
 pub struct Pool {
-    strategy: Strategy,
-    session_ttl: SignedDuration,
+    routing: Mutex<Routing>,
     inner: Mutex<Inner>,
 }
 
@@ -231,10 +261,23 @@ impl Pool {
             ..Inner::default()
         };
         Self {
-            strategy,
-            session_ttl,
+            routing: Mutex::new(Routing {
+                strategy,
+                session_ttl,
+                affinity: true,
+            }),
             inner: Mutex::new(inner),
         }
+    }
+
+    pub fn routing(&self) -> Routing {
+        *self.routing.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// Places requests from now on as `routing` says. Sessions already
+    /// bound keep their accounts, if affinity is still on.
+    pub fn set_routing(&self, routing: Routing) {
+        *self.routing.lock().unwrap_or_else(|p| p.into_inner()) = routing;
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -283,13 +326,17 @@ impl Pool {
 
     /// Chooses an account for a request.
     pub fn pick(&self, req: &Pick, now: Timestamp) -> Result<Choice, Unavailable> {
+        let routing = self.routing();
         let mut inner = self.lock();
         let session_key = req.session.map(|s| (req.provider, s.to_owned()));
+        // The account the session used last, kept to even when affinity is
+        // off, to tell whether the request moved.
         let bound = session_key
             .as_ref()
             .and_then(|key| inner.sessions.get(key))
-            .filter(|b| now.duration_since(b.last_used) < self.session_ttl)
+            .filter(|b| now.duration_since(b.last_used) < routing.session_ttl)
             .map(|b| b.account.clone());
+        let sticky = req.affinity.unwrap_or(routing.affinity);
 
         let usable: Vec<&Account> = inner
             .accounts
@@ -328,13 +375,14 @@ impl Pool {
         // Keep the session where it is whenever its account can still serve.
         let chosen = bound
             .as_deref()
+            .filter(|_| sticky)
             .and_then(|id| ready.iter().find(|a| a.id == id))
             .or_else(|| {
                 let pinned = inner.pins.get(&req.provider)?;
                 ready.iter().find(|a| &a.id == pinned)
             })
             .copied()
-            .or_else(|| self.place(&ready, &inner.states, now));
+            .or_else(|| place(routing.strategy, &ready, &inner, now));
 
         let Some(account) = chosen.cloned() else {
             let reason = match soonest {
@@ -347,6 +395,9 @@ impl Pool {
             });
         };
         let moved_from = bound.filter(|id| *id != account.id);
+        inner.picks += 1;
+        let picks = inner.picks;
+        inner.picked.insert(account.id.clone(), picks);
         if let Some(key) = session_key {
             inner.sessions.insert(
                 key,
@@ -361,39 +412,6 @@ impl Pool {
             account,
             moved_from,
         })
-    }
-
-    /// Placement for a session without a usable binding.
-    fn place<'a>(
-        &self,
-        ready: &[&'a Account],
-        states: &HashMap<String, AccountState>,
-        now: Timestamp,
-    ) -> Option<&'a Account> {
-        let top = ready.iter().map(|a| a.priority).max()?;
-        let tier = ready.iter().copied().filter(|a| a.priority == top);
-        let limits = |a: &Account| {
-            states
-                .get(&a.id)
-                .map(|s| s.limits.clone())
-                .unwrap_or_default()
-        };
-        let last_used = |a: &Account| states.get(&a.id).and_then(|s| s.last_used);
-        let score = |a: &Account| Score(limits(a).score(now));
-
-        match self.strategy {
-            // Store order is priority then age, so the first ready account is
-            // the one to keep filling.
-            Strategy::FillFirst => tier.min_by_key(|a| a.added_at),
-            // Earliest-deadline-first over spare capacity: an account whose
-            // window resets soon loses its unused quota at that reset, while an
-            // idle account loses nothing by waiting. Ties go to the less used.
-            Strategy::ResetFirst => tier.min_by_key(|a| {
-                let deadline = limits(a).expiring_at(now).unwrap_or(Timestamp::MAX);
-                (deadline, score(a), last_used(a))
-            }),
-            Strategy::LeastUsed => tier.min_by_key(|a| (score(a), last_used(a))),
-        }
     }
 
     /// Records a successful request: binds the session and clears throttling.
@@ -561,9 +579,10 @@ impl Pool {
                 accounts.insert(id.clone(), state.clone());
             }
         }
+        let ttl = self.routing().session_ttl;
         inner
             .sessions
-            .retain(|_, b| now.duration_since(b.last_used) < self.session_ttl);
+            .retain(|_, b| now.duration_since(b.last_used) < ttl);
         let sessions = inner
             .sessions
             .iter()
@@ -587,14 +606,54 @@ impl Pool {
 
     /// The account each live session is bound to, for display.
     pub fn session_counts(&self, now: Timestamp) -> HashMap<String, usize> {
+        let ttl = self.routing().session_ttl;
         let inner = self.lock();
         let mut counts = HashMap::new();
         for binding in inner.sessions.values() {
-            if now.duration_since(binding.last_used) < self.session_ttl {
+            if now.duration_since(binding.last_used) < ttl {
                 *counts.entry(binding.account.clone()).or_default() += 1;
             }
         }
         counts
+    }
+}
+
+/// Placement for a session without a usable binding.
+fn place<'a>(
+    strategy: Strategy,
+    ready: &[&'a Account],
+    inner: &Inner,
+    now: Timestamp,
+) -> Option<&'a Account> {
+    let states = &inner.states;
+    let top = ready.iter().map(|a| a.priority).max()?;
+    let tier = ready.iter().copied().filter(|a| a.priority == top);
+    let limits = |a: &Account| {
+        states
+            .get(&a.id)
+            .map(|s| s.limits.clone())
+            .unwrap_or_default()
+    };
+    let last_used = |a: &Account| states.get(&a.id).and_then(|s| s.last_used);
+    let score = |a: &Account| Score(limits(a).score(now));
+
+    match strategy {
+        // Store order is priority then age, so the first ready account is
+        // the one to keep filling.
+        Strategy::FillFirst => tier.min_by_key(|a| a.added_at),
+        // Earliest-deadline-first over spare capacity: an account whose
+        // window resets soon loses its unused quota at that reset, while an
+        // idle account loses nothing by waiting. Ties go to the less used.
+        Strategy::ResetFirst => tier.min_by_key(|a| {
+            let deadline = limits(a).expiring_at(now).unwrap_or(Timestamp::MAX);
+            (deadline, score(a), last_used(a))
+        }),
+        Strategy::LeastUsed => tier.min_by_key(|a| (score(a), last_used(a))),
+        // Each in turn: the one handed a request longest ago, oldest
+        // account first among those never handed one.
+        Strategy::RoundRobin => {
+            tier.min_by_key(|a| (inner.picked.get(&a.id).copied().unwrap_or(0), a.added_at))
+        }
     }
 }
 
@@ -672,12 +731,77 @@ mod tests {
     fn pick(pool: &Pool, session: Option<&str>, now: i64) -> Result<String, Unavailable> {
         let req = Pick {
             provider: ProviderId::Claude,
+            affinity: None,
             session,
             model: None,
             candidates: None,
             exclude: &[],
         };
         pool.pick(&req, ts(now)).map(|c| c.account.id)
+    }
+
+    #[test]
+    fn round_robin_takes_turns_within_the_top_tier() {
+        let a = account(ProviderId::Claude, "a", 1);
+        let b = account(ProviderId::Claude, "b", 2);
+        let mut reserve = account(ProviderId::Claude, "c", 3);
+        reserve.priority = -1;
+        let pool = pool(Strategy::RoundRobin, &[&a, &b, &reserve]);
+        let turns: Vec<String> = (0..4).map(|_| pick(&pool, None, 1000).unwrap()).collect();
+        assert_eq!(
+            turns,
+            [a.id.clone(), b.id.clone(), a.id.clone(), b.id.clone()]
+        );
+        // The reserve tier serves only once the top tier cannot.
+        pool.block(&a.id, ts(5000), None, "limit");
+        pool.block(&b.id, ts(5000), None, "limit");
+        assert_eq!(pick(&pool, None, 1000).unwrap(), reserve.id);
+    }
+
+    #[test]
+    fn without_affinity_a_session_is_placed_afresh_but_its_move_is_known() {
+        let a = account(ProviderId::Claude, "a", 1);
+        let b = account(ProviderId::Claude, "b", 2);
+        let pool = pool(Strategy::RoundRobin, &[&a, &b]);
+        let routing = Routing {
+            affinity: false,
+            ..pool.routing()
+        };
+        pool.set_routing(routing);
+        let req = |affinity| Pick {
+            provider: ProviderId::Claude,
+            affinity,
+            session: Some("s"),
+            model: None,
+            candidates: None,
+            exclude: &[],
+        };
+        let first = pool.pick(&req(None), ts(1000)).unwrap();
+        assert_eq!((first.account.id, first.moved_from), (a.id.clone(), None));
+        // Placed afresh, on the next account, which must drop the first's
+        // state.
+        let second = pool.pick(&req(None), ts(1001)).unwrap();
+        assert_eq!(second.account.id, b.id);
+        assert_eq!(second.moved_from, Some(a.id.clone()));
+        // The request may ask for affinity anyway.
+        let third = pool.pick(&req(Some(true)), ts(1002)).unwrap();
+        assert_eq!((third.account.id, third.moved_from), (b.id.clone(), None));
+    }
+
+    #[test]
+    fn a_shorter_session_ttl_forgets_sessions_sooner() {
+        let a = account(ProviderId::Claude, "a", 1);
+        let b = account(ProviderId::Claude, "b", 2);
+        let pool = pool(Strategy::RoundRobin, &[&a, &b]);
+        assert_eq!(pick(&pool, Some("s"), 1000).unwrap(), a.id);
+        pool.set_routing(Routing {
+            session_ttl: SignedDuration::from_mins(1),
+            ..pool.routing()
+        });
+        // Within a minute the session keeps its account; after, it is new.
+        assert_eq!(pick(&pool, Some("s"), 1030).unwrap(), a.id);
+        assert_eq!(pick(&pool, Some("s"), 1200).unwrap(), b.id);
+        assert_eq!(pool.session_counts(ts(1200)).len(), 1);
     }
 
     #[test]
@@ -769,6 +893,7 @@ mod tests {
         pool.block(&a.id, ts(5000), None, "limit");
         let req = Pick {
             provider: ProviderId::Claude,
+            affinity: None,
             session: Some("s1"),
             model: None,
             candidates: None,
@@ -826,6 +951,7 @@ mod tests {
         let exclude = [a.id.clone()];
         let req = Pick {
             provider: ProviderId::Claude,
+            affinity: None,
             session: Some("s"),
             model: None,
             candidates: None,
@@ -895,6 +1021,7 @@ mod tests {
         pool.block(&a.id, ts(9000), Some("claude-fable"), "overage cap");
         let req = |model| Pick {
             provider: ProviderId::Claude,
+            affinity: None,
             session: None,
             model: Some(model),
             candidates: None,
@@ -941,6 +1068,7 @@ mod tests {
         let exclude = [a.id.clone()];
         let req = Pick {
             provider: ProviderId::Claude,
+            affinity: None,
             session: None,
             model: None,
             candidates: None,

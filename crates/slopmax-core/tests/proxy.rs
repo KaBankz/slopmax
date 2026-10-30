@@ -332,7 +332,18 @@ fn mock_codex(log: &Log, headers: &HeaderMap) -> Response {
             &[],
             json!({ "error": { "type": "usage_limit_reached", "message": "limit", "resets_at": reset_in(5400) } }).to_string(),
         ),
-        "Bearer tok-ok" | "Bearer tok-credit" => reply(
+        // Fails with a passing server error every other request.
+        "Bearer tok-flaky" if count(log, token) % 2 == 1 => reply(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &[],
+            r#"{"error":{"message":"upstream connect error"}}"#,
+        ),
+        "Bearer tok-down" => reply(
+            StatusCode::BAD_GATEWAY,
+            &[],
+            r#"{"error":{"message":"bad gateway"}}"#,
+        ),
+        "Bearer tok-ok" | "Bearer tok-credit" | "Bearer tok-flaky" => reply(
             StatusCode::OK,
             &[
                 ("content-type", "text/event-stream".to_owned()),
@@ -344,6 +355,15 @@ fn mock_codex(log: &Log, headers: &HeaderMap) -> Response {
         ),
         _ => reply(StatusCode::UNAUTHORIZED, &[], ""),
     }
+}
+
+/// How many requests carrying `token` the mock has seen, this one included.
+fn count(log: &Log, token: &str) -> usize {
+    log.lock()
+        .unwrap()
+        .iter()
+        .filter(|s| s.headers.get("authorization").is_some_and(|v| v == token))
+        .count()
 }
 
 /// Claude's usage, with its limit resets: two grants for `tok-ok`, the one
@@ -2154,4 +2174,302 @@ async fn hub_clients_read_usage_and_redeem_credits_without_a_relay() {
     assert_eq!(pool("claude")["windows"][0]["span"], "5h");
     assert_eq!(pool("claude")["windows"][0]["used"], 30.0);
     assert_eq!(pool("codex")["accounts"], 1);
+}
+
+/// A Codex request in `session`, with whatever else `extra` adds.
+fn codex_in(h: &Harness, session: &str) -> RequestBuilder {
+    client()
+        .post(format!("{}/codex/responses", h.proxy))
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("session-id", session)
+        .header("user-agent", "codex_exec/0.159.3 (Linux; x86_64)")
+        .header("content-type", "application/json")
+        .body(r#"{"model":"gpt-6-sol","input":[],"stream":true}"#)
+}
+
+/// Sends `request` and returns the workspace of the account that answered.
+async fn served_by(h: &Harness, request: RequestBuilder) -> String {
+    let response = request.send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    response.text().await.unwrap();
+    let seen = h.log.lock().unwrap();
+    let last = seen.last().unwrap();
+    last.headers["chatgpt-account-id"]
+        .to_str()
+        .unwrap()
+        .to_owned()
+}
+
+#[tokio::test]
+async fn sessions_keep_their_account_so_the_prompt_cache_stays_warm() {
+    let h = harness_with(ProviderId::Codex, &["tok-ok", "tok-ok", "tok-ok"], |c| {
+        c.strategy = Strategy::RoundRobin;
+    })
+    .await;
+    // New sessions take turns; each then keeps its account.
+    let a = served_by(&h, codex_in(&h, "a")).await;
+    let b = served_by(&h, codex_in(&h, "b")).await;
+    let c = served_by(&h, codex_in(&h, "c")).await;
+    assert_eq!(
+        [&*a, &*b, &*c],
+        ["acct-codex0", "acct-codex1", "acct-codex2"]
+    );
+    for _ in 0..3 {
+        assert_eq!(served_by(&h, codex_in(&h, "b")).await, "acct-codex1");
+        assert_eq!(served_by(&h, codex_in(&h, "a")).await, "acct-codex0");
+    }
+    // A fourth session goes to the account handed a request longest ago.
+    assert_eq!(served_by(&h, codex_in(&h, "d")).await, "acct-codex2");
+
+    // Once its account is limited the session moves, and it stays on its
+    // new account after the old one recovers, rather than lose its cache
+    // a second time.
+    h.app.pool.block(
+        &h.ids[1],
+        Timestamp::now() + SignedDuration::from_mins(5),
+        None,
+        "usage limit reached",
+    );
+    let moved = served_by(&h, codex_in(&h, "b")).await;
+    assert_ne!(moved, "acct-codex1");
+    h.app.pool.clear_blocks(&h.ids[1]);
+    for _ in 0..3 {
+        assert_eq!(served_by(&h, codex_in(&h, "b")).await, moved);
+    }
+}
+
+#[tokio::test]
+async fn affinity_can_be_turned_off_for_the_proxy_or_one_request() {
+    let h = harness_with(ProviderId::Codex, &["tok-ok", "tok-ok"], |c| {
+        c.strategy = Strategy::RoundRobin;
+        c.session_affinity = false;
+    })
+    .await;
+    // Off in the config: one session's requests take turns.
+    let turns: Vec<String> = futures_in_order(&h, 4, || codex_in(&h, "s")).await;
+    assert_eq!(
+        turns,
+        ["acct-codex0", "acct-codex1", "acct-codex0", "acct-codex1"]
+    );
+    // A request may ask to keep its session's account anyway.
+    let sticky = || codex_in(&h, "s").header("x-slopmax-affinity", "on");
+    let first = served_by(&h, sticky()).await;
+    assert_eq!(served_by(&h, sticky()).await, first);
+    assert_eq!(served_by(&h, sticky()).await, first);
+
+    // On in the config, a request may still opt out.
+    h.app.set_config(Config {
+        session_affinity: true,
+        ..(*h.app.config()).clone()
+    });
+    let kept = served_by(&h, codex_in(&h, "t")).await;
+    assert_eq!(served_by(&h, codex_in(&h, "t")).await, kept);
+    let loose = || codex_in(&h, "t").header("x-slopmax-affinity", "off");
+    let spread = [served_by(&h, loose()).await, served_by(&h, loose()).await];
+    assert_ne!(spread[0], spread[1], "placed afresh each time: {spread:?}");
+
+    // slopmax's own headers never reach the provider.
+    let seen = h.log.lock().unwrap();
+    assert!(
+        seen.iter()
+            .all(|s| !s.headers.contains_key("x-slopmax-affinity"))
+    );
+}
+
+/// `n` requests made one after another, and who served each.
+async fn futures_in_order(
+    h: &Harness,
+    n: usize,
+    request: impl Fn() -> RequestBuilder,
+) -> Vec<String> {
+    let mut served = Vec::new();
+    for _ in 0..n {
+        served.push(served_by(h, request()).await);
+    }
+    served
+}
+
+#[tokio::test]
+async fn moving_without_affinity_still_drops_another_accounts_state() {
+    let h = harness_with(ProviderId::Codex, &["tok-ok", "tok-ok"], |c| {
+        c.strategy = Strategy::RoundRobin;
+        c.session_affinity = false;
+    })
+    .await;
+    let body = r#"{"model":"gpt-6-sol","previous_response_id":"resp-1","input":[],"stream":true}"#;
+    let request = || codex_in(&h, "s").body(body);
+    served_by(&h, request()).await;
+    served_by(&h, request()).await;
+    let seen = h.log.lock().unwrap();
+    // The first request had no account before it, so went as sent; the
+    // second landed on another account, so lost what the first minted.
+    assert!(String::from_utf8_lossy(&seen[0].body).contains("previous_response_id"));
+    assert!(!String::from_utf8_lossy(&seen[1].body).contains("previous_response_id"));
+}
+
+#[tokio::test]
+async fn passing_server_errors_are_retried_once_on_the_same_account() {
+    let h = harness(ProviderId::Codex, &["tok-flaky", "tok-ok"]).await;
+    // The first try fails with a 503; the second, on the same account,
+    // answers. The session's account never changes.
+    assert_eq!(served_by(&h, codex_in(&h, "s")).await, "acct-codex0");
+    let tokens: Vec<String> = h
+        .log
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|s| s.headers["authorization"].to_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(tokens, ["Bearer tok-flaky", "Bearer tok-flaky"]);
+    assert!(h.app.pool.state(&h.ids[0]).blocked_until.is_none());
+
+    // An error that persists reaches the client after the one retry.
+    let h = harness(ProviderId::Codex, &["tok-down", "tok-ok"]).await;
+    let response = codex_in(&h, "s").send().await.unwrap();
+    assert_eq!(response.status(), 502);
+    assert!(response.text().await.unwrap().contains("bad gateway"));
+    assert_eq!(h.log.lock().unwrap().len(), 2);
+}
+
+async fn admin(h: &Harness, method: Method, path: &str, form: &str) -> (StatusCode, Value) {
+    let url = format!("{}/slopmax/{path}", h.proxy);
+    let request = match method {
+        Method::GET => client().get(url),
+        _ => client()
+            .post(url)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(form.to_owned()),
+    };
+    let response = request
+        .header("authorization", format!("Bearer {KEY}"))
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let text = response.text().await.unwrap();
+    (status, serde_json::from_str(&text).unwrap_or(Value::Null))
+}
+
+#[tokio::test]
+async fn settings_change_through_the_api_and_apply_at_once() {
+    let h = harness(ProviderId::Codex, &["tok-ok", "tok-ok"]).await;
+    let file = h.dir.join("config.toml");
+    std::fs::write(
+        &file,
+        "# mine\napi_key = \"sm-test-key\"\nrefresh_tokens = false\nstrategy = \"fill-first\" # keep\n",
+    )
+    .unwrap();
+
+    let (status, settings) = admin(&h, Method::GET, "settings", "").await;
+    assert_eq!(status, 200);
+    assert_eq!(settings["strategy"], "fill-first");
+    assert_eq!(settings["session_affinity"], true);
+    let ids: Vec<&str> = settings["strategies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        ["reset-first", "fill-first", "least-used", "round-robin"]
+    );
+
+    let (status, settings) = admin(
+        &h,
+        Method::POST,
+        "settings",
+        "strategy=round-robin&session_affinity=false&redeem_when_exhausted=true",
+    )
+    .await;
+    assert_eq!(status, 200, "{settings}");
+    assert_eq!(settings["strategy"], "round-robin");
+    assert_eq!(settings["session_affinity"], false);
+    // Applied to the next request, without a restart.
+    let routing = h.app.pool.routing();
+    assert_eq!(routing.strategy, Strategy::RoundRobin);
+    assert!(!routing.affinity);
+    assert!(h.app.config().redeem_when_exhausted);
+    let first = served_by(&h, codex_in(&h, "s")).await;
+    assert_ne!(served_by(&h, codex_in(&h, "s")).await, first);
+    // Written to config.toml, comments kept.
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.starts_with("# mine\n"), "{text}");
+    assert!(text.contains("strategy = \"round-robin\" # keep"), "{text}");
+    assert!(text.contains("session_affinity = false"), "{text}");
+
+    // Nonsense is refused and changes nothing.
+    for bad in [
+        "strategy=fastest",
+        "session_affinity=maybe",
+        "listen=0.0.0.0:1",
+        "session_ttl_mins=-5",
+        "",
+    ] {
+        let (status, _) = admin(&h, Method::POST, "settings", bad).await;
+        assert_eq!(status, 400, "{bad}");
+    }
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), text);
+    assert_eq!(h.app.pool.routing().strategy, Strategy::RoundRobin);
+
+    let (status, settings) = admin(&h, Method::POST, "settings?session_ttl_mins=15", "").await;
+    assert_eq!(
+        (status, settings["session_ttl_mins"].as_u64()),
+        (StatusCode::OK, Some(15))
+    );
+    assert_eq!(
+        h.app.pool.routing().session_ttl,
+        SignedDuration::from_mins(15)
+    );
+}
+
+#[tokio::test]
+async fn a_changed_config_file_applies_without_a_restart() {
+    let h = harness(ProviderId::Codex, &["tok-ok"]).await;
+    let file = h.dir.join("config.toml");
+    std::fs::write(
+        &file,
+        "api_key = \"sm-other\"\nrefresh_tokens = false\nstrategy = \"least-used\"\nsession_affinity = false\nlisten = \"0.0.0.0:1\"\n",
+    )
+    .unwrap();
+    h.app.reload_config();
+    let config = h.app.config();
+    assert_eq!(config.strategy, Strategy::LeastUsed);
+    assert!(!h.app.pool.routing().affinity);
+    assert_eq!(config.api_key, "sm-other", "a new key applies too");
+    assert_ne!(config.listen.port(), 1, "the address is bound at start");
+
+    // A broken file leaves the last good config in place.
+    std::fs::write(&file, "strategy = \"warp-speed\"\n").unwrap();
+    h.app.reload_config();
+    assert_eq!(h.app.config().strategy, Strategy::LeastUsed);
+}
+
+#[tokio::test]
+async fn the_history_api_charts_what_went_through() {
+    let h = harness(ProviderId::Codex, &["tok-limited", "tok-ok"]).await;
+    served_by(&h, codex_in(&h, "s")).await;
+    served_by(&h, codex_in(&h, "s")).await;
+    // Both answers reach the ledger before it is read.
+    let since = Timestamp::now() - SignedDuration::from_mins(1);
+    eventually(|| ledger::read(&h.dir.join("usage"), since).len() == 2).await;
+
+    let (status, history) = admin(&h, Method::GET, "history?range=today", "").await;
+    assert_eq!(status, 200);
+    assert_eq!(history["range"], "today");
+    assert_eq!(history["total"]["requests"], 2);
+    assert_eq!(history["rescued"], 1, "the first answer needed failover");
+    // An hour each, from midnight to now.
+    assert!(!history["buckets"].as_array().unwrap().is_empty());
+    let accounts = history["accounts"].as_array().unwrap();
+    assert_eq!(accounts.len(), 1);
+    assert_eq!(accounts[0]["name"], "codex1@example.com");
+    assert_eq!(accounts[0]["totals"]["requests"], 2);
+    // GPT-6 Sol has a list price: 2 answers of 40 fresh, 60 cached, 7 out.
+    let cost = history["total"]["cost"].as_f64().unwrap();
+    let expected = 2.0 * (40.0 * 2.0 + 60.0 * 0.2 + 7.0 * 10.0) / 1e6;
+    assert!((cost - expected).abs() < 1e-9, "{cost} vs {expected}");
+
+    let (status, _) = admin(&h, Method::GET, "history?range=forever", "").await;
+    assert_eq!(status, 400);
 }

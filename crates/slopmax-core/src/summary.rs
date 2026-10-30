@@ -180,7 +180,7 @@ mod tests {
     fn unpriced_requests_are_counted_apart() {
         let prices = BTreeMap::new();
         let mut totals = Totals::default();
-        totals.add(&entry("gpt-6-sol", 10), &prices);
+        totals.add(&entry("compat-model", 10), &prices);
         assert_eq!(totals.cost_label(), "—");
         totals.add(&entry("claude-opus-5-5", 1_000_000), &prices);
         assert_eq!(totals.cost_label(), "$4.00+");

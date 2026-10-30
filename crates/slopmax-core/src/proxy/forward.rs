@@ -47,6 +47,16 @@ use crate::wire::{Dialect, translate};
 const MAX_BODY: usize = 256 * 1024 * 1024;
 /// How long to sit out an account the provider refused for other reasons.
 const ACCOUNT_BLOCK: SignedDuration = SignedDuration::from_mins(30);
+/// How long to wait before trying an account again after a passing server
+/// error.
+const TRANSIENT_WAIT: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// Whether a status says the provider failed this once, so the same
+/// request may well succeed on a second try: an internal error, a bad or
+/// timed-out gateway, or an overloaded service (Anthropic's 529).
+fn transient(status: StatusCode) -> bool {
+    matches!(status.as_u16(), 500 | 502 | 503 | 504 | 529)
+}
 
 /// The agent's request, buffered so it can be replayed on another account.
 struct Inbound {
@@ -59,6 +69,8 @@ struct Inbound {
     json: bool,
     agent: Option<&'static dyn Agent>,
     session: Option<String>,
+    /// Its own say on session affinity, over the config's.
+    affinity: Option<bool>,
     model: Option<String>,
     /// The request in common form, decoded the first time a step needs
     /// translation.
@@ -75,6 +87,7 @@ impl Inbound {
         let inspectable: &[u8] = if json { &body } else { b"" };
         let agent = agent::detect(&parts.headers);
         let session = agent::session(agent, &parts.headers, inspectable);
+        let affinity = super::affinity(&parts.headers);
         let model = json
             .then(|| rawjson::find_str(&body, &[Seg::Key("model")]))
             .flatten();
@@ -86,6 +99,7 @@ impl Inbound {
             json,
             agent,
             session,
+            affinity,
             model,
             decoded: OnceLock::new(),
         }
@@ -130,7 +144,7 @@ impl Inbound {
     /// The steps that may serve this request.
     fn plan(&self, app: &App) -> Result<Vec<Step>, NoRoute> {
         let accounts = app.pool.accounts();
-        let config = &app.config;
+        let config = app.config();
         let table = route::Table {
             accounts: &accounts,
             aliases: &config.aliases,
@@ -341,6 +355,7 @@ pub(super) async fn forward(
             let pick = Pick {
                 provider: step.provider,
                 session: inbound.session.as_deref(),
+                affinity: inbound.affinity,
                 model: Some(step.model.as_str()).filter(|m| !m.is_empty()),
                 candidates: Some(&step.accounts),
                 exclude: &tried,
@@ -349,7 +364,7 @@ pub(super) async fn forward(
                 Ok(choice) => choice,
                 Err(none) => {
                     let spent = none.until.is_some();
-                    if spent && app.config.redeem_when_exhausted && !rescued {
+                    if spent && app.config().redeem_when_exhausted && !rescued {
                         rescued = true;
                         if let Some(id) = rescue(&app, step.provider).await {
                             tried.retain(|t| *t != id);
@@ -464,6 +479,7 @@ async fn attempt(
     let refreshable = account.tokens.refresh_token.is_some() || account.link.is_some();
     let mut stripped = moved;
     let mut refreshed = false;
+    let mut retried = false;
     loop {
         let outbound = match outbound(app, inbound, step, &account, lane, stripped, moved) {
             Ok(outbound) => outbound,
@@ -546,7 +562,7 @@ async fn attempt(
         log::info!("{id}: upstream returned {}", failure.status.as_u16());
         let verdict = provider.verdict(failure.status, &failure.headers, &failure.body, model, now);
         match verdict {
-            Verdict::Unauthorized if !refreshed && refreshable && app.config.refresh_tokens => {
+            Verdict::Unauthorized if !refreshed && refreshable && app.config().refresh_tokens => {
                 refreshed = true;
                 match auth::ensure_fresh(&app.auth_http, &app.store, &account, true).await {
                     Ok(fresh) => {
@@ -584,6 +600,14 @@ async fn attempt(
                 app.pool
                     .throttle(&id, until.unwrap_or(now + DEFAULT_THROTTLE));
                 return Attempt::Failed(Some(failure));
+            }
+            // Tried once more on the same account, which keeps the
+            // session's cache, before the error goes back to the agent.
+            Verdict::Final if transient(failure.status) && !retried => {
+                retried = true;
+                log::info!("{id}: retrying after a passing server error");
+                tokio::time::sleep(TRANSIENT_WAIT).await;
+                continue;
             }
             Verdict::StaleState | Verdict::Final => {
                 return Attempt::Done(failure.into_response(app));

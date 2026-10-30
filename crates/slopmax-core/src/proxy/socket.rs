@@ -50,7 +50,7 @@ pub(super) async fn accept(app: Arc<App>, target: Target, mut request: Request) 
         log::info!("websocket refused ({why}); Codex will stream over HTTP");
         upgrade_required()
     };
-    if !app.config.websockets {
+    if !app.config().websockets {
         return refuse("websockets are off in the config");
     }
     if target.provider != Some(ProviderId::Codex) || !target.by_model {
@@ -77,9 +77,9 @@ pub(super) async fn accept(app: Arc<App>, target: Target, mut request: Request) 
         Some(model) => {
             let table = route::Table {
                 accounts: &accounts,
-                aliases: &app.config.aliases,
-                fallbacks: &app.config.fallbacks,
-                paid_overflow: app.config.paid_overflow,
+                aliases: &app.config().aliases,
+                fallbacks: &app.config().fallbacks,
+                paid_overflow: app.config().paid_overflow,
             };
             let request = route::Request {
                 model,
@@ -106,6 +106,7 @@ pub(super) async fn accept(app: Arc<App>, target: Target, mut request: Request) 
     let pick = Pick {
         provider: ProviderId::Codex,
         session: session.as_deref(),
+        affinity: super::affinity(&headers),
         model: model.as_deref(),
         candidates: Some(&candidates),
         exclude: &[],

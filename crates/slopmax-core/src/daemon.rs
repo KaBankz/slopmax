@@ -62,6 +62,7 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<()> {
             if let Err(e) = app.sync() {
                 log::warn!("reloading accounts: {e:#}");
             }
+            app.reload_config();
         },
     ));
     tokio::spawn(every(
@@ -71,15 +72,17 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<()> {
             save_state(&app);
         },
     ));
-    if app.config.refresh_tokens {
-        tokio::spawn(every(
-            Duration::from_secs(300),
-            app.clone(),
-            |app| async move {
+    // Each task asks the config as it runs, so a changed config.toml turns
+    // it on or off without a restart.
+    tokio::spawn(every(
+        Duration::from_secs(300),
+        app.clone(),
+        |app| async move {
+            if app.config().refresh_tokens {
                 refresh_all(&app).await;
-            },
-        ));
-    }
+            }
+        },
+    ));
     tokio::spawn(every(
         Duration::from_secs(60),
         app.clone(),
@@ -87,41 +90,41 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<()> {
             list_credits(&app, false).await;
         },
     ));
-    if app.config.redeem_expiring_credits {
-        tokio::spawn(every(
-            Duration::from_secs(1800),
-            app.clone(),
-            |app| async move {
+    tokio::spawn(every(
+        Duration::from_secs(1800),
+        app.clone(),
+        |app| async move {
+            if app.config().redeem_expiring_credits {
                 redeem_expiring(&app).await;
-            },
-        ));
-    }
-    if app.config.warm_windows {
-        tokio::spawn(every(
-            Duration::from_secs(60),
-            app.clone(),
-            |app| async move {
+            }
+        },
+    ));
+    tokio::spawn(every(
+        Duration::from_secs(60),
+        app.clone(),
+        |app| async move {
+            if app.config().warm_windows {
                 proxy::warm::idle_accounts(&app).await;
-            },
-        ));
-    }
-    if app.config.notify.is_enabled() {
+            }
+        },
+    ));
+    if app.config().notify.is_enabled() {
         tokio::spawn(watch(app.clone()));
     }
-    if app.config.poll_mins > 0 {
-        tokio::spawn(every(
-            Duration::from_secs(60),
-            app.clone(),
-            |app| async move {
+    tokio::spawn(every(
+        Duration::from_secs(60),
+        app.clone(),
+        |app| async move {
+            if app.config().poll_mins > 0 {
                 poll_all(&app, false).await;
-            },
-        ));
-    }
+            }
+        },
+    ));
 
     log::info!(
         "slopmax {} listening on {}",
         env!("CARGO_PKG_VERSION"),
-        app.config.base_url()
+        app.config().base_url()
     );
     let handler = {
         let app = Arc::clone(&app);
@@ -181,7 +184,7 @@ async fn watch(app: Arc<App>) {
         let events = watcher.changes(&accounts, |id| app.pool.state(id), Timestamp::now());
         for event in events {
             log::info!("{}", event.message);
-            if let Err(e) = app.config.notify.send(&app.auth_http, &event).await {
+            if let Err(e) = app.config().notify.send(&app.auth_http, &event).await {
                 log::warn!("sending a notification: {e:#}");
             }
         }
@@ -212,7 +215,7 @@ async fn refresh_all(app: &App) {
 /// Polls usage for accounts whose reading is due (or all, with `force`).
 pub async fn poll_all(app: &Arc<App>, force: bool) {
     let now = Timestamp::now();
-    let interval = SignedDuration::from_mins(app.config.poll_mins.max(1) as i64);
+    let interval = SignedDuration::from_mins(app.config().poll_mins.max(1) as i64);
     let due: Vec<Account> = app
         .pool
         .accounts()
@@ -234,7 +237,7 @@ pub async fn poll_one(app: &App, account: &Account) {
         &app.auth_http,
         &app.store,
         account,
-        app.config.refresh_tokens,
+        app.config().refresh_tokens,
     )
     .await;
     match result {

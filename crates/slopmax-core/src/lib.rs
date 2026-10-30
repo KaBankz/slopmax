@@ -14,6 +14,7 @@ pub mod config;
 pub mod daemon;
 pub mod doctor;
 pub mod fsx;
+pub mod history;
 pub mod import;
 pub mod ledger;
 pub mod limits;

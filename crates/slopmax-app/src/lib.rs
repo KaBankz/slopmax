@@ -8,7 +8,7 @@
 //! menu bar line, [`history`] the charts of past use) and calls [`App`]'s
 //! methods, none of which block.
 
-pub mod history;
+pub use slopmax_core::history;
 pub mod view;
 
 use std::collections::HashMap;

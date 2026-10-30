@@ -7,11 +7,13 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
-use slopmax_core::ledger::{self, Entry};
-use slopmax_core::pricing::{self, Custom};
-use slopmax_core::provider::ProviderId;
-use slopmax_core::summary::{self, Totals};
-use slopmax_core::time::{SignedDuration, Timestamp};
+use serde::Serialize;
+
+use crate::ledger::{self, Entry};
+use crate::pricing::{self, Custom};
+use crate::provider::ProviderId;
+use crate::summary::{self, Totals};
+use crate::time::{SignedDuration, Timestamp};
 
 const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -23,7 +25,8 @@ const SPEED_MIN_OUTPUT: u64 = 64;
 const WARMUP: &str = "slopmax";
 
 /// The span a history covers, counted in local days.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Range {
     Today,
     #[default]
@@ -42,8 +45,13 @@ impl Range {
         }
     }
 
+    /// The range `summary` knows as `key`: `today`, `7d`, or `30d`.
+    pub fn parse(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|r| r.key() == key)
+    }
+
     /// The name `summary` knows it by.
-    fn key(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Range::Today => "today",
             Range::Week => "7d",
@@ -53,7 +61,7 @@ impl Range {
 }
 
 /// What went through slopmax over a range.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct History {
     pub range: Range,
     /// Hours for today, days otherwise, oldest first, empty ones included.
@@ -94,7 +102,7 @@ pub struct History {
 }
 
 /// One hour or day.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Bucket {
     /// `09:00`, or `Oct 3`.
     pub label: String,
@@ -117,7 +125,7 @@ pub struct Bucket {
 }
 
 /// A model's or an account's part of the range.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Share {
     pub name: String,
     pub provider: ProviderId,
@@ -125,14 +133,14 @@ pub struct Share {
 }
 
 /// An agent's part of the range.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Part {
     pub name: &'static str,
     pub totals: Totals,
 }
 
 /// How fast a model writes, once it has begun.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Speed {
     pub model: String,
     pub provider: ProviderId,
