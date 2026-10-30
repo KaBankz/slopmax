@@ -140,8 +140,8 @@ impl Note {
             Self::Pinned => "pinned".into(),
             Self::Priority(priority) => format!("priority {priority}"),
             Self::Follows(tool) => format!("follows {tool}"),
-            Self::ResetCredits(1) => "1 reset credit".into(),
-            Self::ResetCredits(credits) => format!("{credits} reset credits"),
+            Self::ResetCredits(1) => "1 limit reset".into(),
+            Self::ResetCredits(credits) => format!("{credits} limit resets"),
             Self::Served { requests, tokens } => {
                 format!("{requests} req · {} tok", human::compact(*tokens))
             }

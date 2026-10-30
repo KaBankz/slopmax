@@ -349,7 +349,7 @@ async fn consume(app: &App, account: &Account, data: &str) -> Answer {
     let Some(credits) = account.provider.get().credits() else {
         return Err((
             StatusCode::BAD_REQUEST,
-            "this account has no reset credits".into(),
+            "this account has no limit resets".into(),
         ));
     };
     let _redeeming = app.redeeming.lock().await;
@@ -360,7 +360,7 @@ async fn consume(app: &App, account: &Account, data: &str) -> Answer {
         .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
     if outcome == Outcome::Reset {
-        log::info!("{}: redeemed a reset credit for a hub client", account.id);
+        log::info!("{}: redeemed a limit reset for a hub client", account.id);
         app.pool
             .record_reset(&account.id, Timestamp::now(), Some(&credit_id));
     }

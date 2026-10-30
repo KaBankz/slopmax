@@ -290,7 +290,7 @@ pub static APP: App = App {
         command("remove", "Forget an account", &[ACCOUNT_ARG]),
         command(
             "redeem",
-            "Redeem a banked reset credit, resetting a ChatGPT account's limits",
+            "Redeem a banked limit reset, resetting a Claude or ChatGPT account's limits",
             &[
                 ACCOUNT_ARG,
                 arg("yes", "Skip the confirmation prompt", Kind::Flag(Some('y'))),

@@ -751,13 +751,13 @@ async fn rescue(app: &App, provider: ProviderId) -> Option<String> {
             .await
         {
             Ok(Outcome::Reset) => {
-                log::info!("{}: redeemed a reset credit", account.id);
+                log::info!("{}: redeemed a limit reset", account.id);
                 app.pool
                     .record_reset(&account.id, Timestamp::now(), credit.as_deref());
                 return Some(account.id);
             }
-            Ok(outcome) => log::info!("{}: reset credit not used ({outcome:?})", account.id),
-            Err(e) => log::warn!("{}: redeeming a reset credit: {e:#}", account.id),
+            Ok(outcome) => log::info!("{}: limit reset not used ({outcome:?})", account.id),
+            Err(e) => log::warn!("{}: redeeming a limit reset: {e:#}", account.id),
         }
     }
     None

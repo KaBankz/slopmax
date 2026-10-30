@@ -219,7 +219,11 @@ function renderAccounts() {
       if (a.pinned) tags.push(`<span class="tag pin">pinned</span>`);
       if (a.priority) tags.push(`<span class="tag">priority ${a.priority}</span>`);
       if (a.follows) tags.push(`<span class="tag">follows ${esc(a.follows)}</span>`);
-      if (a.state.limits?.reset_credits) tags.push(`<span class="tag">${a.state.limits.reset_credits} reset credit${a.state.limits.reset_credits === 1 ? "" : "s"}</span>`);
+      // As listed, once they are; until then, as the usage counts them.
+      const resets = a.state.credits
+        ? a.state.credits.credits.filter((c) => !c.expires_at || time(c.expires_at) > now).length
+        : a.state.limits?.reset_credits || 0;
+      if (resets) tags.push(`<span class="tag">${resets} limit reset${resets === 1 ? "" : "s"}</span>`);
       if (a.state.usage?.requests) tags.push(`<span class="tag">${a.state.usage.requests} req · ${compact(a.state.usage.input_tokens + a.state.usage.output_tokens + a.state.usage.cache_read_tokens + a.state.usage.cache_write_tokens)} tok</span>`);
       for (const w of (a.state.limits?.windows || []).filter((w) => w.model)) {
         tags.push(`<span class="tag">${esc(w.span)} ${esc(w.model)} ${Math.round(usedAt(w, now))}%</span>`);
@@ -227,7 +231,6 @@ function renderAccounts() {
       const middle = subscription
         ? windowCell(span("5h"), now) + windowCell(span("7d") || span("30d"), now)
         : `<td colspan="2" class="sub">${esc((a.models || []).join(", ") || "—")}</td>`;
-      const credits = a.provider === "codex" && a.state.limits?.reset_credits;
       html += `<tr>
         <td class="sub num">${index}</td>
         <td><div class="name">${esc(a.name)}</div><div class="sub">${esc(a.plan || (subscription ? "" : "per token"))}</div>${tags.length ? `<div class="tags">${tags.join("")}</div>` : ""}</td>
@@ -238,7 +241,7 @@ function renderAccounts() {
           <button data-act="${a.disabled ? "enable" : "disable"}" data-id="${a.id}">${a.disabled ? "Enable" : "Disable"}</button>
           <button data-act="priority" data-id="${a.id}" data-value="${a.priority + 1}" title="Raise priority">▲</button>
           <button data-act="priority" data-id="${a.id}" data-value="${a.priority - 1}" title="Lower priority">▼</button>
-          ${credits ? `<button data-act="redeem" data-id="${a.id}" title="Redeem a reset credit now">Redeem</button>` : ""}
+          ${resets ? `<button data-act="redeem" data-id="${a.id}" title="Redeem a limit reset now">Redeem</button>` : ""}
         </div></td></tr>`;
     }
     // The provider's working accounts read as one, as the agents see them.
@@ -334,7 +337,7 @@ $("accounts").addEventListener("click", async (event) => {
   const button = event.target.closest("button[data-act]");
   if (!button) return;
   const { act, id, value } = button.dataset;
-  if (act === "redeem" && !confirm("Redeem a reset credit now? It resets this account's usage windows.")) return;
+  if (act === "redeem" && !confirm("Redeem a limit reset now? It resets this account's usage windows.")) return;
   button.disabled = true;
   try {
     const path = `/slopmax/accounts/${encodeURIComponent(id)}/${act}` + (act === "priority" ? `?value=${value}` : "");

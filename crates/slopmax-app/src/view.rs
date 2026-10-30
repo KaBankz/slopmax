@@ -32,8 +32,8 @@ pub struct Group {
     pub overview: Vec<Overview>,
     /// How many working accounts the overview reads as one.
     pub working: usize,
-    /// Its accounts' reset credits, and when the next expires: `4 reset
-    /// credits · the next expires in 2d23h`.
+    /// Its accounts' limit resets, and when the next expires: `4 limit
+    /// resets · the next expires in 2d23h`.
     pub credits: Option<String>,
 }
 
@@ -61,7 +61,7 @@ pub struct Row {
 /// once.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Credits {
-    /// `2 reset credits`.
+    /// `2 limit resets`.
     pub title: String,
     /// Soonest to expire first; empty until slopmax has listed them.
     pub credits: Vec<CreditLine>,
@@ -286,7 +286,7 @@ pub fn attention(report: &Report, now: Timestamp) -> Vec<Attention> {
         {
             found.push(note(
                 format!(
-                    "A reset credit on {} expires {}",
+                    "A limit reset on {} expires {}",
                     account.name,
                     clock(at, now, at.local_offset())
                 ),
@@ -430,8 +430,8 @@ fn pool_credits(accounts: &[&AccountReport], now: Timestamp) -> Option<String> {
 
 fn credit_count(n: u32) -> String {
     match n {
-        1 => "1 reset credit".to_owned(),
-        n => format!("{n} reset credits"),
+        1 => "1 limit reset".to_owned(),
+        n => format!("{n} limit resets"),
     }
 }
 
@@ -995,13 +995,13 @@ mod tests {
         let chatgpt = &groups(&report, now)[0];
         assert_eq!(
             chatgpt.credits.as_deref(),
-            Some("2 reset credits · the next expires in 2d0h")
+            Some("2 limit resets · the next expires in 2d0h")
         );
         let row = &chatgpt.accounts[0];
         // Shown apart from the notes, where they can be redeemed.
         assert!(row.notes.iter().all(|n| !n.text.contains("reset")));
         let credits = row.credits.as_ref().unwrap();
-        assert_eq!(credits.title, "2 reset credits");
+        assert_eq!(credits.title, "2 limit resets");
         assert_eq!(credits.clears, "5-hour and weekly");
         assert_eq!(credits.held, None);
         let soon = &credits.credits[0];

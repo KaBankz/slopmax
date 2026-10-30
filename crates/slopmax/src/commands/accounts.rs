@@ -198,7 +198,7 @@ pub(super) async fn redeem(config: &Config, store: &Store, query: &str, yes: boo
     let account = store.find(query)?;
     let Some(credits) = account.provider.get().credits() else {
         bail!(
-            "{} is a {} account, which has no reset credits",
+            "{} is a {} account, which has no limit resets",
             account.name(),
             account.provider.spec().title
         );
@@ -215,7 +215,7 @@ pub(super) async fn redeem(config: &Config, store: &Store, query: &str, yes: boo
     let agent = state.agents.get(&account.provider).map(String::as_str);
     let available = credits.list(&http, &account, agent).await?;
     let Some(next) = available.first() else {
-        println!("{} has no reset credits.", ui::bold(account.name()));
+        println!("{} has no limit resets.", ui::bold(account.name()));
         return Ok(());
     };
     let now = Timestamp::now();
@@ -225,7 +225,7 @@ pub(super) async fn redeem(config: &Config, store: &Store, query: &str, yes: boo
         .unwrap_or_default();
     let s = if available.len() == 1 { "" } else { "s" };
     println!(
-        "{} has {} reset credit{s}{expiry}.",
+        "{} has {} limit reset{s}{expiry}.",
         ui::bold(account.name()),
         available.len()
     );
@@ -241,11 +241,11 @@ pub(super) async fn redeem(config: &Config, store: &Store, query: &str, yes: boo
             // Let a running proxy pick up the fresh windows right away.
             Daemon::new(config).report(true).await;
         }
-        Outcome::NothingToReset => println!("Nothing to reset right now; the credit was kept."),
-        Outcome::NoCredit => println!("No credit was available."),
-        Outcome::AlreadyRedeemed => println!("That credit was already redeemed."),
+        Outcome::NothingToReset => println!("Nothing to reset yet; the limit reset was kept."),
+        Outcome::NoCredit => println!("No limit reset was available."),
+        Outcome::AlreadyRedeemed => println!("That limit reset was already used."),
         Outcome::Declined => println!(
-            "{} would not spend one right now, so it was kept.",
+            "{} would not use one right now, so it was kept.",
             account.provider.spec().title
         ),
     }

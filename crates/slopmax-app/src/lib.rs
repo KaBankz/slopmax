@@ -384,17 +384,17 @@ impl App {
                     let text = match outcome {
                         Outcome::Reset => format!("Reset the usage windows on {name}."),
                         Outcome::NothingToReset => {
-                            format!("{name} had nothing to reset, so its credit was kept.")
+                            format!("{name} had nothing to reset yet, so the limit reset was kept.")
                         }
-                        Outcome::NoCredit => format!("{name} has no reset credit left."),
-                        Outcome::AlreadyRedeemed => "That credit was already redeemed.".to_owned(),
+                        Outcome::NoCredit => format!("{name} has no limit reset left."),
+                        Outcome::AlreadyRedeemed => "That limit reset was already used.".to_owned(),
                         Outcome::Declined => format!(
-                            "{provider} would not spend one on {name} right now, so it was kept."
+                            "{provider} would not use a limit reset on {name} right now, so it was kept."
                         ),
                     };
                     shared.tell(text, outcome == Outcome::NoCredit);
                 }
-                Err(e) => shared.tell(format!("Could not redeem a reset credit: {e:#}"), true),
+                Err(e) => shared.tell(format!("Could not redeem a limit reset: {e:#}"), true),
             }
         });
     }

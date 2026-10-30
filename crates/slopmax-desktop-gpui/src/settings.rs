@@ -277,7 +277,7 @@ fn redeeming(config: &Config, c: &Colors) -> impl IntoElement {
             .text_color(if on { c.fg } else { c.muted })
             .child(if on { "On" } else { "Off" })
     };
-    section("Reset credits", None, c)
+    section("Limit resets", None, c)
         .child(
             panel(c)
                 .child(setting(

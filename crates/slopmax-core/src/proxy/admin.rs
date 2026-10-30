@@ -232,7 +232,7 @@ async fn redeem(app: &App, account: &crate::account::Account, credit: Option<Str
         return error(
             None,
             StatusCode::BAD_REQUEST,
-            "this account has no reset credits",
+            "this account has no limit resets",
         );
     };
     let _redeeming = app.redeeming.lock().await;
@@ -273,7 +273,7 @@ async fn redeem(app: &App, account: &crate::account::Account, credit: Option<Str
     {
         Ok(outcome) => {
             if outcome == Outcome::Reset {
-                log::info!("{}: redeemed a reset credit on request", account.id);
+                log::info!("{}: redeemed a limit reset on request", account.id);
                 app.pool
                     .record_reset(&account.id, Timestamp::now(), Some(&credit));
             }

@@ -304,7 +304,7 @@ pub async fn list_credits(app: &App, force: bool) {
         {
             Ok(listed) => app.pool.record_credits(&account.id, listed, now),
             Err(e) => {
-                log::warn!("{}: listing reset credits: {e:#}", account.id);
+                log::warn!("{}: listing limit resets: {e:#}", account.id);
                 if !credits.counted() {
                     let kept = state.unexpired_credits(now).cloned().collect();
                     app.pool.record_credits(&account.id, kept, now);
@@ -338,18 +338,18 @@ pub async fn redeem_expiring(app: &App) {
         };
         match redeem_if_expiring(app, &account, now).await {
             Ok(Some((Outcome::Reset, credit))) => {
-                log::info!("{}: redeemed a reset credit before it expired", account.id);
+                log::info!("{}: redeemed a limit reset before it expired", account.id);
                 app.pool
                     .record_reset(&account.id, Timestamp::now(), Some(&credit));
             }
             Ok(Some((outcome, _))) => {
                 log::info!(
-                    "{}: expiring reset credit not used ({outcome:?})",
+                    "{}: expiring limit reset not used ({outcome:?})",
                     account.id
                 );
             }
             Ok(None) => {}
-            Err(e) => log::warn!("{}: checking reset credits: {e:#}", account.id),
+            Err(e) => log::warn!("{}: checking limit resets: {e:#}", account.id),
         }
     }
 }

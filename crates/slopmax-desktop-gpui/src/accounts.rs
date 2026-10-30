@@ -250,7 +250,7 @@ impl Main {
                         "Redeem one…",
                     )
                     .disabled(held.is_some())
-                    .accessibility_label(format!("Redeem a reset credit on {}…", row.name))
+                    .accessibility_label(format!("Redeem a limit reset on {}…", row.name))
                     .on_click(cx.listener(move |main, _, _, cx| {
                         main.confirming = Some(id.clone());
                         cx.notify();
@@ -270,7 +270,7 @@ impl Main {
                             .flex_1()
                             .min_w_0()
                             .gap(px(2.))
-                            .child(div().font_weight(FontWeight::MEDIUM).child("Reset credits"))
+                            .child(div().font_weight(FontWeight::MEDIUM).child("Limit resets"))
                             .child(caption(
                                 format!(
                                     "Each one resets this account's {} windows at once.",
