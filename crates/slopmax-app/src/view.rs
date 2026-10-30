@@ -10,7 +10,7 @@ use slopmax_core::human;
 use slopmax_core::limits::Window;
 use slopmax_core::provider::ProviderId;
 use slopmax_core::provider::credits::Credit;
-use slopmax_core::report::{AccountReport, Condition, Note, Report, Tone};
+use slopmax_core::report::{AccountReport, Condition, NextReport, Note, Report, Tone};
 use slopmax_core::service;
 use slopmax_core::time::{SignedDuration, Timestamp};
 
@@ -35,6 +35,10 @@ pub struct Group {
     /// Its accounts' limit resets, and when the next expires: `4 limit
     /// resets · the next expires in 2d23h`.
     pub credits: Option<String>,
+    /// Where a new session would go now, and why: `New sessions →
+    /// claude0 · its quota resets soonest`; a warning when none can take
+    /// one.
+    pub next: Label,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -55,6 +59,8 @@ pub struct Row {
     pub last_used: Option<String>,
     /// Its reset credits, when it has any.
     pub credits: Option<Credits>,
+    /// Whether a new session would go to it now.
+    pub next: bool,
 }
 
 /// An account's reset credits, each of which clears its usage windows at
@@ -335,21 +341,60 @@ pub fn groups(report: &Report, now: Timestamp) -> Vec<Group> {
                     })
                 })
                 .collect();
+            let next = pool.and_then(|p| p.next.as_ref());
+            let mut rows: Vec<Row> = accounts.iter().map(|a| row(a, &slots, now)).collect();
+            for row in &mut rows {
+                row.next = next.is_some_and(|n| n.account == row.id);
+            }
             Some(Group {
                 provider,
                 title: provider.spec().title,
                 subscription: provider.spec().is_subscription(),
                 limits: slots.iter().map(Slot::title).collect(),
-                accounts: accounts.iter().map(|a| row(a, &slots, now)).collect(),
+                accounts: rows,
                 overview,
                 working: pool.map_or_else(
                     || accounts.iter().filter(|a| serving(a)).count(),
                     |pool| pool.accounts,
                 ),
                 credits: pool_credits(&accounts, now),
+                next: next_line(next, &accounts, now),
             })
         })
         .collect()
+}
+
+/// Where a new session goes, worded: the account and why, or, when none
+/// can take one, when the soonest is back.
+fn next_line(next: Option<&NextReport>, accounts: &[&AccountReport], now: Timestamp) -> Label {
+    if let Some(next) = next {
+        let name = accounts
+            .iter()
+            .find(|a| a.id == next.account)
+            .map_or(next.account.as_str(), |a| a.name.as_str());
+        return Label {
+            text: format!("New sessions → {name} · {}", next.why),
+            tone: Tone::Muted,
+        };
+    }
+    let back = accounts
+        .iter()
+        .filter(|a| !a.disabled)
+        .filter_map(|a| match a.condition(now) {
+            Condition::Limited(until) => Some((until, a.name.as_str())),
+            _ => None,
+        })
+        .min_by_key(|(until, _)| *until);
+    Label {
+        text: match back {
+            Some((until, name)) => format!(
+                "No account can take a new session until {}, when {name} is back",
+                clock(until, now, until.local_offset())
+            ),
+            None => "No account can take a new session".to_owned(),
+        },
+        tone: Tone::Warn,
+    }
 }
 
 /// A kind of usage window: its span, and the model it is limited to. Sorts
@@ -647,16 +692,33 @@ pub fn agent_line(agent: &AgentStatus) -> (String, bool) {
     }
 }
 
-/// The login service's line, and whether it can be installed.
-pub fn service_line(service: Option<&service::Status>) -> (String, bool) {
+/// The Start at login setting: whether it is on, whether it can change,
+/// and what it says.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Login {
+    pub on: bool,
+    pub available: bool,
+    pub detail: String,
+}
+
+pub fn login(service: Option<&service::Status>) -> Login {
     match service {
-        None => (
-            "Runs while you are signed in to this machine".to_owned(),
-            false,
-        ),
-        Some(s) if s.installed && s.running => ("Starts at login; running".to_owned(), false),
-        Some(s) if s.installed => ("Starts at login; not running now".to_owned(), false),
-        Some(_) => ("Not started at login yet".to_owned(), true),
+        None => Login {
+            on: false,
+            available: false,
+            detail: "This system has no login service slopmax can use, so the app starts the \
+                     proxy while it runs."
+                .to_owned(),
+        },
+        Some(s) => Login {
+            on: s.installed,
+            available: true,
+            detail: if s.installed && !s.running {
+                "Runs the proxy whenever you log in. It is not running now.".to_owned()
+            } else {
+                "Runs the proxy whenever you log in, even while the app is closed.".to_owned()
+            },
+        },
     }
 }
 
@@ -824,24 +886,50 @@ fn row(account: &AccountReport, slots: &[Slot], now: Timestamp) -> Row {
             .map(|slot| slot.of(account).map(|w| gauge(w, now)))
             .collect(),
         status: Label {
-            text: condition.describe(now),
+            text: match condition {
+                // A pin is how it stands too, so it says so here.
+                Condition::Disabled => condition.describe(now),
+                _ if account.pinned => format!("{} · pinned", condition.describe(now)),
+                _ => condition.describe(now),
+            },
             tone: condition.tone(),
         },
-        // Reset credits show apart, where they can be redeemed.
+        // Reset credits show apart, where they can be redeemed, and a pin
+        // in the status.
         notes: account
             .notes(now)
             .iter()
-            .filter(|note| !matches!(note, Note::ResetCredits(_)))
-            .map(|note| Label {
-                text: note.describe(),
-                tone: note.tone(),
-            })
+            .filter(|note| !matches!(note, Note::ResetCredits(_) | Note::Pinned))
+            .map(note)
             .collect(),
         pinned: account.pinned,
         disabled: account.disabled,
         priority: account.priority,
         last_used: account.state.last_used.map(|at| ago(at, now)),
         credits: credits(account, now),
+        next: false,
+    }
+}
+
+/// A note beside an account. What it has served counts every request since
+/// it was added, which it says, as the Usage page counts a range.
+fn note(note: &Note) -> Label {
+    let text = match note {
+        Note::Served { requests, tokens } => format!(
+            "{} {}, {} tokens all time",
+            requests,
+            if *requests == 1 {
+                "request"
+            } else {
+                "requests"
+            },
+            human::compact(*tokens)
+        ),
+        other => other.describe(),
+    };
+    Label {
+        text,
+        tone: note.tone(),
     }
 }
 
@@ -1138,6 +1226,75 @@ mod tests {
     }
 
     #[test]
+    fn a_pool_says_where_new_sessions_go() {
+        let now = ts(1_000);
+        let mut report = report(now);
+        let b = report.accounts[1].id.clone();
+        report.pools[0].next = Some(NextReport {
+            account: b.clone(),
+            reason: slopmax_core::pool::Reason::ResetsSoonest,
+            why: "its quota resets soonest".to_owned(),
+        });
+        let group = &groups(&report, now)[0];
+        assert_eq!(
+            group.next,
+            Label {
+                text: "New sessions → b@x.dev · its quota resets soonest".to_owned(),
+                tone: Tone::Muted,
+            }
+        );
+        let next: Vec<bool> = group.accounts.iter().map(|row| row.next).collect();
+        assert_eq!(next, [false, true]);
+    }
+
+    #[test]
+    fn with_no_account_free_it_says_when_one_is_back() {
+        let now = ts(1_000);
+        let report = report(now);
+        // No preview of the next session: nothing can take one.
+        let group = &groups(&report, now)[0];
+        assert_eq!(group.next.tone, Tone::Warn);
+        assert_eq!(group.next.text, "No account can take a new session");
+        assert!(group.accounts.iter().all(|row| !row.next));
+
+        let limited = report_of(
+            now,
+            vec![
+                ("a@x.dev", vec![window("5h", 100.0, 4_600)]),
+                ("b@x.dev", vec![window("5h", 100.0, 9_000)]),
+            ],
+        );
+        let line = &groups(&limited, now)[0].next;
+        assert!(
+            line.text
+                .starts_with("No account can take a new session until ")
+                && line.text.ends_with(", when a@x.dev is back"),
+            "{}",
+            line.text
+        );
+    }
+
+    #[test]
+    fn a_pin_reads_in_the_status_and_use_says_its_period() {
+        let now = ts(1_000);
+        let mut report = report(now);
+        report.accounts[0].pinned = true;
+        report.accounts[0].state.usage = slopmax_core::wire::Usage {
+            requests: 120,
+            input_tokens: 5_000_000,
+            output_tokens: 150_000,
+            cache_read_tokens: 0,
+            cache_write_tokens: 50_000,
+        };
+        report.accounts[1].disabled = true;
+        let rows = &groups(&report, now)[0].accounts;
+        assert_eq!(rows[0].status.text, "ready · pinned");
+        let notes: Vec<&str> = rows[0].notes.iter().map(|n| n.text.as_str()).collect();
+        assert_eq!(notes, ["120 requests, 5.2M tokens all time"]);
+        assert_eq!(rows[1].status.text, "disabled");
+    }
+
+    #[test]
     fn the_menu_bar_without_pools_shows_the_name() {
         let report = report_of(ts(1_000), Vec::new());
         assert_eq!(menu_bar(&report, ts(1_000)), "slopmax");
@@ -1289,20 +1446,20 @@ mod tests {
             running,
             lingering: None,
         };
-        assert!(!service_line(None).1);
-        assert_eq!(
-            service_line(Some(&status(true, true))),
-            ("Starts at login; running".to_owned(), false)
+        // With no service manager, the switch is off and cannot change.
+        let none = login(None);
+        assert!(!none.on && !none.available);
+        assert!(none.detail.contains("no login service"));
+        let on = login(Some(&status(true, true)));
+        assert!(on.on && on.available);
+        assert!(on.detail.starts_with("Runs the proxy whenever you log in"));
+        assert!(
+            login(Some(&status(true, false)))
+                .detail
+                .contains("not running now")
         );
-        assert_eq!(
-            service_line(Some(&status(true, false))).0,
-            "Starts at login; not running now"
-        );
-        // Only a service not yet installed offers to install it.
-        assert_eq!(
-            service_line(Some(&status(false, false))),
-            ("Not started at login yet".to_owned(), true)
-        );
+        let off = login(Some(&status(false, false)));
+        assert!(!off.on && off.available);
     }
 
     #[test]

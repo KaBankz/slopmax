@@ -21,6 +21,8 @@ pub(crate) const TITLE: f32 = 20.;
 pub(crate) const HEADING: f32 = 15.;
 pub(crate) const BODY: f32 = 13.;
 pub(crate) const SMALL: f32 = 12.;
+/// A chart's axis labels, the same in every chart.
+pub(crate) const AXIS: f32 = 11.;
 
 /// The height of every control: a button, a text field, a segmented
 /// choice.

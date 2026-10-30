@@ -1,11 +1,11 @@
 //! A provider's page: its pool, each window across the working accounts
-//! side by side; then its accounts as a table, a column for each window
-//! and their controls at the right, with an account's reset credits opened
-//! beneath it.
+//! side by side, and where a new session would go; then its accounts as a
+//! table, a column for each window and a menu of what can be done with it
+//! at the right, with an account's reset credits opened beneath it.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::ButtonVariants as _;
-use gpui_kit::component::switch::Switch;
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::{Disableable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -17,14 +17,14 @@ use slopmax_core::time::Timestamp;
 
 use crate::theme::{Colors, tabular};
 use crate::ui::{
-    self, badge, caption, dot, figure, icon, label, meter, panel, push, resets, segments,
+    self, badge, caption, dot, figure, icon, label, meter, panel, push, resets, segments, tool,
 };
 use crate::{Main, motion};
 
-/// The table's columns: an account's name and standing, and its controls.
-/// Its windows share what is left.
+/// The table's columns: an account's name and standing, and its menu. Its
+/// windows share what is left.
 const NAME: Pixels = px(240.);
-const CONTROLS: Pixels = px(124.);
+const CONTROLS: Pixels = px(28.);
 const WINDOW: Pixels = px(120.);
 
 impl Main {
@@ -96,8 +96,6 @@ impl Main {
         c: &Colors,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let (pin, toggle) = (self.app.clone(), self.app.clone());
-        let (id, id2) = (row.id.clone(), row.id.clone());
         let open = row.credits.is_some() && self.credits_open.contains(&row.id);
         // Out of quota on one window, it waits on that one alone, so the
         // others fade.
@@ -120,7 +118,8 @@ impl Main {
                     )
                     .when(!row.plan.is_empty(), |line| {
                         line.child(badge(row.plan.clone(), c))
-                    }),
+                    })
+                    .when(row.next, |line| line.child(badge("Next", c))),
             )
             .child(label(&row.status, c).text_size(px(ui::SMALL)))
             .when_some(row.last_used.clone(), |name, used| {
@@ -130,23 +129,7 @@ impl Main {
             .w(CONTROLS)
             .flex_shrink_0()
             .justify_end()
-            .gap(px(12.))
-            .child(if row.pinned {
-                badge("Pinned", c).into_any_element()
-            } else {
-                push(SharedString::from(format!("use-{}", row.id)), "Use")
-                    .tooltip("Send requests here first")
-                    .accessibility_label(format!("Use {}", row.name))
-                    .disabled(row.disabled)
-                    .on_click(move |_, _, _| pin.pin(&id))
-                    .into_any_element()
-            })
-            .child(
-                Switch::new(SharedString::from(format!("enabled-{}", row.id)))
-                    .checked(!row.disabled)
-                    .accessibility_label(format!("Enable {}", row.name))
-                    .on_click(move |enabled, _, _| toggle.set_disabled(&id2, !*enabled)),
-            );
+            .child(self.menu(row, cx));
         let line = h_flex()
             .items_start()
             .gap(px(16.))
@@ -188,6 +171,72 @@ impl Main {
             .child(line)
             .children(notes)
             .children(credits)
+    }
+
+    /// What can be done with an account, in a menu: pin it for new
+    /// sessions or stop, turn it off or on, move it in priority, and
+    /// redeem a limit reset.
+    fn menu(&self, row: &Row, cx: &mut Context<Self>) -> impl IntoElement {
+        let (app, main) = (self.app.clone(), cx.entity().downgrade());
+        let (id, pinned, disabled, priority) =
+            (row.id.clone(), row.pinned, row.disabled, row.priority);
+        let redeemable = row.credits.as_ref().map(|credits| credits.held.is_none());
+        tool(
+            SharedString::from(format!("more-{}", row.id)),
+            IconName::Ellipsis,
+            "More",
+        )
+        .accessibility_label(format!("More for {}", row.name))
+        .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+            let pin = if pinned {
+                let app = app.clone();
+                PopupMenuItem::new("Stop pinning").on_click(move |_, _, _| app.unpin_all())
+            } else {
+                let (app, id) = (app.clone(), id.clone());
+                PopupMenuItem::new("Use for new sessions")
+                    .disabled(disabled)
+                    .on_click(move |_, _, _| app.pin(&id))
+            };
+            let toggle = {
+                let (app, id) = (app.clone(), id.clone());
+                PopupMenuItem::new(if disabled { "Enable" } else { "Disable" })
+                    .on_click(move |_, _, _| app.set_disabled(&id, !disabled))
+            };
+            let raise = {
+                let (app, id) = (app.clone(), id.clone());
+                PopupMenuItem::new("Raise priority")
+                    .on_click(move |_, _, _| app.set_priority(&id, priority + 1))
+            };
+            let lower = {
+                let (app, id) = (app.clone(), id.clone());
+                PopupMenuItem::new("Lower priority")
+                    .on_click(move |_, _, _| app.set_priority(&id, priority - 1))
+            };
+            let menu = menu
+                .item(pin)
+                .item(toggle)
+                .separator()
+                .item(PopupMenuItem::label(format!("Priority {priority}")))
+                .item(raise)
+                .item(lower);
+            match redeemable {
+                Some(can) => {
+                    let (main, id) = (main.clone(), id.clone());
+                    menu.separator().item(
+                        PopupMenuItem::new("Redeem a limit reset…")
+                            .disabled(!can)
+                            .on_click(move |_, _, cx| {
+                                let _ = main.update(cx, |main, cx| {
+                                    main.credits_open.insert(id.clone());
+                                    main.confirming = Some(id.clone());
+                                    cx.notify();
+                                });
+                            }),
+                    )
+                }
+                None => menu,
+            }
+        })
     }
 
     /// An account's reset credits, inset beneath it: when each was granted
@@ -323,7 +372,7 @@ impl Main {
 }
 
 /// The pool: each window across the working accounts, side by side, over
-/// each account's share of it.
+/// each account's share of it, under where a new session would go.
 fn pool(group: &Group, c: &Colors) -> impl IntoElement {
     let total = group.accounts.len();
     let noun = if total == 1 { "account" } else { "accounts" };
@@ -355,14 +404,23 @@ fn pool(group: &Group, c: &Colors) -> impl IntoElement {
                 .child(segments(&overview.shares, c))
                 .child(caption(resets(&overview.gauge), c).truncate())
         }));
-    ui::section("Pool", Some(caption(across, c).into_any_element()), c).child(
-        panel(c)
-            .child(cells)
-            .children(group.credits.as_deref().map(|credits| {
-                ui::row(false, c)
-                    .py(px(10.))
-                    .child(caption(ui::sentence(credits), c))
-            })),
+    ui::section(
+        "Pool",
+        Some(crate::overview::next(&group.next, c).into_any_element()),
+        c,
+    )
+    .child(
+        panel(c).child(cells).child(
+            ui::row(false, c)
+                .py(px(10.))
+                .child(caption(across, c).flex_1())
+                .children(
+                    group
+                        .credits
+                        .as_deref()
+                        .map(|credits| caption(ui::sentence(credits), c)),
+                ),
+        ),
     )
 }
 

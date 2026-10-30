@@ -22,10 +22,6 @@ use crate::theme::{self, Colors, tabular};
 use crate::ui::{self, caption, field, label, panel, push, section, segmented};
 use crate::{KEYS, Main};
 
-/// The widest these pages' panels grow, so a row's name and its control
-/// stay within a glance of each other.
-const WIDTH: f32 = 760.;
-
 impl Main {
     pub(crate) fn agents(&self, c: &Colors) -> Div {
         let mut list = panel(c);
@@ -63,7 +59,6 @@ impl Main {
             ));
         }
         v_flex()
-            .max_w(px(WIDTH))
             .gap(px(16.))
             .child(div().max_w(px(560.)).text_color(c.muted).child(
                 "Connecting points an agent's own settings at slopmax, so its requests share \
@@ -74,7 +69,6 @@ impl Main {
 
     pub(crate) fn settings(&self, c: &Colors, cx: &mut Context<Self>) -> Div {
         v_flex()
-            .max_w(px(WIDTH))
             .gap(px(32.))
             .child(appearance(c, cx))
             .child(self.proxy(c))
@@ -89,7 +83,7 @@ impl Main {
         let running = matches!(self.snapshot.proxy, Proxy::Running { .. });
         let (start, dashboard, service) = (self.app.clone(), self.app.clone(), self.app.clone());
         let address = self.snapshot.address.clone();
-        let (state, can_install) = view::service_line(self.snapshot.service.as_ref());
+        let login = view::login(self.snapshot.service.as_ref());
         let (text, tone) = match &self.snapshot.proxy {
             Proxy::Running { version } => (format!("Running {version}"), Tone::Good),
             Proxy::Starting => ("Starting…".to_owned(), Tone::Muted),
@@ -153,11 +147,18 @@ impl Main {
                 .child(setting(
                     false,
                     "Start at login",
-                    state,
-                    div().children(can_install.then(|| {
-                        push("install-service", "Start at login")
-                            .on_click(move |_, _, _| service.install_service())
-                    })),
+                    login.detail,
+                    Switch::new("start-at-login")
+                        .checked(login.on)
+                        .disabled(!login.available)
+                        .accessibility_label("Start at login")
+                        .on_click(move |on, _, _| {
+                            if *on {
+                                service.install_service();
+                            } else {
+                                service.uninstall_service();
+                            }
+                        }),
                     c,
                 )),
         )

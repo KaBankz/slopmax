@@ -5,25 +5,24 @@
 //! charts how well it went: what failover saved and what failed, how much
 //! came from cache, how fast each model writes, and how soon answers began.
 //!
-//! The charts keep to neutrals. A provider's own color tells providers
-//! apart, and red marks what failed; nothing else is colored.
+//! The charts keep to neutrals: providers stack in two shades, and red
+//! marks what failed; nothing else is colored. Totals for each hour or day
+//! stand as columns, never curves that would invent values between them.
 
-use gpui_kit::component::chart::AreaChart;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use slopmax_app::history::{self, Bucket, History, Range};
 use slopmax_core::human;
-use slopmax_core::provider::ProviderId;
 use slopmax_core::summary::Totals;
 
 use crate::Main;
 use crate::theme::{Colors, tabular};
-use crate::ui::{self, caption, dot, figure, legend, meter, panel, section, stat, stats, swatch};
+use crate::ui::{self, caption, figure, legend, meter, panel, section, stat, stats, swatch};
 
 /// The width left of a column chart for its counts.
-const GUTTER: f32 = 32.;
+const GUTTER: f32 = 40.;
 /// The models ranked by name; the rest share a row.
 const MODELS: usize = 5;
 /// The models whose speed is drawn.
@@ -94,7 +93,8 @@ fn page(history: &History, c: &Colors) -> Div {
         history
             .providers
             .iter()
-            .map(|p| (c.provider(*p), p.spec().title)),
+            .enumerate()
+            .map(|(i, p)| (c.stack(i), p.spec().title)),
         c,
     );
     v_flex()
@@ -122,9 +122,10 @@ fn page(history: &History, c: &Colors) -> Div {
                 stat(
                     "API value",
                     priced(total.cost, total),
-                    match total.unpriced {
-                        0 => "at API prices".to_owned(),
-                        n => format!("{} unpriced", count(n, "request")),
+                    match (history.billed > 0., total.unpriced) {
+                        (true, _) => format!("Billed to API keys {}", dollars(history.billed)),
+                        (false, 0) => "at API prices".to_owned(),
+                        (false, n) => format!("{} unpriced", count(n, "request")),
                     },
                     c,
                 ),
@@ -141,15 +142,12 @@ fn page(history: &History, c: &Colors) -> Div {
             c,
         )))
         .child(
-            section("Tokens", Some(providers.into_any_element()), c).child(chart(
-                div().h(px(220.)).child(tokens(history, margin, c)),
-                c,
-            )),
+            section("Tokens", Some(providers.into_any_element()), c)
+                .child(chart(tokens(history, margin, c), c)),
         )
         .child(pair(
             section("Requests", None, c).child(chart(requests(history, margin, c), c)),
-            section("API value", None, c)
-                .child(chart(div().h(px(150.)).child(cost(history, margin, c)), c)),
+            section("API value", None, c).child(chart(cost(history, margin, c), c)),
         ))
         .child(pair(models(history, c), mix(history, c)))
         .child(agents(history, c))
@@ -218,198 +216,174 @@ fn performance(history: &History, c: &Colors) -> Div {
                 ),
                 c,
             )
-            .child(chart(
-                div().h(px(150.)).child(first_byte(history, margin, c)),
-                c,
-            )),
+            .child(chart(first_byte(history, margin, c), c)),
         ))
 }
 
-/// Tokens over the range, an area per provider in its color.
-fn tokens(history: &History, margin: usize, c: &Colors) -> AreaChart<Bucket, SharedString, f64> {
-    let chart = AreaChart::new(history.buckets.clone())
-        .id("tokens")
-        .x(|b: &Bucket| SharedString::from(b.label.clone()));
-    let most = history
-        .buckets
-        .iter()
-        .flat_map(|b| b.tokens.iter().copied())
-        .max()
-        .unwrap_or(0);
-    let (top, ticks) = axis(most as f64, 1.);
-    let mut chart = if smooth(history) {
-        chart.natural()
-    } else {
-        chart.linear()
-    }
-    .y_domain(0., top)
-    .y_padding(0., 0.)
-    .tick_margin(margin)
-    .grid_dashed(false)
-    .y_axis(true)
-    .y_tick_count(ticks)
-    .y_tick_format(|v| human::compact(v.round() as u64).replace(".0", ""))
-    .tooltip_value(|_, _, v| human::compact(v.max(0.) as u64).into());
-    for (i, &provider) in history.providers.iter().enumerate() {
-        let color = c.provider(provider);
-        chart = chart
-            .y(move |b: &Bucket| b.tokens[i] as f64)
-            .stroke(color)
-            .fill(color.opacity(0.05))
-            .name(provider.spec().title);
-    }
-    chart
+/// Tokens each hour or day, a column stacked from each provider's, in
+/// shades of neutral.
+fn tokens(history: &History, margin: usize, c: &Colors) -> Div {
+    let tones: Vec<Hsla> = (0..history.providers.len()).map(|i| c.stack(i)).collect();
+    let providers = history.providers.clone();
+    columns(
+        "tokens",
+        history,
+        Layout::Stacked,
+        |b| {
+            b.tokens
+                .iter()
+                .zip(&tones)
+                .map(|(n, tone)| (*n as f64, *tone))
+                .collect()
+        },
+        move |b| {
+            let mut tip = vec![b.label.clone()];
+            for (provider, tokens) in providers.iter().zip(&b.tokens) {
+                tip.push(format!(
+                    "{}: {}",
+                    provider.spec().title,
+                    human::compact(*tokens)
+                ));
+            }
+            tip.join("\n")
+        },
+        Scale::count(),
+        |v| human::compact(v.round() as u64).replace(".0", ""),
+        180.,
+        margin,
+        c,
+    )
 }
 
-/// Requests over the range, a column each hour or day.
+/// Requests each hour or day.
 fn requests(history: &History, margin: usize, c: &Colors) -> Div {
     let fill = c.meter;
     columns(
         "requests",
         history,
-        |b| vec![(b.requests, fill.into())],
+        Layout::Stacked,
+        |b| vec![(b.requests as f64, fill)],
         |b| format!("{}\n{}", b.label, count(b.requests, "request")),
-        132.,
+        Scale::count(),
+        |v| grouped(v.round() as u64),
+        CHART,
         margin,
         c,
     )
 }
 
 /// What the requests would have cost on the API, each hour or day.
-fn cost(history: &History, margin: usize, c: &Colors) -> AreaChart<Bucket, SharedString, f64> {
-    let most = history.buckets.iter().map(|b| b.cost).fold(0., f64::max);
-    let (top, ticks) = axis(most, 0.01);
-    // Cents only where the steps need them.
-    let cents = if places(top / (ticks - 1) as f64) == 0 {
-        0
-    } else {
-        2
-    };
-    let chart = AreaChart::new(history.buckets.clone())
-        .id("cost")
-        .x(|b: &Bucket| SharedString::from(b.label.clone()))
-        .y(|b: &Bucket| b.cost)
-        .stroke(c.meter)
-        .fill(c.meter.opacity(0.06))
-        .name("API value");
-    if smooth(history) {
-        chart.natural()
-    } else {
-        chart.linear()
+fn cost(history: &History, margin: usize, c: &Colors) -> Div {
+    let fill = c.meter;
+    columns(
+        "cost",
+        history,
+        Layout::Stacked,
+        |b| vec![(b.cost, fill)],
+        |b| format!("{}\n{} at API prices", b.label, dollars(b.cost)),
+        Scale::money(),
+        |v| {
+            if v.fract() == 0. {
+                format!("${v:.0}")
+            } else {
+                format!("${v:.2}")
+            }
+        },
+        CHART,
+        margin,
+        c,
+    )
+}
+
+/// How a column holds its parts: one on another, or side by side.
+#[derive(Clone, Copy, PartialEq)]
+enum Layout {
+    Stacked,
+    Grouped,
+}
+
+/// A value axis: from zero to a round value past the most, its ticks no
+/// finer than a step; or set.
+#[derive(Clone, Copy)]
+enum Scale {
+    Zero { finest: f64 },
+    Fixed { bottom: f64, top: f64, ticks: usize },
+}
+
+impl Scale {
+    /// Whole counts from zero.
+    fn count() -> Self {
+        Self::Zero { finest: 1. }
     }
-    .y_domain(0., top)
-    .y_padding(0., 0.)
-    .tick_margin(margin)
-    .grid_dashed(false)
-    .y_axis(true)
-    .y_tick_count(ticks)
-    .y_tick_format(move |v| format!("${v:.cents$}"))
-    .tooltip_value(|_, _, v| format!("${v:.2}").into())
+
+    /// Dollars from zero, to the cent.
+    fn money() -> Self {
+        Self::Zero { finest: 0.01 }
+    }
+
+    /// The axis's bottom, top, and ticks for values up to `most`.
+    fn fit(self, most: f64) -> (f64, f64, usize) {
+        match self {
+            Self::Fixed { bottom, top, ticks } => (bottom, top, ticks),
+            Self::Zero { finest } => {
+                let (top, ticks) = axis(most, finest);
+                (0., top, ticks)
+            }
+        }
+    }
 }
 
-/// Days curve smoothly; hours, which climb from nothing overnight, keep to
-/// straight lines, where a smooth curve would dip below zero first.
-fn smooth(history: &History) -> bool {
-    history.range != Range::Today
-}
+/// The height of a chart beside another.
+const CHART: f32 = 132.;
 
-/// Counts over the range as columns `height` tall, one an hour or a day,
-/// each stacked from the bottom with its `parts`, on a grid of round counts
-/// as the charts draw theirs. Hovering a column shows its `tip`.
-fn columns(
-    id: &'static str,
+/// A chart's frame, as every chart draws it: a value axis at the left on a
+/// grid of round values, the plot over the hours or days, and every
+/// `margin`th of them named beneath, each under its own slot.
+fn frame(
     history: &History,
-    parts: impl Fn(&Bucket) -> Vec<(u64, Background)>,
-    tip: impl Fn(&Bucket) -> String,
+    (bottom, top, ticks): (f64, f64, usize),
+    format: impl Fn(f64) -> String,
     height: f32,
     margin: usize,
+    plot: Div,
     c: &Colors,
 ) -> Div {
-    let stacks: Vec<Vec<(u64, Background)>> = history.buckets.iter().map(parts).collect();
-    let most = stacks
-        .iter()
-        .map(|stack| stack.iter().map(|(n, _)| n).sum::<u64>())
-        .max()
-        .unwrap_or(0);
-    let (top, ticks) = axis(most as f64, 1.);
     let rows: Vec<f64> = (0..ticks)
-        .map(|i| top * i as f64 / (ticks - 1) as f64)
+        .map(|i| bottom + (top - bottom) * i as f64 / (ticks - 1) as f64)
         .collect();
-    let y = |value: f64| px(height * (1. - (value / top) as f32));
-    let hover = c.hover;
-    let plot = div()
-        .relative()
-        .flex_1()
-        .h(px(height))
-        .children(rows.iter().map(|&value| {
-            div()
-                .absolute()
-                .left_0()
-                .right_0()
-                .top(y(value))
-                .border_t_1()
-                .border_color(c.separator)
-        }))
-        .child(
-            h_flex().absolute().inset_0().items_end().children(
-                history
-                    .buckets
-                    .iter()
-                    .zip(stacks)
-                    .enumerate()
-                    .map(|(i, (bucket, stack))| {
-                        let tip = SharedString::from(tip(bucket));
-                        v_flex()
-                            .id((id, i))
-                            .flex_1()
-                            .h_full()
-                            .items_center()
-                            .justify_end()
-                            .rounded(px(3.))
-                            .hover(move |column| column.bg(hover))
-                            .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-                            .child(
-                                // A slim column, centered in its hour or day
-                                // and clear of its neighbors.
-                                v_flex()
-                                    .w(relative(0.6))
-                                    .max_w(px(16.))
-                                    .gap(px(1.))
-                                    .children(stack.into_iter().rev().filter(|(n, _)| *n > 0).map(
-                                        |(n, color)| {
-                                            div()
-                                                .h(px(height * (n as f64 / top) as f32))
-                                                .min_h(px(2.))
-                                                .rounded(px(2.))
-                                                .bg(color)
-                                        },
-                                    )),
-                            )
-                    }),
-            ),
-        );
-    let counts = div()
+    let y = |value: f64| px(height * (1. - ((value - bottom) / (top - bottom)) as f32));
+    let grid = rows.iter().map(|&value| {
+        div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .top(y(value))
+            .border_t_1()
+            .border_color(c.separator)
+    });
+    let values = div()
         .relative()
         .w(px(GUTTER))
         .flex_shrink_0()
         .h(px(height))
-        .text_size(px(11.))
+        .text_size(px(ui::AXIS))
         .text_color(c.muted)
         .font_features(tabular())
         .children(rows.iter().map(|&value| {
             div()
                 .absolute()
-                .right(px(6.))
+                .right(px(8.))
                 .top(y(value) - px(7.))
-                .child(grouped(value.round() as u64))
+                .whitespace_nowrap()
+                .child(format(value))
         }));
     let names = h_flex()
         .h(px(18.))
+        .pt(px(4.))
         .pl(px(GUTTER))
-        .text_size(px(11.))
+        .text_size(px(ui::AXIS))
         .text_color(c.muted)
         .children(history.buckets.iter().enumerate().map(|(i, b)| {
-            // The hours or days the charts label too.
             h_flex()
                 .flex_1()
                 .justify_center()
@@ -423,8 +397,288 @@ fn columns(
                 })
         }));
     v_flex()
-        .child(h_flex().items_start().child(counts).child(plot))
+        .child(
+            h_flex().items_start().child(values).child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .h(px(height))
+                    .children(grid)
+                    .child(plot),
+            ),
+        )
         .child(names)
+}
+
+/// A strip over each hour or day that shows its `tip` while hovered.
+fn hovers(id: &'static str, history: &History, tip: impl Fn(&Bucket) -> String, c: &Colors) -> Div {
+    let hover = c.hover;
+    h_flex()
+        .absolute()
+        .inset_0()
+        .children(history.buckets.iter().enumerate().map(|(i, bucket)| {
+            let tip = SharedString::from(tip(bucket));
+            div()
+                .id((id, i))
+                .flex_1()
+                .h_full()
+                .rounded(px(3.))
+                .hover(move |strip| strip.bg(hover))
+                .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+        }))
+}
+
+/// Values over the range as columns `height` tall, one an hour or a day,
+/// holding their `parts` as `layout` has it. Hovering a column shows its
+/// `tip`.
+#[allow(clippy::too_many_arguments)]
+fn columns(
+    id: &'static str,
+    history: &History,
+    layout: Layout,
+    parts: impl Fn(&Bucket) -> Vec<(f64, Hsla)>,
+    tip: impl Fn(&Bucket) -> String,
+    scale: Scale,
+    format: impl Fn(f64) -> String,
+    height: f32,
+    margin: usize,
+    c: &Colors,
+) -> Div {
+    let stacks: Vec<Vec<(f64, Hsla)>> = history.buckets.iter().map(parts).collect();
+    let most = stacks
+        .iter()
+        .map(|stack| match layout {
+            Layout::Stacked => stack.iter().map(|(n, _)| n).sum::<f64>(),
+            Layout::Grouped => stack.iter().map(|(n, _)| *n).fold(0., f64::max),
+        })
+        .fold(0., f64::max);
+    let fitted = scale.fit(most);
+    let (_, top, _) = fitted;
+    let tall = |n: f64| px(height * (n / top) as f32);
+    let bars =
+        h_flex()
+            .absolute()
+            .inset_0()
+            .items_end()
+            .children(stacks.into_iter().map(|stack| {
+                let shown = stack.into_iter().filter(|(n, _)| *n > 0.);
+                // A slim column, centered in its hour or day and clear of its
+                // neighbors; grouped, a slimmer one for each part.
+                let column =
+                    match layout {
+                        Layout::Stacked => v_flex()
+                            .w(relative(0.6))
+                            .max_w(px(18.))
+                            .gap(px(1.))
+                            .children(shown.collect::<Vec<_>>().into_iter().rev().map(
+                                |(n, tone)| div().h(tall(n)).min_h(px(2.)).rounded(px(2.)).bg(tone),
+                            )),
+                        Layout::Grouped => h_flex()
+                            .w(relative(0.7))
+                            .max_w(px(22.))
+                            .items_end()
+                            .gap(px(2.))
+                            .children(shown.map(|(n, tone)| {
+                                div()
+                                    .flex_1()
+                                    .h(tall(n))
+                                    .min_h(px(2.))
+                                    .rounded(px(2.))
+                                    .bg(tone)
+                            })),
+                    };
+                h_flex()
+                    .flex_1()
+                    .h_full()
+                    .items_end()
+                    .justify_center()
+                    .child(column)
+            }));
+    let plot = div()
+        .absolute()
+        .inset_0()
+        .child(bars)
+        .child(hovers(id, history, tip, c));
+    frame(history, fitted, format, height, margin, plot, c)
+}
+
+/// Lines over the range, one per series, through each hour or day that has
+/// a value, in straight segments; a lone point shows as a dot.
+#[allow(clippy::too_many_arguments)]
+fn lines(
+    id: &'static str,
+    history: &History,
+    series: Vec<(Vec<Option<f64>>, Hsla)>,
+    tip: impl Fn(&Bucket) -> String,
+    scale: Scale,
+    format: impl Fn(f64) -> String,
+    height: f32,
+    margin: usize,
+    c: &Colors,
+) -> Div {
+    let most = series
+        .iter()
+        .flat_map(|(values, _)| values.iter().flatten().copied())
+        .fold(0., f64::max);
+    let fitted = scale.fit(most);
+    let (bottom, top, _) = fitted;
+    let slots = history.buckets.len().max(1);
+    let drawing = canvas(
+        |_, _, _| {},
+        move |bounds, (), window, _| {
+            let at = |i: usize, value: f64| {
+                let along = (i as f32 + 0.5) / slots as f32;
+                let up = ((value - bottom) / (top - bottom)).clamp(0., 1.) as f32;
+                point(
+                    bounds.left() + bounds.size.width * along,
+                    bounds.top() + bounds.size.height * (1. - up),
+                )
+            };
+            for (values, color) in &series {
+                let mut path = PathBuilder::stroke(px(1.5));
+                let mut drawn = false;
+                for (i, value) in values.iter().enumerate() {
+                    let Some(value) = *value else { continue };
+                    let joined = i > 0 && values[i - 1].is_some();
+                    if joined {
+                        path.line_to(at(i, value));
+                        drawn = true;
+                    } else {
+                        path.move_to(at(i, value));
+                        let alone = values.get(i + 1).is_none_or(Option::is_none);
+                        if alone {
+                            let p = at(i, value);
+                            window.paint_quad(
+                                fill(
+                                    Bounds::new(p - point(px(2.), px(2.)), size(px(4.), px(4.))),
+                                    *color,
+                                )
+                                .corner_radii(px(2.)),
+                            );
+                        }
+                    }
+                }
+                if drawn && let Ok(path) = path.build() {
+                    window.paint_path(path, *color);
+                }
+            }
+        },
+    )
+    .absolute()
+    .inset_0();
+    let plot = div()
+        .absolute()
+        .inset_0()
+        .child(drawing)
+        .child(hovers(id, history, tip, c));
+    frame(history, fitted, format, height, margin, plot, c)
+}
+
+/// What failover saved and what failed, each hour or day, side by side.
+/// The totals above give their sums.
+fn reliability(history: &History, margin: usize, c: &Colors) -> Div {
+    let (saved, failed) = (c.meter, c.bad);
+    section(
+        "Reliability",
+        Some(legend([(saved, "Saved by failover"), (failed, "Failed")], c).into_any_element()),
+        c,
+    )
+    .child(chart(
+        columns(
+            "reliability",
+            history,
+            Layout::Grouped,
+            |b| vec![(b.rescued as f64, saved), (b.failed as f64, failed)],
+            |b| {
+                format!(
+                    "{}\n{} saved by failover\n{} failed",
+                    b.label,
+                    grouped(b.rescued),
+                    grouped(b.failed)
+                )
+            },
+            Scale::count(),
+            |v| grouped(v.round() as u64),
+            CHART,
+            margin,
+            c,
+        ),
+        c,
+    ))
+}
+
+/// How much input came from cache each hour or day, on an axis that ends
+/// at 100% and starts as low as it must, so a steady rate still shows its
+/// changes.
+fn cache(history: &History, margin: usize, c: &Colors) -> Div {
+    let rates: Vec<Option<f64>> = history
+        .buckets
+        .iter()
+        .map(|b| b.cached.map(|r| f64::from(r) * 100.))
+        .collect();
+    let least = rates.iter().flatten().copied().fold(100., f64::min);
+    let span = [10., 20., 50., 100.]
+        .into_iter()
+        .find(|span| 100. - span <= least - 1.)
+        .unwrap_or(100.);
+    let line = lines(
+        "cache",
+        history,
+        vec![(rates, c.meter)],
+        |b| match b.cached {
+            Some(r) => format!("{}\n{:.0}% from cache", b.label, r * 100.),
+            None => format!("{}\nNo input", b.label),
+        },
+        Scale::Fixed {
+            bottom: 100. - span,
+            top: 100.,
+            ticks: 3,
+        },
+        |v| format!("{v:.0}%"),
+        CHART,
+        margin,
+        c,
+    );
+    section("Input from cache", None, c).child(chart(line, c))
+}
+
+/// How soon answers began, in seconds, over the hours or days that had
+/// any: the median, and the slowest twentieth in a fainter line.
+fn first_byte(history: &History, margin: usize, c: &Colors) -> Div {
+    let seconds = |pick: fn((u64, u64)) -> u64| -> Vec<Option<f64>> {
+        history
+            .buckets
+            .iter()
+            .map(|b| b.first_byte.map(|w| pick(w) as f64 / 1e3))
+            .collect()
+    };
+    let (median, slow) = (seconds(|w| w.0), seconds(|w| w.1));
+    let slowest = slow.iter().flatten().copied().fold(0., f64::max);
+    let (top, ticks) = axis(slowest, 0.1);
+    let places = places(top / (ticks - 1) as f64);
+    lines(
+        "first-byte",
+        history,
+        vec![(slow, c.series(2)), (median, c.meter)],
+        |b| match b.first_byte {
+            Some((median, slow)) => format!(
+                "{}\nMedian {:.2}s\nSlowest 5% {:.2}s",
+                b.label,
+                median as f64 / 1e3,
+                slow as f64 / 1e3
+            ),
+            None => format!("{}\nNo answers", b.label),
+        },
+        Scale::Fixed {
+            bottom: 0.,
+            top,
+            ticks,
+        },
+        move |v| format!("{v:.places$}s"),
+        CHART,
+        margin,
+        c,
+    )
 }
 
 /// A round top for a value axis from zero to `most` or past it, and how many
@@ -458,110 +712,6 @@ fn places(step: f64) -> usize {
         .unwrap_or(2)
 }
 
-/// What failover saved and what failed, each hour or day: the saved below,
-/// the failed above. The totals above give their sums.
-fn reliability(history: &History, margin: usize, c: &Colors) -> Div {
-    let (saved, failed) = (c.meter, c.bad);
-    section(
-        "Reliability",
-        Some(legend([(saved, "Saved by failover"), (failed, "Failed")], c).into_any_element()),
-        c,
-    )
-    .child(chart(
-        columns(
-            "reliability",
-            history,
-            |b| vec![(b.rescued, saved.into()), (b.failed, failed.into())],
-            |b| {
-                format!(
-                    "{}\n{} saved by failover\n{} failed",
-                    b.label,
-                    grouped(b.rescued),
-                    grouped(b.failed)
-                )
-            },
-            132.,
-            margin,
-            c,
-        ),
-        c,
-    ))
-}
-
-type Share100 = (SharedString, f64);
-
-/// How much input came from cache each hour or day.
-fn cache(history: &History, margin: usize, c: &Colors) -> Div {
-    let rates: Vec<Share100> = history
-        .buckets
-        .iter()
-        .filter_map(|b| Some((b.label.clone().into(), f64::from(b.cached?) * 100.)))
-        .collect();
-    let line = AreaChart::new(rates)
-        .id("cache")
-        .x(|r: &Share100| r.0.clone())
-        .y(|r: &Share100| r.1)
-        .stroke(c.meter)
-        .fill(c.meter.opacity(0.06))
-        .name("From cache");
-    let line = if smooth(history) {
-        line.natural()
-    } else {
-        line.linear()
-    }
-    .y_domain(0., 100.)
-    .y_padding(0., 0.)
-    .tick_margin(margin)
-    .grid_dashed(false)
-    .y_axis(true)
-    .y_tick_count(3)
-    .y_tick_format(|v| format!("{v:.0}%"))
-    .tooltip_value(|_, _, v| format!("{v:.0}%").into());
-    section("Input from cache", None, c).child(chart(div().h(px(150.)).child(line), c))
-}
-
-type Wait = (SharedString, f64, f64);
-
-/// How soon answers began, in seconds, over the hours or days that had
-/// any: the median shaded, the slowest twentieth a fainter line.
-fn first_byte(history: &History, margin: usize, c: &Colors) -> AreaChart<Wait, SharedString, f64> {
-    let waits: Vec<Wait> = history
-        .buckets
-        .iter()
-        .filter_map(|b| {
-            let (median, slow) = b.first_byte?;
-            Some((
-                b.label.clone().into(),
-                median as f64 / 1e3,
-                slow as f64 / 1e3,
-            ))
-        })
-        .collect();
-    let slowest = waits.iter().map(|w| w.2).fold(0., f64::max);
-    let (top, ticks) = axis(slowest, 0.1);
-    let places = places(top / (ticks - 1) as f64);
-    AreaChart::new(waits)
-        .id("first-byte")
-        .x(|w: &Wait| w.0.clone())
-        .y(|w: &Wait| w.1)
-        .stroke(c.meter)
-        .fill(c.meter.opacity(0.06))
-        .name("Median")
-        .y(|w: &Wait| w.2)
-        .stroke(c.series(2))
-        .fill(transparent_black())
-        .name("Slowest 5%")
-        .natural()
-        .y_domain(0., top)
-        .y_padding(0., 0.)
-        .tick_margin(margin)
-        .grid_dashed(false)
-        .y_axis(true)
-        .y_tick_count(ticks)
-        .y_tick_format(move |v| format!("{v:.places$}s"))
-        .tooltip_value(|_, _, v| format!("{v:.2}s").into())
-}
-
 /// A number at the right of a fixed column, in even figures.
 fn cell(text: impl Into<SharedString>, width: f32) -> Div {
     div()
@@ -573,13 +723,11 @@ fn cell(text: impl Into<SharedString>, width: f32) -> Div {
         .child(text.into())
 }
 
-/// A ranked row's name, after a dot of its maker's color if it has one.
-fn name(text: impl Into<SharedString>, color: Option<Hsla>) -> Div {
+/// A ranked row's name.
+fn name(text: impl Into<SharedString>) -> Div {
     h_flex()
         .w(px(NAME))
         .flex_shrink_0()
-        .gap(px(8.))
-        .children(color.map(dot))
         .child(div().min_w_0().truncate().child(text.into()))
 }
 
@@ -613,7 +761,7 @@ fn models(history: &History, c: &Colors) -> Div {
             let tokens = history::tokens(&totals);
             h_flex()
                 .gap(px(12.))
-                .child(name(model, None))
+                .child(name(model))
                 .child(
                     div()
                         .flex_1()
@@ -709,13 +857,9 @@ fn mix(history: &History, c: &Colors) -> Div {
     )
 }
 
-/// How fast each model writes once it has begun, fastest first.
+/// How fast each model writes once it has begun, fastest first: the
+/// figures alone, as they differ too little for bars to tell apart.
 fn speed(history: &History, c: &Colors) -> Div {
-    let fastest = history
-        .speeds
-        .first()
-        .map_or(1., |s| s.tokens_per_second)
-        .max(1.);
     section("Output speed", None, c).child(
         panel(c)
             .flex_1()
@@ -727,12 +871,13 @@ fn speed(history: &History, c: &Colors) -> Div {
             .children(history.speeds.iter().take(SPEEDS).map(|s| {
                 h_flex()
                     .gap(px(12.))
-                    .child(name(s.model.clone(), Some(c.provider(s.provider))))
-                    .child(div().flex_1().child(meter(
-                        (s.tokens_per_second / fastest) as f32,
-                        c.meter,
-                        c,
-                    )))
+                    .child(name(s.model.clone()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_color(c.muted)
+                            .child(s.provider.spec().title),
+                    )
                     .child(cell(format!("{:.0} tok/s", s.tokens_per_second), 80.))
             })),
     )
@@ -752,7 +897,7 @@ fn agents(history: &History, c: &Colors) -> Div {
             let tokens = history::tokens(&part.totals);
             h_flex()
                 .gap(px(12.))
-                .child(name(part.name, Some(agent_color(part.name, c))))
+                .child(name(part.name))
                 .child(
                     div()
                         .flex_1()
@@ -824,7 +969,7 @@ fn activity(history: &History, c: &Colors) -> Div {
                 h_flex()
                     .pt(px(4.))
                     .gap(px(3.))
-                    .text_size(px(11.))
+                    .text_size(px(ui::AXIS))
                     .text_color(c.faint)
                     .font_features(tabular())
                     .child(div().w(px(36.)).flex_shrink_0())
@@ -838,8 +983,9 @@ fn activity(history: &History, c: &Colors) -> Div {
     )
 }
 
-/// The accounts ranked by tokens, each with its share drawn and its API
-/// value.
+/// The accounts ranked by tokens, each with its provider, its share drawn,
+/// and its API value; the failures no account took; and the totals, which
+/// the columns add up to.
 fn accounts(history: &History, c: &Colors) -> Div {
     let sum = history
         .accounts
@@ -854,6 +1000,7 @@ fn accounts(history: &History, c: &Colors) -> Div {
         .max()
         .unwrap_or(0)
         .max(1) as f32;
+    const ACCOUNT: f32 = 260.;
     const WIDTHS: [f32; 4] = [64., 72., 56., 76.];
     let numbers = |cells: [String; 4]| {
         h_flex().flex_shrink_0().gap(px(16.)).children(
@@ -863,6 +1010,18 @@ fn accounts(history: &History, c: &Colors) -> Div {
                 .map(|(text, width)| cell(text, width)),
         )
     };
+    let line = || {
+        h_flex()
+            .px(px(16.))
+            .py(px(10.))
+            .gap(px(16.))
+            .border_t_1()
+            .border_color(c.separator)
+    };
+    let failed = |n: u64| match n {
+        0 => "—".to_owned(),
+        n => grouped(n),
+    };
     let mut table = panel(c).child(
         h_flex()
             .px(px(16.))
@@ -870,32 +1029,28 @@ fn accounts(history: &History, c: &Colors) -> Div {
             .gap(px(16.))
             .text_size(px(ui::SMALL))
             .text_color(c.muted)
-            .child(div().w(px(220.)).flex_shrink_0().child("Account"))
-            .child(div().flex_1().child("Share"))
+            .child(div().w(px(ACCOUNT)).flex_shrink_0().child("Account"))
+            .child(div().flex_1().child("Share of tokens"))
             .child(numbers(
                 ["Tokens", "Requests", "Failed", "API value"].map(str::to_owned),
             )),
     );
     for share in &history.accounts {
         let tokens = history::tokens(&share.totals);
-        let failed = match share.totals.failed {
-            0 => "—".to_owned(),
-            n => grouped(n),
-        };
         table = table.child(
-            h_flex()
-                .px(px(16.))
-                .py(px(10.))
-                .gap(px(16.))
-                .border_t_1()
-                .border_color(c.separator)
+            line()
                 .child(
                     h_flex()
-                        .w(px(220.))
+                        .w(px(ACCOUNT))
                         .flex_shrink_0()
                         .gap(px(8.))
-                        .child(dot(c.provider(share.provider)))
-                        .child(div().min_w_0().truncate().child(share.name.clone())),
+                        .child(div().min_w_0().truncate().child(share.name.clone()))
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .text_color(c.muted)
+                                .child(share.provider.spec().title),
+                        ),
                 )
                 .child(
                     h_flex()
@@ -914,22 +1069,49 @@ fn accounts(history: &History, c: &Colors) -> Div {
                 .child(numbers([
                     human::compact(tokens),
                     grouped(share.totals.requests),
-                    failed,
+                    failed(share.totals.failed),
                     priced(share.totals.cost, &share.totals),
                 ])),
         );
     }
-    section("Accounts", None, c).child(table)
-}
-
-/// An agent's color: its maker's, as for providers.
-fn agent_color(agent: &str, c: &Colors) -> Hsla {
-    match agent {
-        "Claude Code" => c.provider(ProviderId::Claude),
-        "Codex" => c.provider(ProviderId::Codex),
-        "Warmups" => c.faint,
-        _ => c.muted,
+    if history.unplaced > 0 {
+        table = table.child(
+            line()
+                .text_color(c.muted)
+                .child(
+                    div()
+                        .w(px(ACCOUNT))
+                        .flex_shrink_0()
+                        .child("No account could take it"),
+                )
+                .child(
+                    caption("Every account was limited or out of rotation", c)
+                        .flex_1()
+                        .min_w_0()
+                        .truncate(),
+                )
+                .child(numbers([
+                    "—".to_owned(),
+                    "—".to_owned(),
+                    grouped(history.unplaced),
+                    "—".to_owned(),
+                ])),
+        );
     }
+    let total = &history.total;
+    table = table.child(
+        line()
+            .font_weight(FontWeight::MEDIUM)
+            .child(div().w(px(ACCOUNT)).flex_shrink_0().child("Total"))
+            .child(div().flex_1())
+            .child(numbers([
+                human::compact(history::tokens(total)),
+                grouped(total.requests),
+                failed(total.failed),
+                priced(total.cost, total),
+            ])),
+    );
+    section("Accounts", None, c).child(table)
 }
 
 /// `12,345`.

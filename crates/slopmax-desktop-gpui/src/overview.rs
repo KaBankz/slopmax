@@ -8,7 +8,7 @@ use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use slopmax_app::history::History;
-use slopmax_app::view::{self, Attention, Group, Remedy, Status};
+use slopmax_app::view::{self, Attention, Group, Label, Remedy, Status};
 use slopmax_core::human;
 use slopmax_core::report::Tone;
 use slopmax_core::time::Timestamp;
@@ -212,7 +212,7 @@ fn pool(
         .filter(|r| !r.disabled && r.status.tone == Tone::Good)
         .count();
     let hover = c.hover;
-    // Lines under the title start where its words do.
+    // Lines under the title sit a step in.
     let indent = px(14.);
     v_flex()
         .id(SharedString::from(format!("pool-{provider}")))
@@ -230,7 +230,6 @@ fn pool(
         .child(
             h_flex()
                 .gap(px(8.))
-                .child(dot(c.provider(provider)))
                 .child(
                     div()
                         .flex_1()
@@ -274,6 +273,22 @@ fn pool(
                 .as_deref()
                 .map(|credits| caption(ui::sentence(credits), c).pl(indent)),
         )
+        .child(next(&group.next, c).pl(indent))
+}
+
+/// Where a new session goes, in a quiet line; a warning when none can
+/// take one.
+pub(crate) fn next(line: &Label, c: &Colors) -> Div {
+    h_flex()
+        .min_w_0()
+        .gap(px(6.))
+        .text_size(px(ui::SMALL))
+        .text_color(c.muted)
+        .when(line.tone != Tone::Muted, |next| {
+            next.text_color(c.tone(line.tone))
+                .child(dot(c.tone(line.tone)))
+        })
+        .child(div().min_w_0().child(line.text.clone()))
 }
 
 /// Today's requests by the hour, the hours to come left as stubs, over the
@@ -316,7 +331,7 @@ fn hours(today: &History, c: &Colors) -> impl IntoElement {
         .child(
             // Each label under its own hour's column.
             h_flex()
-                .text_size(px(11.))
+                .text_size(px(ui::AXIS))
                 .text_color(c.faint)
                 .font_features(tabular())
                 .children((0..24).map(|hour| {

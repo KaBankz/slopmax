@@ -34,8 +34,9 @@ actions!(panel, [ClosePanel]);
 
 /// The panel's width, a little wider than a menu's.
 const WIDTH: f32 = 340.;
-/// The width of a window's title, beside its meter.
-const TITLE: f32 = 56.;
+/// The width of a window's title, beside its meter: enough for one
+/// limited to a model, `Weekly · Fable`.
+const TITLE: f32 = 92.;
 /// How often today's work is read again while the panel shows.
 const TODAY_EVERY: Duration = Duration::from_secs(60);
 
@@ -342,7 +343,6 @@ fn pool(group: &Group, c: &Colors) -> impl IntoElement {
         .child(
             h_flex()
                 .gap(px(8.))
-                .child(dot(c.provider(provider)))
                 .child(
                     div()
                         .flex_1()
@@ -403,6 +403,7 @@ fn pool(group: &Group, c: &Colors) -> impl IntoElement {
                 .as_deref()
                 .map(|credits| caption(ui::sentence(credits), c)),
         )
+        .child(crate::overview::next(&group.next, c))
 }
 
 /// Today's totals over its hours; a click opens the Usage page.

@@ -87,6 +87,8 @@ const SIDEBAR_COLLAPSE: f32 = 130.;
 /// The page's margin from the window's edges.
 const MARGIN: f32 = 32.;
 /// How often the charts reread the ledger while they show.
+/// The widest a page's content grows.
+const CONTENT: f32 = 1080.;
 const HISTORY_EVERY: Duration = Duration::from_secs(60);
 
 /// A page of the window, as the sidebar lists them.
@@ -116,7 +118,7 @@ impl Section {
         }
     }
 
-    /// Its icon in the sidebar; a provider shows its color instead.
+    /// Its icon in the sidebar.
     fn icon(self) -> IconName {
         match self {
             Self::Overview => IconName::LayoutDashboard,
@@ -663,7 +665,7 @@ impl Main {
             .on_action(cx.listener(|main, _: &SelectNext, _, cx| main.step(1, cx)))
             .role(Role::List)
             .aria_label("Sidebar")
-            .child(self.item(Section::Overview, None, None, c, cx))
+            .child(self.item(Section::Overview, None, c, cx))
             .child(sidebar_heading("Accounts", c));
         if groups.is_empty() {
             list = list.child(
@@ -694,21 +696,15 @@ impl Main {
                     .child(group.accounts.len().to_string())
                     .into_any_element(),
             };
-            list = list.child(self.item(
-                Section::Provider(group.provider),
-                Some(c.provider(group.provider)),
-                Some(trailing),
-                c,
-                cx,
-            ));
+            list = list.child(self.item(Section::Provider(group.provider), Some(trailing), c, cx));
         }
         list = list
             .child(sidebar_heading("Activity", c))
-            .child(self.item(Section::Usage, None, None, c, cx))
-            .child(self.item(Section::Performance, None, None, c, cx))
+            .child(self.item(Section::Usage, None, c, cx))
+            .child(self.item(Section::Performance, None, c, cx))
             .child(sidebar_heading("Setup", c))
-            .child(self.item(Section::Agents, None, None, c, cx))
-            .child(self.item(Section::Settings, None, None, c, cx));
+            .child(self.item(Section::Agents, None, c, cx))
+            .child(self.item(Section::Settings, None, c, cx));
         v_flex()
             .h_full()
             .bg(c.sidebar)
@@ -740,12 +736,11 @@ impl Main {
             .child(self.proxy_status(c, cx))
     }
 
-    /// A row of the sidebar: its icon, or a provider's dot, its title, and
-    /// what trails it. A press chooses it.
+    /// A row of the sidebar: its icon, its title, and what trails it. A
+    /// press chooses it.
     fn item(
         &self,
         section: Section,
-        color: Option<Hsla>,
         trailing: Option<AnyElement>,
         c: &Colors,
         cx: &mut Context<Self>,
@@ -757,14 +752,11 @@ impl Main {
             .flex()
             .items_center()
             .justify_center();
-        let leading = match color {
-            Some(color) => slot.child(dot(color).size(px(7.))),
-            None => slot.child(icon(
-                section.icon(),
-                15.,
-                if selected { c.fg } else { c.muted },
-            )),
-        };
+        let leading = slot.child(icon(
+            section.icon(),
+            15.,
+            if selected { c.fg } else { c.muted },
+        ));
         let (hover, fg) = (c.hover, c.fg);
         h_flex()
             .id(SharedString::from(format!("go-{section:?}")))
@@ -1128,7 +1120,9 @@ impl Render for Main {
                                 .gap(px(32.))
                                 .overflow_y_scrollbar()
                                 .children(self.sign_in(&c))
-                                .child(page),
+                                // Every page as wide, up to a width that
+                                // keeps a row's ends within a glance.
+                                .child(v_flex().w_full().max_w(px(CONTENT)).child(page)),
                         ),
                     ),
             )

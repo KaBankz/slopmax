@@ -399,6 +399,27 @@ impl App {
         });
     }
 
+    /// Stops running the proxy as a login service, then runs it as the app
+    /// does, since removing the service stops it.
+    pub fn uninstall_service(&self) {
+        let shared = self.shared.clone();
+        self.runtime.spawn(async move {
+            let removed = tokio::task::spawn_blocking(|| {
+                Manager::detect()
+                    .context("this system has no service manager")?
+                    .uninstall()
+            })
+            .await
+            .context("the action stopped")
+            .and_then(|result| result);
+            match removed {
+                Ok(_) => shared.tell("slopmax no longer starts at login.".to_owned(), false),
+                Err(e) => shared.tell(format!("Could not remove the service: {e:#}"), true),
+            }
+            start_proxy(shared).await;
+        });
+    }
+
     /// Redeems a reset credit on account `id`, the soonest to expire, which
     /// clears its usage windows at once. The running proxy redeems it, so
     /// it knows at once.

@@ -3,16 +3,16 @@
 //! same everywhere.
 //!
 //! The palette is restrained. Neutrals carry the window; a primary action
-//! inverts the foreground. Color appears only where it says something: a
-//! window running short, a provider's identity in a small dot, a series in
-//! a chart. slopmax's pink marks its logo and keyboard focus, nothing else.
+//! inverts the foreground. Color appears only where it reports a state: a
+//! window running short, something failed or wants a look. Providers and
+//! chart series tell apart by their names and by shades of neutral.
+//! slopmax's pink marks its logo and keyboard focus, nothing else.
 
 use std::borrow::Cow;
 use std::sync::Arc;
 
 use gpui_kit::component::{ActiveTheme, Theme, ThemeMode, ThemeRegistry};
 use gpui_kit::*;
-use slopmax_core::provider::ProviderId;
 use slopmax_core::report::Tone;
 
 use crate::prefs::{Appearance, Prefs};
@@ -154,15 +154,14 @@ impl Colors {
         }
     }
 
-    /// A provider's identity, muted, for the small dot by its name and its
-    /// series in a chart.
-    pub(crate) fn provider(&self, provider: ProviderId) -> Hsla {
-        let pick =
-            |light: u32, dark: u32| -> Hsla { rgb(if self.dark { dark } else { light }).into() };
-        match provider {
-            ProviderId::Claude | ProviderId::Anthropic => pick(0xc4775a, 0xd08a6e),
-            ProviderId::Codex | ProviderId::OpenAI => pick(0x3c9a78, 0x57ae8d),
-            _ => self.muted,
+    /// The `i`th part of a stacked column, as for each provider's tokens:
+    /// the meter's own tone, then lighter neutrals, so parts tell apart by
+    /// shade alone.
+    pub(crate) fn stack(&self, i: usize) -> Hsla {
+        match i {
+            0 => self.meter,
+            1 => self.series(2),
+            _ => self.series(3),
         }
     }
 
