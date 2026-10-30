@@ -7,6 +7,7 @@
 //! View menu, resizes by its edge, hides when dragged narrow, and is left
 //! as the user leaves it.
 
+mod access;
 mod accounts;
 mod assets;
 mod motion;
@@ -104,6 +105,10 @@ enum Section {
     /// How well it went: failover, caching, and speed.
     Performance,
     Agents,
+    /// Keys for other tools, and compatible endpoints.
+    Access,
+    /// The setup checks `slopmax doctor` runs.
+    Diagnostics,
     Settings,
 }
 
@@ -115,6 +120,8 @@ impl Section {
             Self::Usage => "Usage",
             Self::Performance => "Performance",
             Self::Agents => "Agents",
+            Self::Access => "Access",
+            Self::Diagnostics => "Diagnostics",
             Self::Settings => "Settings",
         }
     }
@@ -127,6 +134,8 @@ impl Section {
             Self::Usage => IconName::ChartColumn,
             Self::Performance => IconName::Zap,
             Self::Agents => IconName::Bot,
+            Self::Access => IconName::KeyRound,
+            Self::Diagnostics => IconName::Stethoscope,
             Self::Settings => IconName::Settings,
         }
     }
@@ -368,6 +377,9 @@ struct Main {
     key: Entity<InputState>,
     key_provider: ProviderId,
     paste: Entity<InputState>,
+    /// The Access page's fields: a client key's name and models, and a
+    /// compatible endpoint's address, API, models, key, and name.
+    access: access::Fields,
     /// The span the charts show.
     range: Range,
     /// When the charts' history, and today's, were last asked for.
@@ -533,6 +545,7 @@ impl Main {
             key,
             key_provider: ProviderId::Anthropic,
             paste,
+            access: access::Fields::new(window, cx),
             range: Range::default(),
             asked: None,
             asked_today: None,
@@ -583,6 +596,11 @@ impl Main {
         match section {
             Section::Usage | Section::Performance => self.load_history(),
             Section::Overview => self.load_today(),
+            Section::Diagnostics
+                if !matches!(self.snapshot.doctor, slopmax_app::Doctor::Running) =>
+            {
+                self.app.check_setup();
+            }
             _ => {}
         }
         cx.notify();
@@ -605,6 +623,8 @@ impl Main {
                 Section::Usage,
                 Section::Performance,
                 Section::Agents,
+                Section::Access,
+                Section::Diagnostics,
                 Section::Settings,
             ])
             .collect()
@@ -723,6 +743,8 @@ impl Main {
             .child(self.item(Section::Performance, None, c, cx))
             .child(sidebar_heading("Setup", c))
             .child(self.item(Section::Agents, None, c, cx))
+            .child(self.item(Section::Access, None, c, cx))
+            .child(self.item(Section::Diagnostics, None, c, cx))
             .child(self.item(Section::Settings, None, c, cx));
         v_flex()
             .h_full()
@@ -909,7 +931,7 @@ impl Main {
             }
             Section::Usage | Section::Performance => tools.child(segmented(
                 "range",
-                Range::ALL.map(|range| (range, range.title())),
+                Range::ALL.map(|range| (range, view::range_title(range))),
                 self.range,
                 |main: &mut Self, range, cx| {
                     main.range = range;
@@ -919,7 +941,16 @@ impl Main {
                 c,
                 cx,
             )),
-            Section::Agents | Section::Settings => tools,
+            Section::Agents | Section::Access | Section::Settings => tools,
+            Section::Diagnostics => {
+                let checking = matches!(self.snapshot.doctor, slopmax_app::Doctor::Running);
+                let app = self.app.clone();
+                tools.child(
+                    push("check-again", "Check again")
+                        .disabled(checking)
+                        .on_click(move |_, _, _| app.check_setup()),
+                )
+            }
         };
         TitleBar::new()
             .h(HEADER)
@@ -1080,6 +1111,8 @@ impl Render for Main {
             Section::Usage => self.usage(&c, false).into_any_element(),
             Section::Performance => self.usage(&c, true).into_any_element(),
             Section::Agents => self.agents(&c).into_any_element(),
+            Section::Access => self.access(&c, cx).into_any_element(),
+            Section::Diagnostics => self.diagnostics(&c).into_any_element(),
             Section::Settings => self.settings(&c, cx).into_any_element(),
         };
         let _ = window;

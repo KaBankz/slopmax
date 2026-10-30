@@ -105,23 +105,31 @@ impl Main {
             .flex_shrink_0()
             .gap(px(4.))
             .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(if row.disabled { c.muted } else { c.fg })
+                    .child(row.name.clone()),
+            )
+            // How it stands, its plan, and whether new sessions go to it
+            // next, under its name so the name has the column's width.
+            .child(
                 h_flex()
                     .min_w_0()
                     .gap(px(8.))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(if row.disabled { c.muted } else { c.fg })
-                            .child(row.name.clone()),
-                    )
+                    .text_size(px(ui::SMALL))
+                    .child(label(&row.status, c).flex_shrink(1.))
                     .when(!row.plan.is_empty(), |line| {
-                        line.child(badge(row.plan.clone(), c))
+                        line.child(
+                            div()
+                                .flex_shrink_0()
+                                .text_color(c.faint)
+                                .child(row.plan.clone()),
+                        )
                     })
                     .when(row.next, |line| line.child(badge("Next", c))),
             )
-            .child(label(&row.status, c).text_size(px(ui::SMALL)))
             .when_some(row.last_used.clone(), |name, used| {
                 name.child(caption(used, c).text_color(c.faint))
             });
@@ -180,6 +188,7 @@ impl Main {
         let (app, main) = (self.app.clone(), cx.entity().downgrade());
         let (id, pinned, disabled, priority) =
             (row.id.clone(), row.pinned, row.disabled, row.priority);
+        let follows = row.follows.clone();
         let redeemable = row.credits.as_ref().map(|credits| credits.held.is_none());
         tool(
             SharedString::from(format!("more-{}", row.id)),
@@ -219,6 +228,17 @@ impl Main {
                 .item(PopupMenuItem::label(format!("Priority {priority}")))
                 .item(raise)
                 .item(lower);
+            // An imported login it follows another tool's copy of.
+            let menu = match &follows {
+                Some(tool) => {
+                    let (app, id) = (app.clone(), id.clone());
+                    menu.separator().item(
+                        PopupMenuItem::new(format!("Refresh here instead of {tool}"))
+                            .on_click(move |_, _, _| app.own(&id)),
+                    )
+                }
+                None => menu,
+            };
             match redeemable {
                 Some(can) => {
                     let (main, id) = (main.clone(), id.clone());
@@ -377,11 +397,12 @@ fn pool(group: &Group, c: &Colors) -> impl IntoElement {
     let total = group.accounts.len();
     let noun = if total == 1 { "account" } else { "accounts" };
     let across = if group.working == total {
-        format!("Across {total} {noun}")
+        format!("Across {total} {noun}, {}", view::pool_basis(group))
     } else {
         format!(
-            "Across {} of {total} {noun}; the rest are out of service",
-            group.working
+            "Across {} of {total} {noun}, {}; the rest are out of service",
+            group.working,
+            view::pool_basis(group)
         )
     };
     let cells = h_flex()
@@ -401,7 +422,12 @@ fn pool(group: &Group, c: &Colors) -> impl IntoElement {
                         .child(figure(overview.gauge.percent.clone(), ui::TITLE, c))
                         .child(caption("used", c).pb(px(3.))),
                 )
-                .child(segments(&overview.shares, c))
+                .child(segments(
+                    SharedString::from(format!("pool-bar-{i}")),
+                    &overview.shares,
+                    view::segments_tip(group),
+                    c,
+                ))
                 .child(caption(resets(&overview.gauge), c).truncate())
         }));
     ui::section(

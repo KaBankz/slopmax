@@ -15,6 +15,8 @@ use slopmax_core::report::{AccountReport, Condition, NextReport, Note, Report, T
 use slopmax_core::service;
 use slopmax_core::time::{SignedDuration, Timestamp};
 
+#[cfg(test)]
+use crate::Doctor;
 use crate::{AgentStatus, Proxy, Setting, SignIn, Snapshot, Step};
 
 /// One provider's accounts.
@@ -33,6 +35,9 @@ pub struct Group {
     pub overview: Vec<Overview>,
     /// How many working accounts the overview reads as one.
     pub working: usize,
+    /// Whether the pool weighs its accounts by their plans' sizes, rather
+    /// than averaging them.
+    pub weighted: bool,
     /// Its accounts' limit resets, and when the next expires: `4 limit
     /// resets · the next expires in 2d23h`.
     pub credits: Option<String>,
@@ -62,6 +67,9 @@ pub struct Row {
     pub credits: Option<Credits>,
     /// Whether a new session would go to it now.
     pub next: bool,
+    /// The tool whose copy of its login slopmax follows, such as Claude
+    /// Code, rather than refreshing it itself.
+    pub follows: Option<String>,
 }
 
 /// An account's reset credits, each of which clears its usage windows at
@@ -108,6 +116,9 @@ pub struct Overview {
 /// One account's use of a window, as a segment of the overview's bar.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Share {
+    /// Its part of the pool, by its plan's size where every plan's is
+    /// known; else an even part.
+    pub weight: f32,
     pub fraction: f32,
     pub tone: Tone,
     /// Not serving: disabled, or its sign-in failed.
@@ -291,11 +302,17 @@ pub fn attention(report: &Report, now: Timestamp) -> Vec<Attention> {
             .find_map(|c| c.expires_at)
             .filter(|at| at.duration_since(now) < EXPIRING)
         {
+            // slopmax would redeem it by itself unless a nudge says it won't.
+            let held = report.nudges.iter().any(|n| {
+                n.event == Kind::ResetExpiring && n.account.as_deref() == Some(&account.name)
+            });
             found.push(note(
                 format!(
-                    "A limit reset on {} expires {}",
+                    "A limit reset on {} expires in {} · {}{}",
                     account.name,
-                    clock(at, now, at.local_offset())
+                    human::until(at, now),
+                    clock(at, now, at.local_offset()),
+                    if held { "; auto-redeem is off" } else { "" }
                 ),
                 Tone::Warn,
                 Remedy::Redeem,
@@ -334,12 +351,12 @@ fn add_nudges(found: &mut Vec<Attention>, report: &Report) {
                 tone: Tone::Warn,
                 remedy: Remedy::Redeem,
             },
-            // Quota to spare is a chance, not a fault.
+            // Quota about to go to waste: amber, as on the dashboard.
             Kind::QuotaUnused => Attention {
                 provider: account.provider,
                 account: account.id.clone(),
                 text: first_sentence(&nudge.message),
-                tone: Tone::Muted,
+                tone: Tone::Warn,
                 remedy: Remedy::Look,
             },
             _ => continue,
@@ -349,10 +366,18 @@ fn add_nudges(found: &mut Vec<Attention>, report: &Report) {
 }
 
 /// A message's first sentence, without its full stop or the marks around
-/// a command.
+/// a command, and its times as the window sets them: `in 19h59m (19:12)`
+/// as `in 19h59m · 19:12`.
 fn first_sentence(message: &str) -> String {
     let first = message.split(". ").next().unwrap_or(message);
-    first.trim_end_matches('.').replace('`', "")
+    let mut text = first.trim_end_matches('.').replace('`', "");
+    while let Some(open) = text.find(" (")
+        && let Some(close) = text[open..].find(')').map(|i| open + i)
+    {
+        let inner = text[open + 2..close].to_owned();
+        text.replace_range(open..=close, &format!(" · {inner}"));
+    }
+    text
 }
 
 /// The accounts grouped by provider, in the order requests try them.
@@ -370,6 +395,10 @@ pub fn groups(report: &Report, now: Timestamp) -> Vec<Group> {
             }
             let slots = slots(&accounts);
             let pool = report.pools.iter().find(|p| p.provider == provider);
+            let shares = pool.map(|p| &p.shares).filter(|s| !s.is_empty());
+            let weight = |account: &AccountReport| {
+                shares.map_or(1.0, |s| s.get(&account.id).copied().unwrap_or(0.0) as f32)
+            };
             let overview = slots
                 .iter()
                 .filter_map(|slot| {
@@ -387,7 +416,10 @@ pub fn groups(report: &Report, now: Timestamp) -> Vec<Group> {
                             pace: None,
                             ..gauge(window, now)
                         },
-                        shares: accounts.iter().map(|a| share(a, slot, now)).collect(),
+                        shares: accounts
+                            .iter()
+                            .map(|a| share(a, slot, weight(a), now))
+                            .collect(),
                     })
                 })
                 .collect();
@@ -409,6 +441,7 @@ pub fn groups(report: &Report, now: Timestamp) -> Vec<Group> {
                 ),
                 credits: pool_credits(&accounts, now),
                 next: next_line(next, &accounts, now),
+                weighted: shares.is_some(),
             })
         })
         .collect()
@@ -756,9 +789,10 @@ fn serving(account: &AccountReport) -> bool {
     !account.disabled && account.auth_error.is_none()
 }
 
-fn share(account: &AccountReport, slot: &Slot, now: Timestamp) -> Share {
+fn share(account: &AccountReport, slot: &Slot, weight: f32, now: Timestamp) -> Share {
     let used = slot.of(account).map_or(0.0, |w| w.used_at(now));
     Share {
+        weight,
         fraction: (used / 100.0).clamp(0.0, 1.0) as f32,
         tone: Tone::of_use(used),
         idle: !serving(account),
@@ -986,7 +1020,7 @@ fn clock(at: Timestamp, now: Timestamp, offset: SignedDuration) -> String {
 fn row(account: &AccountReport, slots: &[Slot], now: Timestamp) -> Row {
     let condition = account.condition(now);
     let plan = match &account.plan {
-        Some(plan) => plan.clone(),
+        Some(plan) => title_case(plan),
         None if !account.provider.spec().is_subscription() => "per token".to_owned(),
         None => String::new(),
     };
@@ -1021,6 +1055,67 @@ fn row(account: &AccountReport, slots: &[Slot], now: Timestamp) -> Row {
         last_used: account.state.last_used.map(|at| ago(at, now)),
         credits: credits(account, now),
         next: false,
+        follows: account.follows.clone(),
+    }
+}
+
+/// `max 20x` as `Max 20x`: each word capitalized.
+fn title_case(text: &str) -> String {
+    text.split(' ')
+        .map(|word| {
+            let mut chars = word.chars();
+            chars.next().map_or_else(String::new, |first| {
+                first.to_uppercase().chain(chars).collect()
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Model patterns as typed, with commas or spaces between them.
+pub fn patterns(text: &str) -> Vec<String> {
+    text.split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|p| !p.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// A range's name as a choice: `7 days`.
+pub fn range_title(range: crate::history::Range) -> &'static str {
+    match range {
+        crate::history::Range::Today => "Today",
+        crate::history::Range::Week => "7 days",
+        crate::history::Range::Month => "30 days",
+    }
+}
+
+/// How a pool reads its accounts as one: `weighted by plan`, or an
+/// average.
+pub fn pool_basis(group: &Group) -> &'static str {
+    if group.weighted {
+        "weighted by plan"
+    } else {
+        "average of accounts"
+    }
+}
+
+/// What a pool's bar shows, for a tooltip.
+pub fn segments_tip(group: &Group) -> &'static str {
+    if group.weighted {
+        "One segment per account, as wide as its plan's share of the pool"
+    } else {
+        "One segment per account; the pool reads as their average"
+    }
+}
+
+/// How bad a finding of the doctor's is.
+pub fn level_tone(level: slopmax_core::doctor::Level) -> Tone {
+    use slopmax_core::doctor::Level;
+    match level {
+        Level::Ok => Tone::Good,
+        Level::Note => Tone::Muted,
+        Level::Warn => Tone::Warn,
+        Level::Fail => Tone::Bad,
     }
 }
 
@@ -1440,9 +1535,9 @@ mod tests {
         let unused = items.iter().find(|a| a.remedy == Remedy::Look).unwrap();
         assert_eq!(
             unused.text,
-            "b@x.dev's week resets in 19h59m (19:12) with 79% of it unused, about $4 of its plan"
+            "b@x.dev's week resets in 19h59m · 19:12 with 79% of it unused, about $4 of its plan"
         );
-        assert_eq!(unused.tone, Tone::Muted, "a chance, not a fault");
+        assert_eq!(unused.tone, Tone::Warn, "amber, as on the dashboard");
         assert_eq!(unused.account, report.accounts[1].id);
         let reset = items.iter().find(|a| a.remedy == Remedy::Redeem).unwrap();
         assert!(!reset.text.contains('`'), "{}", reset.text);
@@ -1524,6 +1619,53 @@ mod tests {
         assert_eq!(left_line(0, 0.), "No week reset in this range");
         assert_eq!(left_line(1, 38.4), "1 week · 38% unused");
         assert_eq!(left_line(4, 26.), "4 weeks · 26% unused on average");
+    }
+
+    #[test]
+    fn a_weighted_pool_sizes_its_segments_by_plan() {
+        let now = ts(1_000);
+        let mut report = report(now);
+        let group = &groups(&report, now)[0];
+        assert!(!group.weighted);
+        assert_eq!(pool_basis(group), "average of accounts");
+        assert!(group.overview[0].shares.iter().all(|s| s.weight == 1.0));
+
+        let (a, b) = (report.accounts[0].id.clone(), report.accounts[1].id.clone());
+        report.pools[0].shares = [(a, 20.0 / 25.0), (b, 5.0 / 25.0)].into_iter().collect();
+        let group = &groups(&report, now)[0];
+        assert!(group.weighted);
+        assert_eq!(pool_basis(group), "weighted by plan");
+        assert!(segments_tip(group).contains("plan"));
+        let weights: Vec<f32> = group.overview[0].shares.iter().map(|s| s.weight).collect();
+        assert_eq!(weights, [0.8, 0.2]);
+    }
+
+    #[test]
+    fn plans_read_in_title_case_and_a_followed_login_names_its_tool() {
+        let now = ts(1_000);
+        let mut report = report(now);
+        report.accounts[0].plan = Some("max 20x".to_owned());
+        report.accounts[0].follows = Some("Claude Code".to_owned());
+        let rows = &groups(&report, now)[0].accounts;
+        assert_eq!(rows[0].plan, "Max 20x");
+        assert_eq!(rows[0].follows.as_deref(), Some("Claude Code"));
+        assert_eq!(rows[1].follows, None);
+    }
+
+    #[test]
+    fn small_words_for_the_access_page_and_ranges() {
+        assert_eq!(
+            patterns("claude-*, gpt-6-sol  local-*,,"),
+            ["claude-*", "gpt-6-sol", "local-*"]
+        );
+        assert!(patterns("  ").is_empty());
+        assert_eq!(range_title(crate::history::Range::Week), "7 days");
+        assert_eq!(range_title(crate::history::Range::Month), "30 days");
+        use slopmax_core::doctor::Level;
+        assert_eq!(level_tone(Level::Ok), Tone::Good);
+        assert_eq!(level_tone(Level::Note), Tone::Muted);
+        assert_eq!(level_tone(Level::Warn), Tone::Warn);
+        assert_eq!(level_tone(Level::Fail), Tone::Bad);
     }
 
     #[test]
@@ -1632,6 +1774,8 @@ mod tests {
             redeeming: None,
             config: Config::default(),
             notifications: true,
+            new_key: None,
+            doctor: Doctor::NotRun,
         }
     }
 

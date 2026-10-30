@@ -7,6 +7,7 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -221,18 +222,38 @@ pub(crate) fn meter(fraction: f32, color: Hsla, c: &Colors) -> Div {
 
 /// A usage window across a pool: a segment for each account, filled to its
 /// use, neutral until it runs short. An account out of service fades.
-pub(crate) fn segments(shares: &[Share], c: &Colors) -> Div {
-    h_flex().gap(px(3.)).children(shares.iter().map(|share| {
-        meter(share.fraction, c.fill(share.tone), c)
-            .flex_1()
-            .when(share.idle, |bar| bar.opacity(0.4))
-    }))
+/// Hovering it says how the segments are sized, as `tip` has it.
+pub(crate) fn segments(
+    id: impl Into<ElementId>,
+    shares: &[Share],
+    tip: &'static str,
+    c: &Colors,
+) -> Stateful<Div> {
+    let total: f32 = shares
+        .iter()
+        .map(|s| s.weight)
+        .sum::<f32>()
+        .max(f32::EPSILON);
+    // Each as wide as its part of the pool: even, or by its plan's size.
+    h_flex()
+        .id(id)
+        .py(px(4.))
+        .gap(px(3.))
+        .tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
+        .children(shares.iter().map(|share| {
+            meter(share.fraction, c.fill(share.tone), c)
+                .flex_basis(relative(share.weight / total))
+                .flex_shrink(1.)
+                .min_w(px(4.))
+                .when(share.idle, |bar| bar.opacity(0.4))
+        }))
 }
 
-/// When a usage window resets: `Resets in 1h07m (22:59)`.
+/// When a usage window resets: `Resets in 1h07m · 22:59`, as the
+/// dashboard says it.
 pub(crate) fn resets(gauge: &Gauge) -> String {
     match (&gauge.resets_in, &gauge.resets_at) {
-        (Some(left), Some(at)) => format!("Resets in {left} ({at})"),
+        (Some(left), Some(at)) => format!("Resets in {left} · {at}"),
         (Some(left), None) => format!("Resets in {left}"),
         _ => "Nothing to reset".to_owned(),
     }

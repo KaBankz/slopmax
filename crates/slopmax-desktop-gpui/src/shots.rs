@@ -90,6 +90,15 @@ async fn shoot(dir: &Path, cx: &mut AsyncApp) -> anyhow::Result<()> {
             if matches!(section, Section::Usage | Section::Performance) {
                 wait(cx, &main, |main| main.snapshot.history.is_some()).await?;
             }
+            if section == Section::Diagnostics {
+                wait(cx, &main, |main| {
+                    matches!(
+                        main.snapshot.doctor,
+                        slopmax_app::Doctor::Done(_) | slopmax_app::Doctor::Failed(_)
+                    )
+                })
+                .await?;
+            }
             capture(window, &dir.join(format!("{mode}-{name}.png")), cx).await?;
         }
         cx.update(panel::toggle);

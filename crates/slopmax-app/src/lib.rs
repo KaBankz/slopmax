@@ -18,11 +18,13 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use slopmax_core::account::Endpoint;
 use slopmax_core::account::{self, Account, Store};
 use slopmax_core::agent::{self, AGENTS, Wiring};
 use slopmax_core::auth::{self, LoginEvent, LoginOptions, Prompt, callback};
 use slopmax_core::background::{self, Daemon};
 use slopmax_core::config::{Config, Strategy};
+use slopmax_core::doctor;
 use slopmax_core::import::{self, Source};
 use slopmax_core::net::Origins;
 use slopmax_core::paths::Home;
@@ -30,6 +32,7 @@ use slopmax_core::provider::ProviderId;
 use slopmax_core::provider::credits::Outcome;
 use slopmax_core::report::{self, Report};
 use slopmax_core::service::{self, Manager};
+use slopmax_core::wire::Dialect;
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::{Notify, mpsc, watch};
 use tokio::task::JoinHandle;
@@ -72,6 +75,40 @@ pub struct Snapshot {
     pub config: Config,
     /// Whether nudges are posted as notifications.
     pub notifications: bool,
+    /// A client key just made, shown once.
+    pub new_key: Option<NewKey>,
+    /// What the doctor found, once asked with [`App::check_setup`].
+    pub doctor: Doctor,
+}
+
+/// A client key just made: its name and the key, which is not shown again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewKey {
+    pub name: String,
+    pub key: String,
+}
+
+/// The setup checks, as far as they have gone.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Doctor {
+    #[default]
+    NotRun,
+    Running,
+    Done(Vec<doctor::Section>),
+    Failed(String),
+}
+
+/// A compatible endpoint to add: an API that speaks one of the formats
+/// slopmax does, at `url`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewEndpoint {
+    pub url: String,
+    pub dialect: Dialect,
+    /// The models it serves, as patterns; empty, any.
+    pub models: Vec<String>,
+    pub key: String,
+    /// What to call it; else its address.
+    pub label: Option<String>,
 }
 
 /// A setting the app changes while the proxy runs, which it applies at
@@ -243,6 +280,8 @@ impl App {
             redeeming: None,
             config: config.clone(),
             notifications: told.enabled,
+            new_key: None,
+            doctor: Doctor::NotRun,
         });
         let shared = Arc::new(Shared {
             home,
@@ -289,7 +328,7 @@ impl App {
 
     /// Signs in to a subscription in the browser.
     pub fn sign_in(&self, provider: ProviderId) {
-        self.connect(provider, LoginOptions::default());
+        self.connect(provider, None, LoginOptions::default());
     }
 
     /// Connects an API key.
@@ -298,7 +337,86 @@ impl App {
             key: Some(key),
             ..LoginOptions::default()
         };
-        self.connect(provider, options);
+        self.connect(provider, None, options);
+    }
+
+    /// Connects a compatible endpoint; its key is checked before it is
+    /// saved.
+    pub fn add_endpoint(&self, endpoint: NewEndpoint) {
+        let options = LoginOptions {
+            key: Some(endpoint.key),
+            endpoint: Some(Endpoint {
+                base_url: endpoint.url.trim().trim_end_matches('/').to_owned(),
+                dialect: endpoint.dialect,
+                models: endpoint.models,
+            }),
+            ..LoginOptions::default()
+        };
+        self.connect(ProviderId::Compat, endpoint.label, options);
+    }
+
+    /// Makes a client key named `name`, held to `models` (patterns) if any
+    /// are given, and shows it once.
+    pub fn add_client_key(&self, name: String, models: Vec<String>) {
+        self.act(move |shared| {
+            let key = Config::add_key(&shared.home.config(), name.trim(), &models)?;
+            let config = adopt(&shared.config, Config::load_from(&shared.home.config())?);
+            shared.update(|s| {
+                s.config = config;
+                s.new_key = Some(NewKey {
+                    name: name.trim().to_owned(),
+                    key,
+                });
+            });
+            Ok(format!("Made the key {}.", name.trim()))
+        });
+    }
+
+    /// Revokes the client key named `name`; whatever used it is refused
+    /// from now on.
+    pub fn revoke_key(&self, name: &str) {
+        let name = name.to_owned();
+        self.act(move |shared| {
+            if !Config::remove_key(&shared.home.config(), &name)? {
+                anyhow::bail!("there is no key named {name}");
+            }
+            let config = adopt(&shared.config, Config::load_from(&shared.home.config())?);
+            shared.update(|s| {
+                s.config = config;
+                if s.new_key.as_ref().is_some_and(|k| k.name == name) {
+                    s.new_key = None;
+                }
+            });
+            Ok(format!("Revoked the key {name}."))
+        });
+    }
+
+    /// Forgets the key just made, once it has been copied.
+    pub fn dismiss_new_key(&self) {
+        self.shared.update(|s| s.new_key = None);
+    }
+
+    /// Runs the setup checks `slopmax doctor` runs.
+    pub fn check_setup(&self) {
+        let shared = self.shared.clone();
+        shared.update(|s| s.doctor = Doctor::Running);
+        self.runtime.spawn(async move {
+            let config = shared.snapshot.borrow().config.clone();
+            let found = match doctor::check(&config, &shared.store).await {
+                Ok(sections) => Doctor::Done(sections),
+                Err(e) => Doctor::Failed(format!("{e:#}")),
+            };
+            shared.update(|s| s.doctor = found);
+        });
+    }
+
+    /// Has slopmax refresh an imported login itself, rather than follow the
+    /// tool it came from.
+    pub fn own(&self, id: &str) {
+        self.change(id, |shared, account| {
+            let account = shared.store.update(&account.id, |a| a.link = None)?;
+            Ok(format!("slopmax now refreshes {} itself.", account.name()))
+        });
     }
 
     /// Hands a redirect address pasted by hand to the sign-in in progress,
@@ -604,7 +722,7 @@ impl App {
         self.shared.update(|s| s.notice = None);
     }
 
-    fn connect(&self, provider: ProviderId, options: LoginOptions) {
+    fn connect(&self, provider: ProviderId, label: Option<String>, options: LoginOptions) {
         self.cancel_sign_in();
         let shared = self.shared.clone();
         let (paste, pasted) = mpsc::unbounded_channel();
@@ -622,7 +740,7 @@ impl App {
             });
         });
         let task = self.runtime.spawn(async move {
-            let result = auth::connect(&shared.store, provider, None, options, prompt).await;
+            let result = auth::connect(&shared.store, provider, label, options, prompt).await;
             *lock(&shared.paste) = None;
             shared.update(|s| s.sign_in = None);
             match result {
@@ -1008,6 +1126,8 @@ mod tests {
             redeeming: None,
             config: Config::default(),
             notifications: true,
+            new_key: None,
+            doctor: Doctor::NotRun,
         }
     }
 

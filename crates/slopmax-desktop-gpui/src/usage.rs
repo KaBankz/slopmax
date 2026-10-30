@@ -147,7 +147,12 @@ fn page(history: &History, c: &Colors) -> Div {
                 .child(chart(tokens(history, margin, c), c)),
         )
         .child(pair(
-            section("Requests", None, c).child(chart(requests(history, margin, c), c)),
+            section(
+                "Requests",
+                Some(legend([(c.meter, "Answered"), (c.bad, "Failed")], c).into_any_element()),
+                c,
+            )
+            .child(chart(requests(history, margin, c), c)),
             section("API value", None, c).child(chart(cost(history, margin, c), c)),
         ))
         .child(pair(models(history, c), mix(history, c)))
@@ -195,7 +200,7 @@ fn performance(history: &History, c: &Colors) -> Div {
                         "First byte",
                         history.first_byte.map_or_else(
                             || "—".to_owned(),
-                            |ms| format!("{:.1}s", ms as f64 / 1e3),
+                            |ms| format!("{:.2} s", ms as f64 / 1e3),
                         ),
                         "the median wait",
                         c,
@@ -257,15 +262,23 @@ fn tokens(history: &History, margin: usize, c: &Colors) -> Div {
     )
 }
 
-/// Requests each hour or day.
+/// Requests each hour or day, those that failed capping them in red.
 fn requests(history: &History, margin: usize, c: &Colors) -> Div {
-    let fill = c.meter;
+    let (fill, failed) = (c.meter, c.bad);
     columns(
         "requests",
         history,
         Layout::Stacked,
-        |b| vec![(b.requests as f64, fill)],
-        |b| format!("{}\n{}", b.label, count(b.requests, "request")),
+        |b| vec![(b.requests as f64, fill), (b.failed as f64, failed)],
+        |b| match b.failed {
+            0 => format!("{}\n{}", b.label, count(b.requests, "request")),
+            n => format!(
+                "{}\n{}\n{} failed",
+                b.label,
+                count(b.requests, "request"),
+                grouped(n)
+            ),
+        },
         Scale::count(),
         |v| grouped(v.round() as u64),
         CHART,
@@ -664,7 +677,7 @@ fn first_byte(history: &History, margin: usize, c: &Colors) -> Div {
         vec![(slow, c.series(2)), (median, c.meter)],
         |b| match b.first_byte {
             Some((median, slow)) => format!(
-                "{}\nMedian {:.2}s\nSlowest 5% {:.2}s",
+                "{}\nMedian {:.2} s\nSlowest 5% {:.2} s",
                 b.label,
                 median as f64 / 1e3,
                 slow as f64 / 1e3
@@ -676,7 +689,7 @@ fn first_byte(history: &History, margin: usize, c: &Colors) -> Div {
             top,
             ticks,
         },
-        move |v| format!("{v:.places$}s"),
+        move |v| format!("{v:.places$} s"),
         CHART,
         margin,
         c,
@@ -733,6 +746,13 @@ fn name(text: impl Into<SharedString>) -> Div {
         .child(div().min_w_0().truncate().child(text.into()))
 }
 
+/// A model's name, ranked, in the face for names a program reads.
+fn model(text: impl Into<SharedString>) -> Div {
+    name(text)
+        .font_family(crate::theme::MONO)
+        .text_size(px(ui::SMALL))
+}
+
 /// Tokens by model, ranked, the rest as one, and what each would cost
 /// on the API.
 fn models(history: &History, c: &Colors) -> Div {
@@ -763,7 +783,7 @@ fn models(history: &History, c: &Colors) -> Div {
             let tokens = history::tokens(&totals);
             h_flex()
                 .gap(px(12.))
-                .child(name(model))
+                .child(self::model(model))
                 .child(
                     div()
                         .flex_1()
@@ -873,7 +893,7 @@ fn speed(history: &History, c: &Colors) -> Div {
             .children(history.speeds.iter().take(SPEEDS).map(|s| {
                 h_flex()
                     .gap(px(12.))
-                    .child(name(s.model.clone()))
+                    .child(model(s.model.clone()))
                     .child(
                         div()
                             .flex_1()

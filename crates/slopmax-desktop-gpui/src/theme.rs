@@ -70,6 +70,14 @@ fn change(system: WindowAppearance, cx: &mut App) {
     Theme::change(mode, None, cx);
 }
 
+/// The face for names a program reads, such as a model's, as the
+/// dashboard sets them.
+pub(crate) const MONO: &str = if cfg!(target_os = "macos") {
+    "Menlo"
+} else {
+    "DejaVu Sans Mono"
+};
+
 /// Figures all of one width, so numbers that change keep still and
 /// columns of them align.
 pub(crate) fn tabular() -> FontFeatures {

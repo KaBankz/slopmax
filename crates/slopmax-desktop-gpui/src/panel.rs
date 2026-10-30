@@ -255,6 +255,10 @@ impl Render for Panel {
             .w_full()
             .text_color(c.fg)
             .child(self.header(status.as_ref(), &c));
+        let attention = report.map(|r| view::attention(r, now)).unwrap_or_default();
+        if !attention.is_empty() {
+            body = body.child(needs(&attention, &c));
+        }
         let pools: Vec<&Group> = groups.iter().filter(|g| !g.overview.is_empty()).collect();
         if pools.is_empty() {
             body = body.child(
@@ -363,7 +367,18 @@ fn pool(group: &Group, c: &Colors) -> impl IntoElement {
                                 .flex_shrink_0()
                                 .truncate(),
                         )
-                        .child(segments(&overview.shares, c).flex_1())
+                        .child(
+                            segments(
+                                SharedString::from(format!(
+                                    "panel-{}-{}",
+                                    provider, overview.title
+                                )),
+                                &overview.shares,
+                                view::segments_tip(group),
+                                c,
+                            )
+                            .flex_1(),
+                        )
                         .child(
                             div()
                                 .w(px(34.))
@@ -404,6 +419,32 @@ fn pool(group: &Group, c: &Colors) -> impl IntoElement {
                 .map(|credits| caption(ui::sentence(credits), c)),
         )
         .child(crate::overview::next(&group.next, c))
+}
+
+/// What wants a look, a line apiece; a click opens the Overview, which
+/// offers what to do about each.
+fn needs(items: &[view::Attention], c: &Colors) -> impl IntoElement {
+    let hover = c.hover;
+    part(c)
+        .id("needs")
+        .gap(px(6.))
+        .cursor_pointer()
+        .hover(move |part| part.bg(hover))
+        .role(Role::Button)
+        .aria_label("Needs attention")
+        .on_click(|_, _, cx| go(Section::Overview, cx))
+        .child(
+            div()
+                .font_weight(FontWeight::MEDIUM)
+                .child("Needs attention"),
+        )
+        .children(items.iter().map(|item| {
+            h_flex()
+                .gap(px(8.))
+                .text_size(px(ui::SMALL))
+                .child(dot(c.tone(item.tone)))
+                .child(div().min_w_0().truncate().child(item.text.clone()))
+        }))
 }
 
 /// Today's totals over its hours; a click opens the Usage page.

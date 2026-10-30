@@ -467,12 +467,12 @@ fn advanced(app: &Arc<Slopmax>, config: &Config, c: &Colors) -> impl IntoElement
                 ))
                 .child(setting(
                     false,
-                    "Warm idle windows",
+                    "Warm ChatGPT windows",
                     view::live_detail("warm_windows"),
                     toggle(
                         app,
                         "warm-windows",
-                        "Warm idle windows",
+                        "Warm ChatGPT windows",
                         config.warm_windows,
                         Setting::WarmWindows,
                     ),
@@ -480,12 +480,12 @@ fn advanced(app: &Arc<Slopmax>, config: &Config, c: &Colors) -> impl IntoElement
                 ))
                 .child(setting(
                     false,
-                    "Paid overflow",
+                    "Overflow to API keys",
                     view::live_detail("paid_overflow"),
                     toggle(
                         app,
                         "paid-overflow",
-                        "Paid overflow",
+                        "Overflow to API keys",
                         config.paid_overflow,
                         Setting::PaidOverflow,
                     ),

@@ -249,7 +249,15 @@ fn pool(
                         .flex_shrink_0()
                         .truncate(),
                 )
-                .child(segments(&overview.shares, c).flex_1())
+                .child(
+                    segments(
+                        SharedString::from(format!("overview-{}-{}", provider, overview.title)),
+                        &overview.shares,
+                        view::segments_tip(group),
+                        c,
+                    )
+                    .flex_1(),
+                )
                 .child(
                     div()
                         .w(px(40.))
