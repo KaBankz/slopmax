@@ -96,6 +96,10 @@ pub struct Event {
     pub until: Option<Timestamp>,
     pub message: String,
     pub at: Timestamp,
+    /// For a nudge about unused quota: what it is worth, in dollars of
+    /// the plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worth: Option<f64>,
 }
 
 impl Event {
@@ -107,6 +111,7 @@ impl Event {
             until: None,
             message: "slopmax notifications are working.".into(),
             at: now,
+            worth: None,
         }
     }
 }
@@ -253,6 +258,7 @@ pub fn nudges(
             until: Some(until),
             message,
             at: now,
+            worth: None,
         };
         if !auto_redeem {
             for credit in account.state.unexpired_credits(now) {
@@ -283,17 +289,18 @@ pub fn nudges(
             if unused < UNUSED_WORTH_A_NUDGE || account.state.is_blocked(now) {
                 continue;
             }
-            let worth = crate::waste::value(
+            let dollars = crate::waste::value(
                 account.provider,
                 account.plan,
                 &window.span,
                 None,
                 100.0 - unused,
                 plan_prices,
-            )
-            .filter(|d| *d >= 0.5)
-            .map(|d| format!(", about ${d:.0} of its plan"))
-            .unwrap_or_default();
+            );
+            let worth = dollars
+                .filter(|d| *d >= 0.5)
+                .map(|d| format!(", about ${d:.0} of its plan"))
+                .unwrap_or_default();
             let period = if window.span == "30d" {
                 "month"
             } else {
@@ -310,7 +317,9 @@ pub fn nudges(
                 account.name,
                 when(resets, now),
             );
-            nudges.push((key, event(Kind::QuotaUnused, resets, message)));
+            let mut nudge = event(Kind::QuotaUnused, resets, message);
+            nudge.worth = dollars;
+            nudges.push((key, nudge));
         }
     }
     nudges
@@ -361,6 +370,7 @@ impl Watcher {
             until,
             message,
             at: now,
+            worth: None,
         };
         let mut events = Vec::new();
         for provider in ProviderId::ALL {
@@ -683,6 +693,8 @@ mod tests {
             spare.contains("60% of it unused, about $28 of its plan"),
             "{spare}"
         );
+        let worth = found[1].1.worth.unwrap();
+        assert!((worth - 200.0 * 12.0 / 52.0 * 0.6).abs() < 1e-9, "{worth}");
 
         // With auto-redeem on, slopmax spends the reset itself.
         let found = nudges(&[subject], true, &plans, now);
