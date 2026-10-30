@@ -75,7 +75,9 @@ served = {"requests": 120, "input_tokens": 900_000, "output_tokens": 80_000,
 # When each account last answered, in seconds ago: the limited one before
 # its limit, the others lately.
 used = {"claude": [180, 2_460], "codex": [7_500, 720]}
-state = {"accounts": {}}
+# As if Claude Code had come through already: Claude lists its limit
+# resets to Claude Code alone.
+state = {"accounts": {}, "agents": {"claude": "claude-cli/2.1.291 (external, cli)"}}
 for provider, shapes in looks.items():
     accounts = [i for i in ids if i.startswith(provider)]
     for account, shape, ago in zip(accounts, shapes, used[provider]):

@@ -67,7 +67,7 @@ async fn upstream(listen: SocketAddr) -> Result<()> {
 }
 
 /// Answers like the providers do: a streamed reply with usage, and the
-/// rate-limit headers slopmax reads; and ChatGPT's reset credits.
+/// rate-limit headers slopmax reads; and both providers' limit resets.
 async fn answer(request: Request) -> Response {
     let (parts, incoming) = request.into_parts();
     let sent = body::read(incoming, usize::MAX).await.unwrap_or_default();
@@ -77,9 +77,18 @@ async fn answer(request: Request) -> Response {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .trim_start_matches("Bearer ");
+    let agent = parts
+        .headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     match (&parts.method, parts.uri.path()) {
         (&Method::GET, "/wham/rate-limit-reset-credits") => return credit_list(token),
         (&Method::POST, "/wham/rate-limit-reset-credits/consume") => return consume(&sent),
+        (&Method::GET, "/api/oauth/usage") => return claude_resets(token, agent),
+        (&Method::POST, path) if path.ends_with("/reset_rate_limits") => {
+            return claim(token, &sent);
+        }
         _ => {}
     }
     let reset = (Timestamp::now() + SignedDuration::from_hours(3)).as_second();
@@ -176,6 +185,53 @@ fn consume(sent: &[u8]) -> Response {
     json_response(&json!({ "code": code, "windows_reset": 2 }))
 }
 
+/// Claude's usage, with only its limit resets, so the demo's windows stay
+/// as seeded: the first account holds a model launch's reset, the second
+/// none. Claude lists them to Claude Code alone.
+fn claude_resets(token: &str, agent: &str) -> Response {
+    static STARTED: OnceLock<Timestamp> = OnceLock::new();
+    let started = *STARTED.get_or_init(Timestamp::now);
+    let at = |hours: i64| (started + SignedDuration::from_hours(hours)).to_string();
+    if !agent.starts_with("claude-cli/") {
+        let refused = json!({ "eligible": false, "ineligible_reason": "surface", "grants": [] });
+        return json_response(&json!({ "cedar_ember": refused }));
+    }
+    let redeemed = REDEEMED.lock().unwrap_or_else(|p| p.into_inner());
+    let grants: Vec<Value> = match token {
+        "bench-claude-0" if !redeemed.contains(&format!("{token}/{LAUNCH}")) => vec![json!({
+            "id": LAUNCH, "label": "Claude Opus 5.5 launch: one usage-limit reset for Pro and Max",
+            "resets_total": 1, "resets_left": 1,
+            "starts_at": at(-15 * 24 - 5), "ends_at": at(15 * 24 - 5),
+            "clears": ["five_hour", "seven_day", "seven_day_overage_included"],
+            "paused": false, "usable_now": true, "use_requires_limit": false,
+        })],
+        _ => Vec::new(),
+    };
+    let next = grants.first().map(|_| LAUNCH);
+    let status = json!({ "eligible": true, "grants": grants, "next_grant_id": next });
+    json_response(&json!({ "cedar_ember": status }))
+}
+
+/// The reset grant every Pro and Max account got at a model's launch.
+const LAUNCH: &str = "opus55-launch-promax-20260921";
+
+/// Spends the account's reset of the grant asked for, once.
+fn claim(token: &str, sent: &[u8]) -> Response {
+    let asked: Value = serde_json::from_slice(sent).unwrap_or_default();
+    let grant = asked["grant_id"].as_str().unwrap_or_default();
+    let key = format!("{token}/{grant}");
+    let mut redeemed = REDEEMED.lock().unwrap_or_else(|p| p.into_inner());
+    let answer = if token != "bench-claude-0" || grant != LAUNCH {
+        json!({ "result": "ineligible", "reason": "unknown_grant" })
+    } else if redeemed.contains(&key) {
+        json!({ "result": "already_used", "reason": "already_used", "resets_left": 0 })
+    } else {
+        redeemed.push(key);
+        json!({ "result": "reset", "resets_left": 0, "cleared": ["five_hour", "seven_day"] })
+    };
+    json_response(&answer)
+}
+
 fn json_response(value: &Value) -> Response {
     let mut response = Response::new(body::full(value.to_string()));
     response
@@ -248,7 +304,10 @@ async fn proxy(listen: SocketAddr, upstream: &str, home: &str) -> Result<()> {
                 },
             );
             account.email = Some(format!("{provider}{i}@bench.invalid"));
-            account.org_id = Some(format!("org-{provider}-{i}"));
+            // A UUID, as Claude's organizations have: spending a limit
+            // reset names it.
+            let org = 100 * provider as usize + i;
+            account.org_id = Some(format!("00000000-0000-4000-8000-{org:012}"));
             account.account_id = Some(format!("acct-{provider}-{i}"));
             account.assign_id();
             store.upsert(account).context("saving a bench account")?;
