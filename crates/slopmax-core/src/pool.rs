@@ -228,6 +228,8 @@ pub enum Reason {
     Pinned,
     /// No other account of the provider can serve.
     OnlyReady,
+    /// Its week resets within the day with quota to spare (reset-first).
+    WeekEndsSoonest,
     /// Its used quota resets soonest (reset-first).
     ResetsSoonest,
     /// The oldest in the top priority tier (fill-first).
@@ -244,6 +246,7 @@ impl Reason {
         match self {
             Self::Pinned => "pinned for new sessions",
             Self::OnlyReady => "the only account ready",
+            Self::WeekEndsSoonest => "its week resets within the day with quota to spare",
             Self::ResetsSoonest => "its quota resets soonest",
             Self::FirstInOrder => "first in priority order",
             Self::MostRoom => "the most room left",
@@ -498,10 +501,11 @@ impl Pool {
         let reason = match strategy {
             _ if top == 1 => Reason::OnlyReady,
             Strategy::ResetFirst => {
-                let limits = inner.states.get(&chosen.id).map(|s| &s.limits);
-                match limits.and_then(|l| l.expiring_at(now)) {
-                    Some(_) => Reason::ResetsSoonest,
-                    None => Reason::MostRoom,
+                let urgency = inner.states.get(&chosen.id).map(|s| s.limits.urgency(now));
+                match urgency {
+                    Some(u) if u.week_ending.is_some() => Reason::WeekEndsSoonest,
+                    Some(u) if u.short.or(u.long).is_some() => Reason::ResetsSoonest,
+                    _ => Reason::MostRoom,
                 }
             }
             Strategy::FillFirst => Reason::FirstInOrder,
@@ -777,7 +781,7 @@ fn place<'a>(
         // window resets soon loses its unused quota at that reset, while an
         // idle account loses nothing by waiting. Ties go to the less used.
         Strategy::ResetFirst => tier.min_by_key(|a| {
-            let deadline = limits(a).expiring_at(now).unwrap_or(Timestamp::MAX);
+            let deadline = limits(a).urgency(now).key();
             (deadline, score(a), last_used(a))
         }),
         Strategy::LeastUsed => tier.min_by_key(|a| (score(a), last_used(a))),
@@ -1020,6 +1024,52 @@ mod tests {
             ts(1000),
         );
         assert_eq!(pick(&pool, None, 1000).unwrap(), b.id);
+    }
+
+    #[test]
+    fn reset_first_saves_a_week_about_to_be_lost_before_any_5_hour_window() {
+        let a = account(ProviderId::Claude, "a", 1);
+        let b = account(ProviderId::Claude, "b", 2);
+        let pool = pool(Strategy::ResetFirst, &[&a, &b]);
+        let hours = |h: i64| 1000 + h * 3600;
+        // a: busy, its 5-hour window resets in 4h, its week in 6 days.
+        pool.observe(
+            &a.id,
+            limits(vec![
+                window("5h", 10.0, Some(hours(4))),
+                window("7d", 50.0, Some(hours(144))),
+            ]),
+            ts(1000),
+        );
+        // b: no 5-hour window running, but 80% of a week lost in 10h.
+        pool.observe(
+            &b.id,
+            limits(vec![window("7d", 20.0, Some(hours(10)))]),
+            ts(1000),
+        );
+        assert_eq!(pick(&pool, None, 1000).unwrap(), b.id);
+        let next = pool.next(ProviderId::Claude, ts(1000)).unwrap();
+        assert_eq!(next.reason, Reason::WeekEndsSoonest);
+        // A week two days out is no emergency: the 5-hour window goes first.
+        pool.observe(
+            &b.id,
+            limits(vec![window("7d", 20.0, Some(hours(48)))]),
+            ts(1000),
+        );
+        assert_eq!(pick(&pool, None, 1000).unwrap(), a.id);
+        // A full week is nothing to save.
+        pool.observe(
+            &b.id,
+            limits(vec![
+                window("7d", 100.0, Some(hours(10))),
+                window("5h", 0.0, None),
+            ]),
+            ts(1000),
+        );
+        assert_ne!(
+            pool.next(ProviderId::Claude, ts(1000)).unwrap().reason,
+            Reason::WeekEndsSoonest
+        );
     }
 
     #[test]

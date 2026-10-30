@@ -192,14 +192,62 @@ impl Limits {
         self.full(now).next().is_some()
     }
 
-    /// The soonest moment some spare capacity on this account expires: the
-    /// earliest upcoming reset of a started, not-yet-full shared window.
-    /// Quota left in that window is lost at reset, so it should go first.
-    pub fn expiring_at(&self, now: Timestamp) -> Option<Timestamp> {
-        self.shared()
-            .filter(|w| w.used_at(now) > 0.0 && !w.is_full(now))
+    /// How soon this account's spare capacity is lost, for spending it
+    /// first; earlier sorts first. A long window (week or month) with room
+    /// left that resets within [`URGENT`] comes before everything: its
+    /// unused quota is the plan's fee thrown away. Then the soonest started
+    /// 5-hour window, whose quota is lost at its reset too, then the
+    /// soonest long window.
+    pub fn urgency(&self, now: Timestamp) -> Urgency {
+        let spare = |w: &&Window| !w.is_full(now);
+        let long = self
+            .shared()
+            .filter(|w| w.span != "5h")
+            .filter(spare)
             .filter_map(|w| w.upcoming_reset(now))
-            .min()
+            .min();
+        let short = self
+            .shared()
+            .filter(|w| w.span == "5h" && w.used_at(now) > 0.0)
+            .filter(spare)
+            .filter_map(|w| w.upcoming_reset(now))
+            .min();
+        Urgency {
+            week_ending: long.filter(|at| *at <= now + URGENT),
+            short,
+            long,
+        }
+    }
+
+    /// The soonest moment some spare capacity on this account expires, if
+    /// any is known to.
+    pub fn expiring_at(&self, now: Timestamp) -> Option<Timestamp> {
+        let urgency = self.urgency(now);
+        urgency.week_ending.or(urgency.short).or(urgency.long)
+    }
+}
+
+/// How close a long window's reset must be for its spare quota to come
+/// before every 5-hour window's.
+pub const URGENT: SignedDuration = SignedDuration::from_hours(24);
+
+/// When an account's spare capacity is lost, as [`Limits::urgency`] orders
+/// it: compare the fields in order, `None` last.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Urgency {
+    /// A long window with room left that resets within [`URGENT`].
+    pub week_ending: Option<Timestamp>,
+    /// The soonest started 5-hour window with room left.
+    pub short: Option<Timestamp>,
+    /// The soonest long window with room left.
+    pub long: Option<Timestamp>,
+}
+
+impl Urgency {
+    /// A key that sorts the most urgent first.
+    pub fn key(self) -> (Timestamp, Timestamp, Timestamp) {
+        let last = |at: Option<Timestamp>| at.unwrap_or(Timestamp::MAX);
+        (last(self.week_ending), last(self.short), last(self.long))
     }
 }
 
@@ -430,14 +478,25 @@ mod tests {
 
     #[test]
     fn expiring_at_prefers_started_windows_with_headroom() {
+        let three_days = 1000 + 3 * 86_400;
         let limits = Limits {
+            windows: vec![
+                Window::new("5h", 40.0, Some(ts(2000))),
+                Window::new("7d", 60.0, Some(ts(three_days))),
+            ],
+            ..Limits::default()
+        };
+        assert_eq!(limits.expiring_at(ts(1000)), Some(ts(2000)));
+        // A week with room left that ends within the day comes first.
+        let ending = Limits {
             windows: vec![
                 Window::new("5h", 40.0, Some(ts(2000))),
                 Window::new("7d", 60.0, Some(ts(9000))),
             ],
             ..Limits::default()
         };
-        assert_eq!(limits.expiring_at(ts(1000)), Some(ts(2000)));
+        assert_eq!(ending.expiring_at(ts(1000)), Some(ts(9000)));
+        assert_eq!(ending.urgency(ts(1000)).short, Some(ts(2000)));
         let idle = Limits {
             windows: vec![Window::new("5h", 0.0, None)],
             ..Limits::default()
