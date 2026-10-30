@@ -181,6 +181,12 @@ impl App {
             .ok()
             .flatten()
             .unwrap_or_else(|| picked.clone());
+        // Another process may have found its sign-in revoked since the pool
+        // last read the disk; trying it would cost a refusal and a refresh.
+        if let Some(error) = &account.auth_error {
+            self.pool.record_error(&account.id, error);
+            return None;
+        }
         // Following a linked account's source is read-only, so it happens
         // even when refreshing is off.
         if !self.config().refresh_tokens && account.link.is_none() {

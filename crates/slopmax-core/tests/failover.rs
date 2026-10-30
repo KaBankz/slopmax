@@ -357,13 +357,23 @@ async fn a_refused_refresh_moves_on_to_the_next_account() {
     let state = h.app.pool.state(&h.ids[0]);
     assert!(state.last_error.is_some());
 
-    // Once the pool reloads the accounts (the daemon does every 2 seconds),
-    // requests skip it and go straight to the second.
-    h.app
-        .pool
-        .sync(h.app.store.list().unwrap(), Default::default());
+    // A request placed afresh (its session would keep it on the second
+    // anyway) skips the first without trying it or refreshing it again,
+    // even before the pool reloads the accounts from disk.
     h.log.lock().unwrap().clear();
-    let (status, _) = claude_code(&h).await;
+    let response = Client::builder()
+        .build()
+        .post(format!("{}/v1/messages", h.proxy))
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("user-agent", "claude-cli/2.1.287 (external, cli)")
+        .header("x-slopmax-affinity", "off")
+        .header("content-type", "application/json")
+        .body(CLAUDE_BODY)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    assert!(h.seen("/v1/oauth/token").is_empty(), "no second refresh");
     assert_eq!(status, StatusCode::OK);
     let tried: Vec<String> = h
         .seen("/v1/messages")

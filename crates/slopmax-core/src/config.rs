@@ -189,16 +189,33 @@ impl Config {
     }
 
     pub fn load_from(path: &Path) -> Result<Self> {
-        let text = match std::fs::read_to_string(path) {
-            Ok(text) => Some(text),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        let read = || -> Result<(Option<String>, Self)> {
+            let text = match std::fs::read_to_string(path) {
+                Ok(text) => Some(text),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+            };
+            let config = match &text {
+                Some(text) => toml_edit::de::from_str::<Self>(text)
+                    .with_context(|| format!("invalid config {}", path.display()))?,
+                None => Self::default(),
+            };
+            Ok((text, config))
+        };
+        let (text, config) = read()?;
+        if !config.api_key.is_empty() {
+            return Ok(config);
+        }
+        // The first run makes the key. Processes started together take
+        // turns, and each after the first finds the key already made, so
+        // all of them agree on it.
+        let lock = path.with_file_name(".config.lock");
+        let _held = fsx::lock(&lock).with_context(|| format!("locking {}", lock.display()))?;
+        let (text, mut config) = match read()? {
+            (_, made) if !made.api_key.is_empty() => return Ok(made),
+            _ => (text, config),
         };
         let invalid = || format!("invalid config {}", path.display());
-        let mut config = match &text {
-            Some(text) => toml_edit::de::from_str::<Self>(text).with_context(invalid)?,
-            None => Self::default(),
-        };
         if config.api_key.is_empty() {
             config.api_key = format!("sm-{}", ids::token());
             let text = match text {
@@ -455,6 +472,21 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert_eq!(text, format!("{mine}api_key = \"{}\"\n", config.api_key));
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn processes_started_together_agree_on_the_key() {
+        let dir = std::env::temp_dir().join(format!("slopmax-race-{}", ids::token()));
+        let path = dir.join("config.toml");
+        let keys: Vec<String> = std::thread::scope(|scope| {
+            let runs: Vec<_> = (0..8)
+                .map(|_| scope.spawn(|| Config::load_from(&path).unwrap().api_key))
+                .collect();
+            runs.into_iter().map(|r| r.join().unwrap()).collect()
+        });
+        assert!(keys.iter().all(|k| *k == keys[0]), "{keys:?}");
+        assert_eq!(Config::load_from(&path).unwrap().api_key, keys[0]);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
