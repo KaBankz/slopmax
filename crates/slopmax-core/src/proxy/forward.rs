@@ -112,6 +112,12 @@ impl Inbound {
             .map_err(String::as_str)
     }
 
+    /// Whether the request lists the models, as agents do before work.
+    fn lists_models(&self) -> bool {
+        let path = self.target.path.split('?').next().unwrap_or_default();
+        self.parts.method == http::Method::GET && path.ends_with("/models")
+    }
+
     /// Whether the request is an agent's housekeeping, such as listing
     /// models or counting tokens, rather than work for a model to do.
     fn housekeeping(&self) -> bool {
@@ -174,6 +180,29 @@ impl Inbound {
             (_, _, None) => Err(NoRoute::NoModel),
         }
     }
+}
+
+/// How many times the body's top level names a `model`.
+fn models_named(body: &[u8]) -> usize {
+    use serde::de::{Deserializer, IgnoredAny, MapAccess, Visitor};
+    struct Count;
+    impl<'de> Visitor<'de> for Count {
+        type Value = usize;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("an object")
+        }
+        fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<usize, M::Error> {
+            let mut n = 0;
+            while let Some(key) = map.next_key::<Cow<'de, str>>()? {
+                n += usize::from(key == "model");
+                map.next_value::<IgnoredAny>()?;
+            }
+            Ok(n)
+        }
+    }
+    serde_json::Deserializer::from_slice(body)
+        .deserialize_map(Count)
+        .unwrap_or(0)
 }
 
 /// The one step for a request routed by its path.
@@ -341,7 +370,17 @@ pub(super) async fn forward(
             Some(model) if !key.allows(model) => {
                 format!("the key {:?} may not use {model}", key.name)
             }
+            // A body naming its model twice could mean the other one to
+            // the provider.
+            Some(_) if models_named(&inbound.body) > 1 => {
+                format!(
+                    "the key {:?} may not send a request that names two models",
+                    key.name
+                )
+            }
             Some(_) => String::new(),
+            // Listing models spends nothing, and agents need it.
+            None if inbound.lists_models() => String::new(),
             // A compressed or unreadable body could name any model.
             None => format!(
                 "the key {:?} may use only some models, and this request names none slopmax can read",

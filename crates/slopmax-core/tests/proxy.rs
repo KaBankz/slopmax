@@ -1842,6 +1842,23 @@ async fn client_keys_are_held_to_their_models() {
             .unwrap()
             .contains("laptop")
     );
+    // Naming the model twice can't slip another past the check.
+    let twice = client()
+        .post(format!("{}/codex/responses", h.proxy))
+        .header("authorization", "Bearer sm-laptop")
+        .body(r#"{"model":"gpt-6-sol","model":"gpt-5-mini","input":[],"stream":true}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(twice.status(), StatusCode::FORBIDDEN);
+    // Listing the models is fine: it spends nothing.
+    let listed = client()
+        .get(format!("{}/codex/models?client_version=0.165.0", h.proxy))
+        .header("authorization", "Bearer sm-laptop")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(listed.status(), StatusCode::OK);
     // A body slopmax cannot read could name any model, so it is refused.
     let packed = client()
         .post(format!("{}/codex/responses", h.proxy))
