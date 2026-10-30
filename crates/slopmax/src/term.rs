@@ -48,6 +48,105 @@ pub fn confirm(question: &str, default: bool) -> io::Result<bool> {
     })
 }
 
+/// Asks for a line of text; an empty answer, or none, takes `default`.
+pub fn ask(question: &str, default: &str) -> io::Result<String> {
+    match default {
+        "" => print!("{question} "),
+        _ => print!("{question} {} ", ui::dim(format!("[{default}]"))),
+    }
+    io::stdout().flush()?;
+    let answer = read_line().unwrap_or_default();
+    Ok(match answer.trim() {
+        "" => default.to_owned(),
+        answer => answer.to_owned(),
+    })
+}
+
+/// Asks for one of `options` (a name and what it means), by number; an
+/// empty answer, or none, takes `default`.
+pub fn choose(question: &str, options: &[(&str, &str)], default: usize) -> io::Result<usize> {
+    println!("{question}");
+    list(options, |i| i == default);
+    // Three tries, then the default: input that has ended answers nothing.
+    for _ in 0..3 {
+        let answer = ask(
+            &format!("  Choose 1-{}", options.len()),
+            &(default + 1).to_string(),
+        )?;
+        match parse_choices(&answer, options.len()).as_deref() {
+            Some([one]) => return Ok(*one),
+            _ => println!("  {}", ui::dim("One number, please.")),
+        }
+    }
+    Ok(default)
+}
+
+/// Asks for any of `options` by number, separated by commas or spaces; an
+/// empty answer, or none, takes `defaults`.
+pub fn choose_many(
+    question: &str,
+    options: &[(&str, &str)],
+    defaults: &[usize],
+) -> io::Result<Vec<usize>> {
+    println!("{question}");
+    list(options, |i| defaults.contains(&i));
+    let default: Vec<String> = defaults.iter().map(|i| (i + 1).to_string()).collect();
+    for _ in 0..3 {
+        let answer = ask(
+            &format!("  Numbers, e.g. 1,3 ({} for none)", ui::bold("0")),
+            &default.join(","),
+        )?;
+        // An empty answer takes the defaults, which may be none.
+        if answer.trim() == "0" || answer.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        match parse_choices(&answer, options.len()) {
+            Some(chosen) => return Ok(chosen),
+            None => println!(
+                "  {}",
+                ui::dim(format!("Numbers from 1 to {}.", options.len()))
+            ),
+        }
+    }
+    Ok(defaults.to_vec())
+}
+
+fn list(options: &[(&str, &str)], marked: impl Fn(usize) -> bool) {
+    let width = options
+        .iter()
+        .map(|(name, _)| name.len())
+        .max()
+        .unwrap_or(0);
+    for (i, (name, help)) in options.iter().enumerate() {
+        let mark = if marked(i) {
+            ui::green("•")
+        } else {
+            " ".into()
+        };
+        println!(
+            "  {mark} {} {}  {}",
+            ui::dim(format!("{:>2}", i + 1)),
+            ui::pad(name, width),
+            ui::dim(help)
+        );
+    }
+}
+
+/// `"1, 3 2"` → `[0, 2, 1]`, for `len` options; `None` if any is not one.
+pub(crate) fn parse_choices(answer: &str, len: usize) -> Option<Vec<usize>> {
+    let mut chosen = Vec::new();
+    for part in answer.split([',', ' ']).filter(|p| !p.is_empty()) {
+        let n: usize = part.parse().ok()?;
+        if n == 0 || n > len {
+            return None;
+        }
+        if !chosen.contains(&(n - 1)) {
+            chosen.push(n - 1);
+        }
+    }
+    (!chosen.is_empty()).then_some(chosen)
+}
+
 /// Reads a secret such as an API key: typed without echo at a terminal, or
 /// read whole from stdin when it is piped in, so it never sits in argv or
 /// shell history.
@@ -153,5 +252,20 @@ impl Drop for EchoOff {
                 libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, saved);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn choices_are_numbers_from_one() {
+        assert_eq!(parse_choices("1", 3), Some(vec![0]));
+        assert_eq!(parse_choices("3, 1 3", 3), Some(vec![2, 0]));
+        assert_eq!(parse_choices("4", 3), None);
+        assert_eq!(parse_choices("0", 3), None);
+        assert_eq!(parse_choices("two", 3), None);
+        assert_eq!(parse_choices(" ", 3), None);
     }
 }

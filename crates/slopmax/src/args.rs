@@ -432,7 +432,9 @@ pub fn help(app: &App, command: Option<&Command>) -> String {
         .filter(|a| a.is_positional() || matches!(a.kind, Kind::Rest))
     {
         let mut help = arg.help.to_owned();
-        if let Kind::Optional(_, default) = arg.kind {
+        if let Kind::Optional(_, default) = arg.kind
+            && !default.is_empty()
+        {
             let _ = write!(help, " [default: {default}]");
         }
         arguments.push((arg.usage(), help));

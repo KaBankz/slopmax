@@ -7,6 +7,8 @@ mod init;
 mod status;
 mod usage;
 
+use std::io::IsTerminal;
+
 use anyhow::{Context, Result, bail};
 
 use self::accounts::{import, login, own, redeem, remove, set_disabled, use_account};
@@ -16,7 +18,7 @@ use crate::ui;
 use slopmax_core::account::{Endpoint, Store};
 use slopmax_core::agent::{self, Agent};
 use slopmax_core::auth::{self, LoginOptions};
-use slopmax_core::config::Config;
+use slopmax_core::config::{Config, Strategy};
 use slopmax_core::net::Origins;
 use slopmax_core::provider::ProviderId;
 use slopmax_core::time::Timestamp;
@@ -167,15 +169,63 @@ pub static APP: App = App {
     after_help: "Run without a command to show account status.",
     default: "status",
     commands: &[
-        command(
-            "init",
-            "Set up accounts, agents, and the background service, step by step",
-            &[arg(
-                "yes",
-                "Take every recommended answer without asking",
-                Kind::Flag(Some('y')),
-            )],
-        ),
+        Command {
+            name: "setup",
+            alias: Some("init"),
+            about: "Set everything up step by step, or point one agent at the proxy",
+            args: &[
+                arg(
+                    "agent",
+                    "Wire just this agent (else run the whole setup)",
+                    Kind::Optional(AGENTS, ""),
+                ),
+                arg(
+                    "undo",
+                    "With an agent: restore what setup replaced",
+                    Kind::Flag(None),
+                ),
+                arg(
+                    "yes",
+                    "Ask nothing: take the flags, else the recommended answers",
+                    Kind::Flag(Some('y')),
+                ),
+                arg(
+                    "import",
+                    "Take logins from claude-code, codex, cliproxyapi, all, or none",
+                    Kind::Value(None, "SOURCES"),
+                ),
+                arg(
+                    "login",
+                    "Sign in to these subscriptions: claude, codex",
+                    Kind::Value(None, "PROVIDERS"),
+                ),
+                arg(
+                    "keys-from-env",
+                    "Add the keys in ANTHROPIC_API_KEY, OPENAI_API_KEY, XAI_API_KEY",
+                    Kind::Flag(None),
+                ),
+                arg(
+                    "strategy",
+                    "reset-first, fill-first, least-used, or round-robin",
+                    Kind::Value(None, "STRATEGY"),
+                ),
+                arg(
+                    "affinity",
+                    "on: sessions keep their account; off: every request placed afresh",
+                    Kind::Value(None, "on|off"),
+                ),
+                arg(
+                    "agents",
+                    "Point these agents at the proxy: claude, codex, or none",
+                    Kind::Value(None, "AGENTS"),
+                ),
+                arg(
+                    "no-service",
+                    "Don't start slopmax at login",
+                    Kind::Flag(None),
+                ),
+            ],
+        },
         Command {
             name: "status",
             alias: Some("ls"),
@@ -318,14 +368,6 @@ pub static APP: App = App {
             &[arg("agent", "Which agent", Kind::Required(AGENTS))],
         ),
         command(
-            "setup",
-            "Point an agent's own config at the proxy (or restore it)",
-            &[
-                arg("agent", "Which agent", Kind::Required(AGENTS)),
-                arg("undo", "Restore what setup replaced", Kind::Flag(None)),
-            ],
-        ),
-        command(
             "usage",
             "Show token usage and its API-equivalent cost",
             &[
@@ -411,17 +453,39 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
     let store = Store::open();
     // A first run at a terminal starts the guided setup instead.
     if bare && init::wanted(&store) {
-        init::run(&config, &store, init::Answers::Ask).await?;
+        init::run(&config, &store, init::Answers::Ask, init::Plan::default()).await?;
         return Ok(0);
     }
     match m.command.name {
-        "init" => {
-            let answers = if m.flag("yes") {
+        "setup" if !m.value("agent").unwrap_or_default().is_empty() => {
+            setup(&config, agent_named(m)?, m.flag("undo"))?;
+        }
+        "setup" => {
+            if m.flag("undo") {
+                bail!("--undo restores one agent: `slopmax setup claude --undo`");
+            }
+            let answers = if m.flag("yes") || !std::io::stdin().is_terminal() {
                 init::Answers::Defaults
             } else {
                 init::Answers::Ask
             };
-            init::run(&config, &store, answers).await?;
+            let plan = init::Plan {
+                import: m.value("import").map(init::sources).transpose()?,
+                login: m.value("login").map(init::subscriptions).transpose()?,
+                keys_from_env: m.flag("keys-from-env"),
+                strategy: m
+                    .value("strategy")
+                    .map(|s| {
+                        Strategy::parse(s).with_context(|| {
+                            format!("--strategy takes reset-first, fill-first, least-used, or round-robin, got {s:?}")
+                        })
+                    })
+                    .transpose()?,
+                affinity: m.value("affinity").map(on_off).transpose()?,
+                agents: m.value("agents").map(init::agents).transpose()?,
+                no_service: m.flag("no-service"),
+            };
+            init::run(&config, &store, answers, plan).await?;
         }
         "status" => {
             let args = StatusArgs {
@@ -486,7 +550,6 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
             let exe = std::env::current_exe().context("locating the slopmax binary")?;
             print!("{}", agent_named(m)?.env(&config, &exe));
         }
-        "setup" => setup(&config, agent_named(m)?, m.flag("undo"))?,
         "usage" => {
             let by = m.value("by").unwrap_or("day");
             if !matches!(by, "day" | "model" | "account") {
@@ -615,6 +678,15 @@ fn endpoint(url: &str, dialect: Option<&str>, models: Option<&str>) -> Result<En
         dialect,
         models,
     })
+}
+
+/// `on` or `off`, as switches are given.
+fn on_off(value: &str) -> Result<bool> {
+    match value {
+        "on" | "true" | "yes" => Ok(true),
+        "off" | "false" | "no" => Ok(false),
+        _ => bail!("expected on or off, got {value:?}"),
+    }
 }
 
 fn agent_named(m: &args::Matches) -> Result<&'static dyn Agent> {
