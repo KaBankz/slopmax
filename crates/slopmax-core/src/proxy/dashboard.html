@@ -114,6 +114,14 @@ section { padding-top: 40px; scroll-margin-top: 56px; }
 .scale i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
 .scale i:first-of-type { margin-left: 4px; } .scale i:last-of-type { margin-right: 4px; }
 tr.unplaced td { color: var(--ink2); }
+.left .lg { display: grid; grid-template-columns: 340px 1fr; }
+.left .lsum { padding: 16px 18px; border-right: 1px solid var(--line2); }
+.left .lsum .k { font-size: 12px; color: var(--muted); }
+.left .lsum .v { font-size: 24px; font-weight: 620; letter-spacing: -.025em; margin: 4px 0 2px; font-variant-numeric: tabular-nums; }
+.left .lsum .d { font-size: 12.5px; color: var(--ink2); }
+.left .why { font-size: 12px; color: var(--muted); margin: 10px 0 0; line-height: 1.5; }
+.left .cb .why { margin: 0; }
+.left .tbl { padding-top: 10px; }
 tr.total td { border-top: 1px solid var(--line); }
 .empty { color: var(--muted); padding: 28px 18px; text-align: center; font-size: 13px; }
 .empty b { display: block; color: var(--ink); font-weight: 550; margin-bottom: 2px; }
@@ -141,6 +149,18 @@ tr.total td { border-top: 1px solid var(--line); }
 .nextline { font-size: 12.5px; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .nextline b { font-weight: 560; color: var(--ink); }
 .poolh { font-size: 11.5px; color: var(--faint); padding: 10px 18px 0; letter-spacing: .01em; }
+.attn { margin-bottom: 16px; }
+.attn .ah { display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 18px; border-bottom: 1px solid var(--line2); font-size: 13px; min-height: 48px; }
+.attn .ah b { font-weight: 600; }
+.attn .ah .muted, .attn .ah .faint { font-size: 12.5px; display: inline-flex; align-items: center; gap: 6px; }
+.attn .ah svg { width: 14px; height: 14px; }
+.nudge { display: flex; align-items: center; gap: 12px; padding: 10px 18px; font-size: 13px; }
+.nudge + .nudge { border-top: 1px solid var(--line2); }
+.nudge .dot { margin-top: 1px; }
+.nudge .nt { flex: 1; min-width: 0; }
+.nudge .nt b { font-weight: 560; }
+.nudge .nt .muted { font-size: 12.5px; margin-top: 1px; }
+.row.flash { animation: flash 1.6s ease-out; }
 .chip.next { background: transparent; box-shadow: inset 0 0 0 1px var(--line); color: var(--ink2); }
 .sub { font-size: 12px; color: var(--muted); margin-top: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sub .t { color: var(--faint); }
@@ -313,7 +333,8 @@ footer.wrap { color: var(--faint); font-size: 12px; padding-bottom: 40px; }
 }
 @media (max-width: 960px) {
   .wrap { padding: 0 20px; }
-  .g2, .g21 { grid-template-columns: 1fr; }
+  .g2, .g21, .left .lg { grid-template-columns: 1fr; }
+  .left .lsum { border-right: 0; border-bottom: 1px solid var(--line2); }
   .row { grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); gap: 12px 20px; }
   .row .who { grid-column: 1 / -1; padding-right: 40px; }
   .row .kebab { position: absolute; top: 12px; right: 14px; }
@@ -360,6 +381,7 @@ footer.wrap { color: var(--faint); font-size: 12px; padding-bottom: 40px; }
   <section id="accounts">
     <div class="shead"><h2>Accounts</h2><div class="summary" id="summary"></div>
       <div class="end"><span class="muted" style="font-size:12px" id="updated"></span><button class="btn sm" id="unpin" hidden>Clear pin</button></div></div>
+    <div id="attention"></div>
     <div id="providers"></div>
   </section>
 
@@ -370,7 +392,7 @@ footer.wrap { color: var(--faint); font-size: 12px; padding-bottom: 40px; }
   </section>
 
   <section id="routing">
-    <div class="shead"><h2>Routing</h2><span class="lede">Written to config.toml and applied at once.</span></div>
+    <div class="shead"><h2>Routing</h2><span class="lede">The settings <code>slopmax config</code> changes, written to config.toml and applied at once.</span></div>
     <div class="grid g2" id="settings"></div>
   </section>
 
@@ -520,8 +542,64 @@ function resetText(w) {
   return `Resets in <span data-until="${r}">${until(r)}</span> <span class="t">· ${clock(r)}</span>`;
 }
 
+// `max 20x` → `Max 20x`.
+const planName = (p) => String(p).replace(/\b\w/g, (c) => c.toUpperCase());
+const byName = (name, provider) => report.accounts.find((a) => a.name === name && (!provider || a.provider === provider));
+
+// What is worth doing before it is lost: an expiring limit reset, a week ending unused.
+function nudgeView(n) {
+  const a = byName(n.account, n.provider), at = ts(n.until);
+  const when = at ? `<span data-until="${at}">${until(at)}</span> <span class="faint">· ${clock(at)}</span>` : "";
+  if (n.event === "reset-expiring") {
+    const auto = settings && !settings.redeem_expiring_credits ? "Auto-redeem is off, so it will lapse unused." : "";
+    const credit = a && credits(a).find((c) => c.expires_at && Math.abs(ts(c.expires_at) - at) < 60e3);
+    return { text: `A limit reset on <b>${esc(n.account)}</b> expires in ${when}`, sub: auto,
+      plain: `A limit reset on ${n.account} expires in ${at ? until(at) : "soon"}. Redeem it before it is lost.`,
+      action: a ? `<button class="btn sm" data-redeem="${esc(a.id)}" data-credit="${esc(credit?.id || "")}">Redeem…</button>` : "" };
+  }
+  if (n.event === "quota-unused") {
+    const w = a && (a.state.limits?.windows || []).find((x) => !x.model && x.span === "7d");
+    const unused = w ? Math.round(100 - usedNow(w)) : null;
+    const worth = /about (\$[\d,.]+)/.exec(n.message || "")?.[1];
+    return { text: `<b>${esc(n.account)}</b>'s week resets in ${when}${unused != null ? ` with ${unused}% unused` : ""}`,
+      sub: `${worth ? `About ${worth} of its plan. ` : ""}Work sent there before then costs nothing extra.`,
+      plain: `${n.account}'s week resets in ${at ? until(at) : "soon"}${unused != null ? ` with ${unused}% unused` : ""}. Work sent there before then costs nothing extra.`,
+      action: a ? `<button class="btn sm" data-jump="${esc(a.id)}">Show</button>` : "" };
+  }
+  return { text: esc(n.message || n.event), sub: "", plain: n.message || n.event, action: "" };
+}
+function renderAttention() {
+  const nudges = report?.nudges || [];
+  if (!nudges.length) { $("#attention").innerHTML = ""; return; }
+  const can = "Notification" in window, perm = can ? Notification.permission : "unsupported";
+  const control = perm === "default" ? `<button class="btn ghost sm" id="notify" title="Ask this browser to show a notification when something here needs doing">${BELL}Notify me</button>`
+    : perm === "granted" ? `<span class="muted">${BELL}Notifications on</span>`
+    : perm === "denied" ? `<span class="faint">Notifications are blocked in this browser</span>` : "";
+  $("#attention").innerHTML = `<div class="card attn"><div class="ah"><b>Needs attention</b><span class="muted">${nudges.length} thing${nudges.length > 1 ? "s" : ""} to do before ${nudges.length > 1 ? "they are" : "it is"} lost</span><span class="grow"></span>${control}</div>` +
+    nudges.map((n) => { const v = nudgeView(n);
+      return `<div class="nudge"><span class="dot warn"></span><div class="nt"><div>${v.text}</div>${v.sub ? `<div class="muted">${v.sub}</div>` : ""}</div>${v.action}</div>`; }).join("") + `</div>`;
+}
+const BELL = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.5V7a4 4 0 0 1 8 0v4.5l1 1.5H3zM6.5 14a1.6 1.6 0 0 0 3 0"/></svg>`;
+// Posts each nudge once, after the user has allowed notifications.
+function notifyNudges() {
+  if (!("Notification" in window) || Notification.permission !== "granted" || !report?.nudges?.length) return;
+  let seen = [];
+  try { seen = JSON.parse(localStorage.getItem("slopmax-notified") || "[]"); } catch { /* start afresh */ }
+  for (const n of report.nudges) {
+    const id = `${n.event}|${n.account}|${n.until}`;
+    if (seen.includes(id)) continue;
+    seen.push(id);
+    try {
+      const note = new Notification(n.event === "reset-expiring" ? "A limit reset is about to expire" : "A week is ending unused", { body: nudgeView(n).plain, tag: id });
+      note.onclick = () => { window.focus(); $("#attention").scrollIntoView({ block: "start" }); note.close(); };
+    } catch { /* some browsers only notify from a service worker */ }
+  }
+  localStorage.setItem("slopmax-notified", JSON.stringify(seen.slice(-200)));
+}
+
 function renderAccounts() {
   if (!report) return;
+  renderAttention();
   const accounts = report.accounts;
   const subs = accounts.filter((a) => SUBSCRIPTIONS.includes(a.provider));
   const keys = accounts.filter((a) => !SUBSCRIPTIONS.includes(a.provider));
@@ -613,7 +691,6 @@ function accountRow(a, slots, next = false) {
       <div class="sub">${resetText(w)}</div></div>`;
   }).join("") || `<div class="win none">${st.limits?.observed_at ? "No windows reported" : "Not read yet"}</div>`;
   const meta = [];
-  if (a.plan) meta.push(esc(a.plan));
   if (st.last_used) meta.push(`used ${ago(ts(st.last_used))}`);
   if (a.priority) meta.push(`priority ${a.priority}`);
   if (a.follows) meta.push(`follows ${esc(a.follows)}`);
@@ -621,8 +698,8 @@ function accountRow(a, slots, next = false) {
   if (n) meta.push(`${n} limit reset${n > 1 ? "s" : ""}`);
   const signin = a.auth_error ? `<div class="meta">${esc(a.auth_error)} · run <code>slopmax login ${a.provider}</code></div>` : "";
   const err = !a.auth_error && !c.limited && st.last_error ? `<div class="meta warn" title="${esc(st.last_error)}">Last error: ${esc(st.last_error.slice(0, 80))}</div>` : "";
-  return `<div class="row ${a.disabled ? "off" : ""}">
-    <div class="who"><div class="name"><span title="${esc(a.email || a.name)}">${esc(a.name)}</span>${a.pinned ? `<span class="chip">Pinned</span>` : ""}${next ? `<span class="chip next" data-tip="Next|New sessions go here now">Next</span>` : ""}</div>
+  return `<div class="row ${a.disabled ? "off" : ""}" id="acct-${esc(a.id)}">
+    <div class="who"><div class="name"><span title="${esc(a.email || a.name)}">${esc(a.name)}</span>${a.plan ? `<span class="plabel">${esc(planName(a.plan))}</span>` : ""}${a.pinned ? `<span class="chip">Pinned</span>` : ""}${next ? `<span class="chip next" data-tip="Next|New sessions go here now">Next</span>` : ""}</div>
       <div class="state"><span class="dot ${c.tone}"></span><span title="${esc(c.detail || "")}">${c.text}</span></div>
       ${meta.length ? `<div class="meta">${meta.join(" · ")}</div>` : ""}${signin}${err}</div>
     ${cells}<button class="btn ghost icon kebab" data-menu="${esc(a.id)}" title="Account actions" aria-label="Account actions">${DOTS}</button></div>`;
@@ -869,7 +946,7 @@ function renderHistory() {
     ${kpi("Cache hit", pct(h.cached), h.cache_saved ? `saved ${money(h.cache_saved, 0)} at API prices` : "Share of input read from cache")}
   </div>`;
   if (!t.requests && !failed) {
-    root.innerHTML = html + `<div class="card empty" style="margin-top:16px"><b>No requests ${span}</b>Point an agent at <span class="mono">${esc(location.origin)}</span> with <code>slopmax setup claude</code> or <code>slopmax setup codex</code>, and its usage shows up here.</div>`;
+    root.innerHTML = html + leftCard(h) + `<div class="card empty" style="margin-top:16px"><b>No requests ${span}</b>Point an agent at <span class="mono">${esc(location.origin)}</span> with <code>slopmax setup claude</code> or <code>slopmax setup codex</code>, and its usage shows up here.</div>`;
     return;
   }
   const failedShare = failed / Math.max(1, t.requests + failed);
@@ -892,6 +969,7 @@ function renderHistory() {
     (unplaced ? `<tr class="unplaced"><td><div class="nm" data-tip="No account could take it|Every account was limited, so these failed before reaching a provider"><span class="muted">No account could take it</span></div></td><td class="n faint">0</td><td class="n">${int(unplaced)}</td><td class="n x faint">—</td><td class="n x faint">—</td><td class="n x faint">—</td><td class="n x faint">—</td><td class="n faint">—</td><td class="n faint">—</td><td></td></tr>` : "") +
     `<tr class="total"><td>Total</td><td class="n">${int(t.requests)}</td><td class="n">${int(failed)}</td><td class="n x">${compact(t.input)}</td><td class="n x">${compact(t.cache_write)}</td><td class="n x">${compact(t.cache_read)}</td><td class="n x">${compact(t.output)}</td><td class="n">${compact(tokens)}</td><td class="n">${money(t.cost)}${plus(t)}</td><td></td></tr>` +
     `</tbody></table></div></div>`;
+  html += leftCard(h);
   // Models and token mix
   const speed = Object.fromEntries(h.speeds.map((s) => [s.model, s.tokens_per_second]));
   const mmax = Math.max(1, ...h.models.map((m) => tokensOf(m.totals)));
@@ -925,6 +1003,23 @@ function renderHistory() {
   drawCharts();
 }
 
+// What weekly resets threw away: each week's unused share of its plan's monthly fee.
+function leftCard(h) {
+  const l = h.left;
+  if (!l) return "";
+  const span = { today: "today", "7d": "in the last 7 days", "30d": "in the last 30 days" }[range];
+  const why = `When a weekly window resets with quota unused, that share of the plan is gone; each week is valued at a week's share of the plan's monthly fee${l.unpriced ? `; ${l.unpriced} week${l.unpriced > 1 ? "s" : ""} had no known plan price and ${l.unpriced > 1 ? "are" : "is"} left out` : ""}.`;
+  if (!l.windows) return `<div class="card left"><div class="ch"><h3>Left on the table</h3><span class="note">No weekly window reset ${span}</span></div><div class="cb"><p class="why">${why}</p></div></div>`;
+  const rows = l.accounts.map((a) => `<tr><td><div class="nm"><span>${esc(a.name)}</span><span class="plabel">${esc(TITLES[a.provider] || a.provider)}</span></div></td>
+    <td class="n">${int(a.windows)}</td><td class="n"><div class="share"><div class="bar"><i style="width:${Math.min(100, a.unused).toFixed(1)}%"></i></div><span>${Math.round(a.unused)}%</span></div></td>
+    <td class="n ${a.dollars >= 0.005 ? "" : "faint"}">${money(a.dollars)}</td></tr>`).join("");
+  return `<div class="card left"><div class="lg">
+    <div class="lsum"><div class="k">Left on the table</div><div class="v">${money(l.dollars)}</div>
+      <div class="d">${int(l.windows)} week${l.windows > 1 ? "s" : ""} reset ${span} · ${Math.round(l.unused)}% unused on average</div><p class="why">${why}</p></div>
+    <div class="tbl"><table><thead><tr><th>Account</th><th class="n">Weeks</th><th class="n">Unused, on average</th><th class="n">Left</th></tr></thead><tbody>${rows}</tbody></table></div>
+  </div></div>`;
+}
+
 function drawCharts() {
   const h = hist;
   if (!h || !$("#c-tokens")) return;
@@ -956,22 +1051,24 @@ const TOGGLES = [
     ["redeem_expiring_credits", "Redeem resets before they expire", "In a reset's last three hours, redeem it if the account has usage to reset, rather than let it lapse."],
     ["redeem_when_exhausted", "Redeem when every account is spent", "Instead of failing the request, redeem a banked reset and retry on that account."],
   ]],
-  ["Capacity", [
+  ["Advanced", [
     ["warm_windows", "Warm ChatGPT windows", "Send an idle ChatGPT account one tiny request as soon as its window resets, so its next reset comes sooner. Claude accounts are never warmed."],
     ["paid_overflow", "Overflow to API keys", "Let API keys serve a subscription's models once every subscription account is limited."],
+    ["poll_mins", "Usage polls", "Read each subscription's usage in the background, besides what every response reports. While an account is limited it is read every 10 minutes regardless.", "number"],
   ]],
 ];
 function renderSettings() {
   const s = settings;
   if (!s) return;
-  const group = ([name, items]) => `<div class="group-t">${name}</div>` + items.map(([k, t, d]) => `<div class="set"><div><div class="t">${t}</div><div class="d">${d}</div>
-      ${k === "session_affinity" ? `<label class="ttl">Forget a session after <input class="field" type="number" min="1" id="ttl" value="${s.session_ttl_mins}"> idle minutes</label>` : ""}</div>
-      <button class="switch" role="switch" aria-checked="${!!s[k]}" data-set="${k}" aria-label="${t}"></button></div>`).join("");
+  const group = ([name, items]) => `<div class="group-t">${name}</div>` + items.map(([k, t, d, kind]) => `<div class="set"><div><div class="t">${t}</div><div class="d">${d}</div>
+      ${k === "session_affinity" ? `<label class="ttl">Forget a session after <input class="field" type="number" min="1" id="ttl" value="${s.session_ttl_mins}"> idle minutes</label>` : ""}
+      ${k === "poll_mins" ? `<label class="ttl">Every <input class="field" type="number" min="0" id="poll" value="${s.poll_mins ?? 5}"> minutes <span class="faint">· 0 turns them off${s.poll_mins === 0 ? ", as now" : ""}</span></label>` : ""}</div>
+      ${kind === "number" ? "" : `<button class="switch" role="switch" aria-checked="${!!s[k]}" data-set="${k}" aria-label="${t}"></button>`}</div>`).join("");
   const strat = `<div class="group-t">Strategy <span class="faint">· where a new session goes, within the highest priority tier</span></div><div class="opts" role="radiogroup">` +
     s.strategies.map((x) => `<button class="opt ${x.id === s.strategy ? "on" : ""}" data-strategy="${x.id}" role="radio" aria-checked="${x.id === s.strategy}"><span class="radio"></span><div><b>${STRATEGY_NAMES[x.id] || x.id}${x.id === "reset-first" ? `<span class="def">default</span>` : ""}</b><span>${esc(x.summary)}</span></div></button>`).join("") + `</div>`;
   $("#settings").innerHTML = `<div class="card"><div class="cb settings">${strat}${group(TOGGLES[0])}</div></div>
     <div class="card"><div class="cb settings">${TOGGLES.slice(1).map(group).join("")}
-      <p class="d foot">A pinned account takes new sessions first while it can serve. When a provider refuses a request, slopmax sets the account aside and retries on the next one before the agent sees anything.</p></div></div>`;
+</div></div>`;
 }
 async function changeSetting(form, done) {
   try { settings = await api("POST", "settings", form); renderSettings(); if (report) report.strategy = settings.strategy; toast(done); }
@@ -1049,6 +1146,7 @@ function setReport(r) {
   $("#ver").textContent = r.version;
   $("#foot").innerHTML = `slopmax ${esc(r.version)} · ${r.live ? "serving" : "not serving"} on <span class="mono">${esc(location.origin)}</span> · strategy ${STRATEGY_NAMES[r.strategy] || r.strategy}`;
   if (!$("#menu") && !$(".scrim")) renderAccounts();
+  notifyNudges();
   tick();
 }
 async function loadStatus() { try { setReport(await api("GET", "status")); } catch (e) { toast(e.message, true); } }
@@ -1074,6 +1172,18 @@ document.addEventListener("click", async (e) => {
   if (!t.closest("#menu")) closeMenu();
   const r = t.closest("[data-redeem]");
   if (r) return redeem(r.dataset.redeem, r.dataset.credit);
+  const jump = t.closest("[data-jump]");
+  if (jump) {
+    const row = document.getElementById("acct-" + jump.dataset.jump);
+    if (row) { row.scrollIntoView({ behavior: "smooth", block: "center" }); row.classList.remove("flash"); void row.offsetWidth; row.classList.add("flash"); }
+    return;
+  }
+  if (t.closest("#notify")) {
+    const perm = await Notification.requestPermission();
+    renderAttention();
+    if (perm === "granted") { toast("This browser will notify you when something needs doing."); notifyNudges(); }
+    return;
+  }
   const st = t.closest("[data-strategy]");
   if (st && st.dataset.strategy !== settings.strategy) return changeSetting(`strategy=${st.dataset.strategy}`, `New sessions now go by ${STRATEGY_NAMES[st.dataset.strategy]?.toLowerCase() || st.dataset.strategy}.`);
   const sw = t.closest("[data-set]");
@@ -1094,6 +1204,10 @@ document.addEventListener("change", (e) => {
   if (e.target.id === "ttl") {
     const v = parseInt(e.target.value, 10);
     if (v > 0) changeSetting(`session_ttl_mins=${v}`, `Idle sessions are forgotten after ${v} minutes.`);
+  }
+  if (e.target.id === "poll") {
+    const v = parseInt(e.target.value, 10);
+    if (v >= 0) changeSetting(`poll_mins=${v}`, v ? `Usage is polled every ${v} minute${v > 1 ? "s" : ""}.` : "Background usage polls are off.");
   }
 });
 document.addEventListener("keydown", (e) => e.key === "Escape" && closeMenu());
