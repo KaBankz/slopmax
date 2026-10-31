@@ -61,7 +61,8 @@ export class ParseError extends Data.TaggedError("ParseError")<{}> {
 // (with its stack) on every parse would cost more than the parse.
 const FAIL: Result.Result<never, ParseError> = Result.fail(new ParseError())
 
-const MONTHS: ReadonlyArray<string> = [
+/** The months as RFC 2822 abbreviates them, January first. */
+export const MONTHS: ReadonlyArray<string> = [
   "Jan",
   "Feb",
   "Mar",

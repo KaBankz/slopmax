@@ -1,0 +1,23 @@
+{"case":"append_root_key","out":"# my setup\nstrategy = \"fill-first\" # drain in order\napi_key = \"sm-KEY\"\n"}
+{"case":"root_key_before_tables","out":"api_key = \"sm-KEY\"\n# head\n\n[aliases]\nfast = \"x\"\n\n# end\n"}
+{"case":"no_final_newline","out":"strategy = \"x\"\napi_key = \"sm-KEY\"\n"}
+{"case":"crlf","out":"a = 1\n# c\nb = 2\nc = 3\n"}
+{"case":"replace_drops_decor","out":"api_key = \"sm-KEY\"\nx = 1\n"}
+{"case":"set_keeps_decor","out":"# top\nstrategy = \"round-robin\"   # mine\npoll_mins = 0\nwarm_windows = true\n\n[notify]\ncommand = \"x\"\n"}
+{"case":"set_on_empty","out":"strategy = \"fill-first\"\n"}
+{"case":"add_key_first","out":"# head\napi_key = \"k\"\n\n[[keys]]\nname = \"laptop\"\nkey = \"sm-1\"\nmodels = [\"gpt-*\", \"claude-*\"]\n\n# Address.\n# listen = \"x\"\n"}
+{"case":"add_key_second","out":"# head\napi_key = \"k\"\n\n[[keys]]\nname = \"laptop\"\nkey = \"sm-1\"\nmodels = [\"gpt-*\", \"claude-*\"]\n\n[[keys]]\nname = \"ci\"\nkey = \"sm-2\"\n\n# Address.\n# listen = \"x\"\n"}
+{"case":"remove_key_one","out":"# head\napi_key = \"k\"\n\n[[keys]]\nname = \"ci\"\nkey = \"sm-2\"\n\n# Address.\n# listen = \"x\"\n"}
+{"case":"remove_key_last","out":"# head\napi_key = \"k\"\n\n# Address.\n# listen = \"x\"\n"}
+{"case":"add_key_after_tables","out":"api_key = \"k\"\n\n[aliases]\nfast = \"m\"\n\n[[keys]]\nname = \"x\"\n\n# tail\n"}
+{"case":"add_key_table_only","out":"[aliases]\nfast = \"m\"\n\n[[keys]]\nname = \"x\"\n"}
+{"case":"add_key_empty_doc","out":"[[keys]]\nname = \"x\"\n"}
+{"case":"codex_setup_existing","out":"model = \"gpt\"\nmodel_provider = \"slopmax\"\n\n[model_providers.other]\nname = \"x\"\n\n[model_providers.slopmax]\nname = \"OpenAI\"\nbase_url = \"http://127.0.0.1:7567/codex\"\nsupports_websockets = true\n\n[profiles.p]\nmodel = \"y\"\n"}
+{"case":"codex_undo","out":"model = \"gpt\"\n\n[model_providers.other]\nname = \"x\"\n\n[profiles.p]\nmodel = \"y\"\n"}
+{"case":"codex_setup_again","out":"model = \"gpt\"\nmodel_provider = \"slopmax\"\n\n[model_providers.other]\nname = \"x\"\n\n[model_providers.slopmax]\nname = \"OpenAI\"\n\n[profiles.p]\nmodel = \"y\"\n"}
+{"case":"codex_setup_fresh","out":"model_provider = \"slopmax\"\n\n[model_providers.slopmax]\nname = \"OpenAI\"\n# just a comment\n"}
+{"case":"reprs","out":"s0 = \"plain\"\ns1 = 'back\\slash'\ns2 = 'q\"uote'\ns3 = \"it's\"\ns4 = '''it's \\ both'''\ns5 = \"\"\"\nline\nbreak\"\"\"\ns6 = \"tab\\there\"\ns7 = \"ctl\\u0001x\"\ns8 = \"trail'\"\ns9 = \"a'''b\\\\\"\ns10 = \"üñí\"\ns11 = \"del\\u007F\"\ns12 = '''\nnew\nline\\'''\n\"my model\" = 0\n\"a.b\" = 1\n\"\" = 2\n\"k'ey\" = 3\n'ba\\ck' = 4\nf0 = 1.0\nf1 = 0.5\nf2 = 100000000000000000000.0\nf3 = -0.0\nf4 = 0.00000025\nf5 = 100.0\n"}
+{"case":"implicit_parent","out":"api_key = \"k\"\n[prices.\"my-model\"]\ninput = 2.0\noutput = 8\n"}
+{"case":"odd_spacing","out":"  a  =  1   # one\nz = 1\n[ t . u ]  # hdr\n  b = 2\n"}
+{"case":"aot_remove_first","out":"\n# about b\n[[keys]]\nname = \"b\"\n\n[notify]\nevents = []\n"}
+{"case":"multiline_values","out":"a = [\n  1, # one\n  2,\n]\nb = \"\"\"\nx\n[not]\n\"\"\"\nc = true\n"}

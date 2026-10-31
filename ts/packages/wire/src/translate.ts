@@ -14,7 +14,7 @@ import * as chatReply from "./chat/reply.ts"
 import * as chatRequest from "./chat/request.ts"
 import type { Dialect } from "./dialect.ts"
 import { type Answer, type Event, Part, Request, ToolChoice } from "./ir.ts"
-import { type JsonObject, read } from "./json.ts"
+import { type JsonObject, read, trimAscii } from "./json.ts"
 import * as messagesReply from "./messages/reply.ts"
 import * as messagesRequest from "./messages/request.ts"
 import { PROMPT } from "./responses/compaction.ts"
@@ -86,17 +86,6 @@ export const encode = (upstream: Target, request: Request): JsonObject => {
     case "chat":
       return chatRequest.encode(sent)
   }
-}
-
-// `<[u8]>::trim_ascii`: space, tab, line feed, form feed, carriage return.
-const isAsciiSpace = (c: number): boolean => c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0c || c === 0x0d
-
-const trimAscii = (data: Uint8Array): Uint8Array => {
-  let start = 0
-  let end = data.length
-  while (start < end && isAsciiSpace(data[start] ?? 0)) start++
-  while (end > start && isAsciiSpace(data[end - 1] ?? 0)) end--
-  return start === 0 && end === data.length ? data : data.subarray(start, end)
 }
 
 // `[DONE]`

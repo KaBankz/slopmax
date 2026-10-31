@@ -97,6 +97,9 @@ const REASONS: Readonly<Record<number, string>> = {
 /** A status as http's `StatusCode` prints it: `404 Not Found`. */
 export const statusText = (status: number): string => `${status} ${REASONS[status] ?? "<unknown status code>"}`
 
+/** `StatusCode::is_success`: a 2xx status. */
+export const isSuccess = (status: number): boolean => status >= 200 && status < 300
+
 /** What went wrong with a request. */
 export type ErrorKind = "Request" | "Connect" | "Timeout" | "Status" | "Body" | "Decode"
 
@@ -801,7 +804,7 @@ export class Response {
 
   /** Fails with the status when it is not a success. */
   errorForStatus(): Effect.Effect<this, HttpError> {
-    return this.status >= 200 && this.status < 300
+    return isSuccess(this.status)
       ? Effect.succeed(this)
       : Effect.fail(new HttpError({ kind: "Status", status: this.status }))
   }

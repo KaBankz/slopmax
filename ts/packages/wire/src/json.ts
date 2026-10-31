@@ -101,6 +101,19 @@ export const isSome = (v: Json | undefined): v is Exclude<Json, null> => v !== u
 /** Compact JSON text, as `serde_json::to_string` writes it. */
 export const stringify = (v: Json): string => JSON.stringify(v)
 
+// `<[u8]>::trim_ascii`: space, tab, line feed, form feed, carriage return.
+const isAsciiSpace = (c: number | undefined): boolean =>
+  c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0c || c === 0x0d
+
+/** `<[u8]>::trim_ascii`: `data` without leading or trailing ASCII whitespace. */
+export const trimAscii = (data: Uint8Array): Uint8Array => {
+  let start = 0
+  let end = data.length
+  while (start < end && isAsciiSpace(data[start])) start++
+  while (end > start && isAsciiSpace(data[end - 1])) end--
+  return start === 0 && end === data.length ? data : data.subarray(start, end)
+}
+
 // ---- parsing ---------------------------------------------------------------
 
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })
