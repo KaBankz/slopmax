@@ -50,12 +50,11 @@ The first port mirrored the Rust's modules, types, test names, and byte-level
 output. That is not the goal and was replaced; it survives only as a behavior
 reference on `ts-reference/rust-shaped`. Settled with the user:
 
-- **Parity is features and external contracts**, not internals or bytes
+- **Parity is features only.** Architecture, outputs, files, URLs, settings,
+  and APIs are all free to change; breaking changes are fine
   (`CONVENTIONS.md`, "What parity means").
-- **Existing `~/.slopmax` files are migrated**, then written the Effect way.
 - **Settings are `config.json`**, defined by an Effect `Schema` that also
-  generates `config.schema.json` for editor completion and validation. A
-  `config.toml` is read once (`effect/encoding` `Toml`) and converted.
+  generates `config.schema.json` for editor completion and validation.
 - **The CLI is `effect/cli`**, with its help, completions, and error wording.
 - **`slopmax run`** spawns the agent with inherited stdio through
   `effect/process`, forwards signals, and exits with the agent's code (a

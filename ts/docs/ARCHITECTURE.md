@@ -38,7 +38,7 @@ layer. Layers compose into the daemon, the CLI, and the app host.
 | Service               | Owns                                                                                             |
 | --------------------- | ------------------------------------------------------------------------------------------------ |
 | `Home`                | where slopmax keeps its files (`SLOPMAX_HOME`, platform user directories)                        |
-| `Settings`            | `config.json`: load, validate (Schema), watch, change; migration from `config.toml`              |
+| `Settings`            | `config.json`: load, validate (Schema), watch, change                                            |
 | `Accounts`            | the account files: list, find, save, remove, pin; change notifications                           |
 | `Credentials`         | OAuth tokens: refresh ahead of expiry under a cross-process lock, never interrupted mid-rotation |
 | `Providers`, `Agents` | the registries: each provider and agent is a value implementing an interface                     |
@@ -104,5 +104,5 @@ draws the view model `@slopmax/app` computes, so it holds no logic.
   slopmax.log
 ```
 
-Existing Rust-written files (`config.toml`, `*.jsonl`, accounts, state) are
-read and migrated on first run.
+Nothing is shared with the Rust slopmax's files; logins come in through the
+importers (Claude Code, Codex, CLIProxyAPI) or a fresh sign-in.

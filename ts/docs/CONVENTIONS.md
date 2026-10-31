@@ -8,18 +8,22 @@ they check features.
 
 ## What parity means
 
-- **Kept:** every feature, command, flag, and setting; every external
-  contract: the proxy endpoints and headers Claude Code, Codex and other
-  clients use, SSE event shapes, the WebSocket relay, the `/slopmax/*` admin
-  API's request and response shapes, the CLIProxyAPI-compatible hub, the
-  dashboard's behavior, notification payloads, the login service's effect.
-- **Migrated:** files the Rust wrote (`config.toml`, accounts, `state.json`,
-  `*.jsonl`) are read and converted on first run.
-- **Not kept:** Rust's internals and bytes. Output text, help, and error
-  wording are Effect's and TypeScript's (`effect/cli` help, `Intl` number
-  formatting, Schema error messages). Precision is what JavaScript gives
-  (milliseconds). Files are written as `Schema.encode` + `JSON.stringify`
-  produce them.
+**Feature parity, nothing more.** Every feature the Rust slopmax has, the
+TypeScript one has. Everything else is open: architecture, outputs, data
+shapes, file layout, URL layout, ports, settings, the admin API, CLI
+surface, wording. Breaking changes are fine; there is no compatibility to
+keep with the Rust slopmax or its files. Choose whatever is cleanest and most
+efficient in Effect, Bun, and TypeScript, and do not hold yourself to the
+Rust's way of doing anything.
+
+- **Fixed by others, not by us:** the protocols of programs slopmax does not
+  control — what Claude Code, Codex, and OpenAI-style clients send and
+  expect, the upstream provider APIs, the agents' config file formats, and
+  T3 Code's CLIProxyAPI-style management calls (the hub feature). How
+  slopmax plugs into them (paths, ports, env wiring) is ours to design.
+- **Dependencies:** use Effect, Bun, and TypeScript to their fullest, plus any
+  popular, well-maintained library that does a job better than code we would
+  write. Record each one and why in the package's `package.json` `"//"` field.
 
 ## Use Effect's own types
 
@@ -97,8 +101,8 @@ export class Accounts extends Context.Service<
 - Responses stream; nothing buffers a whole answer.
 - Typed code everywhere (no `any`, no unchecked casts), so the
   ahead-of-time compiler can do its job (`AOT.md`).
-- No dependency without a measured reason, recorded in the package's
-  `package.json` `"//"` field. Effect and Bun cover nearly everything.
+- Dependencies are welcome when they are popular, maintained, and better
+  than writing it ourselves; record why in `package.json`'s `"//"` field.
 
 ## Tests
 
