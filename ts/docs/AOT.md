@@ -61,3 +61,9 @@ A hello world compiles to 25.6 MB with `--trim` (68 MB without).
 - Experimental and canary-only. Benchmarks report AOT and JIT builds side by
   side, and the shipped build falls back to `--no-aot` if AOT breaks a feature.
 - AOT builds only for the host platform: macOS binaries are built on macOS CI.
+
+## Found while porting
+
+- `bun:ffi`'s `dlopen` (the `flock` in `@slopmax/core`'s `fsx.ts`) keeps
+  `--trim` from removing unused APIs: a hello world grows from 27.4 MB to
+  36.5 MB. Measure the CLI with and without it before choosing how locks work.

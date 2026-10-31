@@ -13,6 +13,7 @@
     },
     "apps/cli": {
       "name": "slopmax",
+      "version": "0.3.0",
       "dependencies": {
         "@effect/platform-bun": "4.1.0",
         "@slopmax/app": "workspace:*",

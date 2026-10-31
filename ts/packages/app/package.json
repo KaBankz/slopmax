@@ -3,8 +3,10 @@
   "private": true,
   "type": "module",
   "description": "The desktop app apart from any UI: its state, actions, and what it draws",
+  "//": "No dependencies beyond effect and @slopmax/core. node:path (dirname) and node:process (execPath, platform), which Bun and Node both have, are used in lib.ts only, to find the CLI beside the app.",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./protocol": "./src/protocol.ts"
   },
   "dependencies": {
     "effect": "4.1.0",

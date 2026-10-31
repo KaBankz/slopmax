@@ -5,9 +5,9 @@
 // of the provider-side identity (Claude organization, ChatGPT workspace), so
 // one email in two organizations stays two accounts with separate limits.
 
-import { Effect, Schema, type Scope } from "effect"
+import { Effect, Result, Schema, SchemaGetter, SchemaIssue, type Scope } from "effect"
 
-import { ids, log, SignedDuration, text as texts, type Timestamp, TimestampFromString } from "@slopmax/common"
+import { ids, log, SignedDuration, text as texts, Timestamp, TimestampFromString } from "@slopmax/common"
 import { DialectSchema } from "@slopmax/wire"
 
 import { context, Failure, lift } from "./error.ts"
@@ -16,6 +16,45 @@ import * as paths from "./paths.ts"
 import { type Home, join } from "./paths.ts"
 import { ProviderId, ProviderIdSchema, Spec } from "./provider/mod.ts"
 import { list, opt, withDefault } from "./serde.ts"
+
+// `added_at` orders accounts, and Rust's clock counts nanoseconds: accounts
+// it adds one after another (an import of several logins) are microseconds
+// apart. Timestamps here are milliseconds, so this one keeps the microseconds
+// as a fraction (a double holds them exactly at today's dates) and writes them
+// back, or those accounts would tie and list in directory order.
+const AddedAtSchema: Schema.decodeTo<Schema.Finite, Schema.String> = Schema.String.pipe(
+  Schema.decodeTo(Schema.Finite, {
+    decode: SchemaGetter.transformEffect((text: string, options) =>
+      Result.match(Timestamp.parse(text), {
+        onSuccess: (t) => Effect.succeed(t + micros(text) / 1_000),
+        onFailure: (e) => Effect.fail(new SchemaIssue.InvalidValue({ message: e.message }, text, options)),
+      }),
+    ),
+    encode: SchemaGetter.transform((t: number) => {
+      if (Number.isInteger(t)) return Timestamp.display(t)
+      const total = Math.round(t * 1_000)
+      const us = ((total % 1_000) + 1_000) % 1_000
+      const ms = (total - us) / 1_000
+      if (us === 0) return Timestamp.display(ms)
+      const text = Timestamp.displayMillis(ms).slice(0, -1) + String(us).padStart(3, "0")
+      return `${text.replace(/0+$/, "")}Z`
+    }),
+  }),
+)
+
+// The microseconds past the millisecond in RFC 3339 text (0 when it has none).
+const micros = (text: string): number => {
+  const dot = text.indexOf(".")
+  if (dot < 0) return 0
+  let n = 0
+  let digits = true
+  for (let i = 1; i <= 6; i++) {
+    const c = text.charCodeAt(dot + i)
+    digits &&= c >= 48 && c <= 57
+    if (i > 3) n = n * 10 + (digits ? c - 48 : 0)
+  }
+  return n
+}
 
 /** OAuth tokens for one account, or its API key as a token that never expires. */
 export const TokensSchema = Schema.Struct({
@@ -99,7 +138,7 @@ export const AccountSchema = Schema.Struct({
   link: opt(LinkSchema),
   /** A compatible endpoint's address and models. */
   endpoint: opt(EndpointSchema),
-  addedAt: TimestampFromString,
+  addedAt: AddedAtSchema,
 }).pipe(
   Schema.encodeKeys({
     accountId: "account_id",
@@ -196,6 +235,15 @@ export class Store {
 
   /** All accounts, ordered by provider, then priority, then age. */
   readonly list = Effect.fn("Store.list")(function* (this: Store): Effect.fn.Return<Array<Account>, Failure> {
+    return (yield* this.read(true)).toSorted(
+      (a, b) => ProviderId.compare(a.provider, b.provider) || b.priority - a.priority || a.addedAt - b.addedAt,
+    )
+  })
+
+  private readonly read = Effect.fn("Store.read")(function* (
+    this: Store,
+    warn: boolean,
+  ): Effect.fn.Return<Array<Account>, Failure> {
     const listing = yield* fsx.readDir(this.dir).pipe(
       Effect.map((names): ReadonlyArray<string> | undefined => names),
       Effect.catchIf(
@@ -213,13 +261,11 @@ export class Store {
       const read = yield* Effect.result(fsx.readJson(path, AccountSchema))
       if (read._tag === "Success") {
         if (read.success !== undefined) accounts.push(read.success)
-      } else {
+      } else if (warn) {
         log.warn(`skipping ${path}: ${read.failure.message}`)
       }
     }
-    return accounts.toSorted(
-      (a, b) => ProviderId.compare(a.provider, b.provider) || b.priority - a.priority || a.addedAt - b.addedAt,
-    )
+    return accounts
   })
 
   readonly get = Effect.fn("Store.get")(function* (
@@ -264,6 +310,14 @@ export class Store {
     yield* this.lock(fresh.id)
     const existing = yield* this.get(fresh.id)
     if (existing !== undefined) fresh = Account.inheritSettings(fresh, existing)
+    else {
+      // Accounts added within one millisecond would tie, where Rust's
+      // nanoseconds keep them in the order they were added.
+      const taken = new Set((yield* this.read(false)).map((a) => a.addedAt))
+      let addedAt = fresh.addedAt
+      while (taken.has(addedAt)) addedAt += 1
+      if (addedAt !== fresh.addedAt) fresh = { ...fresh, addedAt }
+    }
     yield* this.save(fresh)
     return [fresh, existing === undefined] as const
   }, Effect.scoped)

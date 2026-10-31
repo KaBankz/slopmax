@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 
 import { it } from "@slopmax/test"
@@ -143,6 +143,41 @@ describe("account, beyond the Rust tests", () => {
     })
     expect(Account.inheritSettings({ ...base, label: "new" }, old).label).toBe("new")
   })
+
+  it.live("accounts added within one millisecond keep the order they were added in", () =>
+    Effect.gen(function* () {
+      const dir = tempDir("order")
+      const store = Store.at(join(dir, "accounts"))
+      mkdirSync(store.dir, { recursive: true })
+      // Added by the Rust within one millisecond, microseconds apart.
+      const rust = ["146782465", "146659063", "146764693", "146744497"]
+      for (const [i, fraction] of rust.entries()) {
+        const account = { ...claude(`o${i}`, `${i}@x`), addedAt: 0 }
+        const encoded = Schema.encodeSync(AccountSchema)(account)
+        writeFileSync(
+          join(store.dir, `${account.id}.json`),
+          JSON.stringify({ ...encoded, added_at: `2026-10-31T01:02:03.${fraction}Z` }),
+        )
+      }
+      expect((yield* store.list()).map((a) => a.email)).toEqual(["1@x", "3@x", "2@x", "0@x"])
+      // Written back, they keep the microseconds and so the order.
+      const first = (yield* store.list())[0]
+      if (first === undefined) return expect.unreachable()
+      const updated = yield* store.update(first.id, (a) => ({ ...a, label: "kept" }))
+      expect(JSON.parse(readFileSync(join(store.dir, `${updated.id}.json`), "utf8")).added_at).toBe(
+        "2026-10-31T01:02:03.146659Z",
+      )
+      expect((yield* store.list()).map((a) => a.email)).toEqual(["1@x", "3@x", "2@x", "0@x"])
+
+      // Added here in the same millisecond, they take the next free ones.
+      const fresh = Store.at(join(dir, "fresh"))
+      for (const email of ["c@x", "d@x", "e@x", "f@x"]) yield* fresh.upsert(claude(email, email))
+      const listed = yield* fresh.list()
+      expect(listed.map((a) => a.email)).toEqual(["c@x", "d@x", "e@x", "f@x"])
+      expect(listed.map((a) => a.addedAt - now)).toEqual([0, 1, 2, 3])
+      rmSync(dir, { recursive: true })
+    }),
+  )
 
   it.live("the store lists in order, skips bad files, and keeps pins in step", () =>
     Effect.gen(function* () {

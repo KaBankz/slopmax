@@ -1,10 +1,30 @@
 {
   "name": "slopmax",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "The slopmax CLI",
+  "//": {
+    "compile": "Ahead of time with Bun canary (docs/AOT.md): mise run compile, or BUN_CANARY=<path to canary bun> bun run compile.",
+    "compile:jit": "Bun 1.4.4 with the flags docs/RUNTIME.md measured best, bytecode laid out by --version and serve profiles (scripts/compile-jit.sh).",
+    "dependencies": "None beyond the workspace and Effect's Bun platform layers.",
+    "package": "slopmax-<target>.tar.gz (binary at the root) and its .sha256, as install.sh and the release workflow name them (DIST-008/009); a Linux target names the libc dist/slopmax links (gnu or musl).",
+    "compile:musl": "The JIT build for musl Linux (Alpine, and the `unknown-linux-musl` release assets): Bun's musl runtime needs musl's loader and libstdc++, so it runs on musl systems only.",
+    "budget": "DIST-004: at most 8 third-party packages in the dependency tree and a dist/slopmax of at most 73,400,320 bytes (scripts/budget.ts; mise run budget)."
+  },
   "exports": {
     ".": "./src/index.ts"
+  },
+  "scripts": {
+    "compile": "${BUN_CANARY:-bun} compile --no-script --trim --no-compile-autoload-dotenv --no-compile-autoload-bunfig --outfile dist/slopmax src/main.ts",
+    "compile:jit": "scripts/compile-jit.sh",
+    "compile:musl": "scripts/compile-jit.sh bun-linux-$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')-musl",
+    "compile:bench": "${BUN_CANARY:-bun} compile --no-script --trim --no-compile-autoload-dotenv --no-compile-autoload-bunfig --outfile dist/bench bench/bench.ts",
+    "compile:bench:jit": "bun build --compile --minify --bytecode --format=esm --no-compile-autoload-dotenv --no-compile-autoload-bunfig --outfile dist/bench bench/bench.ts",
+    "test": "bun test test",
+    "budget": "bun scripts/budget.ts",
+    "bench": "bench/bench.sh",
+    "package": "scripts/package.sh"
   },
   "dependencies": {
     "effect": "4.1.0",

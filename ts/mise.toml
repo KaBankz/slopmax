@@ -14,5 +14,11 @@ run = "bun run verify"
 
 [tasks.compile]
 description = "Build the CLI ahead of time with Bun canary"
+depends = ["install"]
 tools = { "github:oven-sh/bun" = { version = "canary", asset_pattern = "bun-linux-x64.zip" } }
 run = "bun run --cwd apps/cli compile"
+
+[tasks.budget]
+description = "Hold the CLI to 8 third-party packages and its binary to 70 MiB (DIST-004)"
+depends = ["compile"]
+run = "bun run --cwd apps/cli budget"
