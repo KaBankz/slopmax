@@ -1,8 +1,8 @@
 rust_file	rust_test	ts_file	ts_test	note
-crates/slopmax-app/src/alerts.rs	a_nudge_is_told_once			
-crates/slopmax-app/src/alerts.rs	what_was_told_outlasts_a_restart_until_its_moment_passes			
-crates/slopmax-app/src/alerts.rs	a_missing_or_broken_file_starts_afresh_with_notifications_on			
-crates/slopmax-app/src/alerts.rs	a_notification_reads_plainly			
+crates/slopmax-app/src/alerts.rs	a_nudge_is_told_once	packages/core/test/notifier/notifier.test.ts	tells a nudge once	
+crates/slopmax-app/src/alerts.rs	what_was_told_outlasts_a_restart_until_its_moment_passes	packages/core/test/notifier/notifier.test.ts	keeps what was told past a restart until its moment passes | does not tell again a nudge told before a restart	
+crates/slopmax-app/src/alerts.rs	a_missing_or_broken_file_starts_afresh_with_notifications_on			The desktop told file is gone: the told set lives in state.json, which the pool loads (a malformed file fails the daemon start, DMN-002), and notifications on or off is a desktop preference (NOT-PORTED: desktop told file)
+crates/slopmax-app/src/alerts.rs	a_notification_reads_plainly	packages/domain/test/format.test.ts	read plainly: a title for the kind, and the message without backticks	
 crates/slopmax-app/src/lib.rs	settings_are_written_into_config_toml			
 crates/slopmax-app/src/lib.rs	a_config_that_will_not_load_is_left_alone			
 crates/slopmax-app/src/lib.rs	advanced_settings_are_checked_as_the_cli_checks_them			
@@ -38,256 +38,256 @@ crates/slopmax-app/src/view.rs	lists_read_as_english
 crates/slopmax-app/src/view.rs	the_proxy_line_says_how_it_stands			
 crates/slopmax-app/src/view.rs	agents_and_the_service_read_plainly			
 crates/slopmax-app/src/view.rs	a_sign_in_says_what_to_do_next			
-crates/slopmax-common/src/human.rs	durations_use_two_units			
-crates/slopmax-common/src/human.rs	until_reports_now_when_passed			
-crates/slopmax-common/src/human.rs	counts_keep_three_figures			
-crates/slopmax-common/src/ids.rs	shapes			
-crates/slopmax-common/src/log.rs	reads_plain_levels_and_target_filters			
-crates/slopmax-common/src/log.rs	levels_order_by_verbosity			
-crates/slopmax-common/src/log.rs	labels_line_up_and_colors_tell_levels_apart			
-crates/slopmax-common/src/log.rs	the_default_level_writes_warnings_and_errors_only			
-crates/slopmax-common/src/log.rs	levels_read_case_and_space_insensitively			
-crates/slopmax-common/src/time.rs	parses_rfc3339_with_offsets_and_fractions			
-crates/slopmax-common/src/time.rs	rejects_malformed_timestamps			
-crates/slopmax-common/src/time.rs	displays_minimal_rfc3339			
-crates/slopmax-common/src/time.rs	round_trips_through_text_and_serde			
-crates/slopmax-common/src/time.rs	civil_conversion_matches_known_days			
-crates/slopmax-common/src/time.rs	dates_shift_by_offset			
-crates/slopmax-common/src/time.rs	parses_http_dates			
-crates/slopmax-common/src/time.rs	arithmetic_saturates_and_measures			
-crates/slopmax-core/src/account.rs	ids_hash_the_identity_as_before			
-crates/slopmax-core/src/account.rs	same_email_in_two_orgs_are_distinct_accounts			
-crates/slopmax-core/src/account.rs	upsert_merges_settings_on_relogin			
-crates/slopmax-core/src/account.rs	find_resolves_ids_labels_emails_and_positions			
-crates/slopmax-core/src/account.rs	expiry_checks_respect_lead			
-crates/slopmax-core/src/agent/claude_code.rs	session_id_comes_from_header_then_metadata			
-crates/slopmax-core/src/agent/claude_code.rs	detects_every_claude_code_entrypoint			
-crates/slopmax-core/src/agent/claude_code.rs	env_points_at_the_proxy			
-crates/slopmax-core/src/agent/claude_code.rs	setup_round_trips_and_keeps_other_settings			
-crates/slopmax-core/src/agent/claude_code.rs	the_command_runs_claude_through_the_proxy_without_an_api_key			
-crates/slopmax-core/src/agent/claude_code.rs	settings_that_are_not_an_object_are_refused			
-crates/slopmax-core/src/agent/claude_code.rs	setup_on_a_fresh_machine_creates_settings_and_undo_empties_them			
-crates/slopmax-core/src/agent/claude_code.rs	a_live_login_is_imported_with_its_profile			
-crates/slopmax-core/src/agent/claude_code.rs	an_expired_login_is_refreshed_first_and_keeps_its_refresh_token			
-crates/slopmax-core/src/agent/claude_code.rs	logins_that_cannot_be_read_are_errors			
-crates/slopmax-core/src/agent/codex.rs	overrides_define_a_custom_provider			
-crates/slopmax-core/src/agent/codex.rs	overrides_sit_at_the_users_level			
-crates/slopmax-core/src/agent/codex.rs	env_hands_off_to_run			
-crates/slopmax-core/src/agent/codex.rs	session_prefers_header_then_metadata_then_cache_key			
-crates/slopmax-core/src/agent/codex.rs	imports_the_codex_login			
-crates/slopmax-core/src/agent/codex.rs	api_key_logins_are_not_imported			
-crates/slopmax-core/src/agent/codex.rs	setup_round_trips_and_keeps_comments			
-crates/slopmax-core/src/agent/mod.rs	registry_ids_are_unique_and_cover_every_subscription			
-crates/slopmax-core/src/agent/mod.rs	sessions_come_from_the_agent_or_common_ids			
-crates/slopmax-core/src/agent/mod.rs	setup_edits_a_symlinked_config_in_place			
-crates/slopmax-core/src/agent/mod.rs	shell_quoting			
-crates/slopmax-core/src/auth/callback.rs	parses_full_redirect_url			
-crates/slopmax-core/src/auth/callback.rs	parses_code_hash_state			
-crates/slopmax-core/src/auth/callback.rs	parses_bare_query_and_decodes			
-crates/slopmax-core/src/auth/callback.rs	surfaces_provider_errors			
-crates/slopmax-core/src/auth/callback.rs	empty_codes_and_fragments_are_handled			
-crates/slopmax-core/src/auth/callback.rs	desktops_have_a_browser			
-crates/slopmax-core/src/auth/callback.rs	the_redirect_delivers_the_code_and_a_page			
-crates/slopmax-core/src/auth/callback.rs	busy_ports_fall_back_to_pasted_addresses			
-crates/slopmax-core/src/auth/callback.rs	a_foreign_state_is_refused			
-crates/slopmax-core/src/auth/callback.rs	nothing_to_wait_for_is_an_error			
-crates/slopmax-core/src/auth/jwt.rs	decodes_claims_and_expiry			
-crates/slopmax-core/src/auth/jwt.rs	rejects_non_jwt			
-crates/slopmax-core/src/auth/mod.rs	linked_accounts_follow_their_source			
-crates/slopmax-core/src/auth/mod.rs	classifies_refresh_failures			
-crates/slopmax-core/src/auth/mod.rs	fresh_tokens_are_used_without_a_refresh			
-crates/slopmax-core/src/auth/mod.rs	due_tokens_are_refreshed_identified_and_saved			
-crates/slopmax-core/src/auth/mod.rs	forced_refreshes_keep_tokens_the_provider_did_not_rotate			
-crates/slopmax-core/src/auth/mod.rs	a_token_another_process_rotated_is_reused			
-crates/slopmax-core/src/auth/mod.rs	a_stored_copy_that_is_no_longer_due_is_not_refreshed			
-crates/slopmax-core/src/auth/mod.rs	rejected_refresh_tokens_mark_the_account			
-crates/slopmax-core/src/auth/mod.rs	passing_failures_leave_the_account_alone			
-crates/slopmax-core/src/auth/mod.rs	unreachable_token_endpoints_are_passing_failures			
-crates/slopmax-core/src/auth/mod.rs	accounts_without_a_refresh_token_must_log_in_again			
-crates/slopmax-core/src/auth/mod.rs	api_keys_cannot_be_refreshed			
-crates/slopmax-core/src/auth/mod.rs	linked_accounts_wait_for_their_source_when_forced			
-crates/slopmax-core/src/auth/mod.rs	links_to_unknown_tools_fail_softly			
-crates/slopmax-core/src/auth/mod.rs	connect_signs_in_and_merges_repeat_logins			
-crates/slopmax-core/src/auth/mod.rs	prompts_deliver_events_and_pasted_lines			
-crates/slopmax-core/src/auth/mod.rs	login_options_never_print_the_key			
-crates/slopmax-core/src/auth/mod.rs	grants_become_tokens_stamped_now			
-crates/slopmax-core/src/auth/mod.rs	refresh_errors_read_as_what_to_do			
-crates/slopmax-core/src/auth/pkce.rs	challenge_matches_rfc7636_example			
-crates/slopmax-core/src/auth/pkce.rs	verifier_is_url_safe_and_unique			
-crates/slopmax-core/src/background.rs	the_running_proxy_reports_its_version			
-crates/slopmax-core/src/background.rs	another_program_on_the_port_is_not_the_proxy			
-crates/slopmax-core/src/background.rs	nothing_listening_is_not_running			
-crates/slopmax-core/src/background.rs	reports_are_read_with_the_key_and_refreshes_and_syncs_post			
-crates/slopmax-core/src/background.rs	a_wrong_key_reads_as_no_report			
-crates/slopmax-core/src/background.rs	redeeming_returns_the_outcome_or_the_proxys_reason			
-crates/slopmax-core/src/background.rs	stopping_asks_a_running_proxy_to_shut_down			
-crates/slopmax-core/src/background.rs	the_current_binary_is_found			
-crates/slopmax-core/src/config.rs	first_load_writes_the_template_with_a_fresh_key			
-crates/slopmax-core/src/config.rs	a_missing_key_is_added_without_rewriting_the_file			
-crates/slopmax-core/src/config.rs	live_settings_are_checked_before_they_are_written			
-crates/slopmax-core/src/config.rs	processes_started_together_agree_on_the_key			
-crates/slopmax-core/src/config.rs	template_lists_every_setting_at_its_default			
-crates/slopmax-core/src/config.rs	parses_partial_config			
-crates/slopmax-core/src/config.rs	parses_custom_prices			
-crates/slopmax-core/src/config.rs	client_keys_are_added_and_removed_in_place			
-crates/slopmax-core/src/config.rs	rejects_unknown_keys			
-crates/slopmax-core/src/doctor.rs	a_running_proxy_of_this_version_is_fine			
-crates/slopmax-core/src/doctor.rs	an_older_proxy_should_be_restarted			
-crates/slopmax-core/src/doctor.rs	another_program_on_the_port_is_named			
-crates/slopmax-core/src/doctor.rs	a_stopped_proxy_says_how_to_start_it			
-crates/slopmax-core/src/doctor.rs	listening_beyond_this_machine_is_pointed_out			
-crates/slopmax-core/src/doctor.rs	the_login_service_is_reported			
-crates/slopmax-core/src/doctor.rs	no_accounts_is_a_failure			
-crates/slopmax-core/src/doctor.rs	accounts_are_counted_and_each_problem_has_a_fix			
-crates/slopmax-core/src/doctor.rs	claude_code_wiring_is_checked_against_this_proxy			
-crates/slopmax-core/src/doctor.rs	codex_wiring_is_checked_against_this_proxy			
-crates/slopmax-core/src/doctor.rs	cliproxyapi_matters_only_with_linked_accounts			
-crates/slopmax-core/src/doctor.rs	reachable_services_with_a_sound_clock_are_fine			
-crates/slopmax-core/src/doctor.rs	a_skewed_clock_is_reported_once			
-crates/slopmax-core/src/doctor.rs	unreachable_services_fail_with_a_fix			
-crates/slopmax-core/src/doctor.rs	account_files_others_can_read_are_flagged			
-crates/slopmax-core/src/doctor.rs	programs_are_looked_up_on_path			
-crates/slopmax-core/src/doctor.rs	levels_order_by_severity			
-crates/slopmax-core/src/fsx.rs	new_directories_are_private			
-crates/slopmax-core/src/fsx.rs	write_private_round_trips_and_restricts_permissions			
-crates/slopmax-core/src/fsx.rs	read_json_missing_file_is_none			
-crates/slopmax-core/src/history.rs	days_fill_their_buckets_by_provider			
-crates/slopmax-core/src/history.rs	failover_failures_and_housekeeping_count_apart			
-crates/slopmax-core/src/history.rs	api_keys_bill_what_subscriptions_only_value			
-crates/slopmax-core/src/history.rs	caching_speed_sessions_and_agents			
-crates/slopmax-core/src/history.rs	an_hour_of_warmups_alone_has_no_cache_rate			
-crates/slopmax-core/src/history.rs	today_counts_hours_up_to_now			
-crates/slopmax-core/src/history.rs	work_falls_on_the_local_weekday_and_hour			
-crates/slopmax-core/src/history.rs	first_bytes_read_as_median_and_slowest_twentieth			
-crates/slopmax-core/src/import.rs	reads_cliproxyapi_files			
-crates/slopmax-core/src/ledger.rs	writes_monthly_files_and_reads_them_back			
-crates/slopmax-core/src/limits.rs	elapsed_windows_start_over			
-crates/slopmax-core/src/limits.rs	pools_read_as_one_account			
-crates/slopmax-core/src/limits.rs	unknown_usage_scores_above_full			
-crates/slopmax-core/src/limits.rs	a_window_lapses_once_its_reset_passes_or_a_new_period_shows			
-crates/slopmax-core/src/limits.rs	expiring_at_prefers_started_windows_with_headroom			
-crates/slopmax-core/src/notify.rs	reports_each_change_once			
-crates/slopmax-core/src/notify.rs	disabled_accounts_are_ignored			
-crates/slopmax-core/src/notify.rs	settings_filter_events			
-crates/slopmax-core/src/notify.rs	commands_get_the_event_in_variables			
-crates/slopmax-core/src/notify.rs	nudges_name_lapsing_resets_and_spare_weeks_once_each			
-crates/slopmax-core/src/pool.rs	round_robin_takes_turns_within_the_top_tier			
-crates/slopmax-core/src/pool.rs	reset_windows_are_told_once_with_what_was_used			
-crates/slopmax-core/src/pool.rs	next_says_who_a_new_session_would_get_and_why			
-crates/slopmax-core/src/pool.rs	without_affinity_a_session_is_placed_afresh_but_its_move_is_known			
-crates/slopmax-core/src/pool.rs	a_shorter_session_ttl_forgets_sessions_sooner			
-crates/slopmax-core/src/pool.rs	reset_first_spends_the_window_that_expires_soonest			
-crates/slopmax-core/src/pool.rs	reset_first_saves_a_week_about_to_be_lost_before_any_5_hour_window			
-crates/slopmax-core/src/pool.rs	fill_first_drains_in_order			
-crates/slopmax-core/src/pool.rs	least_used_prefers_headroom_and_ranks_unknown_last			
-crates/slopmax-core/src/pool.rs	sessions_stick_until_their_account_cannot_serve			
-crates/slopmax-core/src/pool.rs	sessions_survive_a_restart			
-crates/slopmax-core/src/pool.rs	moved_from_reports_a_session_leaving_its_account			
-crates/slopmax-core/src/pool.rs	sessions_expire_after_ttl			
-crates/slopmax-core/src/pool.rs	priority_tiers_and_pins_come_before_strategy			
-crates/slopmax-core/src/pool.rs	known_exhaustion_is_skipped_without_a_request			
-crates/slopmax-core/src/pool.rs	unavailable_reports_the_earliest_return			
-crates/slopmax-core/src/pool.rs	model_blocks_only_affect_that_model			
-crates/slopmax-core/src/pool.rs	fresh_reading_lifts_a_block_early			
-crates/slopmax-core/src/pool.rs	disabled_and_signed_out_accounts_are_skipped			
-crates/slopmax-core/src/pool.rs	blocks_on_tried_accounts_still_report_when_the_pool_frees_up			
-crates/slopmax-core/src/pool.rs	credits_count_from_their_list_and_leave_it_when_redeemed			
-crates/slopmax-core/src/pricing.rs	matches_a_model_or_its_dated_snapshots			
-crates/slopmax-core/src/pricing.rs	shares_follow_plan_sizes_only_when_every_one_is_known			
-crates/slopmax-core/src/pricing.rs	plans_are_priced_by_provider_and_can_be_set			
-crates/slopmax-core/src/pricing.rs	openai_prices_charge_nothing_extra_to_cache			
-crates/slopmax-core/src/pricing.rs	custom_prices_win_and_fill_in_cache_rates			
-crates/slopmax-core/src/pricing.rs	costs_every_kind_of_token			
-crates/slopmax-core/src/provider/claude/credits.rs	grants_list_one_credit_per_reset_the_next_first			
-crates/slopmax-core/src/provider/claude/credits.rs	a_refused_caller_or_an_account_without_any_lists_none			
-crates/slopmax-core/src/provider/claude/credits.rs	claims_answer_as_outcomes			
-crates/slopmax-core/src/provider/claude/credits.rs	only_a_uuid_names_the_organization			
-crates/slopmax-core/src/provider/claude/credits.rs	nothing_is_listed_or_spent_before_claude_code_is_seen			
-crates/slopmax-core/src/provider/claude/credits.rs	failures_name_the_step_that_failed			
-crates/slopmax-core/src/provider/claude/credits.rs	unreachable_servers_fail_after_a_retry			
-crates/slopmax-core/src/provider/claude/credits.rs	odd_usage_replies_are_errors_or_empty			
-crates/slopmax-core/src/provider/claude/limits.rs	pool_headers_replace_the_accounts			
-crates/slopmax-core/src/provider/claude/limits.rs	claude_headers_convert_fractions_to_percent			
-crates/slopmax-core/src/provider/claude/limits.rs	claude_usage_reads_shared_and_scoped_windows			
-crates/slopmax-core/src/provider/claude/limits.rs	claude_refusal_blocks_until_latest_rejected_reset			
-crates/slopmax-core/src/provider/claude/limits.rs	claude_overage_only_refusal_scopes_to_model			
-crates/slopmax-core/src/provider/claude/limits.rs	fast_mode_credit_refusals_are_told_apart			
-crates/slopmax-core/src/provider/claude/limits.rs	claude_plain_429_is_throttling			
-crates/slopmax-core/src/provider/claude/mod.rs	accounts_are_keyed_by_organization_then_account			
-crates/slopmax-core/src/provider/claude/mod.rs	requests_carry_the_token_and_the_oauth_beta			
-crates/slopmax-core/src/provider/claude/mod.rs	windows_come_from_headers_and_the_pool_replaces_them			
-crates/slopmax-core/src/provider/claude/mod.rs	verdicts_tell_spent_windows_from_fast_mode_and_auth			
-crates/slopmax-core/src/provider/claude/mod.rs	usage_reads_both_windows			
-crates/slopmax-core/src/provider/claude/mod.rs	new_tokens_bring_the_profile			
-crates/slopmax-core/src/provider/claude/mod.rs	unreachable_usage_endpoints_are_other_failures			
-crates/slopmax-core/src/provider/claude/oauth.rs	authorize_url_carries_pkce_and_scopes			
-crates/slopmax-core/src/provider/claude/oauth.rs	plan_from_profile			
-crates/slopmax-core/src/provider/claude/oauth.rs	apply_profile_never_erases_identity			
-crates/slopmax-core/src/provider/claude/oauth.rs	plans_read_the_organization_first			
-crates/slopmax-core/src/provider/claude/oauth.rs	profiles_fill_identity_but_skip_blanks			
-crates/slopmax-core/src/provider/claude/oauth.rs	exchanges_codes_for_an_identified_account			
-crates/slopmax-core/src/provider/claude/oauth.rs	a_failed_profile_lookup_keeps_the_token_identity			
-crates/slopmax-core/src/provider/claude/oauth.rs	failed_exchanges_say_why			
-crates/slopmax-core/src/provider/claude/oauth.rs	refresh_classifies_the_token_endpoints_answer			
-crates/slopmax-core/src/provider/claude/oauth.rs	profiles_need_a_working_token			
-crates/slopmax-core/src/provider/claude/oauth.rs	logs_in_with_a_pasted_code_and_state			
-crates/slopmax-core/src/provider/claude/wire.rs	oauth_beta_is_added_once			
-crates/slopmax-core/src/provider/claude/wire.rs	claude_code_is_known_by_its_agent			
-crates/slopmax-core/src/provider/claude/wire.rs	only_the_credential_changes			
-crates/slopmax-core/src/provider/codex/credits.rs	only_codex_window_credits_count			
-crates/slopmax-core/src/provider/codex/credits.rs	listing_and_redeeming_report_failures			
-crates/slopmax-core/src/provider/codex/limits.rs	pool_headers_and_events_describe_the_pool			
-crates/slopmax-core/src/provider/codex/limits.rs	websocket_rate_limit_events			
-crates/slopmax-core/src/provider/codex/limits.rs	codex_headers_classify_by_window_length			
-crates/slopmax-core/src/provider/codex/limits.rs	codex_usage_reads_windows_plan_and_reset_credits			
-crates/slopmax-core/src/provider/codex/limits.rs	codex_usage_limit_uses_body_reset			
-crates/slopmax-core/src/provider/codex/limits.rs	codex_rate_limit_is_throttling			
-crates/slopmax-core/src/provider/codex/mod.rs	requests_carry_the_token_and_workspace			
-crates/slopmax-core/src/provider/codex/mod.rs	translated_requests_drop_output_limits_and_moved_state			
-crates/slopmax-core/src/provider/codex/mod.rs	verdicts_cover_limits_stale_state_and_disguised_limits			
-crates/slopmax-core/src/provider/codex/mod.rs	windows_come_from_headers_and_the_pool_replaces_them			
-crates/slopmax-core/src/provider/codex/mod.rs	new_tokens_are_read_for_identity			
-crates/slopmax-core/src/provider/codex/mod.rs	usage_reads_windows_plan_and_credits			
-crates/slopmax-core/src/provider/codex/mod.rs	the_catalog_lists_visible_models			
-crates/slopmax-core/src/provider/codex/oauth.rs	authorize_url_uses_registered_redirect			
-crates/slopmax-core/src/provider/codex/oauth.rs	claims_fill_identity_leniently			
-crates/slopmax-core/src/provider/codex/oauth.rs	email_falls_back_to_access_token_profile_claim			
-crates/slopmax-core/src/provider/codex/oauth.rs	exchanges_codes_for_an_account_named_by_its_claims			
-crates/slopmax-core/src/provider/codex/oauth.rs	failed_exchanges_say_why			
-crates/slopmax-core/src/provider/codex/oauth.rs	refresh_sends_json_and_classifies_failures			
-crates/slopmax-core/src/provider/codex/oauth.rs	device_codes_sign_in_once_approved			
-crates/slopmax-core/src/provider/codex/oauth.rs	device_logins_report_failures			
-crates/slopmax-core/src/provider/codex/oauth.rs	browser_logins_accept_a_pasted_redirect			
-crates/slopmax-core/src/provider/codex/wire.rs	upstream_headers_swap_credentials_and_add_version			
-crates/slopmax-core/src/provider/codex/wire.rs	strips_encrypted_reasoning_but_keeps_summaries			
-crates/slopmax-core/src/provider/codex/wire.rs	recognizes_account_state_rejections			
-crates/slopmax-core/src/provider/compat.rs	endpoints_are_the_accounts_data			
-crates/slopmax-core/src/provider/compat.rs	logins_list_the_models_when_none_are_named			
-crates/slopmax-core/src/provider/compat.rs	named_models_survive_an_endpoint_that_cannot_list			
-crates/slopmax-core/src/provider/compat.rs	logins_need_an_address			
-crates/slopmax-core/src/provider/compat.rs	catalogs_name_models_but_not_patterns			
-crates/slopmax-core/src/provider/compat.rs	accounts_without_an_endpoint_serve_nothing			
-crates/slopmax-core/src/provider/compat.rs	keys_go_in_the_header_the_dialect_expects			
-crates/slopmax-core/src/provider/keys.rs	keys_replace_the_slopmax_key			
-crates/slopmax-core/src/provider/keys.rs	verdicts_tell_funds_from_rate_limits			
-crates/slopmax-core/src/provider/keys.rs	model_lists_read_either_shape			
-crates/slopmax-core/src/provider/keys.rs	key_accounts_are_named_by_their_tail			
-crates/slopmax-core/src/provider/keys.rs	logging_in_checks_the_key_with_the_vendor			
-crates/slopmax-core/src/provider/keys.rs	checks_tolerate_outages_and_open_endpoints			
-crates/slopmax-core/src/provider/keys.rs	catalogs_list_what_the_key_can_use			
-crates/slopmax-core/src/provider/keys.rs	keys_have_no_windows_refreshes_or_state			
-crates/slopmax-core/src/provider/keys.rs	overload_throttles_briefly			
-crates/slopmax-core/src/provider/mod.rs	patterns_match_with_wildcards			
-crates/slopmax-core/src/provider/mod.rs	registry_ids_are_unique_and_round_trip			
-crates/slopmax-core/src/provider/mod.rs	unknown_ids_list_the_known_ones			
-crates/slopmax-core/src/provider/mod.rs	edge_patterns			
-crates/slopmax-core/src/provider/mod.rs	specs_say_how_accounts_sign_in_and_pay			
-crates/slopmax-core/src/provider/mod.rs	refusals_become_verdicts			
-crates/slopmax-core/src/provider/mod.rs	subscriptions_without_a_catalog_list_nothing			
-crates/slopmax-core/src/proxy/forward.rs	upstream_errors_are_retold_with_their_message			
-crates/slopmax-core/src/proxy/forward.rs	a_failure_event_inside_a_stream_is_found			
-crates/slopmax-core/src/proxy/forward.rs	unreadable_errors_pass_their_first_500_bytes			
-crates/slopmax-core/src/proxy/forward.rs	claude_code_hears_server_errors_as_overloaded			
+crates/slopmax-common/src/human.rs	durations_use_two_units	packages/domain/test/format.test.ts	use their two largest units	
+crates/slopmax-common/src/human.rs	until_reports_now_when_passed	packages/domain/test/format.test.ts	count down to a moment, and say now once it has passed	
+crates/slopmax-common/src/human.rs	counts_keep_three_figures	packages/domain/test/format.test.ts	keep counts to about three figures	
+crates/slopmax-common/src/ids.rs	shapes	packages/domain/test/providers.test.ts	makes tokens, keys, hex ids and version 4 UUIDs of the right shape	
+crates/slopmax-common/src/log.rs	reads_plain_levels_and_target_filters	packages/core/test/log/log.test.ts	reads plain levels and filters naming slopmax	
+crates/slopmax-common/src/log.rs	levels_order_by_verbosity	packages/core/test/log/log.test.ts	shows each level and every level more severe, from off to debug	
+crates/slopmax-common/src/log.rs	labels_line_up_and_colors_tell_levels_apart	packages/core/test/log/log.test.ts	lines labels up and tells levels apart by color	
+crates/slopmax-common/src/log.rs	the_default_level_writes_warnings_and_errors_only	packages/core/test/log/log.test.ts	writes warnings and errors only, unless SLOPMAX_LOG says otherwise	
+crates/slopmax-common/src/log.rs	levels_read_case_and_space_insensitively	packages/core/test/log/log.test.ts	reads levels in any case and with spaces around	
+crates/slopmax-common/src/time.rs	parses_rfc3339_with_offsets_and_fractions	packages/domain/test/time.test.ts	reads RFC 3339 with any offset, a space or lowercase separator, and any fraction	
+crates/slopmax-common/src/time.rs	rejects_malformed_timestamps	packages/domain/test/time.test.ts	refuses text that is not an instant	
+crates/slopmax-common/src/time.rs	displays_minimal_rfc3339	packages/domain/test/time.test.ts	writes UTC with only the fraction digits a time needs	
+crates/slopmax-common/src/time.rs	round_trips_through_text_and_serde	packages/domain/test/time.test.ts	round trips through text and JSON	
+crates/slopmax-common/src/time.rs	civil_conversion_matches_known_days	packages/domain/test/time.test.ts	reads each date onto its own day, across leap years and before 1970	
+crates/slopmax-common/src/time.rs	dates_shift_by_offset	packages/domain/test/time.test.ts	shifts dates by the zone they are read in	
+crates/slopmax-common/src/time.rs	parses_http_dates	packages/domain/test/time.test.ts	reads HTTP dates in GMT and nothing else	
+crates/slopmax-common/src/time.rs	arithmetic_saturates_and_measures			n/a: measuring and shifting times are DateTime and Duration's own; saturating at the nanosecond range limits does not apply to millisecond DateTime (NOT-PORTED.md, time precision)
+crates/slopmax-core/src/account.rs	ids_hash_the_identity_as_before	packages/core/test/accounts/accounts.test.ts	names accounts by a hash of who they are, the same as ever	
+crates/slopmax-core/src/account.rs	same_email_in_two_orgs_are_distinct_accounts	packages/core/test/accounts/accounts.test.ts	keeps the same email in two organizations apart	
+crates/slopmax-core/src/account.rs	upsert_merges_settings_on_relogin	packages/core/test/accounts/accounts.test.ts	merges what people set on an account when it signs in again	
+crates/slopmax-core/src/account.rs	find_resolves_ids_labels_emails_and_positions	packages/core/test/accounts/accounts.test.ts	finds accounts by position, id, label, email and id prefix	
+crates/slopmax-core/src/account.rs	expiry_checks_respect_lead	packages/core/test/accounts/accounts.test.ts	counts a token as expiring within the lead, and one with no known expiry as never expiring	
+crates/slopmax-core/src/agent/claude_code.rs	session_id_comes_from_header_then_metadata	packages/core/test/agents/claude-code.test.ts	takes the session from its header, then from metadata.user_id as JSON, then in the older text form	
+crates/slopmax-core/src/agent/claude_code.rs	detects_every_claude_code_entrypoint	packages/core/test/agents/claude-code.test.ts	is recognised from every entrypoint's user agent	
+crates/slopmax-core/src/agent/claude_code.rs	env_points_at_the_proxy	packages/core/test/agents/claude-code.test.ts	prints shell lines that export the same environment and unset the API key	
+crates/slopmax-core/src/agent/claude_code.rs	setup_round_trips_and_keeps_other_settings	packages/core/test/agents/claude-code.test.ts	sets the proxy's address and key, keeps other settings, and undo restores what was there	
+crates/slopmax-core/src/agent/claude_code.rs	the_command_runs_claude_through_the_proxy_without_an_api_key	packages/core/test/agents/claude-code.test.ts | packages/core/test/agents/agents.test.ts	points it at the proxy's /claude address with the owner key, and drops any API key | runs the agent with the proxy's environment, without an API key, and returns its exit code	
+crates/slopmax-core/src/agent/claude_code.rs	settings_that_are_not_an_object_are_refused	packages/core/test/agents/claude-code.test.ts	refuses settings that are not an object, an env that is not one, and an unreadable backup	
+crates/slopmax-core/src/agent/claude_code.rs	setup_on_a_fresh_machine_creates_settings_and_undo_empties_them	packages/core/test/agents/claude-code.test.ts	on a fresh machine creates the settings, and undo leaves an empty env	
+crates/slopmax-core/src/agent/claude_code.rs	a_live_login_is_imported_with_its_profile	packages/core/test/importers/importers.test.ts	imports Claude Code's login with its profile, renewing an expired token first	importing an agent's own login lives in importers.ts; the agent keeps only the no-network login check
+crates/slopmax-core/src/agent/claude_code.rs	an_expired_login_is_refreshed_first_and_keeps_its_refresh_token	packages/core/test/importers/importers.test.ts	imports Claude Code's login with its profile, renewing an expired token first	importing an agent's own login lives in importers.ts; the agent keeps only the no-network login check
+crates/slopmax-core/src/agent/claude_code.rs	logins_that_cannot_be_read_are_errors	packages/core/test/importers/importers.test.ts	skips an expired Claude Code login that nothing can renew, without the network or the keychain	importing an agent's own login lives in importers.ts; the agent keeps only the no-network login check
+crates/slopmax-core/src/agent/codex.rs	overrides_define_a_custom_provider	packages/core/test/agents/codex.test.ts	overrides define a provider of slopmax's own that reads the key from the environment	
+crates/slopmax-core/src/agent/codex.rs	overrides_sit_at_the_users_level	packages/core/test/agents/codex.test.ts	overrides sit at the level of the user's own: after a session subcommand, else first	
+crates/slopmax-core/src/agent/codex.rs	env_hands_off_to_run	packages/core/test/agents/codex.test.ts	env hands off to slopmax run through a shell function	
+crates/slopmax-core/src/agent/codex.rs	session_prefers_header_then_metadata_then_cache_key	packages/core/test/agents/codex.test.ts	takes the session from its headers, then the turn metadata, then the prompt cache key	
+crates/slopmax-core/src/agent/codex.rs	imports_the_codex_login	packages/core/test/importers/importers.test.ts	imports the Codex login, named by its claims	importing an agent's own login lives in importers.ts; the agent keeps only the no-network login check
+crates/slopmax-core/src/agent/codex.rs	api_key_logins_are_not_imported	packages/core/test/importers/importers.test.ts | packages/core/test/agents/codex.test.ts	reports a Codex login that is an API key instead of a ChatGPT sign-in | is a ChatGPT login when auth.json holds tokens, and not an API key or a broken file	importing an agent's own login lives in importers.ts; the agent keeps only the no-network login check
+crates/slopmax-core/src/agent/codex.rs	setup_round_trips_and_keeps_comments	packages/core/test/agents/codex.test.ts	sets the provider and its table, keeps comments and every other line, and undo restores the file exactly | adds the provider after the last top-level key, so a comment that follows it stays | replaces a stale slopmax table where it is and leaves the comments around it	
+crates/slopmax-core/src/agent/mod.rs	registry_ids_are_unique_and_cover_every_subscription	packages/domain/test/providers.test.ts	has one agent per subscription, each naming its provider | reads an agent by its id or its program, and lists the programs otherwise	
+crates/slopmax-core/src/agent/mod.rs	sessions_come_from_the_agent_or_common_ids	packages/core/test/agents/agents.test.ts	sessions come from the agent's own rule, or from ids other clients commonly send	
+crates/slopmax-core/src/agent/mod.rs	setup_edits_a_symlinked_config_in_place	packages/core/test/agents/agents.test.ts	setup edits a symlinked settings file where it lives, and keeps the link	
+crates/slopmax-core/src/agent/mod.rs	shell_quoting	packages/core/test/agents/agents.test.ts	quotes words for the shell only when they need it	
+crates/slopmax-core/src/auth/callback.rs	parses_full_redirect_url	packages/core/test/providers/oauth.test.ts	read a whole redirect address	
+crates/slopmax-core/src/auth/callback.rs	parses_code_hash_state	packages/core/test/providers/oauth.test.ts	split the code and state a manual page shows as one	
+crates/slopmax-core/src/auth/callback.rs	parses_bare_query_and_decodes	packages/core/test/providers/oauth.test.ts	read a bare query and decode it	
+crates/slopmax-core/src/auth/callback.rs	surfaces_provider_errors	packages/core/test/providers/oauth.test.ts	say what the provider refused	
+crates/slopmax-core/src/auth/callback.rs	empty_codes_and_fragments_are_handled	packages/core/test/providers/oauth.test.ts	refuse an empty code, drop a fragment, and keep a # inside a code whose state came apart	
+crates/slopmax-core/src/auth/callback.rs	desktops_have_a_browser	packages/core/test/browser/browser.test.ts	counts on one on macOS and Windows, and elsewhere only in a graphical session	
+crates/slopmax-core/src/auth/callback.rs	the_redirect_delivers_the_code_and_a_page	packages/core/test/providers/oauth.test.ts	delivers the redirect's code, answering with a page, and tells failed attempts	
+crates/slopmax-core/src/auth/callback.rs	busy_ports_fall_back_to_pasted_addresses	packages/core/test/providers/oauth.test.ts	falls back to pasted addresses when the port is busy, skipping blank lines	
+crates/slopmax-core/src/auth/callback.rs	a_foreign_state_is_refused	packages/core/test/providers/oauth.test.ts	refuses a redirect for a sign-in someone else started	
+crates/slopmax-core/src/auth/callback.rs	nothing_to_wait_for_is_an_error	packages/core/test/providers/oauth.test.ts	fails when the port is busy and nothing can be pasted	
+crates/slopmax-core/src/auth/jwt.rs	decodes_claims_and_expiry	packages/core/test/providers/oauth.test.ts	read a token's claims and expiry without checking its signature	
+crates/slopmax-core/src/auth/jwt.rs	rejects_non_jwt	packages/core/test/providers/oauth.test.ts	read nothing from what is not a token	
+crates/slopmax-core/src/auth/mod.rs	linked_accounts_follow_their_source	packages/core/test/refresh/refresh.test.ts	adopts the tokens the source rotated, and waits while it has not	
+crates/slopmax-core/src/auth/mod.rs	classifies_refresh_failures	packages/core/test/providers/provider.test.ts	tell a revoked refresh token from a passing failure	
+crates/slopmax-core/src/auth/mod.rs	fresh_tokens_are_used_without_a_refresh	packages/core/test/refresh/refresh.test.ts	uses a token that is not due without calling anyone	
+crates/slopmax-core/src/auth/mod.rs	due_tokens_are_refreshed_identified_and_saved	packages/core/test/refresh/refresh.test.ts	refreshes a due token, reads who it is, and saves it before handing it out | clears an earlier failure and keeps tokens the provider did not rotate when a grant arrives	
+crates/slopmax-core/src/auth/mod.rs	forced_refreshes_keep_tokens_the_provider_did_not_rotate	packages/core/test/refresh/refresh.test.ts	keeps tokens the provider did not rotate on a forced refresh, and saves an account not stored yet	
+crates/slopmax-core/src/auth/mod.rs	a_token_another_process_rotated_is_reused	packages/core/test/refresh/refresh.test.ts	reuses a token another process already rotated	
+crates/slopmax-core/src/auth/mod.rs	a_stored_copy_that_is_no_longer_due_is_not_refreshed	packages/core/test/refresh/refresh.test.ts	does not refresh a stored copy that is no longer due	
+crates/slopmax-core/src/auth/mod.rs	rejected_refresh_tokens_mark_the_account	packages/core/test/refresh/refresh.test.ts	marks an account whose refresh token was rejected, keeping its tokens	
+crates/slopmax-core/src/auth/mod.rs	passing_failures_leave_the_account_alone	packages/core/test/refresh/refresh.test.ts	leaves the account alone on a passing failure, and fails when its token has expired | hands back a token that still works when its refresh fails in passing, with a warning	
+crates/slopmax-core/src/auth/mod.rs	unreachable_token_endpoints_are_passing_failures	packages/core/test/refresh/refresh.test.ts	treats an unreachable token endpoint as a passing failure	
+crates/slopmax-core/src/auth/mod.rs	accounts_without_a_refresh_token_must_log_in_again	packages/core/test/refresh/refresh.test.ts	asks to sign in again when no refresh token is stored, without calling anyone	
+crates/slopmax-core/src/auth/mod.rs	api_keys_cannot_be_refreshed	packages/core/test/refresh/refresh.test.ts	cannot refresh an API key	
+crates/slopmax-core/src/auth/mod.rs	linked_accounts_wait_for_their_source_when_forced	packages/core/test/refresh/refresh.test.ts	waits for the source when forced, and serves the copy in hand while its token works	
+crates/slopmax-core/src/auth/mod.rs	links_to_unknown_tools_fail_softly			A link names its tool as a schema literal (cliproxyapi), so an account file linked to an unknown tool does not decode and is skipped with a warning when the store loads; there is no unknown tool left to fail softly on.
+crates/slopmax-core/src/auth/mod.rs	connect_signs_in_and_merges_repeat_logins	packages/core/test/providers/sign-in.test.ts	saves the account, and merges a repeat sign-in into it, keeping its label	
+crates/slopmax-core/src/auth/mod.rs	prompts_deliver_events_and_pasted_lines	packages/core/test/providers/oauth.test.ts	falls back to pasted addresses when the port is busy, skipping blank lines | fails when the port is busy and nothing can be pasted	
+crates/slopmax-core/src/auth/mod.rs	login_options_never_print_the_key	packages/core/test/providers/provider.test.ts	never show a sign-in's key when its options are printed	
+crates/slopmax-core/src/auth/mod.rs	grants_become_tokens_stamped_now	packages/core/test/providers/provider.test.ts	turn grants into tokens stamped as refreshed now	
+crates/slopmax-core/src/auth/mod.rs	refresh_errors_read_as_what_to_do	packages/core/test/providers/provider.test.ts	word refresh failures as what to do about them	
+crates/slopmax-core/src/auth/pkce.rs	challenge_matches_rfc7636_example	packages/core/test/providers/oauth.test.ts	compute the challenge of RFC 7636's example	
+crates/slopmax-core/src/auth/pkce.rs	verifier_is_url_safe_and_unique	packages/core/test/providers/oauth.test.ts	make verifiers that are URL-safe, 43 characters, and never the same twice	
+crates/slopmax-core/src/background.rs	the_running_proxy_reports_its_version	packages/core/test/background/background.test.ts	the running proxy reports its version	
+crates/slopmax-core/src/background.rs	another_program_on_the_port_is_not_the_proxy	packages/core/test/background/background.test.ts	another program on the port is not the proxy	
+crates/slopmax-core/src/background.rs	nothing_listening_is_not_running	packages/core/test/background/background.test.ts	nothing listening is not running, and its API cannot be had	
+crates/slopmax-core/src/background.rs	reports_are_read_with_the_key_and_refreshes_and_syncs_post	packages/core/test/background/background.test.ts	reports are read with the key, and refreshes and syncs are POSTs	
+crates/slopmax-core/src/background.rs	a_wrong_key_reads_as_no_report	packages/core/test/background/background.test.ts	a wrong key is refused, as the proxy's own error	the typed client fails with Unauthorized instead of reading as no report
+crates/slopmax-core/src/background.rs	redeeming_returns_the_outcome_or_the_proxys_reason	packages/core/test/background/background.test.ts	redeeming returns the outcome, or the proxy's reason it could not	
+crates/slopmax-core/src/background.rs	stopping_asks_a_running_proxy_to_shut_down	packages/core/test/background/background.test.ts	stopping asks a running proxy to shut down and waits until it is gone	
+crates/slopmax-core/src/background.rs	the_current_binary_is_found	packages/core/test/service/service.test.ts	the program that starts it again is found: the runtime, and the entry script when not compiled	
+crates/slopmax-core/src/config.rs	first_load_writes_the_template_with_a_fresh_key	packages/core/test/settings/settings.test.ts	writes the settings with a fresh key on first run, and their schema beside them	The commented TOML template became config.schema.json beside config.json (NOT-PORTED: config.toml).
+crates/slopmax-core/src/config.rs	a_missing_key_is_added_without_rewriting_the_file	packages/core/test/settings/settings.test.ts	adds a missing key and keeps every other setting as it was	
+crates/slopmax-core/src/config.rs	live_settings_are_checked_before_they_are_written	packages/domain/test/settings.test.ts	are read as people type them and checked before they are written | read back as they are typed, and every default reads in again	
+crates/slopmax-core/src/config.rs	processes_started_together_agree_on_the_key	packages/core/test/settings/settings.test.ts	gives processes started together one key	
+crates/slopmax-core/src/config.rs	template_lists_every_setting_at_its_default	packages/domain/test/settings.test.ts	describes every setting and gives each one a default its file may leave out	The commented TOML template became config.schema.json, generated from the Settings schema with every description and default (NOT-PORTED: config.toml).
+crates/slopmax-core/src/config.rs	parses_partial_config	packages/domain/test/settings.test.ts	loads a partial file with every missing setting at its default	
+crates/slopmax-core/src/config.rs	parses_custom_prices	packages/domain/test/settings.test.ts	reads custom prices, whole numbers included, and needs both input and output	
+crates/slopmax-core/src/config.rs	client_keys_are_added_and_removed_in_place	packages/core/test/settings/settings.test.ts	adds and removes client keys, keeping the rest of the file	
+crates/slopmax-core/src/config.rs	rejects_unknown_keys	packages/domain/test/settings.test.ts	refuses settings it does not know, at any depth	
+crates/slopmax-core/src/doctor.rs	a_running_proxy_of_this_version_is_fine	packages/core/test/doctor/doctor.test.ts	a running proxy of this version is fine	
+crates/slopmax-core/src/doctor.rs	an_older_proxy_should_be_restarted	packages/core/test/doctor/doctor.test.ts	an older proxy should be restarted	
+crates/slopmax-core/src/doctor.rs	another_program_on_the_port_is_named	packages/core/test/doctor/doctor.test.ts	another program on the port is called out, with how to move | another program on the port is named from the system	
+crates/slopmax-core/src/doctor.rs	a_stopped_proxy_says_how_to_start_it	packages/core/test/doctor/doctor.test.ts	a stopped proxy says how to start it	
+crates/slopmax-core/src/doctor.rs	listening_beyond_this_machine_is_pointed_out	packages/core/test/doctor/doctor.test.ts	listening beyond this machine is pointed out, counting the client keys	
+crates/slopmax-core/src/doctor.rs	the_login_service_is_reported	packages/core/test/doctor/doctor.test.ts	the login service is reported when the system has one	
+crates/slopmax-core/src/doctor.rs	no_accounts_is_a_failure	packages/core/test/doctor/doctor.test.ts	no accounts is a failure	
+crates/slopmax-core/src/doctor.rs	accounts_are_counted_and_each_problem_has_a_fix	packages/core/test/doctor/doctor.test.ts	accounts are counted by provider and each problem has a fix	
+crates/slopmax-core/src/doctor.rs	claude_code_wiring_is_checked_against_this_proxy	packages/core/test/doctor/doctor.test.ts | packages/core/test/agents/claude-code.test.ts	Claude Code's wiring is checked against this proxy, and a conflicting API key is flagged | the doctor checks the wiring against this proxy and its key	
+crates/slopmax-core/src/doctor.rs	codex_wiring_is_checked_against_this_proxy	packages/core/test/doctor/doctor.test.ts | packages/core/test/agents/codex.test.ts	Codex's wiring is checked against this proxy | the doctor checks the wiring against this proxy and its key	
+crates/slopmax-core/src/doctor.rs	cliproxyapi_matters_only_with_linked_accounts	packages/core/test/doctor/doctor.test.ts	matters only with linked accounts, and is probed on its port without being bound	
+crates/slopmax-core/src/doctor.rs	reachable_services_with_a_sound_clock_are_fine	packages/core/test/doctor/doctor.test.ts	reachable services with a sound clock are fine	
+crates/slopmax-core/src/doctor.rs	a_skewed_clock_is_reported_once	packages/core/test/doctor/doctor.test.ts	a skewed clock is reported once	
+crates/slopmax-core/src/doctor.rs	unreachable_services_fail_with_a_fix	packages/core/test/doctor/doctor.test.ts	unreachable services fail with a fix	
+crates/slopmax-core/src/doctor.rs	account_files_others_can_read_are_flagged	packages/core/test/doctor/doctor.test.ts	account files others can read are flagged, with the chmod that fixes them	
+crates/slopmax-core/src/doctor.rs	programs_are_looked_up_on_path	packages/core/test/agents/agents.test.ts	programs are looked up on PATH by their exact name, as files	
+crates/slopmax-core/src/doctor.rs	levels_order_by_severity	packages/domain/test/contract.test.ts	order levels by severity	
+crates/slopmax-core/src/fsx.rs	new_directories_are_private	packages/core/test/home/home.test.ts	creates new directories private and leaves the modes of existing ones alone	
+crates/slopmax-core/src/fsx.rs	write_private_round_trips_and_restricts_permissions	packages/core/test/home/home.test.ts	writes JSON pretty-printed with a trailing newline, private, and reads it back | keeps files 0600 and new directories 0700 on a real disk	
+crates/slopmax-core/src/fsx.rs	read_json_missing_file_is_none	packages/core/test/home/home.test.ts	reads a missing file as nothing	
+crates/slopmax-core/src/history.rs	days_fill_their_buckets_by_provider	packages/core/test/ledger-views/ledger-views.test.ts	fills each day's bucket by provider, and ranks models and accounts busiest first	
+crates/slopmax-core/src/history.rs	failover_failures_and_housekeeping_count_apart	packages/core/test/ledger-views/ledger-views.test.ts	counts failover's rescues, failures and housekeeping apart	
+crates/slopmax-core/src/history.rs	api_keys_bill_what_subscriptions_only_value	packages/core/test/ledger-views/ledger-views.test.ts	bills what API keys answered, and only values what subscriptions answered	
+crates/slopmax-core/src/history.rs	caching_speed_sessions_and_agents	packages/core/test/ledger-views/ledger-views.test.ts	works out what caching saved, how fast answers came, the sessions and the agents	
+crates/slopmax-core/src/history.rs	an_hour_of_warmups_alone_has_no_cache_rate	packages/core/test/ledger-views/ledger-views.test.ts	gives an hour of warmups alone no cache rate and no place among the work	
+crates/slopmax-core/src/history.rs	today_counts_hours_up_to_now	packages/core/test/ledger-views/ledger-views.test.ts	counts today's hours up to now	
+crates/slopmax-core/src/history.rs	work_falls_on_the_local_weekday_and_hour	packages/core/test/ledger-views/ledger-views.test.ts	places work on the local weekday and hour	
+crates/slopmax-core/src/history.rs	first_bytes_read_as_median_and_slowest_twentieth	packages/core/test/ledger-views/ledger-views.test.ts	reads the time to the first byte as the median and the slowest twentieth	
+crates/slopmax-core/src/import.rs	reads_cliproxyapi_files	packages/core/test/importers/importers.test.ts	reads CLIProxyAPI's logins, linked to their files, skipping other kinds and what is not a login	
+crates/slopmax-core/src/ledger.rs	writes_monthly_files_and_reads_them_back	packages/core/test/ledger/ledger.test.ts	files each record under its UTC month and reads them back from a moment on | keeps lines short by leaving out what reads back as the default	
+crates/slopmax-core/src/limits.rs	elapsed_windows_start_over	packages/domain/test/limits.test.ts	lets elapsed windows start over | clamps a provider's reading to 0–100 and starts over once its reset passes	
+crates/slopmax-core/src/limits.rs	pools_read_as_one_account	packages/domain/test/limits.test.ts	reads a pool of accounts as one account	
+crates/slopmax-core/src/limits.rs	unknown_usage_scores_above_full	packages/domain/test/limits.test.ts	scores unknown usage above full, and never counts it as exhausted	
+crates/slopmax-core/src/limits.rs	a_window_lapses_once_its_reset_passes_or_a_new_period_shows	packages/domain/test/limits.test.ts	says a window lapsed once its reset passes or a new period shows	
+crates/slopmax-core/src/limits.rs	expiring_at_prefers_started_windows_with_headroom	packages/domain/test/limits.test.ts	expires spare capacity first in started windows with headroom	
+crates/slopmax-core/src/notify.rs	reports_each_change_once	packages/core/test/notifier/notifier.test.ts	reports each change once, and the first look only takes stock	
+crates/slopmax-core/src/notify.rs	disabled_accounts_are_ignored	packages/core/test/notifier/notifier.test.ts	ignores accounts their owner switched off	
+crates/slopmax-core/src/notify.rs	settings_filter_events	packages/domain/test/settings.test.ts	sends the default notice kinds when none are named, and the test notice always	
+crates/slopmax-core/src/notify.rs	commands_get_the_event_in_variables	packages/core/test/notifier/notifier.test.ts	runs the command with the notice in SLOPMAX_ variables | tries the webhook and the command both, and names each failure	
+crates/slopmax-core/src/notify.rs	nudges_name_lapsing_resets_and_spare_weeks_once_each	packages/core/test/notifier/notifier.test.ts	names lapsing resets and spare weeks, once each | says nothing of a week nearly spent, an account switched off or signed out, or a week far from its reset	
+crates/slopmax-core/src/pool.rs	round_robin_takes_turns_within_the_top_tier	packages/core/test/pool/pool.test.ts	round-robin takes turns within the top priority, and the lower tier serves only when the top cannot	
+crates/slopmax-core/src/pool.rs	reset_windows_are_told_once_with_what_was_used	packages/core/test/pool/pool.test.ts	a window that reset is told once, with what was used of it	
+crates/slopmax-core/src/pool.rs	next_says_who_a_new_session_would_get_and_why	packages/core/test/pool/pool.test.ts	next says who a new session would get and why, and changes nothing	
+crates/slopmax-core/src/pool.rs	without_affinity_a_session_is_placed_afresh_but_its_move_is_known	packages/core/test/pool/pool.test.ts	without affinity a session is placed afresh, but its move is still known	
+crates/slopmax-core/src/pool.rs	a_shorter_session_ttl_forgets_sessions_sooner	packages/core/test/pool/pool.test.ts	a shorter session time forgets sessions sooner	
+crates/slopmax-core/src/pool.rs	reset_first_spends_the_window_that_expires_soonest	packages/core/test/pool/pool.test.ts	reset-first spends the window that expires soonest	
+crates/slopmax-core/src/pool.rs	reset_first_saves_a_week_about_to_be_lost_before_any_5_hour_window	packages/core/test/pool/pool.test.ts	reset-first saves a week about to be lost before any 5-hour window	
+crates/slopmax-core/src/pool.rs	fill_first_drains_in_order	packages/core/test/pool/pool.test.ts	fill-first drains accounts oldest first and returns to one once it resets	
+crates/slopmax-core/src/pool.rs	least_used_prefers_headroom_and_ranks_unknown_last	packages/core/test/pool/pool.test.ts	least-used prefers headroom and ranks accounts never measured last	
+crates/slopmax-core/src/pool.rs	sessions_stick_until_their_account_cannot_serve	packages/core/test/pool/pool.test.ts	a session sticks to its account until that account cannot serve, and then reports the move	
+crates/slopmax-core/src/pool.rs	sessions_survive_a_restart	packages/core/test/pool/pool.test.ts	sessions survive a restart through state.json	
+crates/slopmax-core/src/pool.rs	moved_from_reports_a_session_leaving_its_account	packages/core/test/pool/pool.test.ts	a session leaving an account the request already tried reports where it came from	
+crates/slopmax-core/src/pool.rs	sessions_expire_after_ttl	packages/core/test/pool/pool.test.ts	sessions expire after their idle time and are placed afresh	
+crates/slopmax-core/src/pool.rs	priority_tiers_and_pins_come_before_strategy	packages/core/test/pool/pool.test.ts	priority tiers and pins come before the strategy	
+crates/slopmax-core/src/pool.rs	known_exhaustion_is_skipped_without_a_request	packages/core/test/pool/pool.test.ts	known exhaustion is skipped without sending a request	
+crates/slopmax-core/src/pool.rs	unavailable_reports_the_earliest_return	packages/core/test/pool/pool.test.ts	when nothing can serve, the pick reports the earliest return	
+crates/slopmax-core/src/pool.rs	model_blocks_only_affect_that_model	packages/core/test/pool/pool.test.ts	a cap on one model affects only that model	
+crates/slopmax-core/src/pool.rs	fresh_reading_lifts_a_block_early	packages/core/test/pool/pool.test.ts	a fresh reading below the limit lifts a block early	
+crates/slopmax-core/src/pool.rs	disabled_and_signed_out_accounts_are_skipped	packages/core/test/pool/pool.test.ts	turned-off and signed-out accounts are skipped, and the reason says so	
+crates/slopmax-core/src/pool.rs	blocks_on_tried_accounts_still_report_when_the_pool_frees_up	packages/core/test/pool/pool.test.ts	accounts tried by this request are skipped, but their blocks still say when the pool frees up	
+crates/slopmax-core/src/pool.rs	credits_count_from_their_list_and_leave_it_when_redeemed	packages/core/test/pool/pool.test.ts	resets count from their list once listed, and leave it when redeemed	
+crates/slopmax-core/src/pricing.rs	matches_a_model_or_its_dated_snapshots	packages/core/test/pricing/pricing.test.ts	a model is priced as itself or its dated snapshots, and never as another version	
+crates/slopmax-core/src/pricing.rs	shares_follow_plan_sizes_only_when_every_one_is_known	packages/core/test/pricing/pricing.test.ts	pool shares follow plan sizes only when every one is known	
+crates/slopmax-core/src/pricing.rs	plans_are_priced_by_provider_and_can_be_set	packages/core/test/pricing/pricing.test.ts	plans are priced by provider, and people can set their own	
+crates/slopmax-core/src/pricing.rs	openai_prices_charge_nothing_extra_to_cache	packages/core/test/pricing/pricing.test.ts	OpenAI charges nothing extra to write the cache	
+crates/slopmax-core/src/pricing.rs	custom_prices_win_and_fill_in_cache_rates	packages/core/test/pricing/pricing.test.ts	prices people set win, and fill in the cache rates they leave out	
+crates/slopmax-core/src/pricing.rs	costs_every_kind_of_token	packages/core/test/pricing/pricing.test.ts	a cost counts every kind of token	
+crates/slopmax-core/src/provider/claude/credits.rs	grants_list_one_credit_per_reset_the_next_first	packages/core/test/providers/claude.test.ts	lists one reset per one left, the grant Claude spends next first, then the soonest to expire	
+crates/slopmax-core/src/provider/claude/credits.rs	a_refused_caller_or_an_account_without_any_lists_none	packages/core/test/providers/claude.test.ts	lists none for a refused caller or an account without any, and fails on odd answers	
+crates/slopmax-core/src/provider/claude/credits.rs	claims_answer_as_outcomes	packages/core/test/providers/claude.test.ts	reads Claude's answers to spending a reset as outcomes	
+crates/slopmax-core/src/provider/claude/credits.rs	only_a_uuid_names_the_organization	packages/core/test/providers/claude.test.ts	takes only a UUID as the organization, since it goes in the path	
+crates/slopmax-core/src/provider/claude/credits.rs	nothing_is_listed_or_spent_before_claude_code_is_seen	packages/core/test/providers/claude.test.ts	lists and spends nothing before Claude Code has come through	
+crates/slopmax-core/src/provider/claude/credits.rs	failures_name_the_step_that_failed	packages/core/test/providers/claude.test.ts	names the step that failed | spends a reset as Claude Code, retrying once with the same request id	
+crates/slopmax-core/src/provider/claude/credits.rs	unreachable_servers_fail_after_a_retry	packages/core/test/providers/claude.test.ts	fails after one retry when the server cannot be reached	
+crates/slopmax-core/src/provider/claude/credits.rs	odd_usage_replies_are_errors_or_empty	packages/core/test/providers/claude.test.ts	lists none for a refused caller or an account without any, and fails on odd answers	
+crates/slopmax-core/src/provider/claude/limits.rs	pool_headers_replace_the_accounts	packages/core/test/providers/claude.test.ts	replaces the account's limit headers with the pool's, warning as one account would	
+crates/slopmax-core/src/provider/claude/limits.rs	claude_headers_convert_fractions_to_percent	packages/core/test/providers/claude.test.ts	converts the headers' fractions to percent	
+crates/slopmax-core/src/provider/claude/limits.rs	claude_usage_reads_shared_and_scoped_windows	packages/core/test/providers/claude.test.ts	reads the usage endpoint's shared and model-scoped windows	
+crates/slopmax-core/src/provider/claude/limits.rs	claude_refusal_blocks_until_latest_rejected_reset	packages/core/test/providers/claude.test.ts	blocks a spent account until the latest of its rejected windows' resets	
+crates/slopmax-core/src/provider/claude/limits.rs	claude_overage_only_refusal_scopes_to_model	packages/core/test/providers/claude.test.ts	caps only the request's model when only the overage window is spent	
+crates/slopmax-core/src/provider/claude/limits.rs	fast_mode_credit_refusals_are_told_apart	packages/core/test/providers/claude.test.ts	tells fast mode's want of usage credits from a spent window	
+crates/slopmax-core/src/provider/claude/limits.rs	claude_plain_429_is_throttling	packages/core/test/providers/claude.test.ts	reads a plain 429 as throttling until retry-after	
+crates/slopmax-core/src/provider/claude/mod.rs	accounts_are_keyed_by_organization_then_account	packages/core/test/providers/claude.test.ts	keys accounts by organization, then account	
+crates/slopmax-core/src/provider/claude/mod.rs	requests_carry_the_token_and_the_oauth_beta	packages/core/test/providers/claude.test.ts	signs requests with the token and the OAuth beta, and serves Claude Code alone	
+crates/slopmax-core/src/provider/claude/mod.rs	windows_come_from_headers_and_the_pool_replaces_them	packages/core/test/providers/claude.test.ts	reads windows from the headers, and shows the pool's in their place	
+crates/slopmax-core/src/provider/claude/mod.rs	verdicts_tell_spent_windows_from_fast_mode_and_auth	packages/core/test/providers/claude.test.ts	tells spent windows from fast mode and from a rejected token	
+crates/slopmax-core/src/provider/claude/mod.rs	usage_reads_both_windows	packages/core/test/providers/claude.test.ts	reads both windows from the usage endpoint, and only the start of a failure	
+crates/slopmax-core/src/provider/claude/mod.rs	new_tokens_bring_the_profile	packages/core/test/providers/claude.test.ts	brings the profile with new tokens, and changes nothing when it cannot	
+crates/slopmax-core/src/provider/claude/mod.rs	unreachable_usage_endpoints_are_other_failures	packages/core/test/providers/claude.test.ts	reports an unreachable usage endpoint as a failure, not a rejected token	
+crates/slopmax-core/src/provider/claude/oauth.rs	authorize_url_carries_pkce_and_scopes	packages/core/test/providers/claude.test.ts	asks to authorize with PKCE, the scopes, and the registered redirect	
+crates/slopmax-core/src/provider/claude/oauth.rs	plan_from_profile	packages/core/test/providers/claude.test.ts	reads the plan, with Max's multiplier	
+crates/slopmax-core/src/provider/claude/oauth.rs	apply_profile_never_erases_identity	packages/core/test/providers/claude.test.ts	never erases what is known with a blank profile	
+crates/slopmax-core/src/provider/claude/oauth.rs	plans_read_the_organization_first	packages/core/test/providers/claude.test.ts	reads the plan from the organization first, and a multiplier only for Max	
+crates/slopmax-core/src/provider/claude/oauth.rs	profiles_fill_identity_but_skip_blanks	packages/core/test/providers/claude.test.ts	fills the identity from a profile but skips its blanks	
+crates/slopmax-core/src/provider/claude/oauth.rs	exchanges_codes_for_an_identified_account	packages/core/test/providers/claude.test.ts	exchanges a code for an account identified by its profile	
+crates/slopmax-core/src/provider/claude/oauth.rs	a_failed_profile_lookup_keeps_the_token_identity	packages/core/test/providers/claude.test.ts	keeps the identity the token answer gave when the profile lookup fails	
+crates/slopmax-core/src/provider/claude/oauth.rs	failed_exchanges_say_why	packages/core/test/providers/claude.test.ts	says why an exchange failed	
+crates/slopmax-core/src/provider/claude/oauth.rs	refresh_classifies_the_token_endpoints_answer	packages/core/test/providers/claude.test.ts	refreshes with the scopes, telling a revoked token from a passing failure	
+crates/slopmax-core/src/provider/claude/oauth.rs	profiles_need_a_working_token	packages/core/test/providers/claude.test.ts	needs a working token to read a profile	
+crates/slopmax-core/src/provider/claude/oauth.rs	logs_in_with_a_pasted_code_and_state	packages/core/test/providers/claude.test.ts	signs in with a code and state pasted from Anthropic's page	
+crates/slopmax-core/src/provider/claude/wire.rs	oauth_beta_is_added_once	packages/core/test/providers/claude.test.ts	adds the OAuth beta once, keeping the agent's betas in order	
+crates/slopmax-core/src/provider/claude/wire.rs	claude_code_is_known_by_its_agent	packages/core/test/providers/claude.test.ts	knows Claude Code by its user agent	
+crates/slopmax-core/src/provider/claude/wire.rs	only_the_credential_changes	packages/core/test/providers/claude.test.ts	changes only the credential of Claude Code's requests	
+crates/slopmax-core/src/provider/codex/credits.rs	only_codex_window_credits_count	packages/core/test/providers/codex.test.ts	count only unspent credits that reset Codex's windows, soonest to expire first	
+crates/slopmax-core/src/provider/codex/credits.rs	listing_and_redeeming_report_failures	packages/core/test/providers/codex.test.ts	say which step failed when listing or redeeming | fail when the backend cannot be reached, after a retry	
+crates/slopmax-core/src/provider/codex/limits.rs	pool_headers_and_events_describe_the_pool	packages/core/test/providers/codex.test.ts	describes the pool in the headers and socket events Codex reads, keeping the rest	
+crates/slopmax-core/src/provider/codex/limits.rs	websocket_rate_limit_events	packages/core/test/providers/codex.test.ts	reads the windows a socket's rate-limit event reports	
+crates/slopmax-core/src/provider/codex/limits.rs	codex_headers_classify_by_window_length	packages/core/test/providers/codex.test.ts	names header windows by their length	
+crates/slopmax-core/src/provider/codex/limits.rs	codex_usage_reads_windows_plan_and_reset_credits	packages/core/test/providers/codex.test.ts	reads windows, the plan and banked reset credits from the usage endpoint's answer	
+crates/slopmax-core/src/provider/codex/limits.rs	codex_usage_limit_uses_body_reset	packages/core/test/providers/codex.test.ts	takes a spent quota's end from its body, absolute or relative	
+crates/slopmax-core/src/provider/codex/limits.rs	codex_rate_limit_is_throttling	packages/core/test/providers/codex.test.ts	reads a plain rate limit as throttling	
+crates/slopmax-core/src/provider/codex/mod.rs	requests_carry_the_token_and_workspace	packages/core/test/providers/codex.test.ts	signs requests with the token and workspace, and drops the turn state of a moved session	
+crates/slopmax-core/src/provider/codex/mod.rs	translated_requests_drop_output_limits_and_moved_state	packages/core/test/providers/codex.test.ts	drops output limits from translated requests, and state a moved session cannot use	
+crates/slopmax-core/src/provider/codex/mod.rs	verdicts_cover_limits_stale_state_and_disguised_limits	packages/core/test/providers/codex.test.ts	reads spent quotas, stale state, and limits disguised as server errors	
+crates/slopmax-core/src/provider/codex/mod.rs	windows_come_from_headers_and_the_pool_replaces_them	packages/core/test/providers/codex.test.ts	reads windows from the headers and shows the pool's in their place	
+crates/slopmax-core/src/provider/codex/mod.rs	new_tokens_are_read_for_identity	packages/core/test/providers/codex.test.ts	reads who the account is from new tokens, without a network call	
+crates/slopmax-core/src/provider/codex/mod.rs	usage_reads_windows_plan_and_credits	packages/core/test/providers/codex.test.ts	reads usage with the workspace when it is known	
+crates/slopmax-core/src/provider/codex/mod.rs	the_catalog_lists_visible_models	packages/core/test/providers/codex.test.ts	lists the models the plan offers Codex, except hidden ones	
+crates/slopmax-core/src/provider/codex/oauth.rs	authorize_url_uses_registered_redirect	packages/core/test/providers/codex.test.ts	asks to authorize at the redirect registered for Codex	
+crates/slopmax-core/src/provider/codex/oauth.rs	claims_fill_identity_leniently	packages/core/test/providers/codex.test.ts	fills the identity from the tokens' claims, leniently	
+crates/slopmax-core/src/provider/codex/oauth.rs	email_falls_back_to_access_token_profile_claim	packages/core/test/providers/codex.test.ts	takes the email from the access token's profile claim when the id token has none	
+crates/slopmax-core/src/provider/codex/oauth.rs	exchanges_codes_for_an_account_named_by_its_claims	packages/core/test/providers/codex.test.ts	exchanges a code for an account named by its claims	
+crates/slopmax-core/src/provider/codex/oauth.rs	failed_exchanges_say_why	packages/core/test/providers/codex.test.ts	says why an exchange failed	
+crates/slopmax-core/src/provider/codex/oauth.rs	refresh_sends_json_and_classifies_failures	packages/core/test/providers/codex.test.ts	refreshes with exactly the JSON Codex sends, telling revoked from passing failures	
+crates/slopmax-core/src/provider/codex/oauth.rs	device_codes_sign_in_once_approved	packages/core/test/providers/codex.test.ts	signs in with a device code once it is approved	
+crates/slopmax-core/src/provider/codex/oauth.rs	device_logins_report_failures	packages/core/test/providers/codex.test.ts	reports a device sign-in that failed, could not start, or ran out of time	
+crates/slopmax-core/src/provider/codex/oauth.rs	browser_logins_accept_a_pasted_redirect	packages/core/test/providers/codex.test.ts	signs in through the browser with a pasted redirect address	
+crates/slopmax-core/src/provider/codex/wire.rs	upstream_headers_swap_credentials_and_add_version	packages/core/test/providers/codex.test.ts	swaps the credential, asks for an uncompressed stream, and adds Codex's version	
+crates/slopmax-core/src/provider/codex/wire.rs	strips_encrypted_reasoning_but_keeps_summaries	packages/core/test/providers/codex.test.ts	strips encrypted reasoning but keeps its summaries and the body's key order	
+crates/slopmax-core/src/provider/codex/wire.rs	recognizes_account_state_rejections	packages/core/test/providers/codex.test.ts	recognizes refusals of state another account minted	
+crates/slopmax-core/src/provider/compat.rs	endpoints_are_the_accounts_data	packages/core/test/providers/compat.test.ts	take their address, format and models from the account	
+crates/slopmax-core/src/provider/compat.rs	logins_list_the_models_when_none_are_named	packages/core/test/providers/compat.test.ts	list the endpoint's models at sign-in when none are named	
+crates/slopmax-core/src/provider/compat.rs	named_models_survive_an_endpoint_that_cannot_list	packages/core/test/providers/compat.test.ts	keep named models when the endpoint cannot list, and need some	
+crates/slopmax-core/src/provider/compat.rs	logins_need_an_address	packages/core/test/providers/compat.test.ts	need an address to sign in	
+crates/slopmax-core/src/provider/compat.rs	catalogs_name_models_but_not_patterns	packages/core/test/providers/compat.test.ts	list named models but not patterns	
+crates/slopmax-core/src/provider/compat.rs	accounts_without_an_endpoint_serve_nothing	packages/core/test/providers/compat.test.ts	serve nothing without an endpoint, sending a key as a bearer token	
+crates/slopmax-core/src/provider/compat.rs	keys_go_in_the_header_the_dialect_expects	packages/core/test/providers/compat.test.ts	put the key in the header the endpoint's format expects	
+crates/slopmax-core/src/provider/keys.rs	keys_replace_the_slopmax_key	packages/core/test/providers/keys.test.ts	put the key where slopmax's key was	
+crates/slopmax-core/src/provider/keys.rs	verdicts_tell_funds_from_rate_limits	packages/core/test/providers/keys.test.ts	tell a key out of funds from a rate limit	
+crates/slopmax-core/src/provider/keys.rs	model_lists_read_either_shape	packages/core/test/providers/keys.test.ts	read model lists in either vendor's shape	
+crates/slopmax-core/src/provider/keys.rs	key_accounts_are_named_by_their_tail	packages/core/test/providers/keys.test.ts	name key accounts by the key's tail	
+crates/slopmax-core/src/provider/keys.rs	logging_in_checks_the_key_with_the_vendor	packages/core/test/providers/keys.test.ts	check the key with the vendor when signing in	
+crates/slopmax-core/src/provider/keys.rs	checks_tolerate_outages_and_open_endpoints	packages/core/test/providers/keys.test.ts	tolerate outages and open endpoints when checking a key, but not a refusal	
+crates/slopmax-core/src/provider/keys.rs	catalogs_list_what_the_key_can_use	packages/core/test/providers/keys.test.ts	list the models the key can use	
+crates/slopmax-core/src/provider/keys.rs	keys_have_no_windows_refreshes_or_state	packages/core/test/providers/keys.test.ts	have no usage windows, refreshes, or state bound to an account	
+crates/slopmax-core/src/provider/keys.rs	overload_throttles_briefly	packages/core/test/providers/keys.test.ts	throttle briefly on overload, and keep a forbidden key's answer	
+crates/slopmax-core/src/provider/mod.rs	patterns_match_with_wildcards	packages/domain/test/providers.test.ts	matches model patterns with wildcards	
+crates/slopmax-core/src/provider/mod.rs	registry_ids_are_unique_and_round_trip	packages/domain/test/providers.test.ts	lists providers subscriptions first, which is also the order they try and sort in | lets metered providers back only a subscription	
+crates/slopmax-core/src/provider/mod.rs	unknown_ids_list_the_known_ones	packages/domain/test/providers.test.ts	lists the known providers when an id is none of them	
+crates/slopmax-core/src/provider/mod.rs	edge_patterns	packages/domain/test/providers.test.ts	matches the edge cases of patterns: empty, a bare star, and parts that may not overlap	
+crates/slopmax-core/src/provider/mod.rs	specs_say_how_accounts_sign_in_and_pay	packages/domain/test/providers.test.ts	says how each provider's accounts sign in and pay	
+crates/slopmax-core/src/provider/mod.rs	refusals_become_verdicts	packages/core/test/providers/provider.test.ts	keep the answers every provider treats alike: 401 is the token, 403 the account, the rest the request's	
+crates/slopmax-core/src/provider/mod.rs	subscriptions_without_a_catalog_list_nothing	packages/core/test/providers/provider.test.ts	list no models for a subscription without a catalog	
+crates/slopmax-core/src/proxy/forward.rs	upstream_errors_are_retold_with_their_message	packages/wire/test/errors/errors.test.ts	keeps an upstream error's status and finds its message wherever the provider put it	
+crates/slopmax-core/src/proxy/forward.rs	a_failure_event_inside_a_stream_is_found	packages/wire/test/errors/errors.test.ts	finds the failure event inside a stream that opened with one	
+crates/slopmax-core/src/proxy/forward.rs	unreadable_errors_pass_their_first_500_bytes	packages/wire/test/errors/errors.test.ts	passes on the first 500 bytes of an error it cannot read	
+crates/slopmax-core/src/proxy/forward.rs	claude_code_hears_server_errors_as_overloaded	packages/wire/test/errors/errors.test.ts	tells Claude Code every server error as overloaded, which it retries	
 crates/slopmax-core/src/proxy/forward.rs	the_earliest_return_wins_across_steps			
 crates/slopmax-core/src/proxy/hub.rs	readings_take_the_providers_shapes			
 crates/slopmax-core/src/proxy/mod.rs	routes_prefixed_and_v1_paths			
@@ -295,60 +295,60 @@ crates/slopmax-core/src/proxy/mod.rs	client_keys_reach_the_proxy_but_not_the_adm
 crates/slopmax-core/src/proxy/mod.rs	auth_accepts_bearer_or_api_key			
 crates/slopmax-core/src/proxy/mod.rs	forwardable_drops_only_credentials_and_hop_by_hop			
 crates/slopmax-core/src/proxy/models.rs	claude_code_and_codex_keep_their_own_lists			
-crates/slopmax-core/src/proxy/rawjson.rs	finds_nested_values			
-crates/slopmax-core/src/proxy/rawjson.rs	strings_end_only_at_unescaped_quotes			
-crates/slopmax-core/src/proxy/rawjson.rs	splice_replaces_in_place			
+crates/slopmax-core/src/proxy/rawjson.rs	finds_nested_values	packages/wire/test/scan/scan.test.ts	finds a value nested inside objects and arrays	
+crates/slopmax-core/src/proxy/rawjson.rs	strings_end_only_at_unescaped_quotes	packages/wire/test/scan/scan.test.ts	ends strings only at an unescaped quote	
+crates/slopmax-core/src/proxy/rawjson.rs	splice_replaces_in_place	packages/wire/test/scan/scan.test.ts	replaces a value in place, leaving every other byte as it was	
 crates/slopmax-core/src/proxy/socket.rs	the_routing_hint_names_the_model			
 crates/slopmax-core/src/proxy/socket.rs	spent_accounts_close_the_socket_and_request_errors_pass			
 crates/slopmax-core/src/proxy/socket.rs	moved_sockets_drop_old_account_state			
-crates/slopmax-core/src/proxy/sse.rs	claude_usage_merges_start_and_delta			
-crates/slopmax-core/src/proxy/sse.rs	codex_usage_separates_cached_input			
-crates/slopmax-core/src/proxy/sse.rs	whole_json_responses_report_usage			
-crates/slopmax-core/src/proxy/sse.rs	codex_in_stream_usage_limit_is_exhaustion			
-crates/slopmax-core/src/proxy/sse.rs	tapped_stream_reports_once_even_when_dropped			
+crates/slopmax-core/src/proxy/sse.rs	claude_usage_merges_start_and_delta	packages/wire/test/tap/tap.test.ts	merges Messages usage from the start and the last delta, across a line cut between chunks	
+crates/slopmax-core/src/proxy/sse.rs	codex_usage_separates_cached_input	packages/wire/test/tap/tap.test.ts	separates cached input in a Responses stream	
+crates/slopmax-core/src/proxy/sse.rs	whole_json_responses_report_usage	packages/wire/test/tap/tap.test.ts	reads usage from a JSON answer when it ends | only counts the request for a document past 16 MiB, or a compressed answer	
+crates/slopmax-core/src/proxy/sse.rs	codex_in_stream_usage_limit_is_exhaustion	packages/wire/test/tap/tap.test.ts	marks the account spent when a Responses stream fails with a usage limit	
+crates/slopmax-core/src/proxy/sse.rs	tapped_stream_reports_once_even_when_dropped	packages/wire/test/tap/tap.test.ts	reports once even when the client drops the answer after its first chunk	
 crates/slopmax-core/src/proxy/start.rs	content_streams_with_the_held_start_replayed			
 crates/slopmax-core/src/proxy/start.rs	a_spent_quota_is_caught_before_the_agent_sees_it			
 crates/slopmax-core/src/proxy/start.rs	request_failures_go_to_the_agent			
-crates/slopmax-core/src/proxy/transcode.rs	chat_chunks_split_anywhere_become_messages_events			
-crates/slopmax-core/src/proxy/transcode.rs	replay_is_per_account_and_bounded			
-crates/slopmax-core/src/report.rs	conditions_put_the_most_pressing_first			
-crates/slopmax-core/src/report.rs	use_turns_yellow_at_70_and_red_at_90_percent			
-crates/slopmax-core/src/report.rs	conditions_read_the_same_in_every_front_end			
-crates/slopmax-core/src/report.rs	notes_read_the_same_in_every_front_end			
-crates/slopmax-core/src/report.rs	limits_and_idle_accounts_have_their_own_conditions			
-crates/slopmax-core/src/report.rs	notes_come_in_order_and_skip_errors_the_condition_explains			
-crates/slopmax-core/src/report.rs	windows_are_found_by_span_and_scope			
-crates/slopmax-core/src/report.rs	keys_report_their_endpoint_and_models_and_get_no_pool			
-crates/slopmax-core/src/report.rs	pools_average_working_accounts_and_their_model_windows			
-crates/slopmax-core/src/report.rs	a_pool_with_no_working_account_is_left_out			
-crates/slopmax-core/src/report.rs	with_next_names_the_account_a_new_session_gets_and_why			
-crates/slopmax-core/src/report.rs	reports_survive_a_json_round_trip			
-crates/slopmax-core/src/route.rs	subscriptions_come_first_and_keys_only_as_paid_overflow			
-crates/slopmax-core/src/route.rs	claude_models_serve_claude_code_only			
-crates/slopmax-core/src/route.rs	models_find_their_provider_in_the_clients_format			
-crates/slopmax-core/src/route.rs	selectors_aliases_and_fallbacks			
-crates/slopmax-core/src/service.rs	systemd_unit_runs_serve_and_appends_to_the_log			
-crates/slopmax-core/src/service.rs	launchd_plist_escapes_paths			
-crates/slopmax-core/src/service.rs	launchd_plist_sets_slopmax_home_when_moved			
-crates/slopmax-core/src/service.rs	commands_report_their_stderr_when_they_fail			
-crates/slopmax-core/src/service.rs	launchd_targets_the_users_gui_domain			
-crates/slopmax-core/src/service.rs	service_files_live_where_each_manager_looks			
-crates/slopmax-core/src/service.rs	lingering_is_a_linux_question			
-crates/slopmax-core/src/summary.rs	unpriced_requests_are_counted_apart			
-crates/slopmax-core/src/summary.rs	requests_are_the_answers_alone			
-crates/slopmax-core/src/summary.rs	ranges_start_at_local_midnight			
+crates/slopmax-core/src/proxy/transcode.rs	chat_chunks_split_anywhere_become_messages_events	packages/wire/test/transcode/transcode.test.ts	turns Chat chunks split anywhere into Messages events | tells the same answer however the upstream's bytes are split	
+crates/slopmax-core/src/proxy/transcode.rs	replay_is_per_account_and_bounded	packages/wire/test/replay/replay.test.ts	gives reasoning state back only to the account that issued it | holds at most 4096 calls, the first remembered going first	
+crates/slopmax-core/src/report.rs	conditions_put_the_most_pressing_first	packages/domain/test/report.test.ts	put the most pressing first	
+crates/slopmax-core/src/report.rs	use_turns_yellow_at_70_and_red_at_90_percent	packages/domain/test/report.test.ts	turn use yellow at 70 percent and red at 90	
+crates/slopmax-core/src/report.rs	conditions_read_the_same_in_every_front_end	packages/domain/test/report.test.ts	conditions read the same in every front end	
+crates/slopmax-core/src/report.rs	notes_read_the_same_in_every_front_end	packages/domain/test/report.test.ts	notes read the same in every front end	
+crates/slopmax-core/src/report.rs	limits_and_idle_accounts_have_their_own_conditions	packages/domain/test/report.test.ts	give limits and idle accounts their own conditions	
+crates/slopmax-core/src/report.rs	notes_come_in_order_and_skip_errors_the_condition_explains	packages/domain/test/report.test.ts	come in order and skip errors the condition already explains	
+crates/slopmax-core/src/report.rs	windows_are_found_by_span_and_scope	packages/domain/test/limits.test.ts	finds windows by span and scope	
+crates/slopmax-core/src/report.rs	keys_report_their_endpoint_and_models_and_get_no_pool	packages/core/test/report/report.test.ts	keys report where their requests go and the models they serve, and get no pool	
+crates/slopmax-core/src/report.rs	pools_average_working_accounts_and_their_model_windows	packages/core/test/report/report.test.ts	pools average working accounts and their model windows	
+crates/slopmax-core/src/report.rs	a_pool_with_no_working_account_is_left_out	packages/core/test/report/report.test.ts	a pool with no working account is left out	
+crates/slopmax-core/src/report.rs	with_next_names_the_account_a_new_session_gets_and_why	packages/core/test/report/report.test.ts	each pool names the account a new session gets, and why	
+crates/slopmax-core/src/report.rs	reports_survive_a_json_round_trip	packages/domain/test/report.test.ts	survives a JSON round trip	
+crates/slopmax-core/src/route.rs	subscriptions_come_first_and_keys_only_as_paid_overflow	packages/core/test/router/router.test.ts	subscriptions come first, and keys serve their models only as paid overflow	
+crates/slopmax-core/src/route.rs	claude_models_serve_claude_code_only	packages/core/test/router/router.test.ts	Claude's models serve Claude Code only, and never in another format	
+crates/slopmax-core/src/route.rs	models_find_their_provider_in_the_clients_format	packages/core/test/router/router.test.ts	models find their provider in the client's format, or one it can be translated into	
+crates/slopmax-core/src/route.rs	selectors_aliases_and_fallbacks	packages/core/test/router/router.test.ts	selectors pick a provider or one account, aliases rename, and fallbacks follow	
+crates/slopmax-core/src/service.rs	systemd_unit_runs_serve_and_appends_to_the_log	packages/core/test/service/service.test.ts	the systemd unit runs serve, restarts on failure and appends its output to the log	
+crates/slopmax-core/src/service.rs	launchd_plist_escapes_paths	packages/core/test/service/service.test.ts	the launchd plist escapes paths	
+crates/slopmax-core/src/service.rs	launchd_plist_sets_slopmax_home_when_moved	packages/core/test/service/service.test.ts	the launchd plist sets SLOPMAX_HOME when the home was moved	
+crates/slopmax-core/src/service.rs	commands_report_their_stderr_when_they_fail	packages/core/test/service/service.test.ts	commands report their stderr when they fail	
+crates/slopmax-core/src/service.rs	launchd_targets_the_users_gui_domain	packages/core/test/service/service.test.ts	launchd targets the user's gui domain	
+crates/slopmax-core/src/service.rs	service_files_live_where_each_manager_looks	packages/core/test/service/service.test.ts	service files live where each manager looks, honouring only an absolute XDG_CONFIG_HOME	
+crates/slopmax-core/src/service.rs	lingering_is_a_linux_question	packages/core/test/service/service.test.ts	lingering is a Linux question, answered yes only by exactly Linger=yes	
+crates/slopmax-core/src/summary.rs	unpriced_requests_are_counted_apart	packages/core/test/ledger-views/ledger-views.test.ts	counts answers whose model has no price apart, and labels the cost to say so	
+crates/slopmax-core/src/summary.rs	requests_are_the_answers_alone	packages/core/test/ledger-views/ledger-views.test.ts	counts only answers as requests: a failure as failed, an agent's housekeeping not at all	
+crates/slopmax-core/src/summary.rs	ranges_start_at_local_midnight	packages/core/test/ledger-views/ledger-views.test.ts	starts ranges at local midnight, six or 29 days before it, or at the epoch for all | starts a range on a local midnight even across a clock change	
 crates/slopmax-core/src/testkit.rs	the_mock_records_requests_sent_to_redirected_origins			
-crates/slopmax-core/src/usage.rs	reads_usage_with_a_working_token			
-crates/slopmax-core/src/usage.rs	refreshes_a_due_token_before_reading			
-crates/slopmax-core/src/usage.rs	a_rejected_token_is_refreshed_once_and_retried			
-crates/slopmax-core/src/usage.rs	a_token_rejected_after_refresh_is_an_error			
-crates/slopmax-core/src/usage.rs	without_refresh_a_rejected_token_is_reported			
-crates/slopmax-core/src/usage.rs	revoked_logins_say_how_to_reconnect			
-crates/slopmax-core/src/usage.rs	passing_refresh_failures_keep_their_reason			
-crates/slopmax-core/src/usage.rs	other_failures_pass_through_before_and_after_a_refresh			
-crates/slopmax-core/src/waste.rs	the_unused_part_of_a_week_costs_its_share_of_the_fee			
-crates/slopmax-core/src/waste.rs	records_are_kept_and_read_back_once_each			
-crates/slopmax-core/src/waste.rs	left_totals_long_windows_by_account			
+crates/slopmax-core/src/usage.rs	reads_usage_with_a_working_token	packages/core/test/refresh/refresh.test.ts	reads usage with a working token	
+crates/slopmax-core/src/usage.rs	refreshes_a_due_token_before_reading	packages/core/test/refresh/refresh.test.ts	refreshes a due token before reading	
+crates/slopmax-core/src/usage.rs	a_rejected_token_is_refreshed_once_and_retried	packages/core/test/refresh/refresh.test.ts	refreshes a rejected token once and reads again	
+crates/slopmax-core/src/usage.rs	a_token_rejected_after_refresh_is_an_error	packages/core/test/refresh/refresh.test.ts	fails when the refreshed token is rejected too	
+crates/slopmax-core/src/usage.rs	without_refresh_a_rejected_token_is_reported	packages/core/test/refresh/refresh.test.ts	reports a rejected token without refreshing when refreshing is not allowed	
+crates/slopmax-core/src/usage.rs	revoked_logins_say_how_to_reconnect	packages/core/test/refresh/refresh.test.ts	says how to sign in again when the sign-in was revoked	
+crates/slopmax-core/src/usage.rs	passing_refresh_failures_keep_their_reason	packages/core/test/refresh/refresh.test.ts	keeps a passing refresh failure's own reason	
+crates/slopmax-core/src/usage.rs	other_failures_pass_through_before_and_after_a_refresh	packages/core/test/refresh/refresh.test.ts	passes other failures through, before and after a refresh	
+crates/slopmax-core/src/waste.rs	the_unused_part_of_a_week_costs_its_share_of_the_fee	packages/core/test/ledger-views/ledger-views.test.ts	values the unused part of a week at its share of the plan's fee	
+crates/slopmax-core/src/waste.rs	records_are_kept_and_read_back_once_each	packages/core/test/ledger/ledger.test.ts	reads ended windows back once each, from a moment on	
+crates/slopmax-core/src/waste.rs	left_totals_long_windows_by_account	packages/core/test/ledger-views/ledger-views.test.ts	totals long windows by account, most dollars first	
 crates/slopmax-core/tests/failover.rs	a_rejected_token_is_refreshed_and_the_request_retried			
 crates/slopmax-core/tests/failover.rs	a_refused_refresh_moves_on_to_the_next_account			
 crates/slopmax-core/tests/failover.rs	without_refreshing_a_rejected_token_benches_the_account			
@@ -366,8 +366,8 @@ crates/slopmax-core/tests/proxy.rs	rejects_requests_without_the_slopmax_key
 crates/slopmax-core/tests/proxy.rs	revoked_tokens_move_to_the_next_account			
 crates/slopmax-core/tests/proxy.rs	spent_codex_pool_redeems_a_credit_when_allowed			
 crates/slopmax-core/tests/proxy.rs	spent_codex_pool_keeps_its_credits_by_default			
-crates/slopmax-core/tests/proxy.rs	credits_about_to_expire_are_redeemed_on_used_accounts			
-crates/slopmax-core/tests/proxy.rs	claude_limit_resets_are_listed_and_spent_as_claude_code			
+crates/slopmax-core/tests/proxy.rs	credits_about_to_expire_are_redeemed_on_used_accounts	packages/core/test/quota/quota.test.ts	the next reset to be spent is redeemed when it expires within 3 hours, on an account with usage to reset	
+crates/slopmax-core/tests/proxy.rs	claude_limit_resets_are_listed_and_spent_as_claude_code	packages/core/test/quota/quota.test.ts	are listed and spent as Claude Code once it has been seen, the grant Claude spends next first	
 crates/slopmax-core/tests/proxy.rs	credits_are_listed_kept_and_redeemed_soonest_first			
 crates/slopmax-core/tests/proxy.rs	websockets_off_or_for_other_models_send_codex_to_http			
 crates/slopmax-core/tests/proxy.rs	codex_websockets_are_relayed_to_chatgpt			
@@ -383,7 +383,7 @@ crates/slopmax-core/tests/proxy.rs	translated_failures_reach_the_client_in_its_f
 crates/slopmax-core/tests/proxy.rs	openai_clients_list_every_model_they_can_use			
 crates/slopmax-core/tests/proxy.rs	the_dashboard_api_reports_acts_and_streams			
 crates/slopmax-core/tests/proxy.rs	client_keys_are_held_to_their_models			
-crates/slopmax-core/tests/proxy.rs	idle_chatgpt_windows_are_warmed_once			
+crates/slopmax-core/tests/proxy.rs	idle_chatgpt_windows_are_warmed_once	packages/core/test/quota/quota.test.ts	an idle account gets one tiny request, recorded as slopmax's own, at most once per 5 hours	
 crates/slopmax-core/tests/proxy.rs	agents_see_the_pool_not_the_serving_account			
 crates/slopmax-core/tests/proxy.rs	codex_sockets_report_the_pool_too			
 crates/slopmax-core/tests/proxy.rs	hub_clients_read_usage_and_redeem_credits_without_a_relay			
@@ -392,7 +392,7 @@ crates/slopmax-core/tests/proxy.rs	affinity_can_be_turned_off_for_the_proxy_or_o
 crates/slopmax-core/tests/proxy.rs	moving_without_affinity_still_drops_another_accounts_state			
 crates/slopmax-core/tests/proxy.rs	passing_server_errors_are_retried_once_on_the_same_account			
 crates/slopmax-core/tests/proxy.rs	settings_change_through_the_api_and_apply_at_once			
-crates/slopmax-core/tests/proxy.rs	a_changed_config_file_applies_without_a_restart			
+crates/slopmax-core/tests/proxy.rs	a_changed_config_file_applies_without_a_restart	packages/core/test/settings/settings.test.ts	reloads within moments of the file changing | applies a changed file at once, keeping the running key when the file's is emptied	
 crates/slopmax-core/tests/proxy.rs	the_history_api_charts_what_went_through			
 crates/slopmax-core/tests/proxy.rs	history_says_what_resets_left_on_the_table			
 crates/slopmax-core/tests/proxy.rs	the_api_does_what_the_cli_does_for_keys_endpoints_and_the_doctor			
@@ -406,64 +406,64 @@ crates/slopmax-desktop-gpui/src/prefs.rs	missing_settings_take_their_defaults
 crates/slopmax-desktop-gpui/src/ui.rs	the_cores_words_read_as_a_sentence			
 crates/slopmax-desktop-gpui/src/usage.rs	axes_end_on_round_values			
 crates/slopmax-desktop-gpui/src/usage.rs	ticks_keep_the_places_their_steps_need			
-crates/slopmax-net/src/body.rs	reads_within_the_limit			
-crates/slopmax-net/src/body.rs	stalled_bodies_fail			
-crates/slopmax-net/src/client.rs	plain_clients_refuse_https			
-crates/slopmax-net/src/client.rs	parses_proxy_urls			
-crates/slopmax-net/src/client.rs	origins_rewrite_matching_prefixes			
-crates/slopmax-net/src/client.rs	loopback_and_listed_hosts_bypass_the_proxy			
-crates/slopmax-net/src/form.rs	encodes_like_the_whatwg_serializer			
-crates/slopmax-net/src/form.rs	decodes_pairs_and_tolerates_malformed_escapes			
+crates/slopmax-net/src/body.rs	reads_within_the_limit	packages/core/test/upstream/upstream.test.ts	reads a body whole within its limit and refuses one past it	
+crates/slopmax-net/src/body.rs	stalled_bodies_fail	packages/core/test/upstream/upstream.test.ts	gives up waiting for a provider's headers after 600 seconds	Upstream bounds the wait for headers; a stall between body chunks is ended by the proxy's one stall sweeper over live streams (ARCHITECTURE.md 6.7), which the relay's tests cover.
+crates/slopmax-net/src/client.rs	plain_clients_refuse_https	packages/core/test/upstream/upstream.test.ts	trusts the system's roots and Bun's bundled ones	There is no plain-HTTP-only client any more: every outbound call trusts the system's roots and Bun's bundled ones (NOT-PORTED: TLS roots).
+crates/slopmax-net/src/client.rs	parses_proxy_urls	packages/core/test/upstream/upstream.test.ts	reads proxy URLs of every scheme it supports, and refuses the rest in plain words	
+crates/slopmax-net/src/client.rs	origins_rewrite_matching_prefixes	packages/core/test/upstream/upstream.test.ts	sends a URL whose start matches an origin to that origin's stand-in	
+crates/slopmax-net/src/client.rs	loopback_and_listed_hosts_bypass_the_proxy	packages/core/test/upstream/upstream.test.ts	lets loopback hosts and NO_PROXY's entries skip the proxy	
+crates/slopmax-net/src/form.rs	encodes_like_the_whatwg_serializer			Forms are encoded by Effect's UrlParams over the platform's URLSearchParams, which is the WHATWG serializer itself; slopmax has no form encoder of its own (NOT-PORTED: form-encoded admin bodies).
+crates/slopmax-net/src/form.rs	decodes_pairs_and_tolerates_malformed_escapes			Form bodies are decoded by URLSearchParams (WHATWG); slopmax has no form decoder of its own, and its own API takes JSON (NOT-PORTED: form-encoded admin bodies).
 crates/slopmax-net/src/server.rs	serves_until_shutdown			
-crates/slopmax-net/src/server.rs	names_the_program_holding_a_port			
-crates/slopmax-net/src/ws.rs	accept_key_matches_the_rfc			
-crates/slopmax-net/src/ws.rs	reads_the_rfcs_frames			
-crates/slopmax-net/src/ws.rs	round_trips_every_size_masked_or_not			
-crates/slopmax-net/src/ws.rs	rejects_broken_frames			
-crates/slopmax-wire/src/chat/events.rs	gathers_interleaved_tool_calls			
-crates/slopmax-wire/src/chat/events.rs	reasoning_and_whole_completions			
-crates/slopmax-wire/src/chat/events.rs	errors_and_cut_streams			
-crates/slopmax-wire/src/chat/mod.rs	usage_comes_from_the_final_chunk			
-crates/slopmax-wire/src/chat/reply.rs	streams_chunks_then_usage_and_done			
-crates/slopmax-wire/src/chat/reply.rs	usage_chunks_only_when_asked			
-crates/slopmax-wire/src/chat/reply.rs	whole_completions			
-crates/slopmax-wire/src/chat/request.rs	decodes_and_encodes_a_tool_loop			
-crates/slopmax-wire/src/chat/request.rs	freeform_calls_travel_as_functions			
-crates/slopmax-wire/src/ir.rs	data_urls_round_trip			
-crates/slopmax-wire/src/ir.rs	answers_collect_and_infer_tool_use			
-crates/slopmax-wire/src/ir.rs	budgets_map_to_efforts			
-crates/slopmax-wire/src/lib.rs	each_format_names_its_errors_its_own_way			
-crates/slopmax-wire/src/lib.rs	spent_pools_answer_with_each_clients_own_limit_error			
-crates/slopmax-wire/src/lib.rs	only_codex_streams_are_held_until_they_open			
-crates/slopmax-wire/src/lib.rs	usage_is_read_from_each_formats_events			
-crates/slopmax-wire/src/lib.rs	formats_have_stable_names			
-crates/slopmax-wire/src/lib.rs	usage_adds_up_and_totals_every_kind_of_token			
-crates/slopmax-wire/src/lib.rs	frames_are_server_sent_events			
-crates/slopmax-wire/src/messages/reply.rs	streams_text_then_tool_use			
-crates/slopmax-wire/src/messages/reply.rs	failures_become_error_events			
-crates/slopmax-wire/src/messages/reply.rs	whole_messages_carry_text_and_calls			
-crates/slopmax-wire/src/messages/request.rs	decodes_a_claude_code_turn			
-crates/slopmax-wire/src/messages/request.rs	named_effort_wins_over_a_budget			
-crates/slopmax-wire/src/responses/compaction.rs	seals_round_trip_and_ignore_openais			
-crates/slopmax-wire/src/responses/events.rs	reads_text_reasoning_state_and_calls			
-crates/slopmax-wire/src/responses/events.rs	failures_and_cut_streams_are_errors			
-crates/slopmax-wire/src/responses/events.rs	whole_responses_and_length_stops			
-crates/slopmax-wire/src/responses/reply.rs	streams_items_codex_can_rebuild			
-crates/slopmax-wire/src/responses/reply.rs	failures_fail_the_response			
-crates/slopmax-wire/src/responses/reply.rs	whole_responses			
-crates/slopmax-wire/src/responses/request.rs	decodes_codex_items_into_turns			
-crates/slopmax-wire/src/responses/request.rs	encodes_turns_as_items			
-crates/slopmax-wire/src/responses/request.rs	foreign_reasoning_is_not_replayed			
-crates/slopmax-wire/src/translate.rs	claude_code_through_responses_and_back			
-crates/slopmax-wire/src/translate.rs	freeform_tools_survive_chat			
-crates/slopmax-wire/src/translate.rs	nothing_translates_into_messages			
-crates/slopmax-wire/src/translate.rs	compaction_is_emulated_with_a_summary			
-crates/slopmax/src/args.rs	parses_flags_values_and_defaults			
-crates/slopmax/src/args.rs	negative_numbers_are_values_and_rest_is_verbatim			
-crates/slopmax/src/args.rs	explains_mistakes			
-crates/slopmax/src/args.rs	renders_help			
-crates/slopmax/src/args.rs	writes_completions			
-crates/slopmax/src/args.rs	edit_distance			
+crates/slopmax-net/src/server.rs	names_the_program_holding_a_port	packages/core/test/port-holder/port-holder.test.ts	on Linux it is the process with a descriptor for the listening socket | names this very process when it holds the port | names the first process lsof reports, or says a program when it has no name	
+crates/slopmax-net/src/ws.rs	accept_key_matches_the_rfc			Bun answers inbound WebSocket upgrades and ws dials upstream ones, so slopmax computes no accept keys (NOT-PORTED: WebSocket framing and the raw HTTP client).
+crates/slopmax-net/src/ws.rs	reads_the_rfcs_frames			Bun and ws read WebSocket frames; the relay's round trips (plain, through a CONNECT proxy, and wss through it) cover the behavior (NOT-PORTED: WebSocket framing).
+crates/slopmax-net/src/ws.rs	round_trips_every_size_masked_or_not			Bun and ws write WebSocket frames; the relay's frame-size round trips cover every length (NOT-PORTED: WebSocket framing).
+crates/slopmax-net/src/ws.rs	rejects_broken_frames			Bun and ws reject malformed WebSocket frames themselves (NOT-PORTED: WebSocket framing).
+crates/slopmax-wire/src/chat/events.rs	gathers_interleaved_tool_calls	packages/wire/test/chat/chat.test.ts	gathers interleaved tool calls by index and unwraps the freeform ones	
+crates/slopmax-wire/src/chat/events.rs	reasoning_and_whole_completions	packages/wire/test/chat/chat.test.ts	reads reasoning in either field, gives calls without an id one, and reads a whole completion	
+crates/slopmax-wire/src/chat/events.rs	errors_and_cut_streams	packages/wire/test/chat/chat.test.ts	turns an error chunk into a failure with its status, and a stream with no finish into a 502	
+crates/slopmax-wire/src/chat/mod.rs	usage_comes_from_the_final_chunk	packages/wire/test/observe/observe.test.ts	comes from the final chunk, with cached prompt tokens counted apart	
+crates/slopmax-wire/src/chat/reply.rs	streams_chunks_then_usage_and_done	packages/wire/test/chat/chat.test.ts	streams a role chunk, text, calls, the finish, the usage chunk and [DONE]	
+crates/slopmax-wire/src/chat/reply.rs	usage_chunks_only_when_asked	packages/wire/test/chat/chat.test.ts	writes a usage chunk only when the client asked for one	
+crates/slopmax-wire/src/chat/reply.rs	whole_completions	packages/wire/test/chat/chat.test.ts	carry the content, reasoning, calls, the finish reason and usage	
+crates/slopmax-wire/src/chat/request.rs	decodes_and_encodes_a_tool_loop	packages/wire/test/chat/chat.test.ts	reads a tool loop: one system text, consecutive tool messages as one turn of results | writes it back keys in order, results as tool messages, with usage asked for and no effort	
+crates/slopmax-wire/src/chat/request.rs	freeform_calls_travel_as_functions	packages/wire/test/chat/chat.test.ts	sends freeform calls as functions taking {input}	
+crates/slopmax-wire/src/ir.rs	data_urls_round_trip	packages/wire/test/common/common.test.ts	writes inline media as a data URL and reads data URLs back as inline media | keeps any other URL as a link with no known type	
+crates/slopmax-wire/src/ir.rs	answers_collect_and_infer_tool_use	packages/wire/test/collect/collect.test.ts	joins the text and reasoning, keeps every call, and infers tool use from the calls	
+crates/slopmax-wire/src/ir.rs	budgets_map_to_efforts	packages/wire/test/common/common.test.ts	maps thinking budgets to efforts: under 4096 low, under 16384 medium, else high | reads each format's names for effort, none as the lightest and xhigh as the most	
+crates/slopmax-wire/src/lib.rs	each_format_names_its_errors_its_own_way	packages/wire/test/errors/errors.test.ts	names errors in each format's own way	
+crates/slopmax-wire/src/lib.rs	spent_pools_answer_with_each_clients_own_limit_error	packages/wire/test/errors/errors.test.ts	answers Claude Code with a rejected unified limit and its reset in headers | answers Codex with its usage-limit error and when it resets | answers OpenAI-style clients with rate_limit_exceeded and nothing but retry-after	
+crates/slopmax-wire/src/lib.rs	only_codex_streams_are_held_until_they_open	packages/wire/test/opening/opening.test.ts	holds only Responses streams, the one format that refuses inside a 200 | finds a spent quota in Responses, and treats anything in the other formats as content	
+crates/slopmax-wire/src/lib.rs	usage_is_read_from_each_formats_events	packages/wire/test/observe/observe.test.ts	is read from message_start, then each message_delta's running totals | is read from the last event of a stream, however it ended, or from a whole response | is read from a whole completion, and an error object is a failure	
+crates/slopmax-wire/src/lib.rs	formats_have_stable_names	packages/wire/test/observe/observe.test.ts	are named messages, responses and chat, and each has its own observer	
+crates/slopmax-wire/src/lib.rs	usage_adds_up_and_totals_every_kind_of_token	packages/domain/test/ledger.test.ts	adds up requests and tokens, every kind of token counting toward the total	
+crates/slopmax-wire/src/lib.rs	frames_are_server_sent_events	packages/wire/test/lines/lines.test.ts	writes server-sent events: a name when there is one, then compact JSON, then a blank line	
+crates/slopmax-wire/src/messages/reply.rs	streams_text_then_tool_use	packages/wire/test/messages/messages.test.ts	streams text, then a tool_use block, then the stop and usage, every frame named	
+crates/slopmax-wire/src/messages/reply.rs	failures_become_error_events	packages/wire/test/messages/messages.test.ts	turns a failure into an error event in Messages' own shape, and writes nothing after it	
+crates/slopmax-wire/src/messages/reply.rs	whole_messages_carry_text_and_calls	packages/wire/test/messages/messages.test.ts	carry the text, then each call with its input as JSON, freeform input wrapped	
+crates/slopmax-wire/src/messages/request.rs	decodes_a_claude_code_turn	packages/wire/test/messages/messages.test.ts	reads a Claude Code turn: system text without the billing line, calls, results and images	
+crates/slopmax-wire/src/messages/request.rs	named_effort_wins_over_a_budget	packages/wire/test/messages/messages.test.ts	lets a named effort win over a thinking budget, and reads disabled thinking as low effort | refuses a request that names no model	
+crates/slopmax-wire/src/responses/compaction.rs	seals_round_trip_and_ignore_openais	packages/wire/test/compaction/compaction.test.ts	seals a summary so it opens again, and opens nothing it did not seal	
+crates/slopmax-wire/src/responses/events.rs	reads_text_reasoning_state_and_calls	packages/wire/test/responses/responses.test.ts	reads text, reasoning parts, reasoning state and calls, then the end with cached input apart	
+crates/slopmax-wire/src/responses/events.rs	failures_and_cut_streams_are_errors	packages/wire/test/responses/responses.test.ts	turns a failure into an error with the status its code means, and a cut stream into a 502	
+crates/slopmax-wire/src/responses/events.rs	whole_responses_and_length_stops	packages/wire/test/responses/responses.test.ts	reads a whole response's items and its length stop, or its error alone	
+crates/slopmax-wire/src/responses/reply.rs	streams_items_codex_can_rebuild	packages/wire/test/responses/responses.test.ts	streams items Codex can rebuild its history from, each frame named and numbered from zero	
+crates/slopmax-wire/src/responses/reply.rs	failures_fail_the_response	packages/wire/test/responses/responses.test.ts	fails the response with the code its status means	
+crates/slopmax-wire/src/responses/reply.rs	whole_responses	packages/wire/test/responses/responses.test.ts	hold the reasoning, text and calls as finished items, completed with usage	
+crates/slopmax-wire/src/responses/request.rs	decodes_codex_items_into_turns	packages/wire/test/responses/responses.test.ts	reads Codex's items into turns: developer text as system, calls with their kinds, reasoning with its state	
+crates/slopmax-wire/src/responses/request.rs	encodes_turns_as_items	packages/wire/test/responses/responses.test.ts	writes turns as items, keys in order: results by their call's kind, images after, effort and cache key	
+crates/slopmax-wire/src/responses/request.rs	foreign_reasoning_is_not_replayed	packages/wire/test/responses/responses.test.ts	never replays reasoning another provider wrote, and sends the most effort as xhigh	
+crates/slopmax-wire/src/translate.rs	claude_code_through_responses_and_back	packages/wire/test/format/format.test.ts	takes Claude Code through a Responses upstream and back, a tool call and all	
+crates/slopmax-wire/src/translate.rs	freeform_tools_survive_chat	packages/wire/test/format/format.test.ts	keeps Codex's freeform apply_patch freeform through a Chat-only upstream	
+crates/slopmax-wire/src/translate.rs	nothing_translates_into_messages	packages/wire/test/format/format.test.ts	translates into Responses or Chat from any other format, and never into Messages	
+crates/slopmax-wire/src/translate.rs	compaction_is_emulated_with_a_summary	packages/wire/test/format/format.test.ts	emulates Codex's compaction with a summary that is sealed, then opened on the next request	
+crates/slopmax/src/args.rs	parses_flags_values_and_defaults			n/a: effect/cli replaces the hand-written parser, its help, error and completion texts (NOT-PORTED.md, CLI parser texts); the CLI's parse tests cover the invocations
+crates/slopmax/src/args.rs	negative_numbers_are_values_and_rest_is_verbatim			n/a: effect/cli replaces the hand-written parser, its help, error and completion texts (NOT-PORTED.md, CLI parser texts); the CLI's parse tests cover the invocations
+crates/slopmax/src/args.rs	explains_mistakes			n/a: effect/cli replaces the hand-written parser, its help, error and completion texts (NOT-PORTED.md, CLI parser texts); the CLI's parse tests cover the invocations
+crates/slopmax/src/args.rs	renders_help			n/a: effect/cli replaces the hand-written parser, its help, error and completion texts (NOT-PORTED.md, CLI parser texts); the CLI's parse tests cover the invocations
+crates/slopmax/src/args.rs	writes_completions			n/a: effect/cli replaces the hand-written parser, its help, error and completion texts (NOT-PORTED.md, CLI parser texts); the CLI's parse tests cover the invocations
+crates/slopmax/src/args.rs	edit_distance			n/a: effect/cli replaces the hand-written parser, its help, error and completion texts (NOT-PORTED.md, CLI parser texts); the CLI's parse tests cover the invocations
 crates/slopmax/src/commands.rs	agent_choices_match_the_registry			
 crates/slopmax/src/commands.rs	every_command_parses_a_typical_invocation			
 crates/slopmax/src/commands/init.rs	lists_read_as_flags_give_them			

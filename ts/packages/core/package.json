@@ -3,14 +3,19 @@
   "private": true,
   "type": "module",
   "description": "The engine as services and layers: accounts, credentials, providers, agents, pool, router, proxy, admin API, daemon, ledger",
+  "//": {
+    "@decimalturn/toml-patch": "Parses Codex's config.toml into a syntax tree with line positions, so `slopmax setup codex` and its undo change only slopmax's own lines and keep people's comments; its whole-document patch is the fallback for layouts the line edits cannot reach. Bun's TOML is parse-only.",
+    "@effect/platform-bun": "Effect's FileSystem, Path, ChildProcessSpawner, sockets, DNS and HTTP server on Bun: the engine runs on Bun only, and these are the layers its services are built on."
+  },
   "exports": {
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "effect": "4.1.0",
-    "@effect/platform-bun": "4.1.0",
+    "@decimalturn/toml-patch": "3.3.1",
+    "@effect/platform-bun": "4.1.1",
     "@slopmax/domain": "workspace:*",
-    "@slopmax/wire": "workspace:*"
+    "@slopmax/wire": "workspace:*",
+    "effect": "4.1.1"
   },
   "devDependencies": {
     "@slopmax/test": "workspace:*"

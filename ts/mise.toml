@@ -1,24 +1,106 @@
-# The TypeScript port's toolchain. Bun is the runtime and most of the tools;
-# the CLI binary is compiled ahead of time with Bun canary (see docs/AOT.md).
+# The TypeScript slopmax's toolchain and every task, for development and CI
+# alike: CI jobs each run one `mise run <task>`, so they check exactly what a
+# developer checks locally. Bun is the runtime and most of the tools; the CLI
+# binary is compiled ahead of time with Bun canary (docs/AOT.md).
+#
+# Bun canary's release names one zip per platform, next to baseline, musl and
+# profiling builds that mise could pick by mistake, so each platform the CLI
+# ships for names its own (the same line in compile and canary).
+#
+# mise also reads the repository root's mise.toml, and a config cannot opt
+# out of that. Every task name defined there is defined here too, so a task
+# run from ts/ always builds this tree; `msrv` is the one with no meaning of
+# its own here, kept hidden only so it runs `canary` instead of the root's.
+#
+# Package scripts the tasks call (owned by their packages):
+#   apps/cli:    compile (AOT binary at dist/slopmax), build (the --no-aot
+#                --minify --bytecode fallback), budget (ARCHITECTURE.md §16 size)
+#   tools/bench: bench (oha runs against the mock provider), gates (§16's
+#                limits on the AOT binary), demo (a throwaway home with fake accounts)
 
 [tools]
 bun = "1.4.4"
 node = "24"
 
-[tasks.install]
-run = "bun install"
+[tasks.deps]
+description = "Install every workspace's dependencies exactly as bun.lock pins them (run `bun install` to change them)"
+run = "bun install --frozen-lockfile"
+
+[tasks.fmt]
+description = "Format every file"
+run = "bun fmt"
+
+[tasks.test]
+description = "Run every test"
+run = "bun test"
+
+[tasks.map-check]
+description = "Check that docs/parity/test-map.tsv names real tests (add --allow-pending while the port is under way)"
+run = "bun tools/test/map-check.ts"
 
 [tasks.check]
-description = "Format check, types, lint, and every test"
-run = "bun run verify"
+description = "Format check, types with Effect's diagnostics, lint, the test map, and every test"
+depends = ["deps"]
+run = [
+  "bun fmt --check",
+  "bun check -b",
+  "bun run effect-check",
+  "bunx oxlint --deny-warnings",
+  "bun tools/test/map-check.ts",
+  "bun test",
+]
 
 [tasks.compile]
-description = "Build the CLI ahead of time with Bun canary"
-depends = ["install"]
-tools = { "github:oven-sh/bun" = { version = "canary", asset_pattern = "bun-linux-x64.zip" } }
+description = "Build the CLI ahead of time with Bun canary (bun compile --trim)"
+depends = ["deps"]
+tools = { "github:oven-sh/bun" = { version = "canary", platforms = { linux-x64 = { asset_pattern = "bun-linux-x64.zip" }, linux-arm64 = { asset_pattern = "bun-linux-aarch64.zip" }, macos-arm64 = { asset_pattern = "bun-darwin-aarch64.zip" }, macos-x64 = { asset_pattern = "bun-darwin-x64.zip" } } } }
 run = "bun run --cwd apps/cli compile"
 
+[tasks.build]
+description = "Build the CLI without the ahead-of-time compiler (--no-aot --minify --bytecode), the fallback binary"
+depends = ["deps"]
+run = "bun run --cwd apps/cli build"
+
 [tasks.budget]
-description = "Hold the CLI to 8 third-party packages and its binary to 70 MiB (DIST-004)"
+description = "Hold the AOT binary to 70 MiB (26 MB as xz) and its runtime packages to the ones ARCHITECTURE.md §14 lists"
 depends = ["compile"]
 run = "bun run --cwd apps/cli budget"
+
+[tasks.canary]
+description = "Type check and test on Bun canary, the runtime the shipped binary is compiled with"
+depends = ["deps"]
+tools = { "github:oven-sh/bun" = { version = "canary", platforms = { linux-x64 = { asset_pattern = "bun-linux-x64.zip" }, linux-arm64 = { asset_pattern = "bun-linux-aarch64.zip" }, macos-arm64 = { asset_pattern = "bun-darwin-aarch64.zip" }, macos-x64 = { asset_pattern = "bun-darwin-x64.zip" } } } }
+run = ["bun check -b", "bun test"]
+
+[tasks.msrv]
+description = "Runs canary; it exists only so the root config's task of this name never runs from ts/"
+hide = true
+depends = ["canary"]
+run = "true"
+
+[tasks.bench]
+description = "Measure the latency, throughput, memory, and startup slopmax adds"
+depends = ["compile"]
+tools = { oha = "1.16", jq = "1.8", hyperfine = "1.20" }
+run = "bun run --cwd tools/bench bench"
+
+[tasks.gates]
+description = "Fail when the AOT binary misses a performance budget of ARCHITECTURE.md §16"
+depends = ["compile"]
+tools = { oha = "1.16", jq = "1.8", hyperfine = "1.20" }
+run = "bun run --cwd tools/bench gates"
+
+[tasks.demo]
+description = "Run a throwaway slopmax with fake accounts, for working on the UI or the desktop app"
+depends = ["deps"]
+run = "bun run --cwd tools/bench demo"
+
+[tasks.install]
+description = "Install the AOT-compiled slopmax into $SLOPMAX_INSTALL_DIR (default ~/.local/bin)"
+depends = ["compile"]
+run = '''
+dir="${SLOPMAX_INSTALL_DIR:-$HOME/.local/bin}"
+mkdir -p "$dir"
+install -m 0755 apps/cli/dist/slopmax "$dir/slopmax"
+echo "Installed $("$dir/slopmax" --version) to $dir/slopmax"
+'''

@@ -2,10 +2,21 @@
   "name": "@slopmax/test",
   "private": true,
   "type": "module",
+  "description": "Test support for every package: it.effect / it.live / it.layer, an in-memory FileSystem, throwaway real homes, and the test-map check",
+  "//": {
+    "effect": "The only runtime dependency: the helpers build on effect/testing, FileSystem and Path, so any package can use them, including the browser-bound domain.",
+    "@effect/platform-bun": "Dev only. map-check.ts needs a real file system to read the map, and the contract tests run the same checks on the real disk as on MemoryFileSystem. src/ never imports it."
+  },
   "exports": {
     ".": "./src/index.ts"
   },
+  "scripts": {
+    "map-check": "bun map-check.ts"
+  },
   "dependencies": {
-    "effect": "4.1.0"
+    "effect": "4.1.1"
+  },
+  "devDependencies": {
+    "@effect/platform-bun": "4.1.1"
   }
 }

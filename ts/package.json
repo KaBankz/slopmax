@@ -2,6 +2,14 @@
   "name": "slopmax-ts",
   "private": true,
   "type": "module",
+  "//": {
+    "@effect/tsgo": "TypeScript-Go with Effect's diagnostics (floating effects, missing services, unstable APIs); `effect-check` runs it over every project.",
+    "@shadcn/lint": "oxlint JS plugin for the UI's components: theme colors and shadcn/ui variants instead of raw colors, arbitrary values and restyled primitives (.oxlintrc.json, apps/ui/src/**/*.tsx).",
+    "@types/bun": "Types for Bun's APIs and bun:test.",
+    "eslint-plugin-better-tailwindcss": "oxlint JS plugin that catches conflicting and duplicate Tailwind classes in the UI, which Tailwind itself resolves silently by source order.",
+    "oxlint": "The linter. .oxlintrc.json enforces the package boundaries and hot-path bans of ARCHITECTURE.md §1.3 and §2.",
+    "typescript": "TypeScript 7, the compiler `bun check` and @effect/tsgo build on."
+  },
   "workspaces": [
     "packages/*",
     "apps/*",
@@ -9,14 +17,16 @@
   ],
   "scripts": {
     "typecheck": "bun check -b",
-    "test": "bun test",
-    "fmt": "bun fmt",
+    "effect-check": "effect-tsgo tsc -b",
     "lint": "oxlint",
-    "verify": "bun fmt --check && bun check -b && oxlint && bun test"
+    "map-check": "bun tools/test/map-check.ts",
+    "test": "bun test"
   },
   "devDependencies": {
     "@effect/tsgo": "0.63.0",
+    "@shadcn/lint": "0.2.3",
     "@types/bun": "1.4.4",
+    "eslint-plugin-better-tailwindcss": "4.10.0",
     "oxlint": "1.90.0",
     "typescript": "7.0.2"
   }

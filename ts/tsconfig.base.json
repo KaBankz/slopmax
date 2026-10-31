@@ -15,6 +15,33 @@
     "composite": true,
     "emitDeclarationOnly": true,
     "declaration": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "allowedUnstableApis": [
+          "effect/FileSystem",
+          "effect/Path",
+          "effect/PlatformError",
+          "effect/ByteSize",
+          "effect/cli",
+          "effect/http",
+          "effect/http-api",
+          "effect/encoding",
+          "effect/process",
+          "effect/reactivity",
+          "effect/rpc",
+          "effect/crypto",
+          "effect/testing",
+          "@effect/platform-bun",
+          "@effect/platform-node",
+          "@effect/atom-react"
+        ],
+        "diagnosticSeverity": {
+          "unstableApiUsage": "message",
+          "floatingEffect": "error"
+        }
+      }
+    ]
   }
 }
