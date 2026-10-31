@@ -1,0 +1,17 @@
+{
+  "name": "@slopmax/bench",
+  "private": true,
+  "type": "module",
+  "description": "The bench rig: mock provider, request bodies, oha runs, the demo home, and the CI performance gates",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "effect": "4.1.0",
+    "@effect/platform-bun": "4.1.0",
+    "@slopmax/domain": "workspace:*"
+  },
+  "devDependencies": {
+    "@slopmax/test": "workspace:*"
+  }
+}

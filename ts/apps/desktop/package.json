@@ -2,8 +2,12 @@
   "name": "slopmax-desktop",
   "private": true,
   "type": "module",
-  "description": "The desktop app: an Electron shell over the CLI's app-host",
+  "description": "The desktop app: an Electron shell over the daemon's HttpApi, with the UI's desktop build and the bundled CLI",
   "main": "out/main.js",
+  "dependencies": {
+    "effect": "4.1.0",
+    "@slopmax/domain": "workspace:*"
+  },
   "devDependencies": {
     "@slopmax/test": "workspace:*"
   }

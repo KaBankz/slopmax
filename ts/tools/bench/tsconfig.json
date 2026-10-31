@@ -1,0 +1,6 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "outDir": "../../.tsbuild/bench", "rootDir": "." },
+  "include": ["src"],
+  "references": [{ "path": "../test" }, { "path": "../../packages/domain" }]
+}

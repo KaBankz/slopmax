@@ -15,7 +15,6 @@
       "name": "slopmax",
       "dependencies": {
         "@effect/platform-bun": "4.1.0",
-        "@slopmax/app": "workspace:*",
         "@slopmax/core": "workspace:*",
         "@slopmax/domain": "workspace:*",
         "effect": "4.1.0",
@@ -26,14 +25,17 @@
     },
     "apps/desktop": {
       "name": "slopmax-desktop",
+      "dependencies": {
+        "@slopmax/domain": "workspace:*",
+        "effect": "4.1.0",
+      },
       "devDependencies": {
         "@slopmax/test": "workspace:*",
       },
     },
-    "packages/app": {
-      "name": "@slopmax/app",
+    "apps/ui": {
+      "name": "@slopmax/ui",
       "dependencies": {
-        "@slopmax/core": "workspace:*",
         "@slopmax/domain": "workspace:*",
         "effect": "4.1.0",
       },
@@ -65,6 +67,17 @@
     "packages/wire": {
       "name": "@slopmax/wire",
       "dependencies": {
+        "@slopmax/domain": "workspace:*",
+        "effect": "4.1.0",
+      },
+      "devDependencies": {
+        "@slopmax/test": "workspace:*",
+      },
+    },
+    "tools/bench": {
+      "name": "@slopmax/bench",
+      "dependencies": {
+        "@effect/platform-bun": "4.1.0",
         "@slopmax/domain": "workspace:*",
         "effect": "4.1.0",
       },
@@ -138,13 +151,15 @@
 
     "@oxlint/binding-win32-x64-msvc": ["@oxlint/binding-win32-x64-msvc@1.90.0", "", { "os": "win32", "cpu": "x64" }, "sha512-30JiaFEBUB9peEOcvVM8ggo88SoN/IdSr9DW505JdBji/R6dM66gKEiG65hw6qcaF2f4mO0cEJ+RwRZprmun9g=="],
 
-    "@slopmax/app": ["@slopmax/app@workspace:packages/app"],
+    "@slopmax/bench": ["@slopmax/bench@workspace:tools/bench"],
 
     "@slopmax/core": ["@slopmax/core@workspace:packages/core"],
 
     "@slopmax/domain": ["@slopmax/domain@workspace:packages/domain"],
 
     "@slopmax/test": ["@slopmax/test@workspace:tools/test"],
+
+    "@slopmax/ui": ["@slopmax/ui@workspace:apps/ui"],
 
     "@slopmax/wire": ["@slopmax/wire@workspace:packages/wire"],
 

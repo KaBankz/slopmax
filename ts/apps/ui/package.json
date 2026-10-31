@@ -1,15 +1,14 @@
 {
-  "name": "@slopmax/app",
+  "name": "@slopmax/ui",
   "private": true,
   "type": "module",
-  "description": "The desktop app's engine: state, actions, view model, and the Rpc handlers",
+  "description": "One React app for the web dashboard and the desktop window, over the daemon's HttpApi",
   "exports": {
     ".": "./src/index.ts"
   },
   "dependencies": {
     "effect": "4.1.0",
-    "@slopmax/domain": "workspace:*",
-    "@slopmax/core": "workspace:*"
+    "@slopmax/domain": "workspace:*"
   },
   "devDependencies": {
     "@slopmax/test": "workspace:*"

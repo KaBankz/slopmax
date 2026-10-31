@@ -5,6 +5,9 @@
       "path": "tools/test"
     },
     {
+      "path": "tools/bench"
+    },
+    {
       "path": "packages/domain"
     },
     {
@@ -14,7 +17,7 @@
       "path": "packages/core"
     },
     {
-      "path": "packages/app"
+      "path": "apps/ui"
     },
     {
       "path": "apps/cli"

@@ -10,8 +10,7 @@
     "effect": "4.1.0",
     "@effect/platform-bun": "4.1.0",
     "@slopmax/domain": "workspace:*",
-    "@slopmax/core": "workspace:*",
-    "@slopmax/app": "workspace:*"
+    "@slopmax/core": "workspace:*"
   },
   "devDependencies": {
     "@slopmax/test": "workspace:*"

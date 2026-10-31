@@ -3,9 +3,8 @@
   "compilerOptions": {
     "outDir": "../../.tsbuild/desktop",
     "rootDir": ".",
-    "lib": ["es2024", "dom", "dom.iterable"],
-    "jsx": "react-jsx"
+    "lib": ["es2024", "dom", "dom.iterable"]
   },
   "include": ["src"],
-  "references": []
+  "references": [{ "path": "../../packages/domain" }]
 }
