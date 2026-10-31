@@ -13,11 +13,11 @@
     },
     "apps/cli": {
       "name": "slopmax",
-      "version": "0.3.0",
       "dependencies": {
         "@effect/platform-bun": "4.1.0",
         "@slopmax/app": "workspace:*",
         "@slopmax/core": "workspace:*",
+        "@slopmax/domain": "workspace:*",
         "effect": "4.1.0",
       },
       "devDependencies": {
@@ -34,15 +34,7 @@
       "name": "@slopmax/app",
       "dependencies": {
         "@slopmax/core": "workspace:*",
-        "effect": "4.1.0",
-      },
-      "devDependencies": {
-        "@slopmax/test": "workspace:*",
-      },
-    },
-    "packages/common": {
-      "name": "@slopmax/common",
-      "dependencies": {
+        "@slopmax/domain": "workspace:*",
         "effect": "4.1.0",
       },
       "devDependencies": {
@@ -52,8 +44,8 @@
     "packages/core": {
       "name": "@slopmax/core",
       "dependencies": {
-        "@slopmax/common": "workspace:*",
-        "@slopmax/net": "workspace:*",
+        "@effect/platform-bun": "4.1.0",
+        "@slopmax/domain": "workspace:*",
         "@slopmax/wire": "workspace:*",
         "effect": "4.1.0",
       },
@@ -61,10 +53,9 @@
         "@slopmax/test": "workspace:*",
       },
     },
-    "packages/net": {
-      "name": "@slopmax/net",
+    "packages/domain": {
+      "name": "@slopmax/domain",
       "dependencies": {
-        "@slopmax/common": "workspace:*",
         "effect": "4.1.0",
       },
       "devDependencies": {
@@ -74,7 +65,7 @@
     "packages/wire": {
       "name": "@slopmax/wire",
       "dependencies": {
-        "@slopmax/common": "workspace:*",
+        "@slopmax/domain": "workspace:*",
         "effect": "4.1.0",
       },
       "devDependencies": {
@@ -149,11 +140,9 @@
 
     "@slopmax/app": ["@slopmax/app@workspace:packages/app"],
 
-    "@slopmax/common": ["@slopmax/common@workspace:packages/common"],
-
     "@slopmax/core": ["@slopmax/core@workspace:packages/core"],
 
-    "@slopmax/net": ["@slopmax/net@workspace:packages/net"],
+    "@slopmax/domain": ["@slopmax/domain@workspace:packages/domain"],
 
     "@slopmax/test": ["@slopmax/test@workspace:tools/test"],
 

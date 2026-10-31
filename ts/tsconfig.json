@@ -1,13 +1,26 @@
 {
   "files": [],
   "references": [
-    { "path": "tools/test" },
-    { "path": "packages/common" },
-    { "path": "packages/wire" },
-    { "path": "packages/net" },
-    { "path": "packages/core" },
-    { "path": "packages/app" },
-    { "path": "apps/cli" },
-    { "path": "apps/desktop" }
+    {
+      "path": "tools/test"
+    },
+    {
+      "path": "packages/domain"
+    },
+    {
+      "path": "packages/wire"
+    },
+    {
+      "path": "packages/core"
+    },
+    {
+      "path": "packages/app"
+    },
+    {
+      "path": "apps/cli"
+    },
+    {
+      "path": "apps/desktop"
+    }
   ]
 }

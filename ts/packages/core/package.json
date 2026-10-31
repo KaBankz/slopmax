@@ -2,15 +2,15 @@
   "name": "@slopmax/core",
   "private": true,
   "type": "module",
-  "description": "The engine: accounts, sign-in, the pool, the proxy, and all the CLI and app share",
+  "description": "The engine as services and layers: accounts, credentials, providers, agents, pool, router, proxy, admin API, daemon, ledger",
   "exports": {
     ".": "./src/index.ts"
   },
   "dependencies": {
     "effect": "4.1.0",
-    "@slopmax/common": "workspace:*",
-    "@slopmax/wire": "workspace:*",
-    "@slopmax/net": "workspace:*"
+    "@effect/platform-bun": "4.1.0",
+    "@slopmax/domain": "workspace:*",
+    "@slopmax/wire": "workspace:*"
   },
   "devDependencies": {
     "@slopmax/test": "workspace:*"

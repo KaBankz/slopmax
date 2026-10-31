@@ -1,14 +1,78 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["typescript", "unicorn", "oxc", "import"],
-  "categories": { "correctness": "error", "suspicious": "warn" },
+  "plugins": [
+    "typescript",
+    "unicorn",
+    "oxc",
+    "import"
+  ],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn"
+  },
   "rules": {
     "typescript/no-explicit-any": "error",
     "import/no-cycle": "error",
     "no-eval": "error",
     "no-new-func": "error",
     "no-extend-native": "error",
-    "no-underscore-dangle": ["warn", { "allow": ["_tag"] }]
+    "no-underscore-dangle": [
+      "warn",
+      {
+        "allow": [
+          "_tag"
+        ]
+      }
+    ]
   },
-  "ignorePatterns": ["**/node_modules/**", "**/dist/**", "**/out/**", "**/pkg/**", ".tsbuild/**"]
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/out/**",
+    "**/pkg/**",
+    ".tsbuild/**"
+  ],
+  "overrides": [
+    {
+      "files": [
+        "packages/*/src/**/*.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "node:fs",
+                "message": "Use FileSystem from effect."
+              },
+              {
+                "name": "node:fs/promises",
+                "message": "Use FileSystem from effect."
+              },
+              {
+                "name": "fs",
+                "message": "Use FileSystem from effect."
+              },
+              {
+                "name": "node:child_process",
+                "message": "Use effect/process."
+              }
+            ]
+          }
+        ],
+        "no-restricted-globals": [
+          "error",
+          {
+            "name": "setInterval",
+            "message": "Use Schedule."
+          },
+          {
+            "name": "setTimeout",
+            "message": "Use Effect.sleep or Schedule."
+          }
+        ]
+      }
+    }
+  ]
 }

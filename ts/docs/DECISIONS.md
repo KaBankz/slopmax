@@ -13,6 +13,7 @@ judges, whose corrections are folded in below.
 | CLI binary                                 | `bun compile --trim` (ahead of time, Bun canary); `--no-aot --minify --bytecode` as the fallback build                                                            |
 | Package manager                            | `bun install`, workspaces                                                                                                                                         |
 | Types                                      | `bun check -b`; `@effect/tsgo` for Effect's diagnostics in CI (with `unstableApiUsage` lowered to a message, since `effect/http` and friends are tagged unstable) |
+| CLI                                        | `effect/cli`; the admin API client is `HttpApiClient`                                                                                                             |
 | Tests                                      | `bun test` with `@slopmax/test` (`it.effect`, `it.live`, `it.layer` over `bun:test` and `effect/testing`)                                                         |
 | Format                                     | `bun fmt` (`printWidth = 120`, `semi = false`)                                                                                                                    |
 | Lint                                       | oxlint, with `@shadcn/lint` and `eslint-plugin-better-tailwindcss` as JS plugins for the renderer                                                                 |
@@ -22,7 +23,7 @@ judges, whose corrections are folded in below.
 ## Where the code runs
 
 ```
-Electron main (Node)  ──stdio, typed messages──  slopmax app-host (Bun)  ──HTTP──  slopmax serve (Bun)
+Electron main (Node)  ──stdio, effect/rpc───────  slopmax app-host (Bun)  ──HTTP──  slopmax serve (Bun)
    window, tray,                                    @slopmax/app:                   the proxy daemon
    notifications,                                   snapshot, actions,              (or the login service)
    IPC to the renderer                              sign-in, background
@@ -30,51 +31,44 @@ Electron main (Node)  ──stdio, typed messages──  slopmax app-host (Bun) 
 
 - **The engine runs on Bun only.** The core, the app's state and actions, and
   the daemon all run inside the one Bun binary. Electron's main process is a
-  shell: it draws the window and tray, shows notifications, and relays typed
+  shell: it draws the window and tray, shows notifications, and relays `effect/rpc`
   messages between the renderer and a `slopmax app-host` child (a hidden
   subcommand of the bundled CLI).
 - **Why not the core in Electron's main.** It would save one process (about
   35 MB), but the core needs `flock` (shared with the token refresh in the
   daemon and the CLI), which Node does not have, and running the core on two
-  runtimes doubles what must be tested. With the host, `@slopmax/app` is a
-  straight port of `slopmax-app` and the core never runs on Node.
+  runtimes doubles what must be tested. With the host, the core never runs on Node.
 - **The proxy outlives the window**, as in Rust: the host starts the bundled
   CLI's `serve` if none runs, and the login service runs the same binary.
 - **Electron is started lean:** `app.disableHardwareAcceleration()` plus
   `--enable-features=NetworkServiceInProcess2` (about 40 MB less), and the
   Vulkan/SwiftShader files are dropped from the package.
 
-## The CLI
+## Effect-native, not Rust-shaped (2026-10-31)
 
-- **The parser is ported, not replaced by `effect/cli`.** Tests assert its
-  exact error texts, exit code 2, `-1` read as a value, the trailing-argument
-  rules, and the completion scripts. The table-driven parser is a few hundred
-  lines of pure functions; `effect/cli` would not reproduce those bytes, and it
-  costs about half of the measured startup floor.
-- **`slopmax run`** cannot replace itself with the agent (`exec`) on Bun; it
-  spawns the agent with inherited stdio, forwards signals, and exits with its
-  code.
+The first port mirrored the Rust's modules, types, test names, and byte-level
+output. That is not the goal and was replaced; it survives only as a behavior
+reference on `ts-reference/rust-shaped`. Settled with the user:
 
-## Parity traps settled up front
-
-- **Numbers print as Rust prints them.** `@slopmax/common` has a formatter with
-  Rust's round-half-to-even and `25.0`-style floats; nothing uses `toFixed` for
-  output.
-- **Widths count characters** (code points), not UTF-16 units.
-- **Time:** timestamps are epoch milliseconds in memory. RFC 3339 parsing
-  accepts nanoseconds; formatting drops trailing zeros as Rust does. A Rust
-  test that round-trips nanoseconds is ported against milliseconds and noted.
-- **TOML:** config edits keep the user's comments and place new keys where
-  Rust's `toml_edit` does. No JS library does this, so `@slopmax/core` has a
-  small format-preserving editor for the subset slopmax writes.
-- **Locks** are `flock` through `bun:ffi`, which interoperates with Rust's
-  `File::lock`.
-- **SOCKS5** outbound proxies go through a small local CONNECT-to-SOCKS5
-  bridge, since Bun's `fetch` takes only HTTP proxies.
-- **Compressed upstream bodies pass through untouched** (`decompress: false`),
-  as the Rust forwards `accept-encoding`.
-- **`JSON.parse` is not used on request bodies on the hot path**: `rawjson`
-  scans bytes (it must also see duplicate `model` keys).
+- **Parity is features and external contracts**, not internals or bytes
+  (`CONVENTIONS.md`, "What parity means").
+- **Existing `~/.slopmax` files are migrated**, then written the Effect way.
+- **Settings are `config.json`**, defined by an Effect `Schema` that also
+  generates `config.schema.json` for editor completion and validation. A
+  `config.toml` is read once (`effect/encoding` `Toml`) and converted.
+- **The CLI is `effect/cli`**, with its help, completions, and error wording.
+- **`slopmax run`** spawns the agent with inherited stdio through
+  `effect/process`, forwards signals, and exits with the agent's code (a
+  process cannot replace itself on Bun).
+- **The admin API is an `HttpApi`**, so the daemon, the CLI, and the app share
+  one typed definition and client.
+- **The desktop protocol is `effect/rpc`** over the app host's stdio.
+- **Locks:** a `Semaphore` within a process; across processes, `flock`
+  through `bun:ffi` behind a small `Lock` service (it costs about 9 MB of
+  `--trim` savings in the AOT binary; measured in `AOT.md`).
+- **Outbound SOCKS5** goes through a small local CONNECT-to-SOCKS5 bridge
+  inside the `Upstream` layer, since Bun's `fetch` takes only HTTP proxies.
+- **Compressed upstream bodies pass through untouched** (`decompress: false`).
 
 ## Styling, with the judges' corrections
 

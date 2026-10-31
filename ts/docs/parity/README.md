@@ -1,4 +1,13 @@
-# Parity inventory: index
+# Parity inventory
+
+> **Scope (2026-10-31).** The TypeScript rewrite keeps slopmax's features and
+> external contracts, not the Rust's internals or bytes (`../CONVENTIONS.md`,
+> "What parity means"). When an item below states a Rust-internal detail —
+> exact error or help wording, number rounding and float printing, nanosecond
+> precision, integer limits, serde key order, TOML comment placement, module
+> or type names — the behavior it describes still matters, but its exact form
+> does not. Settings live in `config.json` now, so `CFG-` items describe what
+> each setting does, not the TOML text. Judges check features and contracts.
 
 These files are the contract the TypeScript port of slopmax is judged
 against. Every line item is one checkable behavior of the Rust workspace

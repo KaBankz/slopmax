@@ -1,145 +1,116 @@
-# Conventions for the TypeScript port
+# Conventions
 
-The TypeScript port is slopmax rebuilt on Effect 4, one package per Rust crate.
-It must match the Rust one-to-one in behavior (the contract is `docs/parity/`),
-and it must stay small, fast, and plain. These rules apply to every package.
+slopmax in TypeScript is written as first-class Effect and TypeScript. It
+keeps the Rust slopmax's features and external contracts, never its
+internals. When the Rust and Effect would do a thing differently, do it the
+Effect way. These rules bind every package; judges check them as hard as
+they check features.
 
-## Layout
+## What parity means
 
-```
-ts/
-  packages/
-    common   @slopmax/common   time, ids, the logger, short formats for people   (slopmax-common)
-    wire     @slopmax/wire     API formats and translation; no I/O                 (slopmax-wire)
-    net      @slopmax/net      outbound HTTP (pooling, proxies, origins), WebSocket and form helpers (slopmax-net)
-    core     @slopmax/core     the engine: accounts, sign-in, pool, proxy, daemon  (slopmax-core)
-    app      @slopmax/app      the desktop app apart from any UI: state, actions, view (slopmax-app)
-  apps/
-    cli      slopmax           the CLI binary                                       (slopmax)
-    desktop  slopmax-desktop   the Electron app                                     (slopmax-desktop-gpui)
-```
+- **Kept:** every feature, command, flag, and setting; every external
+  contract: the proxy endpoints and headers Claude Code, Codex and other
+  clients use, SSE event shapes, the WebSocket relay, the `/slopmax/*` admin
+  API's request and response shapes, the CLIProxyAPI-compatible hub, the
+  dashboard's behavior, notification payloads, the login service's effect.
+- **Migrated:** files the Rust wrote (`config.toml`, accounts, `state.json`,
+  `*.jsonl`) are read and converted on first run.
+- **Not kept:** Rust's internals and bytes. Output text, help, and error
+  wording are Effect's and TypeScript's (`effect/cli` help, `Intl` number
+  formatting, Schema error messages). Precision is what JavaScript gives
+  (milliseconds). Files are written as `Schema.encode` + `JSON.stringify`
+  produce them.
 
-Dependencies point one way, as in Rust: common under net and wire, those under
-core, core under app and the front ends. The core re-exports what front ends
-need, so `apps/*` import from `@slopmax/core` and `@slopmax/app` only.
+## Use Effect's own types
 
-Each package: `src/` (one module per Rust module, same names in kebab-case is
-not needed — keep the Rust file names, e.g. `rawjson.ts`, `claude-code.ts`),
-`test/` mirroring `src/`, an `index.ts` that is the public surface, and a
-`package.json` with `"type": "module"` and an `exports` map pointing at the
-TypeScript sources (the apps bundle them; nothing is published).
+| Need                                                    | Use                                                                           | Not                                                        |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| A domain entity (account, window, ledger entry, report) | `Schema.Class`, `Schema.TaggedClass`                                          | hand-written classes or interfaces plus decoders           |
+| A sum type (verdict, credential, billing)               | `Schema.TaggedUnion`/`Data.TaggedEnum` with `Match`                           | string flags, nested ifs                                   |
+| An error                                                | `Schema.TaggedError` (crosses a boundary or serializes) or `Data.TaggedError` | a generic `Failure`, `Error` subclasses, thrown exceptions |
+| Optional values                                         | `Option` inside Effect code, `undefined` at plain-data edges                  | sentinel values                                            |
+| Time                                                    | `DateTime`, `Duration`, `Clock`                                               | custom timestamp or duration types                         |
+| Ids, randomness, hashes                                 | `crypto.randomUUID`, `Random`, `effect/crypto`                                | in-house generators                                        |
+| Files                                                   | `FileSystem`, `Path`                                                          | `node:fs`                                                  |
+| Settings and env                                        | `Schema` for `config.json`; `Config` for env vars                             | hand-parsed files                                          |
+| Logging                                                 | `Effect.log*` with a `Logger` layer                                           | a custom logger                                            |
+| HTTP server                                             | `HttpRouter`; `HttpApi` + `HttpApiBuilder` for typed APIs                     | hand dispatch on paths                                     |
+| HTTP client                                             | `HttpClient`; `HttpApiClient` for slopmax's own API                           | hand-built requests to slopmax                             |
+| Streams, SSE, NDJSON                                    | `Stream`, `effect/encoding` `Sse` and `Ndjson`                                | manual line splitting                                      |
+| State others watch                                      | `SubscriptionRef`, `PubSub`                                                   | callbacks, polling                                         |
+| Timers                                                  | `Schedule` with `Effect.repeat`, forked into a `Scope`                        | `setInterval`                                              |
+| Resources                                               | `Effect.acquireRelease`, `Scope`, `Layer.scoped`                              | try/finally                                                |
+| Child processes                                         | `effect/process`                                                              | `Bun.spawn` in engine code                                 |
+| CLI                                                     | `effect/cli` (`Command`, `Flag`, `Argument`, `Prompt`)                        | a hand-written parser                                      |
+| App ⇄ engine                                            | `effect/rpc` (`RpcGroup`, `RpcServer`, `RpcClient`) over NDJSON               | an ad-hoc message protocol                                 |
+| People-facing numbers and times                         | `Intl.NumberFormat`, `Intl.RelativeTimeFormat`, `DateTime.format`             | Rust format emulation                                      |
 
-## Effect
+## Services and layers
 
-Effect 4.1 (`effect`, plus `effect/http`, `effect/cli`, `effect/socket`,
-`effect/process`; platform layers from `@effect/platform-bun`, and
-`@effect/platform-node` only where Electron's Node runs our code).
-
-## Toolchain
-
-Bun (latest, pinned in `ts/mise.toml`) is the runtime and the toolchain:
-`bun install` (workspaces), `bun build --compile` (the CLI binary),
-`bun test`, `bun check` (types), `bun fmt`. Bun has no linter, so oxlint
-lints. The details and measurements behind each choice are in `RUNTIME.md`.
-
-The CLI ships compiled ahead of time (`bun compile --trim`, Bun canary), which
-needs the whole program to type check and avoids code generated from strings.
-Follow the rules in `AOT.md`.
-
-- **Pure code stays pure.** Parsers, codecs, the planner, placement, pricing,
-  formatting, rawjson scanning: plain synchronous functions over plain data.
-  Do not wrap pure logic in `Effect` — it costs allocations on the hot path and
-  says nothing. Effect is for I/O, time, concurrency, resources, and errors that
-  cross an I/O boundary.
-- **Services** are classes, keyed by their package path, with a `make` and a
-  `layer`:
-
-  ```ts
-  export class Store extends Context.Service<
-    Store,
-    {
-      readonly load: (id: AccountId) => Effect.Effect<Account, StoreError>
-    }
-  >()("@slopmax/core/Store", {
-    make: Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      return {
-        load: Effect.fn("Store.load")(function* (id) {
-          /* … */
-        }),
-      }
-    }),
-  }) {
-    static readonly layer = Layer.effect(Store, Store.make)
+```ts
+export class Accounts extends Context.Service<
+  Accounts,
+  {
+    readonly list: Effect.Effect<ReadonlyArray<Account>, AccountsError>
+    readonly save: (account: Account) => Effect.Effect<void, AccountsError>
   }
-  ```
+>()("@slopmax/core/Accounts", {
+  make: Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const home = yield* Home
+    const list = Effect.fn("Accounts.list")(function* () {
+      /* … */
+    })
+    return {
+      list: list(),
+      save: Effect.fn("Accounts.save")(function* (account) {
+        /* … */
+      }),
+    }
+  }),
+}) {
+  static readonly layer = Layer.effect(Accounts, Accounts.make)
+}
+```
 
-  Only make something a service when it holds state or does I/O that tests
-  need to replace. A module of functions is fine otherwise.
+- Every stateful or I/O concern is a service; its dependencies are services.
+  Tests provide test layers (an in-memory `FileSystem`, a mock `HttpClient`,
+  `TestClock`) rather than temp directories and real ports wherever possible.
+- Effectful functions are `Effect.fn("Service.method")`.
+- Pure logic (planning, placement, pricing, translation, peeking at bytes)
+  stays plain functions over Schema-typed data. Do not wrap it in `Effect`.
 
-- **Named effects** use `Effect.fn("Module.name")(function* (...) { … })`, so
-  spans and stack traces carry the name.
-- **Errors** that cross module boundaries are `Schema.TaggedError` classes
-  (or `Data.TaggedError` when they never serialize). Recover with
-  `Effect.catchTag`. Never throw from Effect code; never use `any`.
-- **Data on disk and on the wire** that slopmax owns (accounts, state.json,
-  pins, ledger lines, windows.jsonl, admin API bodies) is described with
-  `Schema` and decoded with it, so a malformed file is a typed error, not a
-  crash. Upstream API bodies on the hot path are scanned, not decoded (see
-  Performance).
-- **Time** comes from `Clock` (`Clock.currentTimeMillis`, `DateTime.now`) so
-  tests drive it with `TestClock`. Timestamps are epoch milliseconds (`number`)
-  in data, `Duration` for spans.
-- **Timers and background tasks** are `Effect.repeat`/`Schedule` fibers forked
-  into the daemon's `Scope` (`Effect.forkScoped`), never `setInterval`.
-- **Watched state** (the pool, the app's snapshot) is `SubscriptionRef`; a UI
-  or the daemon subscribes with `SubscriptionRef.changes`.
-- **Resources** (listeners, sockets, file locks, child processes) are acquired
-  with `Effect.acquireRelease` inside a `Scope`.
-- **Platform** is provided at the edge. `@slopmax/core` depends on `effect`
-  only (FileSystem, Path, HttpClient, HttpServer, Socket, ChildProcess are
-  abstract services). The CLI provides the Bun or Node layers; Electron's main
-  process provides the Node layers. Node-only APIs (`node:crypto`, `node:os`,
-  `node:net` for things Effect lacks) are allowed in core when both Bun and
-  Node implement them; isolate each in one small module.
-- **Config** for slopmax itself is the TOML file, not Effect `Config`; env vars
-  that Rust reads (`SLOPMAX_HOME`, …) are read through `Config` so tests can
-  set them with a `ConfigProvider`.
+## Structure and names
+
+- Files are named for what they hold in TypeScript's usual style:
+  `accounts.ts`, `claude-code.ts`, `router.ts`. No `mod.ts`; a folder's
+  public surface is its `index.ts`.
+- Names are TypeScript's: `camelCase` values, `PascalCase` types and
+  services. Pick the clearest name, not the Rust one.
+- Comments explain why, in plain words about slopmax itself. Never explain
+  code in terms of Rust, its crates, or its types.
 
 ## Performance
 
-The hot path rules from the Rust carry over:
-
-- Request bodies are `Uint8Array`s, never parsed whole. `rawjson` scans for the
-  few values slopmax reads and stops once it has them; edits splice bytes.
-- The stream tap reads SSE events in place and parses only those that mention
-  usage or an error.
-- Responses stream through; nothing buffers a whole answer.
-- Commands that only talk to the local proxy do not load TLS roots or open
-  pools they do not need.
-- No dependency without a measured reason (smaller, faster, or more correct
-  than a small module). List each one with its reason in the package's
-  `package.json` `"//"` field.
+- Request bodies are bytes; routing peeks at the few fields it needs without
+  parsing the whole body. Same-format requests are forwarded as sent.
+- Responses stream; nothing buffers a whole answer.
+- Typed code everywhere (no `any`, no unchecked casts), so the
+  ahead-of-time compiler can do its job (`AOT.md`).
+- No dependency without a measured reason, recorded in the package's
+  `package.json` `"//"` field. Effect and Bun cover nearly everything.
 
 ## Tests
 
-- `bun test`, with the shared `it.effect`/`it.layer` helpers (see
-  `RUNTIME.md`) for effectful tests, plain `it` for pure ones, `TestClock`
-  for time.
-- Every Rust test is ported. **The test title is the Rust test function's
-  name, verbatim** (`it("refresh_waits_for_the_lock", …)`), so
-  `docs/parity/rust-tests.tsv` maps one-to-one. A Rust test that cannot apply
-  (it tests a Rust-only mechanism) is listed in the package's
-  `test/NOT-PORTED.md` with the reason, and whatever behavior it guarded is
-  covered by another test.
-- Integration tests run the real proxy against a mock provider on a local port,
-  as `slopmax-core/tests/proxy.rs` does.
-- Temporary homes go under the OS temp dir and are removed after.
+- `bun test` with `@slopmax/test` (`it.effect`, `it.live`, `it.layer`).
+- Tests are named for the behavior they check, in plain English, grouped with
+  `describe` by service. Each behavior the Rust tests covered is covered;
+  `docs/parity/test-map.tsv` maps every Rust test to the TypeScript test (file
+  and title) that covers it, or to the reason it does not apply.
+- End-to-end tests run the real proxy against a mock provider.
 
-## Style
+## Toolchain
 
-- TypeScript strict, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`.
-- Readonly data, discriminated unions with `_tag` for sum types.
-- Comments: as sparse as the Rust's and in the same plain voice; carry over
-  the Rust's comments where they explain _why_.
-- Names follow the Rust (`plan`, `pick`, `Verdict`, `Dialect`), camelCased.
+Bun is the runtime and the toolchain (`bun install`, `bun check -b`,
+`bun test`, `bun fmt`); oxlint lints. The CLI ships compiled ahead of time
+(`bun compile --trim`, Bun canary; see `AOT.md`).

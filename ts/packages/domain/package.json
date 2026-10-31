@@ -1,0 +1,15 @@
+{
+  "name": "@slopmax/domain",
+  "private": true,
+  "type": "module",
+  "description": "The shared vocabulary: Schema models and errors, the admin HttpApi, the desktop Rpc group, formatting for people",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "effect": "4.1.0"
+  },
+  "devDependencies": {
+    "@slopmax/test": "workspace:*"
+  }
+}

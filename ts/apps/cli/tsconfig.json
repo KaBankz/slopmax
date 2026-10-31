@@ -1,6 +1,11 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "outDir": "../../.tsbuild/cli", "rootDir": "." },
-  "include": ["src", "test", "bench"],
-  "references": [{ "path": "../../tools/test" }, { "path": "../../packages/core" }, { "path": "../../packages/app" }]
+  "include": ["src", "test"],
+  "references": [
+    { "path": "../../tools/test" },
+    { "path": "../../packages/domain" },
+    { "path": "../../packages/core" },
+    { "path": "../../packages/app" }
+  ]
 }
