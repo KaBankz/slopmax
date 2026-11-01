@@ -83,15 +83,14 @@ describe("the release", () => {
     ["unknown-linux-gnu", "unknown-linux-musl", "apple-darwin"].map((os) => `${arch}-${os}`),
   )
 
-  test("is made from a pushed v* tag from v0.4.0 on, or rehearsed by hand", () => {
-    expect(at(release, "on", "push", "tags")).toEqual(["v*", "!v0.[0-3].*"])
-    expect(keysOf(at(release, "on"))).toContain("workflow_dispatch")
+  test("runs only by hand until the TypeScript slopmax is chosen to ship, checking a tag when it has one", () => {
+    expect(keysOf(at(release, "on"))).toEqual(["workflow_dispatch"])
     expect(runsOf(release, "check")).toContain('release-check --tag "$GITHUB_REF_NAME"')
   })
 
-  test("leaves the tags before v0.4.0 to the earlier slopmax's release.yml, and only those", () => {
+  test("leaves every v* tag to the earlier slopmax's release.yml meanwhile", () => {
     // Both would create the release and upload archives of the same names.
-    expect(at(earlierRelease, "on", "push", "tags")).toEqual(["v0.[0-3].*"])
+    expect(at(earlierRelease, "on", "push", "tags")).toEqual(["v*"])
   })
 
   test("takes its notes from CHANGELOG.md", () => {

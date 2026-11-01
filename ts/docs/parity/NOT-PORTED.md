@@ -345,9 +345,11 @@ paidOverflow on`, prices under `prices` in `config.json`); `start --json`
   x86-64 CPU without AVX2, which Bun's runtime needs. Releases come from `v*`
   tags whose version is `slopmaxVersion`, checked by
   `bun tools/bench release-check` (a manual run reports missing notes
-  without failing). The Rust slopmax's `release.yml` now answers only the
-  tags before v0.4.0 (`v0.[0-3].*`) and `ts-release.yml` every later one,
-  so no tag is released by both. The musl binaries are tried in the
+  without failing). Until the TypeScript slopmax is chosen to ship, the
+  Rust slopmax's `release.yml` answers every `v*` tag and `ts-release.yml`
+  runs only by hand, as a dry run, so no tag is released by both; shipping
+  it means giving `ts-release.yml` the `v*` tags and narrowing
+  `release.yml`'s to the ones before. The musl binaries are tried in the
   Alpine image, since the Ubuntu runners have no musl loader.
 - **The performance budgets do not hold yet** (DIST-004, DIST-014). The
   gates (`mise run gates`) measure ARCHITECTURE.md §16 for real and fail
