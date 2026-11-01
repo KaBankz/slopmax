@@ -6,7 +6,9 @@ import { Option } from "effect"
 import type { LucideIcon } from "lucide-react"
 import { AsyncResult } from "effect/reactivity"
 import type { ReactNode } from "react"
+import appIcon from "../icon-128.png"
 import { pct } from "../lib/style.ts"
+import mark from "../logo.svg"
 import type { Overview } from "../view/groups.ts"
 import { capitalize, failureText, poolBarTip, segmentsShown, sentence } from "../view/words.ts"
 import { Button } from "./ui/button.tsx"
@@ -275,17 +277,14 @@ export function Skeleton({ lines = 3 }: { readonly lines?: number }) {
   )
 }
 
-/** slopmax's logo: a pink tile with three rising bars. */
+/**
+ * slopmax's logo: the Option key (⌥), traffic switched to another account.
+ * Small sizes use the flat mark, which stays crisp at 16 px; the large one is
+ * the app icon itself. Both come from assets/icon (`bun assets/icon/build.ts derive`).
+ */
 export function Logo({ size = "md" }: { readonly size?: "sm" | "md" | "lg" }) {
-  const box = size === "sm" ? "size-4" : size === "md" ? "size-5" : "size-10"
-  return (
-    <svg viewBox="0 0 64 64" aria-hidden className={box}>
-      <rect width="64" height="64" rx="14" className="fill-brand" />
-      <rect x="14" y="34" width="9" height="16" rx="2" className="fill-brand-foreground" />
-      <rect x="27.5" y="24" width="9" height="26" rx="2" className="fill-brand-foreground" />
-      <rect x="41" y="14" width="9" height="36" rx="2" className="fill-brand-foreground" />
-    </svg>
-  )
+  if (size === "lg") return <img src={appIcon} alt="" width={40} height={40} className="size-10" />
+  return <img src={mark} alt="" width={20} height={20} className={size === "sm" ? "size-4" : "size-5"} />
 }
 
 /** A keyboard shortcut, faint. */

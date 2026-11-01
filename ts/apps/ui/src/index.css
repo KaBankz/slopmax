@@ -1,6 +1,6 @@
 /*
  * slopmax's look: calm neutrals, color only where something needs a look
- * (good, warn, bad), and the pink of the logo kept for the logo and focus.
+ * (good, warn, bad), and the cobalt of the app icon kept for the brand and focus.
  * Text tokens, the faint one included, read at 4.5:1 or more on the page and
  * the sidebar; the focus ring and the controls' edges at 3:1 or more.
  * Light and dark share every token; `.dark` on <html> switches them, set by
@@ -43,8 +43,8 @@
   --hover: #0000000a;
   --selected: #00000010;
   --raised: #ffffff;
-  /* The one accent, defined once: the logo, the Next badge and the focus ring. */
-  --brand: #d63370;
+  /* The one accent, defined once: the app icon's cobalt, for the Next badge and the focus ring. */
+  --brand: #2470ee;
   --brand-foreground: #ffffff;
   --ring: var(--brand);
   --scrim: #0000002e;
@@ -78,6 +78,9 @@
   --hover: #ffffff0a;
   --selected: #ffffff12;
   --raised: #333338;
+  /* The icon's cobalt, lifted so text and the focus ring read on the dark page. */
+  --brand: #6aa0ff;
+  --brand-foreground: #0b1730;
   --scrim: #00000080;
   --series-1: #e6e6e8;
   --series-2: #9b9ba3;
