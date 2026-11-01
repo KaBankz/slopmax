@@ -32,7 +32,7 @@ import {
 import { ChildProcessSpawner } from "effect/process"
 import { TestClock } from "effect/testing"
 import { Events } from "../../src/events.ts"
-import type { Pricing } from "../../src/ledger-views.ts"
+import type { Pricing } from "../../src/pricing.ts"
 import {
   commandEnv,
   type Conditions,

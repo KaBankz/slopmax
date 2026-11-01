@@ -3,41 +3,41 @@ crates/slopmax-app/src/alerts.rs	a_nudge_is_told_once	packages/core/test/notifie
 crates/slopmax-app/src/alerts.rs	what_was_told_outlasts_a_restart_until_its_moment_passes	packages/core/test/notifier/notifier.test.ts	keeps what was told past a restart until its moment passes | does not tell again a nudge told before a restart	
 crates/slopmax-app/src/alerts.rs	a_missing_or_broken_file_starts_afresh_with_notifications_on			The desktop told file is gone: the told set lives in state.json, which the pool loads (a malformed file fails the daemon start, DMN-002), and notifications on or off is a desktop preference (NOT-PORTED: desktop told file)
 crates/slopmax-app/src/alerts.rs	a_notification_reads_plainly	packages/domain/test/format.test.ts	read plainly: a title for the kind, and the message without backticks	
-crates/slopmax-app/src/lib.rs	settings_are_written_into_config_toml			
-crates/slopmax-app/src/lib.rs	a_config_that_will_not_load_is_left_alone			
-crates/slopmax-app/src/lib.rs	advanced_settings_are_checked_as_the_cli_checks_them			
-crates/slopmax-app/src/lib.rs	each_setting_has_its_key			
-crates/slopmax-app/src/lib.rs	a_reread_config_keeps_the_address_and_key_the_app_runs_with			
-crates/slopmax-app/src/lib.rs	sign_in_progress_moves_the_step_along			
-crates/slopmax-app/src/lib.rs	counts_of_accounts_agree			
+crates/slopmax-app/src/lib.rs	settings_are_written_into_config_toml	apps/ui/test/app.test.tsx	the settings page draws each live setting the API serves, and a switch changes it	The window changes a setting through PATCH /settings; the daemon checks and writes config.json (packages/core/test/settings/settings.test.ts, "checks live settings before anything is written")
+crates/slopmax-app/src/lib.rs	a_config_that_will_not_load_is_left_alone	packages/core/test/settings/settings.test.ts	refuses a file that does not load, and never rewrites it	The window never writes settings itself; the daemon refuses a file that does not load
+crates/slopmax-app/src/lib.rs	advanced_settings_are_checked_as_the_cli_checks_them	apps/ui/test/view/settings.test.ts	a change is checked as the CLI checks it before it is sent	
+crates/slopmax-app/src/lib.rs	each_setting_has_its_key	apps/ui/test/view/settings.test.ts	every live setting the API lists has a place: its own section or Advanced, each with its title	
+crates/slopmax-app/src/lib.rs	a_reread_config_keeps_the_address_and_key_the_app_runs_with	packages/core/test/settings/settings.test.ts	applies a changed file at once, keeping the running key when the file's is emptied	The window reads no config file: it shows what the running proxy serves, and the daemon keeps its running key
+crates/slopmax-app/src/lib.rs	sign_in_progress_moves_the_step_along	apps/ui/test/view/live.test.ts	progress moves the step along, and notes gather	
+crates/slopmax-app/src/lib.rs	counts_of_accounts_agree	apps/ui/test/atoms.test.ts	counts of imported accounts agree with what was found	
 crates/slopmax-app/src/lib.rs	commands_are_looked_up_on_path			
-crates/slopmax-app/src/view.rs	groups_carry_gauges_status_and_the_pool			
-crates/slopmax-app/src/view.rs	a_window_for_one_model_gets_a_column_after_the_shared_ones			
-crates/slopmax-app/src/view.rs	resets_read_on_the_local_clock			
-crates/slopmax-app/src/view.rs	pace_compares_use_with_an_even_spend			
-crates/slopmax-app/src/view.rs	last_use_reads_coarsely			
-crates/slopmax-app/src/view.rs	reset_credits_show_their_dates_and_what_they_clear			
-crates/slopmax-app/src/view.rs	status_and_attention_say_what_wants_a_look			
-crates/slopmax-app/src/view.rs	the_menu_bar_shows_each_pool			
-crates/slopmax-app/src/view.rs	a_pool_says_where_new_sessions_go			
-crates/slopmax-app/src/view.rs	with_no_account_free_it_says_when_one_is_back			
-crates/slopmax-app/src/view.rs	a_pin_reads_in_the_status_and_use_says_its_period			
-crates/slopmax-app/src/view.rs	nudges_join_what_wants_a_look_once			
-crates/slopmax-app/src/view.rs	a_reset_already_offered_is_not_offered_twice			
-crates/slopmax-app/src/view.rs	advanced_settings_step_and_read			
-crates/slopmax-app/src/view.rs	what_resets_left_reads_as_a_line			
-crates/slopmax-app/src/view.rs	a_weighted_pool_sizes_its_segments_by_plan			
-crates/slopmax-app/src/view.rs	plans_read_in_title_case_and_a_followed_login_names_its_tool			
-crates/slopmax-app/src/view.rs	small_words_for_the_access_page_and_ranges			
-crates/slopmax-app/src/view.rs	the_menu_bar_without_pools_shows_the_name			
-crates/slopmax-app/src/view.rs	every_strategy_has_a_name_and_a_sentence			
-crates/slopmax-app/src/view.rs	routing_reads_as_a_line			
-crates/slopmax-app/src/view.rs	changing_a_setting_says_what_it_does_now			
-crates/slopmax-app/src/view.rs	auto_redeem_follows_the_config			
-crates/slopmax-app/src/view.rs	lists_read_as_english			
-crates/slopmax-app/src/view.rs	the_proxy_line_says_how_it_stands			
-crates/slopmax-app/src/view.rs	agents_and_the_service_read_plainly			
-crates/slopmax-app/src/view.rs	a_sign_in_says_what_to_do_next			
+crates/slopmax-app/src/view.rs	groups_carry_gauges_status_and_the_pool	apps/ui/test/view/groups.test.ts	carry a group per provider in try order, with gauges, status and the pool	
+crates/slopmax-app/src/view.rs	a_window_for_one_model_gets_a_column_after_the_shared_ones	apps/ui/test/view/groups.test.ts	give a window for one model a column after the shared ones	
+crates/slopmax-app/src/view.rs	resets_read_on_the_local_clock	packages/domain/test/format.test.ts	show the clock today, the weekday this week, and the date after that, in the zone given	The UI words reset times with the domain's clock
+crates/slopmax-app/src/view.rs	pace_compares_use_with_an_even_spend	packages/domain/test/format.test.ts	compares a window's use with spending it evenly until it resets	The UI draws the domain's pace (apps/ui/test/view/groups.test.ts covers its use in gauges)
+crates/slopmax-app/src/view.rs	last_use_reads_coarsely	packages/domain/test/format.test.ts	say coarsely how long ago an account was used	
+crates/slopmax-app/src/view.rs	reset_credits_show_their_dates_and_what_they_clear	apps/ui/test/view/groups.test.ts	show their dates, soonest first, and what one clears | say why none can be redeemed: signed out, turned off, or nothing used	
+crates/slopmax-app/src/view.rs	status_and_attention_say_what_wants_a_look	apps/ui/test/view/attention.test.ts	a headline, what keeps the rest, and the worst tone | lists what is broken first, then limit resets about to lapse and quota about to go unused	
+crates/slopmax-app/src/view.rs	the_menu_bar_shows_each_pool	packages/domain/test/format.test.ts	shows each pool's 5-hour use, a dash without one, and the name with no pools	
+crates/slopmax-app/src/view.rs	a_pool_says_where_new_sessions_go	apps/ui/test/view/groups.test.ts	a pool says which account takes the next session, and why	
+crates/slopmax-app/src/view.rs	with_no_account_free_it_says_when_one_is_back	apps/ui/test/view/groups.test.ts	with no account free, it says when one is back	
+crates/slopmax-app/src/view.rs	a_pin_reads_in_the_status_and_use_says_its_period	apps/ui/test/view/groups.test.ts	say a pin in the status, but not for an account turned off, and give use its period	
+crates/slopmax-app/src/view.rs	nudges_join_what_wants_a_look_once	apps/ui/test/view/attention.test.ts	nudges join the list once, and only for accounts in the report	
+crates/slopmax-app/src/view.rs	a_reset_already_offered_is_not_offered_twice	apps/ui/test/view/attention.test.ts	a limit reset already offered is not offered twice, and says when auto-redeem is off	
+crates/slopmax-app/src/view.rs	advanced_settings_step_and_read	apps/ui/test/view/words.test.ts	advanced settings step through their stops and read as durations	
+crates/slopmax-app/src/view.rs	what_resets_left_reads_as_a_line	apps/ui/test/view/words.test.ts	what resets left on the table reads as a line	
+crates/slopmax-app/src/view.rs	a_weighted_pool_sizes_its_segments_by_plan	apps/ui/test/view/groups.test.ts	size a weighted pool's segments by plan, and an unweighted one evenly	
+crates/slopmax-app/src/view.rs	plans_read_in_title_case_and_a_followed_login_names_its_tool	apps/ui/test/view/groups.test.ts	read plans in title case, keys per token, and name the tool a followed login comes from	
+crates/slopmax-app/src/view.rs	small_words_for_the_access_page_and_ranges	apps/ui/test/view/words.test.ts	the access page's patterns and the history ranges	
+crates/slopmax-app/src/view.rs	the_menu_bar_without_pools_shows_the_name	packages/domain/test/format.test.ts	shows each pool's 5-hour use, a dash without one, and the name with no pools	
+crates/slopmax-app/src/view.rs	every_strategy_has_a_name_and_a_sentence	apps/ui/test/view/words.test.ts	every strategy has a name and a sentence	
+crates/slopmax-app/src/view.rs	routing_reads_as_a_line	apps/ui/test/view/words.test.ts	routing reads as a line	
+crates/slopmax-app/src/view.rs	changing_a_setting_says_what_it_does_now	apps/ui/test/view/words.test.ts	changing a setting says what it does now	
+crates/slopmax-app/src/view.rs	auto_redeem_follows_the_config	apps/ui/test/view/words.test.ts	auto-redeem follows the settings	
+crates/slopmax-app/src/view.rs	lists_read_as_english	apps/ui/test/view/words.test.ts	lists read as English	
+crates/slopmax-app/src/view.rs	the_proxy_line_says_how_it_stands	apps/ui/test/view/live.test.ts	the proxy's label says how it stands, and what needs it running says how to get there	
+crates/slopmax-app/src/view.rs	agents_and_the_service_read_plainly	apps/ui/test/view/live.test.ts	agents and the login service read plainly	
+crates/slopmax-app/src/view.rs	a_sign_in_says_what_to_do_next	apps/ui/test/view/live.test.ts	says what to do next at each step	
 crates/slopmax-common/src/human.rs	durations_use_two_units	packages/domain/test/format.test.ts	use their two largest units	
 crates/slopmax-common/src/human.rs	until_reports_now_when_passed	packages/domain/test/format.test.ts	count down to a moment, and say now once it has passed	
 crates/slopmax-common/src/human.rs	counts_keep_three_figures	packages/domain/test/format.test.ts	keep counts to about three figures	
@@ -288,27 +288,27 @@ crates/slopmax-core/src/proxy/forward.rs	upstream_errors_are_retold_with_their_m
 crates/slopmax-core/src/proxy/forward.rs	a_failure_event_inside_a_stream_is_found	packages/wire/test/errors/errors.test.ts	finds the failure event inside a stream that opened with one	
 crates/slopmax-core/src/proxy/forward.rs	unreadable_errors_pass_their_first_500_bytes	packages/wire/test/errors/errors.test.ts	passes on the first 500 bytes of an error it cannot read	
 crates/slopmax-core/src/proxy/forward.rs	claude_code_hears_server_errors_as_overloaded	packages/wire/test/errors/errors.test.ts	tells Claude Code every server error as overloaded, which it retries	
-crates/slopmax-core/src/proxy/forward.rs	the_earliest_return_wins_across_steps			
-crates/slopmax-core/src/proxy/hub.rs	readings_take_the_providers_shapes			
-crates/slopmax-core/src/proxy/mod.rs	routes_prefixed_and_v1_paths			
-crates/slopmax-core/src/proxy/mod.rs	client_keys_reach_the_proxy_but_not_the_admin_api			
-crates/slopmax-core/src/proxy/mod.rs	auth_accepts_bearer_or_api_key			
-crates/slopmax-core/src/proxy/mod.rs	forwardable_drops_only_credentials_and_hop_by_hop			
-crates/slopmax-core/src/proxy/models.rs	claude_code_and_codex_keep_their_own_lists			
+crates/slopmax-core/src/proxy/forward.rs	the_earliest_return_wins_across_steps	packages/core/test/proxy/failover.test.ts	the earliest return wins across steps, and the first reason is kept	
+crates/slopmax-core/src/proxy/hub.rs	readings_take_the_providers_shapes	packages/core/test/api/hub.test.ts	take the providers' shapes, and read a window whose reset passed as unused	
+crates/slopmax-core/src/proxy/mod.rs	routes_prefixed_and_v1_paths	packages/core/test/proxy/classify.test.ts	routes the prefixed and the unprefixed /v1 paths | takes a prefix only as a whole path segment	
+crates/slopmax-core/src/proxy/mod.rs	client_keys_reach_the_proxy_but_not_the_admin_api	packages/core/test/proxy/inbound.test.ts	tells a client key from the owner key, and holds it to its models only when it names some	The proxy half; slopmax's own API takes the owner key alone and is tested with it.
+crates/slopmax-core/src/proxy/mod.rs	auth_accepts_bearer_or_api_key	packages/core/test/proxy/inbound.test.ts	accepts the owner key as a bearer token or x-api-key, and nothing else | takes a bearer token, spelled Bearer or bearer, else x-api-key, trimmed	
+crates/slopmax-core/src/proxy/mod.rs	forwardable_drops_only_credentials_and_hop_by_hop	packages/core/test/providers/provider.test.ts	forward everything but hop-by-hop headers, the agent's credentials, cookies and slopmax's own	
+crates/slopmax-core/src/proxy/models.rs	claude_code_and_codex_keep_their_own_lists	packages/core/test/proxy/classify.test.ts	leaves Claude Code's and Codex's model lists to their own providers	
 crates/slopmax-core/src/proxy/rawjson.rs	finds_nested_values	packages/wire/test/scan/scan.test.ts	finds a value nested inside objects and arrays	
 crates/slopmax-core/src/proxy/rawjson.rs	strings_end_only_at_unescaped_quotes	packages/wire/test/scan/scan.test.ts	ends strings only at an unescaped quote	
 crates/slopmax-core/src/proxy/rawjson.rs	splice_replaces_in_place	packages/wire/test/scan/scan.test.ts	replaces a value in place, leaving every other byte as it was	
-crates/slopmax-core/src/proxy/socket.rs	the_routing_hint_names_the_model			
-crates/slopmax-core/src/proxy/socket.rs	spent_accounts_close_the_socket_and_request_errors_pass			
-crates/slopmax-core/src/proxy/socket.rs	moved_sockets_drop_old_account_state			
+crates/slopmax-core/src/proxy/socket.rs	the_routing_hint_names_the_model	packages/core/test/socket/socket.test.ts	reads the model from Codex's routing hint	
+crates/slopmax-core/src/proxy/socket.rs	spent_accounts_close_the_socket_and_request_errors_pass	packages/core/test/socket/socket.test.ts	closes the socket for a spent or throttled account, and lets the request's own failures pass	
+crates/slopmax-core/src/proxy/socket.rs	moved_sockets_drop_old_account_state	packages/core/test/socket/socket.test.ts	starts a turn on response.create, keeping its text as sent unless a moved socket drops state	
 crates/slopmax-core/src/proxy/sse.rs	claude_usage_merges_start_and_delta	packages/wire/test/tap/tap.test.ts	merges Messages usage from the start and the last delta, across a line cut between chunks	
 crates/slopmax-core/src/proxy/sse.rs	codex_usage_separates_cached_input	packages/wire/test/tap/tap.test.ts	separates cached input in a Responses stream	
 crates/slopmax-core/src/proxy/sse.rs	whole_json_responses_report_usage	packages/wire/test/tap/tap.test.ts	reads usage from a JSON answer when it ends | only counts the request for a document past 16 MiB, or a compressed answer	
 crates/slopmax-core/src/proxy/sse.rs	codex_in_stream_usage_limit_is_exhaustion	packages/wire/test/tap/tap.test.ts	marks the account spent when a Responses stream fails with a usage limit	
 crates/slopmax-core/src/proxy/sse.rs	tapped_stream_reports_once_even_when_dropped	packages/wire/test/tap/tap.test.ts	reports once even when the client drops the answer after its first chunk	
-crates/slopmax-core/src/proxy/start.rs	content_streams_with_the_held_start_replayed			
-crates/slopmax-core/src/proxy/start.rs	a_spent_quota_is_caught_before_the_agent_sees_it			
-crates/slopmax-core/src/proxy/start.rs	request_failures_go_to_the_agent			
+crates/slopmax-core/src/proxy/start.rs	content_streams_with_the_held_start_replayed	packages/core/test/proxy/stream.test.ts	streams content with the held start replayed first	
+crates/slopmax-core/src/proxy/start.rs	a_spent_quota_is_caught_before_the_agent_sees_it	packages/core/test/proxy/stream.test.ts	catches a spent quota before the agent sees a byte	
+crates/slopmax-core/src/proxy/start.rs	request_failures_go_to_the_agent	packages/core/test/proxy/stream.test.ts	passes a failure that is the request's own to the agent	
 crates/slopmax-core/src/proxy/transcode.rs	chat_chunks_split_anywhere_become_messages_events	packages/wire/test/transcode/transcode.test.ts	turns Chat chunks split anywhere into Messages events | tells the same answer however the upstream's bytes are split	
 crates/slopmax-core/src/proxy/transcode.rs	replay_is_per_account_and_bounded	packages/wire/test/replay/replay.test.ts	gives reasoning state back only to the account that issued it | holds at most 4096 calls, the first remembered going first	
 crates/slopmax-core/src/report.rs	conditions_put_the_most_pressing_first	packages/domain/test/report.test.ts	put the most pressing first	
@@ -337,7 +337,7 @@ crates/slopmax-core/src/service.rs	lingering_is_a_linux_question	packages/core/t
 crates/slopmax-core/src/summary.rs	unpriced_requests_are_counted_apart	packages/core/test/ledger-views/ledger-views.test.ts	counts answers whose model has no price apart, and labels the cost to say so	
 crates/slopmax-core/src/summary.rs	requests_are_the_answers_alone	packages/core/test/ledger-views/ledger-views.test.ts	counts only answers as requests: a failure as failed, an agent's housekeeping not at all	
 crates/slopmax-core/src/summary.rs	ranges_start_at_local_midnight	packages/core/test/ledger-views/ledger-views.test.ts	starts ranges at local midnight, six or 29 days before it, or at the epoch for all | starts a range on a local midnight even across a clock change	
-crates/slopmax-core/src/testkit.rs	the_mock_records_requests_sent_to_redirected_origins			
+crates/slopmax-core/src/testkit.rs	the_mock_records_requests_sent_to_redirected_origins	packages/core/test/proxy/memory-upstream.test.ts	records each call and answers it from its route	
 crates/slopmax-core/src/usage.rs	reads_usage_with_a_working_token	packages/core/test/refresh/refresh.test.ts	reads usage with a working token	
 crates/slopmax-core/src/usage.rs	refreshes_a_due_token_before_reading	packages/core/test/refresh/refresh.test.ts	refreshes a due token before reading	
 crates/slopmax-core/src/usage.rs	a_rejected_token_is_refreshed_once_and_retried	packages/core/test/refresh/refresh.test.ts	refreshes a rejected token once and reads again	
@@ -349,63 +349,63 @@ crates/slopmax-core/src/usage.rs	other_failures_pass_through_before_and_after_a_
 crates/slopmax-core/src/waste.rs	the_unused_part_of_a_week_costs_its_share_of_the_fee	packages/core/test/ledger-views/ledger-views.test.ts	values the unused part of a week at its share of the plan's fee	
 crates/slopmax-core/src/waste.rs	records_are_kept_and_read_back_once_each	packages/core/test/ledger/ledger.test.ts	reads ended windows back once each, from a moment on	
 crates/slopmax-core/src/waste.rs	left_totals_long_windows_by_account	packages/core/test/ledger-views/ledger-views.test.ts	totals long windows by account, most dollars first	
-crates/slopmax-core/tests/failover.rs	a_rejected_token_is_refreshed_and_the_request_retried			
-crates/slopmax-core/tests/failover.rs	a_refused_refresh_moves_on_to_the_next_account			
-crates/slopmax-core/tests/failover.rs	without_refreshing_a_rejected_token_benches_the_account			
-crates/slopmax-core/tests/failover.rs	a_throttled_account_is_set_aside_briefly_not_blocked			
-crates/slopmax-core/tests/failover.rs	only_throttled_accounts_pass_the_refusal_back			
-crates/slopmax-core/tests/failover.rs	an_unreachable_endpoint_fails_over_and_records_why			
-crates/slopmax-core/tests/failover.rs	codex_streams_that_open_overloaded_move_on_without_benching			
-crates/slopmax-core/tests/failover.rs	requests_without_a_model_are_turned_away			
-crates/slopmax-core/tests/failover.rs	claude_paths_refuse_other_clients_before_routing			
-crates/slopmax-core/tests/proxy.rs	claude_fails_over_and_forwards_the_request_unchanged			
-crates/slopmax-core/tests/proxy.rs	every_account_spent_returns_the_agents_own_limit_error			
-crates/slopmax-core/tests/proxy.rs	codex_fails_over_with_workspace_and_version_headers			
-crates/slopmax-core/tests/proxy.rs	codex_exhaustion_uses_usage_limit_shape			
-crates/slopmax-core/tests/proxy.rs	rejects_requests_without_the_slopmax_key			
-crates/slopmax-core/tests/proxy.rs	revoked_tokens_move_to_the_next_account			
-crates/slopmax-core/tests/proxy.rs	spent_codex_pool_redeems_a_credit_when_allowed			
-crates/slopmax-core/tests/proxy.rs	spent_codex_pool_keeps_its_credits_by_default			
+crates/slopmax-core/tests/failover.rs	a_rejected_token_is_refreshed_and_the_request_retried	packages/core/test/proxy/failover.test.ts | packages/core/test/e2e/sessions.test.ts	a rejected token is refreshed and the request tried again on the same account | a token the provider rejects is refreshed and the request sent again on the same account	
+crates/slopmax-core/tests/failover.rs	a_refused_refresh_moves_on_to_the_next_account	packages/core/test/proxy/failover.test.ts | packages/core/test/e2e/sessions.test.ts	a refused refresh signs the account out and moves on, and later requests skip it untried | a refused refresh signs the account out, and the next account serves without it being tried again	
+crates/slopmax-core/tests/failover.rs	without_refreshing_a_rejected_token_benches_the_account	packages/core/test/proxy/failover.test.ts	without refreshing, a rejected token benches its account and the next one serves	
+crates/slopmax-core/tests/failover.rs	a_throttled_account_is_set_aside_briefly_not_blocked	packages/core/test/proxy/failover.test.ts	a throttled account is set aside briefly, not blocked	
+crates/slopmax-core/tests/failover.rs	only_throttled_accounts_pass_the_refusal_back	packages/core/test/proxy/failover.test.ts	when only throttled accounts remain, their refusal goes back to the client	
+crates/slopmax-core/tests/failover.rs	an_unreachable_endpoint_fails_over_and_records_why	packages/core/test/proxy/failover.test.ts	an unreachable endpoint fails over and records why on the account	
+crates/slopmax-core/tests/failover.rs	codex_streams_that_open_overloaded_move_on_without_benching	packages/core/test/proxy/failover.test.ts	Codex streams that open overloaded move on without benching the account	
+crates/slopmax-core/tests/failover.rs	requests_without_a_model_are_turned_away	packages/core/test/proxy/failover.test.ts	a request that names no model is turned away before anything is sent	
+crates/slopmax-core/tests/failover.rs	claude_paths_refuse_other_clients_before_routing	packages/core/test/proxy/failover.test.ts	Claude's paths refuse other clients before anything is sent	
+crates/slopmax-core/tests/proxy.rs	claude_fails_over_and_forwards_the_request_unchanged	packages/core/test/proxy/proxy.test.ts | packages/core/test/e2e/failover.test.ts	Claude fails over and forwards the request unchanged but for the account's credential | Claude Code's request moves past a spent account and reaches the next as Claude Code wrote it	
+crates/slopmax-core/tests/proxy.rs	every_account_spent_returns_the_agents_own_limit_error	packages/core/test/proxy/failover.test.ts | packages/core/test/e2e/failover.test.ts	every account spent answers in the agent's own limit shape, naming when the next frees up | with every account spent, the client hears its own limit error naming when one frees up	
+crates/slopmax-core/tests/proxy.rs	codex_fails_over_with_workspace_and_version_headers	packages/core/test/e2e/failover.test.ts	Codex fails over with its workspace and release headers, and the account that served counts it	
+crates/slopmax-core/tests/proxy.rs	codex_exhaustion_uses_usage_limit_shape	packages/core/test/proxy/failover.test.ts | packages/core/test/e2e/failover.test.ts	Codex hears a spent pool as its usage limit, with when it resets | with every account spent, the client hears its own limit error naming when one frees up	
+crates/slopmax-core/tests/proxy.rs	rejects_requests_without_the_slopmax_key	packages/core/test/proxy/proxy.test.ts	a request without the slopmax key hears 401 in its own format, and nothing reaches a provider | health and Claude Code's probes need no key, and unknown paths are refused before the key	
+crates/slopmax-core/tests/proxy.rs	revoked_tokens_move_to_the_next_account	packages/core/test/proxy/failover.test.ts	without refreshing, a rejected token benches its account and the next one serves	
+crates/slopmax-core/tests/proxy.rs	spent_codex_pool_redeems_a_credit_when_allowed	packages/core/test/proxy/proxy.test.ts	a spent Codex pool redeems a limit reset when allowed, and the request is served	
+crates/slopmax-core/tests/proxy.rs	spent_codex_pool_keeps_its_credits_by_default	packages/core/test/proxy/proxy.test.ts	a spent Codex pool keeps its limit resets by default	
 crates/slopmax-core/tests/proxy.rs	credits_about_to_expire_are_redeemed_on_used_accounts	packages/core/test/quota/quota.test.ts	the next reset to be spent is redeemed when it expires within 3 hours, on an account with usage to reset	
-crates/slopmax-core/tests/proxy.rs	claude_limit_resets_are_listed_and_spent_as_claude_code	packages/core/test/quota/quota.test.ts	are listed and spent as Claude Code once it has been seen, the grant Claude spends next first	
-crates/slopmax-core/tests/proxy.rs	credits_are_listed_kept_and_redeemed_soonest_first			
-crates/slopmax-core/tests/proxy.rs	websockets_off_or_for_other_models_send_codex_to_http			
-crates/slopmax-core/tests/proxy.rs	codex_websockets_are_relayed_to_chatgpt			
-crates/slopmax-core/tests/proxy.rs	spent_accounts_close_the_socket_so_codex_reconnects_elsewhere			
-crates/slopmax-core/tests/proxy.rs	fast_mode_refusals_reach_claude_code_without_benching_accounts			
-crates/slopmax-core/tests/proxy.rs	codex_streams_that_open_spent_move_to_the_next_account			
-crates/slopmax-core/tests/proxy.rs	claude_accounts_serve_claude_code_only			
-crates/slopmax-core/tests/proxy.rs	chat_clients_reach_keys_and_endpoints_by_model			
-crates/slopmax-core/tests/proxy.rs	keys_serve_subscription_models_only_as_paid_overflow			
-crates/slopmax-core/tests/proxy.rs	claude_code_may_use_other_vendors_messages_endpoints			
-crates/slopmax-core/tests/proxy.rs	claude_code_runs_gpt_models_on_chatgpt_accounts			
-crates/slopmax-core/tests/proxy.rs	translated_failures_reach_the_client_in_its_format			
-crates/slopmax-core/tests/proxy.rs	openai_clients_list_every_model_they_can_use			
-crates/slopmax-core/tests/proxy.rs	the_dashboard_api_reports_acts_and_streams			
-crates/slopmax-core/tests/proxy.rs	client_keys_are_held_to_their_models			
+crates/slopmax-core/tests/proxy.rs	claude_limit_resets_are_listed_and_spent_as_claude_code	packages/core/test/quota/quota.test.ts | packages/core/test/e2e/quota.test.ts	are listed and spent as Claude Code once it has been seen, the grant Claude spends next first | lists Claude's limit resets as Claude Code once it has been seen, and spends the one Claude spends next	
+crates/slopmax-core/tests/proxy.rs	credits_are_listed_kept_and_redeemed_soonest_first	packages/core/test/proxy/proxy.test.ts	limit resets are listed with their dates, kept, and redeemed soonest to expire first	
+crates/slopmax-core/tests/proxy.rs	websockets_off_or_for_other_models_send_codex_to_http	packages/core/test/socket/socket.test.ts | packages/core/test/e2e/relay.test.ts	answers 426 in Responses' shape when websockets are off, so Codex streams over HTTP | sends models no ChatGPT account serves as named to HTTP | sends Codex to HTTP with 426 when websockets are turned off	
+crates/slopmax-core/tests/proxy.rs	codex_websockets_are_relayed_to_chatgpt	packages/core/test/socket/socket.test.ts | packages/core/test/e2e/relay.test.ts	relays Codex's socket to ChatGPT on one account, and records the turn | relays a turn to ChatGPT on the account picked for it, and records it as a socket request	
+crates/slopmax-core/tests/proxy.rs	spent_accounts_close_the_socket_so_codex_reconnects_elsewhere	packages/core/test/socket/socket.test.ts | packages/core/test/e2e/relay.test.ts	closes a spent account's socket so Codex reconnects on another | closes a spent account's socket so Codex reconnects, and the new socket goes to the next account	
+crates/slopmax-core/tests/proxy.rs	fast_mode_refusals_reach_claude_code_without_benching_accounts	packages/core/test/proxy/proxy.test.ts	a refusal that is the request's own reaches Claude Code as it came, benching no account	
+crates/slopmax-core/tests/proxy.rs	codex_streams_that_open_spent_move_to_the_next_account	packages/core/test/proxy/failover.test.ts | packages/core/test/e2e/failover.test.ts	Codex streams that open spent move to the next account before the client sees a byte | a Codex stream that opens spent moves to the next account before Codex sees a byte	
+crates/slopmax-core/tests/proxy.rs	claude_accounts_serve_claude_code_only	packages/core/test/proxy/failover.test.ts	another client asking for a Claude model on /v1/messages is refused before anything is sent	
+crates/slopmax-core/tests/proxy.rs	chat_clients_reach_keys_and_endpoints_by_model	packages/core/test/e2e/routing.test.ts	OpenAI-style tools reach API keys, endpoints and ChatGPT accounts by the model they name	
+crates/slopmax-core/tests/proxy.rs	keys_serve_subscription_models_only_as_paid_overflow	packages/core/test/e2e/routing.test.ts	API keys take subscription models only as paid overflow, or when a request names them	
+crates/slopmax-core/tests/proxy.rs	claude_code_may_use_other_vendors_messages_endpoints	packages/core/test/e2e/routing.test.ts	Claude Code reaches another vendor's Messages endpoint by model, and Claude models stay on Claude	
+crates/slopmax-core/tests/proxy.rs	claude_code_runs_gpt_models_on_chatgpt_accounts	packages/core/test/proxy/proxy.test.ts | packages/core/test/e2e/routing.test.ts	Claude Code runs GPT models on ChatGPT accounts, its reasoning going back to the account that made it | Claude Code runs a GPT model on a ChatGPT account, hearing Messages events, its reasoning kept back	
+crates/slopmax-core/tests/proxy.rs	translated_failures_reach_the_client_in_its_format	packages/core/test/proxy/proxy.test.ts	translated failures reach the client in its own format, and token counts are estimated | a provider's error to a translated request is retold in the client's format	
+crates/slopmax-core/tests/proxy.rs	openai_clients_list_every_model_they_can_use	packages/core/test/proxy/proxy.test.ts	lists every model a connected account offers them, with the aliases, reusing each list a while | narrows the list to a client key's models, and refuses a request without a key in Chat's shape	
+crates/slopmax-core/tests/proxy.rs	the_dashboard_api_reports_acts_and_streams	packages/core/test/api/api.test.ts | packages/core/test/api/assets.test.ts | packages/core/test/e2e/watching.test.ts	answers the live report to the owner key alone: client keys and no key get 401 | turns accounts off and on, orders, labels, pins and removes them, answering the report | streams hello, the report, and each request as it settles, uncached | are served at /slopmax/ without a key, under a strict content security policy | the event stream says hello, sends the report, and tells each request as it settles	The dashboard moved to /slopmax/ and the API to /slopmax/api; account actions are PATCH /accounts/:id, pins and DELETE /accounts/:id.
+crates/slopmax-core/tests/proxy.rs	client_keys_are_held_to_their_models	packages/core/test/proxy/proxy.test.ts | packages/core/test/socket/socket.test.ts	client keys are held to their models, aliases included | sends a key held to some models to HTTP, where each request is checked	
 crates/slopmax-core/tests/proxy.rs	idle_chatgpt_windows_are_warmed_once	packages/core/test/quota/quota.test.ts	an idle account gets one tiny request, recorded as slopmax's own, at most once per 5 hours	
-crates/slopmax-core/tests/proxy.rs	agents_see_the_pool_not_the_serving_account			
-crates/slopmax-core/tests/proxy.rs	codex_sockets_report_the_pool_too			
-crates/slopmax-core/tests/proxy.rs	hub_clients_read_usage_and_redeem_credits_without_a_relay			
-crates/slopmax-core/tests/proxy.rs	sessions_keep_their_account_so_the_prompt_cache_stays_warm			
-crates/slopmax-core/tests/proxy.rs	affinity_can_be_turned_off_for_the_proxy_or_one_request			
-crates/slopmax-core/tests/proxy.rs	moving_without_affinity_still_drops_another_accounts_state			
-crates/slopmax-core/tests/proxy.rs	passing_server_errors_are_retried_once_on_the_same_account			
-crates/slopmax-core/tests/proxy.rs	settings_change_through_the_api_and_apply_at_once			
+crates/slopmax-core/tests/proxy.rs	agents_see_the_pool_not_the_serving_account	packages/core/test/proxy/proxy.test.ts	agents see the pool's windows, not the serving account's	
+crates/slopmax-core/tests/proxy.rs	codex_sockets_report_the_pool_too	packages/core/test/socket/socket.test.ts	shows Codex the pool's windows, not the account's	
+crates/slopmax-core/tests/proxy.rs	hub_clients_read_usage_and_redeem_credits_without_a_relay	packages/core/test/api/hub.test.ts | packages/core/test/e2e/watching.test.ts	takes the owner key as a bearer token, x-api-key or x-management-key, and nothing else | lists subscription accounts as CLIProxyAPI's auth files, leaving out what is unknown | answers usage from slopmax's own readings, never from the provider | lists limit resets from ChatGPT, reuses the list for 5 minutes, and redeems one by its id | clears an account's cooldown and reads its usage again in the background | checks a call's body and account, and answers only the usage and reset calls of its accounts | T3 Code reads accounts, usage and limit resets through the hub, with no token leaving slopmax	
+crates/slopmax-core/tests/proxy.rs	sessions_keep_their_account_so_the_prompt_cache_stays_warm	packages/core/test/proxy/proxy.test.ts | packages/core/test/e2e/sessions.test.ts	sessions keep their account so the prompt cache stays warm, and stay where they moved | a session keeps its account across requests, and stays where it moved once that account was spent	
+crates/slopmax-core/tests/proxy.rs	affinity_can_be_turned_off_for_the_proxy_or_one_request	packages/core/test/proxy/proxy.test.ts	affinity can be turned off for the proxy, or for one request | with affinity on, a request may still ask to be placed afresh	
+crates/slopmax-core/tests/proxy.rs	moving_without_affinity_still_drops_another_accounts_state	packages/core/test/proxy/proxy.test.ts	moving without affinity still drops another account's state	
+crates/slopmax-core/tests/proxy.rs	passing_server_errors_are_retried_once_on_the_same_account	packages/core/test/proxy/failover.test.ts | packages/core/test/e2e/failover.test.ts	a passing server error is tried once more on the same account after 400 ms | an account answering a server error twice is passed over, never benched | a server error that passes is tried once more on the same account, unseen by the client	
+crates/slopmax-core/tests/proxy.rs	settings_change_through_the_api_and_apply_at_once	packages/core/test/api/api.test.ts	shows the settings, and changes live ones at once after checking the whole change	PATCH /settings takes JSON (NOT-PORTED: form-encoded admin bodies); config.json keeps what people wrote (packages/core/test/settings/settings.test.ts).
 crates/slopmax-core/tests/proxy.rs	a_changed_config_file_applies_without_a_restart	packages/core/test/settings/settings.test.ts	reloads within moments of the file changing | applies a changed file at once, keeping the running key when the file's is emptied	
-crates/slopmax-core/tests/proxy.rs	the_history_api_charts_what_went_through			
-crates/slopmax-core/tests/proxy.rs	history_says_what_resets_left_on_the_table			
-crates/slopmax-core/tests/proxy.rs	the_api_does_what_the_cli_does_for_keys_endpoints_and_the_doctor			
-crates/slopmax-desktop-gpui/src/main.rs	a_slide_runs_from_where_it_set_out_to_where_it_rests			
-crates/slopmax-desktop-gpui/src/main.rs	a_slide_turned_back_sets_out_from_where_it_had_reached			
-crates/slopmax-desktop-gpui/src/main.rs	the_keyboard_shows_and_hides_it_at_once			
-crates/slopmax-desktop-gpui/src/motion.rs	curves_run_from_rest_to_rest			
-crates/slopmax-desktop-gpui/src/motion.rs	the_ease_out_answers_at_once			
-crates/slopmax-desktop-gpui/src/motion.rs	the_ease_in_out_holds_back_then_settles			
-crates/slopmax-desktop-gpui/src/prefs.rs	missing_settings_take_their_defaults			
-crates/slopmax-desktop-gpui/src/ui.rs	the_cores_words_read_as_a_sentence			
-crates/slopmax-desktop-gpui/src/usage.rs	axes_end_on_round_values			
-crates/slopmax-desktop-gpui/src/usage.rs	ticks_keep_the_places_their_steps_need			
+crates/slopmax-core/tests/proxy.rs	the_history_api_charts_what_went_through	packages/core/test/api/api.test.ts	sums usage by day, model or account, and charts history with what resets left on the table	
+crates/slopmax-core/tests/proxy.rs	history_says_what_resets_left_on_the_table	packages/core/test/api/api.test.ts	sums usage by day, model or account, and charts history with what resets left on the table	Ended windows are WindowEnded ledger records, not windows.jsonl (NOT-PORTED: windows file).
+crates/slopmax-core/tests/proxy.rs	the_api_does_what_the_cli_does_for_keys_endpoints_and_the_doctor	packages/core/test/api/api.test.ts	makes client keys shown once and working at once, lists them without the key, and revokes them | adds API keys and endpoints after the provider accepts them, and refuses what it rejects | lets an imported account refresh its own tokens | answers the doctor's sections	
+crates/slopmax-desktop-gpui/src/main.rs	a_slide_runs_from_where_it_set_out_to_where_it_rests			The slide is a CSS width transition (the `slide` utility in apps/ui/src/index.css, 220 ms, ease-in-out); the browser runs it from wherever it has reached, so there is no slide arithmetic of slopmax's own to test
+crates/slopmax-desktop-gpui/src/main.rs	a_slide_turned_back_sets_out_from_where_it_had_reached			The slide is a CSS width transition (the `slide` utility in apps/ui/src/index.css, 220 ms, ease-in-out); the browser runs it from wherever it has reached, so there is no slide arithmetic of slopmax's own to test
+crates/slopmax-desktop-gpui/src/main.rs	the_keyboard_shows_and_hides_it_at_once	apps/ui/test/view/pages.test.ts	the keyboard shows and hides it at once; its button slides it	
+crates/slopmax-desktop-gpui/src/motion.rs	curves_run_from_rest_to_rest			Motion is CSS: the ease-out and ease-in-out curves are cubic-bezier tokens in apps/ui/src/index.css, and prefers-reduced-motion turns every animation off; the browser evaluates the curves
+crates/slopmax-desktop-gpui/src/motion.rs	the_ease_out_answers_at_once			Motion is CSS: the ease-out and ease-in-out curves are cubic-bezier tokens in apps/ui/src/index.css, and prefers-reduced-motion turns every animation off; the browser evaluates the curves
+crates/slopmax-desktop-gpui/src/motion.rs	the_ease_in_out_holds_back_then_settles			Motion is CSS: the ease-out and ease-in-out curves are cubic-bezier tokens in apps/ui/src/index.css, and prefers-reduced-motion turns every animation off; the browser evaluates the curves
+crates/slopmax-desktop-gpui/src/prefs.rs	missing_settings_take_their_defaults	apps/ui/test/host.test.ts	missing settings take their defaults	The window's preferences; Electron main keeps them in userData/prefs.json (C15)
+crates/slopmax-desktop-gpui/src/ui.rs	the_cores_words_read_as_a_sentence	apps/ui/test/view/words.test.ts	the engine's words read as a sentence, keeping names that have their own case	
+crates/slopmax-desktop-gpui/src/usage.rs	axes_end_on_round_values	apps/ui/test/view/charts.test.ts	end on round values, three to five steps of 1, 2, 2.5 or 5 times a power of ten	
+crates/slopmax-desktop-gpui/src/usage.rs	ticks_keep_the_places_their_steps_need	apps/ui/test/view/charts.test.ts	ticks keep the places their steps need	
 crates/slopmax-net/src/body.rs	reads_within_the_limit	packages/core/test/upstream/upstream.test.ts	reads a body whole within its limit and refuses one past it	
 crates/slopmax-net/src/body.rs	stalled_bodies_fail	packages/core/test/upstream/upstream.test.ts	gives up waiting for a provider's headers after 600 seconds	Upstream bounds the wait for headers; a stall between body chunks is ended by the proxy's one stall sweeper over live streams (ARCHITECTURE.md 6.7), which the relay's tests cover.
 crates/slopmax-net/src/client.rs	plain_clients_refuse_https	packages/core/test/upstream/upstream.test.ts	trusts the system's roots and Bun's bundled ones	There is no plain-HTTP-only client any more: every outbound call trusts the system's roots and Bun's bundled ones (NOT-PORTED: TLS roots).
@@ -414,11 +414,11 @@ crates/slopmax-net/src/client.rs	origins_rewrite_matching_prefixes	packages/core
 crates/slopmax-net/src/client.rs	loopback_and_listed_hosts_bypass_the_proxy	packages/core/test/upstream/upstream.test.ts	lets loopback hosts and NO_PROXY's entries skip the proxy	
 crates/slopmax-net/src/form.rs	encodes_like_the_whatwg_serializer			Forms are encoded by Effect's UrlParams over the platform's URLSearchParams, which is the WHATWG serializer itself; slopmax has no form encoder of its own (NOT-PORTED: form-encoded admin bodies).
 crates/slopmax-net/src/form.rs	decodes_pairs_and_tolerates_malformed_escapes			Form bodies are decoded by URLSearchParams (WHATWG); slopmax has no form decoder of its own, and its own API takes JSON (NOT-PORTED: form-encoded admin bodies).
-crates/slopmax-net/src/server.rs	serves_until_shutdown			
+crates/slopmax-net/src/server.rs	serves_until_shutdown	packages/core/test/server/server.test.ts	serves until shutdown, then stops listening | lets an answer in flight finish when it shuts down	
 crates/slopmax-net/src/server.rs	names_the_program_holding_a_port	packages/core/test/port-holder/port-holder.test.ts	on Linux it is the process with a descriptor for the listening socket | names this very process when it holds the port | names the first process lsof reports, or says a program when it has no name	
-crates/slopmax-net/src/ws.rs	accept_key_matches_the_rfc			Bun answers inbound WebSocket upgrades and ws dials upstream ones, so slopmax computes no accept keys (NOT-PORTED: WebSocket framing and the raw HTTP client).
-crates/slopmax-net/src/ws.rs	reads_the_rfcs_frames			Bun and ws read WebSocket frames; the relay's round trips (plain, through a CONNECT proxy, and wss through it) cover the behavior (NOT-PORTED: WebSocket framing).
-crates/slopmax-net/src/ws.rs	round_trips_every_size_masked_or_not			Bun and ws write WebSocket frames; the relay's frame-size round trips cover every length (NOT-PORTED: WebSocket framing).
+crates/slopmax-net/src/ws.rs	accept_key_matches_the_rfc	packages/core/test/socket/socket.test.ts | packages/core/test/dial/dial.test.ts	relays Codex's socket to ChatGPT on one account, and records the turn | opens the socket with the given headers and keeps those of the 101	Bun computes the accept key for Codex's handshake and ws checks ChatGPT's; the relay's end-to-end test opens a client that verifies the key it gets (NOT-PORTED: WebSocket framing and the raw HTTP client).
+crates/slopmax-net/src/ws.rs	reads_the_rfcs_frames	packages/core/test/socket/socket.test.ts | packages/core/test/dial/dial.test.ts	carries text and binary messages of every frame length both ways | carries text and binary messages of every frame length intact	Bun and ws read WebSocket frames; round trips of every length, plain, through a CONNECT proxy and wss through it, cover what slopmax relies on (NOT-PORTED: WebSocket framing).
+crates/slopmax-net/src/ws.rs	round_trips_every_size_masked_or_not	packages/core/test/socket/socket.test.ts | packages/core/test/dial/dial.test.ts	carries text and binary messages of every frame length both ways | carries text and binary messages of every frame length intact | goes through a CONNECT proxy, with the proxy's credentials | reaches a wss server through the proxy, trusting the roots it is given	Bun frames the client side (unmasked) and ws the upstream side (masked) (NOT-PORTED: WebSocket framing).
 crates/slopmax-net/src/ws.rs	rejects_broken_frames			Bun and ws reject malformed WebSocket frames themselves (NOT-PORTED: WebSocket framing).
 crates/slopmax-wire/src/chat/events.rs	gathers_interleaved_tool_calls	packages/wire/test/chat/chat.test.ts	gathers interleaved tool calls by index and unwraps the freeform ones	
 crates/slopmax-wire/src/chat/events.rs	reasoning_and_whole_completions	packages/wire/test/chat/chat.test.ts	reads reasoning in either field, gives calls without an id one, and reads a whole completion	
@@ -464,40 +464,40 @@ crates/slopmax/src/args.rs	explains_mistakes			n/a: effect/cli replaces the hand
 crates/slopmax/src/args.rs	renders_help			n/a: effect/cli replaces the hand-written parser, its help, error and completion texts (NOT-PORTED.md, CLI parser texts); the CLI's parse tests cover the invocations
 crates/slopmax/src/args.rs	writes_completions			n/a: effect/cli replaces the hand-written parser, its help, error and completion texts (NOT-PORTED.md, CLI parser texts); the CLI's parse tests cover the invocations
 crates/slopmax/src/args.rs	edit_distance			n/a: effect/cli replaces the hand-written parser, its help, error and completion texts (NOT-PORTED.md, CLI parser texts); the CLI's parse tests cover the invocations
-crates/slopmax/src/commands.rs	agent_choices_match_the_registry			
-crates/slopmax/src/commands.rs	every_command_parses_a_typical_invocation			
-crates/slopmax/src/commands/init.rs	lists_read_as_flags_give_them			
-crates/slopmax/src/commands/status.rs	pools_get_a_row_of_their_own			
-crates/slopmax/src/commands/status.rs	renders_windows_status_and_scoped_limits			
-crates/slopmax/src/commands/status.rs	empty_report_explains_next_steps			
-crates/slopmax/src/term.rs	choices_are_numbers_from_one			
-crates/slopmax/src/ui.rs	visible_width_ignores_escapes			
-crates/slopmax/src/ui.rs	bar_fills_proportionally			
-crates/slopmax/tests/cli.rs	help_version_and_completions_print_and_succeed			
-crates/slopmax/tests/cli.rs	mistakes_explain_themselves_and_fail			
-crates/slopmax/tests/cli.rs	a_bad_listen_override_is_named			
-crates/slopmax/tests/cli.rs	status_shows_accounts_from_disk			
-crates/slopmax/tests/cli.rs	refreshing_status_reports_unreachable_providers_without_failing			
-crates/slopmax/tests/cli.rs	account_commands_change_the_store			
-crates/slopmax/tests/cli.rs	own_takes_over_linked_accounts			
-crates/slopmax/tests/cli.rs	keys_are_added_listed_and_revoked			
-crates/slopmax/tests/cli.rs	usage_totals_the_ledger			
-crates/slopmax/tests/cli.rs	setup_wires_the_agents_and_undo_restores_their_files_exactly			
-crates/slopmax/tests/cli.rs	setup_on_a_fresh_machine_and_undo_leave_no_wiring			
-crates/slopmax/tests/cli.rs	env_prints_shell_setup_for_each_agent			
-crates/slopmax/tests/cli.rs	doctor_reports_findings_and_fails_on_problems			
-crates/slopmax/tests/cli.rs	doctor_names_what_holds_the_port			
-crates/slopmax/tests/cli.rs	import_brings_over_codex_and_cliproxyapi_logins			
-crates/slopmax/tests/cli.rs	login_with_keys_reads_them_from_stdin			
-crates/slopmax/tests/cli.rs	sign_ins_that_need_the_network_fail_cleanly			
-crates/slopmax/tests/cli.rs	redeem_needs_an_account_with_resets			
-crates/slopmax/tests/cli.rs	notify_sends_a_test_event_through_the_command			
-crates/slopmax/tests/cli.rs	logs_show_the_tail_of_the_background_log			
-crates/slopmax/tests/cli.rs	the_background_proxy_starts_reports_and_stops			
-crates/slopmax/tests/cli.rs	serve_runs_in_the_foreground_until_stopped			
-crates/slopmax/tests/cli.rs	service_commands_find_no_manager_in_the_sandbox			
-crates/slopmax/tests/cli.rs	unattended_setup_with_nothing_to_pool_fails_and_says_what_to_add			
-crates/slopmax/tests/cli.rs	setup_flags_that_make_no_sense_are_refused			
-crates/slopmax/tests/cli.rs	unattended_setup_imports_routes_wires_and_starts_the_proxy			
-crates/slopmax/tests/cli.rs	unattended_setup_leaves_alone_an_agent_it_has_no_account_for			
-crates/slopmax/tests/cli.rs	unattended_setup_that_misses_part_of_what_was_asked_says_so			
+crates/slopmax/src/commands.rs	agent_choices_match_the_registry	apps/cli/test/cli.test.ts	offers exactly the registered providers and agents as choices	
+crates/slopmax/src/commands.rs	every_command_parses_a_typical_invocation	apps/cli/test/cli.test.ts	parses a typical invocation of every command into what its action gets | hands everything after `run <agent>` to the agent, flags and all	
+crates/slopmax/src/commands/init.rs	lists_read_as_flags_give_them	apps/cli/test/commands.test.ts	reads a list flag as the items it names, without blanks or `none` | checks every list before anything runs, naming the first mistake	
+crates/slopmax/src/commands/status.rs	pools_get_a_row_of_their_own	apps/cli/test/status.test.ts	gives a provider's pool a row of its own when it has more than one account, and names the next | keeps a lone account's pool to itself	
+crates/slopmax/src/commands/status.rs	renders_windows_status_and_scoped_limits	apps/cli/test/status.test.ts	shows each account's windows, its plan and how it stands, numbered as `slopmax use` takes them | says a condition and its notes in their tones, joined by dots | counts a window whose reset has passed as unused, and colors use by how full it is	
+crates/slopmax/src/commands/status.rs	empty_report_explains_next_steps	apps/cli/test/status.test.ts	explains how to add the first account when there is none	
+crates/slopmax/src/term.rs	choices_are_numbers_from_one			n/a: choices are effect/cli's Select and MultiSelect prompts at a terminal (arrow keys, no numbers typed); without one the defaults are taken, covered by apps/cli/test/terminal.test.ts "takes the defaults for choices when nobody can be asked"
+crates/slopmax/src/ui.rs	visible_width_ignores_escapes	apps/cli/test/print.test.ts	measures what the eye sees, ignoring color escapes and counting each character once	
+crates/slopmax/src/ui.rs	bar_fills_proportionally	apps/cli/test/print.test.ts	fills a bar in proportion to the percent, clamped to its width	
+crates/slopmax/tests/cli.rs	help_version_and_completions_print_and_succeed	apps/cli/test/end-to-end.test.ts | apps/cli/test/cli.test.ts	prints help, its version and completion scripts, and creates nothing doing so | prints the version and help without running any command | writes completion scripts for bash, zsh and fish	
+crates/slopmax/tests/cli.rs	mistakes_explain_themselves_and_fail	apps/cli/test/end-to-end.test.ts | apps/cli/test/cli.test.ts	explains mistakes and fails: 2 for the parser's, 1 for a command's | refuses usage mistakes on stderr with exit status 2, running nothing	
+crates/slopmax/tests/cli.rs	a_bad_listen_override_is_named	apps/cli/test/end-to-end.test.ts	names a SLOPMAX_LISTEN that is not an address	
+crates/slopmax/tests/cli.rs	status_shows_accounts_from_disk	apps/cli/test/end-to-end.test.ts	shows the accounts on disk, as a table and as JSON	
+crates/slopmax/tests/cli.rs	refreshing_status_reports_unreachable_providers_without_failing	apps/cli/test/end-to-end.test.ts	refreshes usage offline and reports unreachable providers without failing	
+crates/slopmax/tests/cli.rs	account_commands_change_the_store	apps/cli/test/end-to-end.test.ts	changes accounts: label, priority, disable, enable, pin and remove	
+crates/slopmax/tests/cli.rs	own_takes_over_linked_accounts	apps/cli/test/end-to-end.test.ts	takes over refreshing the accounts it follows from CLIProxyAPI	
+crates/slopmax/tests/cli.rs	keys_are_added_listed_and_revoked	apps/cli/test/end-to-end.test.ts	adds, lists and revokes client keys, showing a key's secret only once	
+crates/slopmax/tests/cli.rs	usage_totals_the_ledger	apps/cli/test/end-to-end.test.ts | apps/cli/test/commands.test.ts	totals the ledger by day, model or account, with what it would cost | totals the rows with their API cost, and says what is left out	
+crates/slopmax/tests/cli.rs	setup_wires_the_agents_and_undo_restores_their_files_exactly	apps/cli/test/end-to-end.test.ts	wires the agents and undoes it, giving back their files byte for byte	
+crates/slopmax/tests/cli.rs	setup_on_a_fresh_machine_and_undo_leave_no_wiring	apps/cli/test/end-to-end.test.ts	leaves no wiring behind after setting up and undoing on a fresh machine	
+crates/slopmax/tests/cli.rs	env_prints_shell_setup_for_each_agent	apps/cli/test/end-to-end.test.ts	prints the shell setup that points each agent at the proxy	
+crates/slopmax/tests/cli.rs	doctor_reports_findings_and_fails_on_problems	apps/cli/test/end-to-end.test.ts | apps/cli/test/commands.test.ts	checks the setup, says how to fix what fails, and exits 1 when something does | marks each finding by its level, with its fix beneath, and counts the problems	
+crates/slopmax/tests/cli.rs	doctor_names_what_holds_the_port	apps/cli/test/end-to-end.test.ts	names what holds the proxy's port when it is not slopmax	
+crates/slopmax/tests/cli.rs	import_brings_over_codex_and_cliproxyapi_logins	apps/cli/test/end-to-end.test.ts	imports Codex's and CLIProxyAPI's logins, saying what it skipped	
+crates/slopmax/tests/cli.rs	login_with_keys_reads_them_from_stdin	apps/cli/test/end-to-end.test.ts | apps/cli/test/terminal.test.ts	reads keys from stdin, checks endpoints, and keeps a key it cannot check | reads a secret from the whole of stdin, trimmed, when it is not a terminal	
+crates/slopmax/tests/cli.rs	sign_ins_that_need_the_network_fail_cleanly	apps/cli/test/end-to-end.test.ts	fails a sign-in that needs the network cleanly	
+crates/slopmax/tests/cli.rs	redeem_needs_an_account_with_resets	apps/cli/test/end-to-end.test.ts | apps/cli/test/redeem.test.ts	redeems only on accounts that bank limit resets, and fails when it cannot ask | lists the resets, asks, and redeems the one expiring soonest | redeems nothing when the question is answered no, or nobody answers | says what each outcome came to	
+crates/slopmax/tests/cli.rs	notify_sends_a_test_event_through_the_command	apps/cli/test/end-to-end.test.ts	sends a test notification through the configured command	
+crates/slopmax/tests/cli.rs	logs_show_the_tail_of_the_background_log	apps/cli/test/end-to-end.test.ts | apps/cli/test/commands.test.ts	shows the tail of the background log | shows the last lines of the log, each ending in a newline | follows the log as it grows, and from its start again once it is truncated	
+crates/slopmax/tests/cli.rs	the_background_proxy_starts_reports_and_stops	apps/cli/test/end-to-end.test.ts	starts the proxy in the background, reports from it, and stops it	
+crates/slopmax/tests/cli.rs	serve_runs_in_the_foreground_until_stopped	apps/cli/test/end-to-end.test.ts	serves in the foreground, appending to its log, until it is stopped	
+crates/slopmax/tests/cli.rs	service_commands_find_no_manager_in_the_sandbox	apps/cli/test/end-to-end.test.ts	finds no login service in the sandbox, and touches none	
+crates/slopmax/tests/cli.rs	unattended_setup_with_nothing_to_pool_fails_and_says_what_to_add	apps/cli/test/end-to-end.test.ts	fails an unattended setup with nothing to pool, saying what to add	
+crates/slopmax/tests/cli.rs	setup_flags_that_make_no_sense_are_refused	apps/cli/test/end-to-end.test.ts | apps/cli/test/commands.test.ts	refuses setup flags that make no sense before touching anything | checks every list before anything runs, naming the first mistake	
+crates/slopmax/tests/cli.rs	unattended_setup_imports_routes_wires_and_starts_the_proxy	apps/cli/test/end-to-end.test.ts	sets up unattended: imports, routes, wires and starts the proxy	
+crates/slopmax/tests/cli.rs	unattended_setup_leaves_alone_an_agent_it_has_no_account_for	apps/cli/test/end-to-end.test.ts	leaves alone, unattended, an agent no account can serve	
+crates/slopmax/tests/cli.rs	unattended_setup_that_misses_part_of_what_was_asked_says_so	apps/cli/test/end-to-end.test.ts	finishes an unattended setup that missed part of what was asked, then fails naming it	

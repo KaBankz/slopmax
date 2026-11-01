@@ -23,6 +23,17 @@ adds what it changes.
   bodies validated by Schema.
 - **URL layout** (ADM-\*, PRX paths). The admin API is at `/slopmax/api/*`, the
   dashboard at `/slopmax/`, and Claude Code's base URL is `<base>/claude`.
+- **The admin API's shape** (ADM-004..020). Typed endpoints of `SlopmaxApi`
+  replace the action paths: account actions are `PATCH /accounts/:id`,
+  `POST /accounts/:id/pin`, `DELETE /pins`, `POST /accounts/:id/own`,
+  `DELETE /accounts/:id` and `POST /accounts/:id/redeem`; keys are
+  `GET/POST /keys` and `DELETE /keys/:name`; settings are `PATCH /settings`.
+  Errors are the API's tagged errors (`{ _tag, message }`) with their status.
+  A rejected API key is 502 (the provider refused it), not 400.
+- **The event stream** (ADM-012). `GET /events` sends a `Hello` event, then the
+  current report, then `Request`, `Status`, `Notice` and `Login` events, with a
+  `Ping` event every 15 s, in place of the `: connected` and `: keepalive`
+  comments and bare ledger lines.
 - **`exec` in `run`** (CLI-082, CLI-215). Bun cannot replace its own process.
   slopmax spawns the agent with inherited stdio, forwards SIGINT, SIGTERM and
   SIGHUP, and exits with the agent's code, or 128+n when a signal ended it.
@@ -179,3 +190,124 @@ adds what it changes.
 - **Import results** (IMP-003). `Found` and `Saved` carry an Effect `Result`
   whose failure is the reason in words. A Claude Code login's origin is its
   credentials file, or "the macOS keychain".
+
+## The HTTP proxy (C9)
+
+- **The front door's connection handling** (NET-030). `Bun.serve` owns
+  accepting connections, keep-alive, upgrades and `TCP_NODELAY` (its
+  default), so there is no accept loop to warn and retry after 100 ms. Its
+  idle timeout is off (`idleTimeout: 0`), because an answer may be quiet for
+  minutes and Bun's timer would cut it; the 600 s stall sweep decides when a
+  stream is dead instead. So a client gets no separate 30 s limit for sending
+  its request headers. Shutdown stops accepting, lets answers in flight
+  finish for up to 10 s, then closes the rest, as before.
+
+## Codex's socket relay (C10)
+
+- **Backpressure** (WS-011). In place of a 64-message queue per side, reading
+  from ChatGPT pauses while Codex's send buffer is full, and what ChatGPT
+  already sent waits unsent, until Bun says it drained; a client more than
+  64 MiB ahead of ChatGPT is closed with 1013 (try again later). Once either
+  side closes, each gets 5 s to send what it has queued before it is cut.
+- **A close without a code** (WS-014). Bun cannot send a close frame without
+  a code, so a bare close from ChatGPT reaches Codex as 1000. A close Codex
+  sends without a code still goes up bare, and so does a client that went
+  away without closing (WS-012).
+- **A throttled socket** (WS-017) logs
+  `{id}: throttled inside a websocket; closing it`, as a spent one logs that
+  it was limited.
+
+## API and daemon (C11)
+
+- **History on the request path** (ADM-009). The history view is worked out
+  in the request's own fiber, not on a separate thread: the aggregation is
+  one synchronous pass over the records, and a Bun worker would need its own
+  entry in the compiled binary and a copy of every record. A 30-day ledger of
+  50,000 requests takes about 0.15 s, during which live streams wait.
+- **Reset windows go through the ledger's queue** (DMN-019). Ended windows
+  are queued for the ledger's one writer, like every other record, and taken
+  from the pool in the same uninterruptible step, so a stop cannot lose
+  them. A failed write is logged as `writing the usage ledger: …`.
+- **Event streams end on stop** (ADM-012, DMN-013). An open event stream
+  (the dashboard's, the desktop window's) ends as the daemon starts to stop,
+  so the server's drain waits only for answers in flight, not its full 10 s.
+
+## UI (C14)
+
+- **One app for the dashboard and the window** (ADM-032, ADM-044, ADM-045,
+  DESK-126). The web dashboard and the desktop window are the same React app
+  with the desktop's layout, tokens and type scale: a sidebar of pages
+  replaces the dashboard's section links and its two-column breakpoints,
+  side-by-side charts stack by the width they get (container queries), and
+  both hosts use the desktop's light and dark colors. The live requests
+  (ADM-042) are a Requests page in both hosts.
+- **Dialogs and confirmations** (ADM-048, DESK-057, DESK-058). The window
+  gains the dashboard's Rename… and Remove… (both ask first), and redeeming
+  a limit reset always asks in the dialog that lists the account's windows
+  (ADM-050), in place of the window's inline "Redeem one now?". Tooltips are
+  anchored to what they describe rather than following the pointer.
+- **Charts** (ADM-053, DESK-063..071). Columns, meters and the heatmap are
+  HTML boxes sized by CSS custom properties; only the lines are SVG. The
+  axis, label and tooltip rules are the desktop's.
+- **Timers** (ADM-043, DESK-009). Nothing polls the report: it arrives on
+  the event stream. The shown history is read again every minute and 8 s
+  after a request is answered. Countdowns tick every second.
+- **Keys in the window** (DESK-003). The arrow keys move through the pages
+  while the sidebar has focus, as before; the app's menus and their
+  shortcuts belong to Electron main (C15), which sends them to the window.
+  Single keys work in both hosts while no field has focus: a digit opens
+  that page, R refreshes usage, \ shows or hides the sidebar, the comma
+  opens Settings.
+- **Narrow windows** (ADM-045). One container breakpoint replaces the
+  dashboard's two viewport ones: below 720 px of content an account's name
+  takes its own line, its windows wrap beneath with their names, and its
+  menu stays at the top right; the overview's lines wrap the same way.
+- **Many accounts** (APP-073, APP-103). Past 12 accounts a pool's bar is one meter
+  filled to the pool's use rather than a segment per account.
+- **A stream that drops** (ADM-042). The web dashboard never says the proxy
+  stopped (the proxy serves it): it says slopmax is not answering and
+  tries again. A refused key brings back the gate saying so.
+
+## CLI (C13)
+
+- **The command surface** (CLI-011..062). `effect/cli` parses, so its help
+  layout, error wording and completion scripts are the CLI's: help is
+  `--help`/`-h` anywhere (there is no `help <command>`), the version is
+  `--version`/`-v` (`slopmax 0.4.0`), and completions are the
+  `--completions bash|zsh|fish` flag rather than a `completions` command.
+  A usage mistake prints `error: …` and ``See `slopmax <command> --help`.``
+  on stderr and exits 2; this now includes a value outside a flag's choices
+  (`--strategy`, `--affinity`, `--dialect`, `--by`, a negative `logs -n`),
+  which the old CLI's commands refused with exit 1. `service` and `key` take
+  their action as a subcommand (`service install`, `key add <name>`); a bare
+  `service` shows the status and a bare `key` lists keys; `key add` and
+  `key remove` without a name are usage mistakes. `label <account>` with no
+  label clears it. `config` names settings as `config.json` does
+  (`sessionAffinity`, `pollMinutes`), and `setup <agent>` and `run`/`env`
+  take the program (`claude`, `codex`) or the agent's id (`claude-code`).
+- **Questions at a terminal** (CLI-190..196). Yes-or-no questions, choices,
+  text and secrets are `effect/cli`'s prompts (arrow keys and space, a
+  hidden prompt for keys), not typed numbers and `[Y/n]` lines, and quitting
+  one (Ctrl-C, Esc) ends the command with status 130. Without a terminal a
+  yes-or-no question still reads one line (`y`/`yes`, else no; the end of
+  input takes its default), other questions take their defaults, and a
+  secret is the whole of stdin, so scripts work as before.
+- **Words and layout** (CLI-079..185). The output says the same things in
+  the new names (`Cleared …'s label`, `paid overflow` with `slopmax config
+paidOverflow on`, prices under `prices` in `config.json`); `start --json`
+  prints `{ url, dashboard, version, log }`, and `service status --json` and
+  `doctor --json` print their shapes. The dashboard's address is
+  `<base>/slopmax/#key=…`.
+- **The doctor's CLIProxyAPI port** (DOC, CLI-230). `SLOPMAX_CLIPROXYAPI_PORT`
+  tells the doctor (and a daemon's API doctor) where CLIProxyAPI listens
+  when it is not 8317; the CLI's tests point it at a dead port.
+- **Bun's budgets** (DIST-004). In place of the crate count and the 6 MiB
+  release binary: the AOT binary at most 70 MiB and 26 MB as xz, carrying
+  no third-party package beyond `effect`, `@effect/platform-bun`,
+  `@effect/platform-node-shared`, `ws` and `@decimalturn/toml-patch`
+  (`mise run budget`), with `--version` at most 30 ms. Measured on
+  2026-10-31 (docs/AOT.md, "The slopmax binary"): 71,284,968 bytes, 23.9 MB
+  as xz, `--version` 22 ms. The daemon's memory is over its budgets there
+  (idle 58 MB against 45, peak 153 MB against 120), most of it the binary's
+  own code paged in; that is the engine's to bring down, gated by
+  `tools/bench gates`.

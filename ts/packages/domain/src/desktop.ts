@@ -82,3 +82,22 @@ export interface DesktopBridge {
   readonly openWindow: (page: string) => void
   readonly quit: () => void
 }
+
+/** What `slopmax start --json` prints: the running proxy, as main needs it to use it. */
+export class StartedProxy extends Schema.Class<StartedProxy>("StartedProxy")({
+  url: Schema.String,
+  /** The dashboard's address, carrying the owner key. */
+  dashboard: Schema.String,
+  /** The running proxy's version, which may differ from the CLI's. */
+  version: Schema.String,
+  log: Schema.String,
+}) {}
+
+/** What `slopmax service status --json` prints. */
+export class ServiceView extends Schema.Class<ServiceView>("ServiceView")({
+  installed: Schema.Boolean,
+  running: Schema.Boolean,
+  file: Schema.String,
+  /** Whether it keeps running after logout (systemd's lingering); null where that does not apply. */
+  lingering: Schema.NullOr(Schema.Boolean),
+}) {}

@@ -5,7 +5,9 @@
   "description": "The engine as services and layers: accounts, credentials, providers, agents, pool, router, proxy, admin API, daemon, ledger",
   "//": {
     "@decimalturn/toml-patch": "Parses Codex's config.toml into a syntax tree with line positions, so `slopmax setup codex` and its undo change only slopmax's own lines and keep people's comments; its whole-document patch is the fallback for layouts the line edits cannot reach. Bun's TOML is parse-only.",
-    "@effect/platform-bun": "Effect's FileSystem, Path, ChildProcessSpawner, sockets, DNS and HTTP server on Bun: the engine runs on Bun only, and these are the layers its services are built on."
+    "@effect/platform-bun": "Effect's FileSystem, Path, ChildProcessSpawner, sockets, DNS and HTTP server on Bun: the engine runs on Bun only, and these are the layers its services are built on.",
+    "ws": "Codex's upstream WebSocket. Under Bun this is Bun's own implementation of the `ws` API: unlike the browser-style `WebSocket` it shows the headers of the upstream's 101 (the relay copies three of them to Codex), and it takes Bun's `proxy` and `tls` options, so the socket goes through the same upstream proxy and CA roots as every other call.",
+    "@types/ws": "Types for the `ws` API that Bun implements."
   },
   "exports": {
     ".": "./src/index.ts"
@@ -15,9 +17,11 @@
     "@effect/platform-bun": "4.1.1",
     "@slopmax/domain": "workspace:*",
     "@slopmax/wire": "workspace:*",
-    "effect": "4.1.1"
+    "effect": "4.1.1",
+    "ws": "8.22.0"
   },
   "devDependencies": {
-    "@slopmax/test": "workspace:*"
+    "@slopmax/test": "workspace:*",
+    "@types/ws": "8.18.2"
   }
 }

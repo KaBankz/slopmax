@@ -1693,9 +1693,9 @@ export const holdStart = Effect.fn("Proxy.holdStart")(function* (
     if (next.value.done) return Held.Streaming({ reader, held })
     held.push(next.value.value)
     size += next.value.value.byteLength
-    const verdict = judge.feed(next.value.value) // pure: "wait" | "content" | { refused, exhausted }
-    if (verdict === "content") return Held.Streaming({ reader, held })
-    if (verdict !== "wait") {
+    const verdict = judge.feed(next.value.value) // pure: Wait | Content | Refused { exhausted }
+    if (verdict._tag === "Content") return Held.Streaming({ reader, held })
+    if (verdict._tag === "Refused") {
       yield* cancelReader(reader)
       return Held.Refused({ bytes: concat(held), exhausted: verdict.exhausted })
     }
@@ -1717,7 +1717,7 @@ export interface RelayPlan {
   readonly held: ReadonlyArray<Uint8Array>
   readonly pending?: Promise<ReadResult>
   readonly tap: wire.Tap // pure: chunk(bytes) → void; finish() → TapOutcome
-  readonly transcoder?: wire.Transcoder // pure: push(bytes) → Uint8Array[]; end(cut) → Uint8Array[]
+  readonly transcoder?: wire.Transcoder // pure: push(bytes) → Uint8Array[]; end() → Uint8Array[]
   readonly settle: (end: StreamEnd) => void // once-guarded; Queue.offerUnsafe(settler, …)
   readonly clock: Clock.Clock // currentTimeMillisUnsafe; follows TestClock in tests
 }

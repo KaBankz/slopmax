@@ -24,7 +24,7 @@ export {
   StartFailed,
   StopFailed,
 } from "./background.ts"
-export { DialRefused, DialTimedOut, type DialRoute } from "./dial.ts"
+export { DialRefused, type DialRoute } from "./dial.ts"
 export { doctor, type DoctorOptions, type DoctorServices } from "./doctor.ts"
 export { Events } from "./events.ts"
 export {
@@ -43,9 +43,7 @@ export {
   costLabel,
   history,
   left,
-  type Pricing,
   rangeStart,
-  type Rates,
   summary,
   unusedValue,
   type ViewContext,
@@ -69,7 +67,7 @@ export {
   WebhookFailed,
 } from "./notifier.ts"
 export { accepts, portHolder, portTaken } from "./port-holder.ts"
-export * as pool from "./pool.ts"
+export * as PoolModel from "./pool.ts"
 export {
   type AccountLapse,
   affinityOverride,
@@ -78,21 +76,32 @@ export {
   Pick,
   type PickRequest,
   Pool,
-  type PoolModel,
   ResetList,
   type Routing,
   routingOf,
   SavedState,
   Session,
 } from "./pool.ts"
+export { Proxy } from "./proxy/forward.ts"
+export { relayLayer } from "./proxy/socket.ts"
+export { ListenFailed, Relay, type RelayShape, Server, type SocketServer, WebApp, type WebAppShape } from "./server.ts"
+export { Assets, type Asset, type AssetsShape } from "./api/assets.ts"
+export { ApiDoctorOptions, Shutdown } from "./api/handlers.ts"
+export { CoreLive, type CoreServices, Daemon, type DaemonError } from "./daemon.ts"
+/**
+ * Bun's file system, paths, processes, stdio and terminal: the platform the
+ * engine runs on, for the CLI's tests and build scripts, which may not reach
+ * for Bun's platform layer themselves.
+ */
+export { BunServices as Platform } from "@effect/platform-bun"
 export * as Browser from "./browser.ts"
-export * as importers from "./importers.ts"
+export * as Importers from "./importers.ts"
 export * as Providers from "./providers/index.ts"
-export { costOf, planFee, pricingOf, ratesFor, shares } from "./pricing.ts"
+export { costAt, costOf, planFee, type Pricing, pricingOf, type Rates, ratesFor, shares } from "./pricing.ts"
 export { NoLimitResets, NotReady, Quota } from "./quota.ts"
-export * as router from "./router.ts"
+export * as Router from "./router.ts"
 export { type Ask, Plan, type Step, type Table } from "./router.ts"
-export { accountView, buildReport, offline as offlineReport, report, type ReportInput } from "./report.ts"
+export { accountView, buildReport, currentZone, offline as offlineReport, report, type ReportInput } from "./report.ts"
 export {
   type EndpointOptions,
   type Grant,

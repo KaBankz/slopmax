@@ -139,7 +139,7 @@ export const buildReport = (input: ReportInput): Report => {
 }
 
 /** The time zone people read times in: the one in context, else the machine's. */
-const currentZone = Effect.map(Effect.serviceOption(DateTime.CurrentTimeZone), (zone) =>
+export const currentZone = Effect.map(Effect.serviceOption(DateTime.CurrentTimeZone), (zone) =>
   Option.getOrElse(zone, DateTime.zoneMakeLocal),
 )
 

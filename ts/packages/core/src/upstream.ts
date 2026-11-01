@@ -344,12 +344,9 @@ const build = (route: Route): Effect.Effect<Shape> =>
     )
 
     const dial = (url: string, headers: Headers) =>
-      dialSocket(url, headers, route.dialRoute(url)).pipe(
+      dialSocket(headers, route.dialRoute(url)).pipe(
+        Effect.mapError((error) => new Unreachable({ url, cause: error })),
         Effect.timeoutOrElse({ duration: dialWait, orElse: () => Effect.fail(new TimedOut({ after: dialWait })) }),
-        Effect.catchTags({
-          DialRefused: (error) => Effect.fail(new Unreachable({ url, cause: error.cause })),
-          DialTimedOut: (error) => Effect.fail(new TimedOut({ after: error.after })),
-        }),
       )
 
     return { send, readAll, http, dial, proxy: route.proxy }
@@ -409,7 +406,10 @@ export const networkRoute = (options: RouteOptions): Effect.Effect<Route, SocksF
     }
     return {
       fetch: routed,
-      dialRoute: (url) => ({ proxy: goesDirect(rewriteOrigin(url, options.origins)) ? undefined : viaProxy, ca }),
+      dialRoute: (url) => {
+        const target = rewriteOrigin(url, options.origins)
+        return { url: target, proxy: goesDirect(target) ? undefined : viaProxy, ca }
+      },
       proxy: Option.map(options.proxy, showProxy),
     }
   })
@@ -450,14 +450,21 @@ export class Upstream extends Context.Service<Upstream, Shape>()("@slopmax/core/
   ): Layer.Layer<Upstream, ProxyUrlInvalid | SocksFailed, SettingsService> =>
     Layer.effect(Upstream, Effect.flatMap(routeFromSettings(origins), build)).pipe(Layer.provide(BunDns.layer))
 
-  /** Tests: every call is answered by `handler` in this process, with no sockets. */
-  static readonly layerHandler = (handler: (request: Request) => Response | Promise<Response>): Layer.Layer<Upstream> =>
+  /**
+   * Tests: every call is answered by `handler` in this process. A WebSocket
+   * cannot be answered in process, so dials go to real sockets: a URL
+   * starting with a key of `sockets` is dialed at its value instead.
+   */
+  static readonly layerHandler = (
+    handler: (request: Request) => Response | Promise<Response>,
+    sockets: Readonly<Record<string, string>> = {},
+  ): Layer.Layer<Upstream> =>
     Layer.effect(
       Upstream,
       build({
         fetch: async (input, init) =>
           handler(input instanceof Request ? new Request(input, init) : new Request(urlOf(input), init)),
-        dialRoute: () => ({ proxy: undefined, ca: [] }),
+        dialRoute: (url) => ({ url: rewriteOrigin(url, sockets), proxy: undefined, ca: [] }),
         proxy: Option.none(),
       }),
     )

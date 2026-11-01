@@ -38,22 +38,7 @@ import {
 } from "@slopmax/domain"
 import { money } from "@slopmax/domain/format"
 import { DateTime } from "effect"
-
-/** API prices for one model, in dollars per million tokens, with the cache rates filled in. */
-export interface Rates {
-  readonly input: number
-  readonly output: number
-  readonly cacheRead: number
-  readonly cacheWrite: number
-}
-
-/** What usage is valued at. The list prices and the settings' own prices are behind these. */
-export interface Pricing {
-  /** A model's API prices, or nothing when slopmax cannot price it. */
-  readonly rates: (model: string) => Rates | undefined
-  /** What a plan costs a month, or nothing when its price is not known. */
-  readonly planFee: (provider: ProviderId, plan: string) => number | undefined
-}
+import { costAt, type Pricing } from "./pricing.ts"
 
 /** Everything the views need besides the records. */
 export interface ViewContext {
@@ -64,17 +49,6 @@ export interface ViewContext {
   /** Where "today", days and hours are counted. */
   readonly zone: DateTime.TimeZone
 }
-
-/** What a set of tokens costs at `rates`. */
-export const costAt = (
-  rates: Rates,
-  usage: { readonly input: number; readonly output: number; readonly cacheRead: number; readonly cacheWrite: number },
-): number =>
-  (usage.input * rates.input +
-    usage.output * rates.output +
-    usage.cacheRead * rates.cacheRead +
-    usage.cacheWrite * rates.cacheWrite) /
-  1e6
 
 // ---------------------------------------------------------------------------
 // Local time

@@ -1,0 +1,288 @@
+/*
+ * slopmax's look: calm neutrals, color only where something needs a look
+ * (good, warn, bad), and the pink of the logo kept for the logo and focus.
+ * Text tokens, the faint one included, read at 4.5:1 or more on the page and
+ * the sidebar; the focus ring and the controls' edges at 3:1 or more.
+ * Light and dark share every token; `.dark` on <html> switches them, set by
+ * the app from the system or from the Appearance setting.
+ *
+ * The spacing, type and radius scales are reset and only the steps the design
+ * uses are declared, so an off-design step (`m-13`) is an unknown class and
+ * the linter reports it.
+ */
+@import "tailwindcss" source(none);
+@source "./";
+
+/* IBM Plex Sans 400, 500 and 600 are declared by build.ts, which ships them as files. */
+
+@custom-variant dark (&:where(.dark, .dark *));
+/* The desktop window on macOS, where the traffic lights sit at the top left. */
+@custom-variant mac (&:where(.mac, .mac *));
+
+:root {
+  color-scheme: light;
+  --background: #ffffff;
+  --foreground: #1d1d1f;
+  --popover: #ffffff;
+  --primary: #1d1d1f;
+  --primary-foreground: #ffffff;
+  --muted-foreground: #5f5f67;
+  --border: #e4e4e7;
+  --input: #dcdce0;
+  /* An off switch's track. */
+  --control-off: #8e8e96;
+  --sidebar: #f7f7f8;
+  --success: #1f7a4a;
+  --warning: #94600f;
+  --danger: #c42f27;
+  --well: #f7f7f8;
+  --separator: #efeff1;
+  --faint: #71717a;
+  --track: #ebebee;
+  --meter: #5a5a62;
+  --hover: #0000000a;
+  --selected: #00000010;
+  --raised: #ffffff;
+  /* The one accent, defined once: the logo, the Next badge and the focus ring. */
+  --brand: #d63370;
+  --brand-foreground: #ffffff;
+  --ring: var(--brand);
+  --scrim: #0000002e;
+  --series-1: #1d1d1f;
+  --series-2: #76767e;
+  --series-3: #a9a9b0;
+  --series-4: #d2d2d7;
+  --shadow-color: #00000014;
+}
+
+.dark {
+  color-scheme: dark;
+  --background: #1b1b1d;
+  --foreground: #e6e6e8;
+  --popover: #222225;
+  --primary: #e6e6e8;
+  --primary-foreground: #1b1b1d;
+  --muted-foreground: #9b9ba3;
+  --border: #2c2c30;
+  --input: #34343a;
+  --control-off: #6e6e76;
+  --sidebar: #161618;
+  --success: #4cb782;
+  --warning: #d9a23f;
+  --danger: #e5534b;
+  --well: #212124;
+  --separator: #26262a;
+  --faint: #8b8b93;
+  --track: #2c2c31;
+  --meter: #a8a8b0;
+  --hover: #ffffff0a;
+  --selected: #ffffff12;
+  --raised: #333338;
+  --scrim: #00000080;
+  --series-1: #e6e6e8;
+  --series-2: #9b9ba3;
+  --series-3: #6a6a72;
+  --series-4: #45454b;
+  --shadow-color: #00000066;
+}
+
+@theme {
+  --spacing-*: initial;
+  --spacing: initial;
+  --spacing-0: 0px;
+  --spacing-0_5: 2px;
+  --spacing-0_75: 3px;
+  --spacing-1: 4px;
+  --spacing-1_5: 6px;
+  --spacing-2: 8px;
+  --spacing-2_5: 10px;
+  --spacing-3: 12px;
+  --spacing-3_5: 14px;
+  --spacing-4: 16px;
+  --spacing-4_5: 18px;
+  --spacing-5: 20px;
+  --spacing-6: 24px;
+  --spacing-7: 28px;
+  --spacing-7_5: 30px;
+  --spacing-8: 32px;
+  --spacing-8_5: 34px;
+  --spacing-9: 36px;
+  --spacing-10: 40px;
+  --spacing-12: 48px;
+  --spacing-13: 52px;
+  --spacing-14: 56px;
+  --spacing-15: 60px;
+  --spacing-16: 64px;
+  --spacing-18: 72px;
+  --spacing-20: 80px;
+  --spacing-22: 88px;
+  --spacing-23: 92px;
+  --spacing-24: 96px;
+  --spacing-25: 100px;
+  --spacing-25_5: 102px;
+  --spacing-28: 112px;
+  --spacing-30: 120px;
+  --spacing-32: 128px;
+  --spacing-40: 160px;
+  --spacing-48: 192px;
+  --spacing-50: 200px;
+  --spacing-56: 224px;
+  --spacing-60: 240px;
+  --spacing-65: 260px;
+  --spacing-64: 256px;
+  --spacing-72: 288px;
+  --spacing-80: 320px;
+  --spacing-85: 340px;
+  --spacing-96: 384px;
+  --spacing-100: 400px;
+
+  /* The page's content column, and prose beside controls. */
+  --container-page: 1080px;
+  --container-prose: 560px;
+  /* Wide enough for an account's row of windows (a name, three windows and a menu); narrower, rows stack. */
+  --container-table: 720px;
+
+  --text-*: initial;
+  --text-title: 20px;
+  --text-title--line-height: 26px;
+  --text-figure: 20px;
+  --text-figure--line-height: 24px;
+  --text-heading: 15px;
+  --text-heading--line-height: 20px;
+  --text-body: 13px;
+  --text-body--line-height: 18px;
+  --text-small: 12px;
+  --text-small--line-height: 16px;
+  --text-caption: 11.5px;
+  --text-caption--line-height: 15px;
+  --text-axis: 11px;
+  --text-axis--line-height: 14px;
+
+  --radius-*: initial;
+  --radius-xs: 2px;
+  --radius-sm: 5px;
+  --radius-md: 6px;
+  --radius-lg: 7px;
+  --radius-xl: 8px;
+  --radius-2xl: 10px;
+
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", Menlo, "Cascadia Mono", Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
+
+  --shadow-*: initial;
+  --shadow-popover: 0 8px 24px var(--shadow-color), 0 0 0 1px var(--border);
+  --shadow-raised: 0 1px 2px var(--shadow-color);
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+
+  --animate-appear: appear 200ms var(--ease-out);
+  --animate-rise: rise 200ms var(--ease-out);
+  --animate-flash: flash 1.3s var(--ease-out);
+
+  @keyframes appear {
+    from {
+      opacity: 0;
+      translate: 0 -6px;
+    }
+  }
+  @keyframes rise {
+    from {
+      opacity: 0;
+      translate: 0 8px;
+    }
+  }
+  @keyframes flash {
+    from {
+      background-color: var(--selected);
+    }
+  }
+}
+
+@theme inline {
+  --color-*: initial;
+  --color-transparent: transparent;
+  --color-current: currentColor;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-popover: var(--popover);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-control-off: var(--control-off);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-well: var(--well);
+  --color-separator: var(--separator);
+  --color-faint: var(--faint);
+  --color-track: var(--track);
+  --color-meter: var(--meter);
+  --color-hover: var(--hover);
+  --color-selected: var(--selected);
+  --color-raised: var(--raised);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-scrim: var(--scrim);
+  --color-series-1: var(--series-1);
+  --color-series-2: var(--series-2);
+  --color-series-3: var(--series-3);
+  --color-series-4: var(--series-4);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring;
+  }
+  html,
+  body,
+  #root {
+    @apply h-full;
+  }
+  body {
+    @apply bg-background font-sans text-body text-foreground antialiased;
+    font-feature-settings: "kern";
+  }
+  /* The menu bar's panel: a card in a transparent window. */
+  html.panel,
+  html.panel body {
+    @apply bg-transparent;
+  }
+  ::selection {
+    @apply bg-selected;
+  }
+  :focus-visible {
+    @apply outline-2 outline-offset-2;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation: none !important;
+      transition: none !important;
+    }
+  }
+}
+
+/* Figures that change in place keep their width. */
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The desktop window's title strips drag the window; their controls do not. */
+@utility drag {
+  -webkit-app-region: drag;
+}
+@utility no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* The sidebar slides when its button shows or hides it. */
+@utility slide {
+  transition: width 220ms var(--ease-in-out);
+}

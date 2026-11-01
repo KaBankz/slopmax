@@ -3,8 +3,7 @@ import { Price } from "@slopmax/domain"
 import { it } from "@slopmax/test"
 import { Effect, Schema } from "effect"
 import { parseSettings } from "../../src/settings.ts"
-import { costAt } from "../../src/ledger-views.ts"
-import { costOf, planFee, pricingOf, ratesFor, shares } from "../../src/pricing.ts"
+import { costAt, costOf, planFee, pricingOf, ratesFor, shares } from "../../src/pricing.ts"
 
 const price = Schema.decodeUnknownSync(Price)
 

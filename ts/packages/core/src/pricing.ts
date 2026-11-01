@@ -6,7 +6,33 @@
 // People can set their own prices and plan fees in `config.json`; theirs
 // always win over the built-in lists.
 import { type ProviderId, type Price, type Settings, type SubscriptionId, type Usage } from "@slopmax/domain"
-import { costAt, type Pricing, type Rates } from "./ledger-views.ts"
+
+/** API prices for one model, in dollars per million tokens, with the cache rates filled in. */
+export interface Rates {
+  readonly input: number
+  readonly output: number
+  readonly cacheRead: number
+  readonly cacheWrite: number
+}
+
+/** What usage is valued at. The list prices and the settings' own prices are behind these. */
+export interface Pricing {
+  /** A model's API prices, or nothing when slopmax cannot price it. */
+  readonly rates: (model: string) => Rates | undefined
+  /** What a plan costs a month, or nothing when its price is not known. */
+  readonly planFee: (provider: ProviderId, plan: string) => number | undefined
+}
+
+/** What a set of tokens costs at `rates`. */
+export const costAt = (
+  rates: Rates,
+  usage: { readonly input: number; readonly output: number; readonly cacheRead: number; readonly cacheWrite: number },
+): number =>
+  (usage.input * rates.input +
+    usage.output * rates.output +
+    usage.cacheRead * rates.cacheRead +
+    usage.cacheWrite * rates.cacheWrite) /
+  1e6
 
 /** A model's list prices in dollars per million tokens: input, output, cache read. */
 type Listed = readonly [model: string, input: number, output: number, cacheRead: number]

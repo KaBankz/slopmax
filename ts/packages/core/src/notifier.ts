@@ -43,7 +43,8 @@ import {
 import { type HttpClientError, HttpClientRequest } from "effect/http"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { Events } from "./events.ts"
-import { type Pricing, unusedValue } from "./ledger-views.ts"
+import { unusedValue } from "./ledger-views.ts"
+import type { Pricing } from "./pricing.ts"
 import { SettingsService } from "./settings.ts"
 import { Upstream } from "./upstream.ts"
 

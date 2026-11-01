@@ -67,3 +67,38 @@ A hello world compiles to 25.6 MB with `--trim` (68 MB without).
 - `bun:ffi`'s `dlopen` (the `flock` in `@slopmax/core`'s `fsx.ts`) keeps
   `--trim` from removing unused APIs: a hello world grows from 27.4 MB to
   36.5 MB. Measure the CLI with and without it before choosing how locks work.
+- A dynamic `import()`, even of a fixed path, makes the bundler wrap every
+  module it reaches in a lazy initializer: the CLI grew from 75.7 MB to
+  84.4 MB that way. `slopmax --version` answers fast without one instead:
+  `main.ts` imports `version.ts` first, which prints and exits before the
+  rest of the program is evaluated.
+- `--trim-locales=en` saves 4.7 MB and `--no-compile-function-source` 2.3 MB
+  (nothing in slopmax reads a function's source or formats for other locales).
+
+## The slopmax binary (2026-10-31, linux-x64, `1.4.4-canary.1+da867c60b`)
+
+`mise run compile` (`bun build.ts compile`: `bun compile --trim
+--trim-locales=en --no-compile-function-source --no-compile-autoload-*`,
+with the web dashboard embedded), measured on a shared host under load
+(load average about 20 on 8 cores):
+
+| Metric                                                               | Measured                                                                                                | Budget (ARCHITECTURE.md §16) |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| Binary                                                               | 71,284,968 bytes (68.0 MiB), 93.8 MB of Bun APIs trimmed                                                | ≤ 70 MiB                     |
+| As `xz -9`                                                           | 23,852,464 bytes                                                                                        | ≤ 26 MB                      |
+| Third-party packages inside                                          | effect, @effect/platform-bun, @effect/platform-node-shared, @decimalturn/toml-patch (`ws` is Bun's own) | the §14 list                 |
+| `--version` (hyperfine, 50 runs)                                     | 22.4 ± 7.3 ms (min 15.9), 26 MB RSS                                                                     | ≤ 30 ms                      |
+| Daemon idle RSS (30 s after start)                                   | 58 MB (12 MB anonymous, 46 MB the binary's code paged in)                                               | ≤ 45 MB                      |
+| Daemon peak RSS, 32 at once × 300 KB, 3,000 requests to a local mock | 153 MB (back to 62 MB after)                                                                            | ≤ 120 MB                     |
+| Build time                                                           | about 80–135 s, every core                                                                              |                              |
+
+The fallback (`mise run build`: `--no-aot --minify --bytecode --format=esm`,
+bytecode laid out by profiles of `--version`, `status --json` and `serve`)
+is 118,188,208 bytes and answers `--version` in 61 ± 12 ms on the same host.
+
+Every CLI test (`bun test apps/cli/test` with `SLOPMAX_BIN=apps/cli/dist/slopmax`)
+passes on the AOT binary. `bun compile` warns only about regular expressions
+built from strings inside Effect's Schema and HTTP router and
+@decimalturn/toml-patch; none come from slopmax's own code. The daemon's
+memory is over budget; most of the idle figure is machine code touched while
+the engine's modules initialize.

@@ -7,13 +7,12 @@ import {
   history,
   left,
   percentile,
-  type Pricing,
   rangeStart,
-  type Rates,
   summary,
   unusedValue,
   type ViewContext,
 } from "../../src/ledger-views.ts"
+import type { Pricing, Rates } from "../../src/pricing.ts"
 
 const decode = Schema.decodeUnknownSync(LedgerRecord)
 const id = Schema.decodeUnknownSync(AccountId)
