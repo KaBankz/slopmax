@@ -259,20 +259,25 @@ State a format cannot carry back is kept by slopmax: the encrypted reasoning an 
 
 ## Background work
 
-`daemon::run` binds the listener and starts the background tasks:
+`daemon::run` takes the home's serve lock (`.serve.lock`, so a second daemon on the same home refuses to start), binds the listener, and starts the background tasks:
 
-- reloading accounts and pins from disk every 2 seconds, and config.toml when it changed, so the CLI's and the app's changes take effect (`POST /slopmax/sync` applies them at once). `App::config` is swapped whole; only the listener is bound for good;
+- reloading accounts and pins when told (`POST /slopmax/sync`, which the CLI and the app send after each change), and otherwise when a stat every 30 seconds shows a file changed, with config.toml when it changed. Requests use the accounts the pool holds in memory and read no files; a refresh puts its new tokens back into the pool. `App::config` is swapped whole; only the listener is bound for good;
 - saving pool state (windows, blocks, sessions) every 10 seconds, so a restart keeps sessions on their accounts;
 - refreshing tokens ahead of expiry (every 5 minutes), polling usage when due, listing limit resets, and warming idle windows (each checked every minute), and redeeming resets about to expire (every 30 minutes);
 - watching account conditions every 15 seconds: notifications and nudges, and each window that reset, written to `windows.jsonl` for quota left on the table.
 
-Each task reads the config as it runs, so a changed setting turns it on or off without a restart.
+Each task reads the config as it runs, so a changed setting turns it on or off without a restart. A task that panics is logged and runs again on schedule.
+
+Everything runs on one thread unless `SLOPMAX_WORKERS` asks for more (`daemon::runtime`), so nothing on it may block: file locks, the ledger reads behind `/slopmax/usage` and `/history`, and saves run through `blocking::run`. The one disk write left on the request path is the ledger's: one `write` per request to the month file it keeps open.
+
+Stopping (a signal or `POST /slopmax/shutdown`) cancels `App::stop`, and then runs in order: the listener drains open connections (event streams end at once), the background loops end and the work they started finishes (`App::tasks`), a token refresh in flight saves what it got (`auth::settle`), state is saved by the only writer left, and the ledger is synced to disk.
 
 ## Files
 
 ```
 ~/.slopmax/                 (SLOPMAX_HOME moves it; directories 0700, files 0600)
   config.toml, .config.lock (held while the first run writes the proxy's key)
+  .serve.lock               held by the running daemon, naming its pid
   accounts/<provider>-<hash>.json, .<id>.lock
   state.json                windows, blocks, sessions, limit resets, Claude Code's user agent
   pins.json                 `slopmax use`
@@ -285,7 +290,7 @@ Each task reads the config as it runs, so a changed setting turns it on or off w
 
 ## Dependencies
 
-The binary is under 6 MB, from about 60 crates besides slopmax's own. The async stack is tokio, hyper, and rustls (with ring). serde_json, toml_edit, memchr, base64, and anyhow round it out. Time, logging, the CLI parser, form encoding, and the HTTP client conveniences are small in-house modules, because the crates for them each pull in far more than slopmax uses. A crate earns its place by doing its job measurably better than a small module would: faster, leaner, or more correct. The CI holds the tree to 70 crates and the binary to 6 MB; raising either needs that reason in the commit.
+The binary is about 6.5 MB, from about 65 crates besides slopmax's own. The async stack is tokio, hyper, and rustls (with ring). serde_json, toml_edit, memchr, base64, and anyhow round it out. Time, logging, the CLI parser, form encoding, and the HTTP client conveniences are small in-house modules, because the crates for them each pull in far more than slopmax uses. A crate earns its place by doing its job measurably better than a small module would: faster, leaner, or more correct. The CI holds the tree to 70 crates and the binary to 6.6 MB; raising either needs that reason in the commit. tokio-util is the newest: its `CancellationToken` and `TaskTracker` let the daemon stop in order, for 30 KB.
 
 ## Performance
 
@@ -299,6 +304,8 @@ On a 2-vCPU machine shared with the load generator and the mock (which answers a
 | 300 KB request | 1.9 ms | 1,050 req/s | 40 MB peak under that load |
 
 `slopmax --version` and `status` take about 2 ms, and `serve` answers about 22 ms after it starts.
+
+Running on one thread (since v0.4), on an 8-vCPU machine with the proxy held to two cores (`scripts/compare/ab.sh`): a small request one at a time takes 0.80 ms at the median and 680 µs of CPU, where 4 worker threads took 1.35 ms and 1,600 µs, handing each request between threads (28 futex calls each). The daemon idles on 2 threads, waking 0.5 times a second. One thread tops out at about 1,400 small requests a second 32 at once, against 4,100 on four; `SLOPMAX_WORKERS=auto` gets those back, for a proxy shared by many clients. Each streamed chunk is still its own write, which is most of what the proxy spends in the kernel now.
 
 The hot path keeps to a few rules:
 

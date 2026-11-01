@@ -516,7 +516,9 @@ mod tests {
     fn failover_failures_and_housekeeping_count_apart() {
         let now = Timestamp::now();
         let since = summary::since("today", now).unwrap();
-        let at = since.max(now - SignedDuration::from_mins(1));
+        // Now, not a minute ago: in an hour's first minute, that would be
+        // the hour before, and not the last bucket.
+        let at = now;
         let rescued = Entry {
             attempts: 2,
             ..entry(at, ProviderId::Claude, "claude-opus-5-5", 100)

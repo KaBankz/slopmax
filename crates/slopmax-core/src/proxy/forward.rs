@@ -504,8 +504,7 @@ fn failed(
         agent: inbound.agent.map(|a| a.id().to_owned()),
         session: inbound.session.clone(),
     };
-    app.broadcast(&entry);
-    app.ledger.record(entry);
+    app.record(&entry);
 }
 
 /// Combines why two steps could not serve: the earliest return wins.
@@ -634,11 +633,12 @@ async fn attempt(
                 refreshed = true;
                 match auth::ensure_fresh(&app.auth_http, &app.store, &account, true).await {
                     Ok(fresh) => {
+                        app.adopt(&account, &fresh);
                         account = fresh;
                         continue;
                     }
                     Err(e) => {
-                        app.pool.record_error(&id, &e.to_string());
+                        app.refresh_failed(&account, &e);
                         return Attempt::Failed(Some(failure));
                     }
                 }
@@ -1022,8 +1022,7 @@ fn recorded(
             agent: served.agent.map(str::to_owned),
             session: served.session,
         };
-        pool_app.broadcast(&entry);
-        pool_app.ledger.record(entry);
+        pool_app.record(&entry);
     });
     body::boxed(stream)
 }

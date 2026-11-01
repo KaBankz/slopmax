@@ -2,13 +2,12 @@
 //! answered or failed, in monthly files (`~/.slopmax/usage/2026-10.jsonl`).
 //! `slopmax usage` reads it back.
 
-use std::collections::BTreeMap;
-use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
 
 use crate::provider::ProviderId;
 use crate::time::{SignedDuration, Timestamp};
@@ -75,66 +74,110 @@ fn is_one(n: &u32) -> bool {
     *n == 1
 }
 
-/// Appends entries in the background, so requests never wait on the disk.
-#[derive(Debug, Clone)]
-pub struct Ledger(mpsc::UnboundedSender<Entry>);
+/// Appends entries to the month file it keeps open. Each entry is one
+/// `write` on a file opened for appending, which the kernel lands whole and
+/// in order beside other processes' appends; nothing is queued, so nothing
+/// is lost when the daemon stops.
+#[derive(Debug)]
+pub struct Ledger {
+    dir: PathBuf,
+    open: Mutex<Writer>,
+}
+
+#[derive(Debug, Default)]
+struct Writer {
+    /// The month file, and the month it is for.
+    month: Option<((i64, u32), File)>,
+    /// The line being written, kept to save an allocation per entry.
+    line: Vec<u8>,
+    /// Entries a failed write lost since the daemon started.
+    dropped: u64,
+}
 
 impl Ledger {
-    /// Starts the writer for `dir`.
-    pub fn start(dir: PathBuf) -> Self {
-        let (tx, mut rx) = mpsc::unbounded_channel::<Entry>();
-        tokio::spawn(async move {
-            while let Some(first) = rx.recv().await {
-                let mut batch = vec![first];
-                while let Ok(entry) = rx.try_recv() {
-                    batch.push(entry);
-                }
-                let dir = dir.clone();
-                let written = tokio::task::spawn_blocking(move || append(&dir, &batch)).await;
-                if let Ok(Err(e)) = written {
-                    log::warn!("writing the usage ledger: {e}");
-                }
-            }
-        });
-        Self(tx)
+    /// A ledger writing into `dir`, which is created on the first entry.
+    pub fn at(dir: PathBuf) -> Self {
+        Self {
+            dir,
+            open: Mutex::default(),
+        }
     }
 
-    pub fn record(&self, entry: Entry) {
-        let _ = self.0.send(entry);
+    /// Appends `entry` to its month's file. A failed write is logged and
+    /// counted, and the file is opened afresh for the next entry.
+    pub fn record(&self, entry: &Entry) {
+        let mut writer = self.open.lock().unwrap_or_else(|p| p.into_inner());
+        if let Err(e) = writer.append(&self.dir, entry) {
+            writer.month = None;
+            writer.dropped += 1;
+            if writer.dropped == 1 {
+                log::warn!("writing the usage ledger: {e}");
+            }
+        }
     }
+
+    /// Entries a failed write lost since the daemon started.
+    pub fn dropped(&self) -> u64 {
+        self.open.lock().unwrap_or_else(|p| p.into_inner()).dropped
+    }
+
+    /// Flushes the month file to the disk, for a daemon that is stopping.
+    pub fn sync(&self) {
+        let writer = self.open.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((_, file)) = &writer.month
+            && let Err(e) = file.sync_data()
+        {
+            log::warn!("syncing the usage ledger: {e}");
+        }
+    }
+}
+
+impl Writer {
+    fn append(&mut self, dir: &Path, entry: &Entry) -> std::io::Result<()> {
+        let (year, month, _) = entry.at.date(SignedDuration::ZERO);
+        let key = (year, month);
+        if self.month.as_ref().is_none_or(|(open, _)| *open != key) {
+            self.month = None;
+            self.month = Some((key, open_month(dir, &file_for(dir, entry.at))?));
+        }
+        let Some((_, file)) = &mut self.month else {
+            unreachable!("opened above");
+        };
+        self.line.clear();
+        serde_json::to_writer(&mut self.line, entry).map_err(std::io::Error::other)?;
+        self.line.push(b'\n');
+        file.write_all(&self.line)
+    }
+}
+
+/// Opens a month file for appending, private to the owner. A file a crash
+/// left without its last newline gets one first, so the next entry starts
+/// its own line instead of joining the torn one.
+fn open_month(dir: &Path, path: &Path) -> std::io::Result<File> {
+    fsx::private_dir(dir)?;
+    let mut options = OpenOptions::new();
+    options.read(true).create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    let len = file.metadata()?.len();
+    if len > 0 {
+        let mut last = [0];
+        file.seek(SeekFrom::Start(len - 1))?;
+        file.read_exact(&mut last)?;
+        if last[0] != b'\n' {
+            file.write_all(b"\n")?;
+        }
+    }
+    Ok(file)
 }
 
 fn file_for(dir: &Path, at: Timestamp) -> PathBuf {
     let (year, month, _) = at.date(SignedDuration::ZERO);
     dir.join(format!("{year:04}-{month:02}.jsonl"))
-}
-
-fn append(dir: &Path, entries: &[Entry]) -> std::io::Result<()> {
-    fsx::private_dir(dir)?;
-    let mut by_file: BTreeMap<PathBuf, Vec<&Entry>> = BTreeMap::new();
-    for entry in entries {
-        by_file
-            .entry(file_for(dir, entry.at))
-            .or_default()
-            .push(entry);
-    }
-    for (path, entries) in by_file {
-        let mut options = OpenOptions::new();
-        options.create(true).append(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(&path)?;
-        let mut text = String::new();
-        for entry in entries {
-            text.push_str(&serde_json::to_string(entry).map_err(std::io::Error::other)?);
-            text.push('\n');
-        }
-        file.write_all(text.as_bytes())?;
-    }
-    Ok(())
 }
 
 /// Every entry at or after `since`, oldest first. Unreadable lines (a
@@ -189,12 +232,18 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn writes_monthly_files_and_reads_them_back() {
-        let dir = std::env::temp_dir().join(format!("slopmax-ledger-{}", crate::ids::token()));
+    fn temp_dir() -> PathBuf {
+        std::env::temp_dir().join(format!("slopmax-ledger-{}", crate::ids::token()))
+    }
+
+    #[test]
+    fn writes_monthly_files_and_reads_them_back() {
+        let dir = temp_dir();
         let september = entry("2026-09-30T23:00:00Z", "a");
         let october = entry("2026-10-01T01:00:00Z", "b");
-        append(&dir, &[september.clone(), october.clone()]).unwrap();
+        let ledger = Ledger::at(dir.clone());
+        ledger.record(&september);
+        ledger.record(&october);
         assert!(dir.join("2026-09.jsonl").exists());
         assert!(dir.join("2026-10.jsonl").exists());
 
@@ -206,6 +255,69 @@ mod tests {
         // Lines stay compact: defaults are left out.
         let text = fs::read_to_string(dir.join("2026-10.jsonl")).unwrap();
         assert!(!text.contains("attempts"), "{text}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn every_entry_is_on_disk_as_soon_as_it_is_recorded() {
+        let dir = temp_dir();
+        let ledger = Ledger::at(dir.clone());
+        let since = Timestamp::UNIX_EPOCH;
+        for n in 0..50 {
+            ledger.record(&entry("2026-10-02T00:00:00Z", &n.to_string()));
+            assert_eq!(read(&dir, since).len(), n + 1);
+        }
+        ledger.sync();
+        assert_eq!(ledger.dropped(), 0);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn appends_beside_another_writer_and_mends_a_torn_line() {
+        let dir = temp_dir();
+        let first = Ledger::at(dir.clone());
+        first.record(&entry("2026-10-02T00:00:00Z", "a"));
+        // A crash left half a line behind.
+        let path = dir.join("2026-10.jsonl");
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(br#"{"at":"2026-10-02T00:00:01Z","acc"#)
+            .unwrap();
+        // Another process (the CLI, a second ledger) appends after it.
+        let second = Ledger::at(dir.clone());
+        second.record(&entry("2026-10-02T00:00:02Z", "b"));
+        first.record(&entry("2026-10-02T00:00:03Z", "c"));
+        let models: Vec<String> = read(&dir, Timestamp::UNIX_EPOCH)
+            .into_iter()
+            .filter_map(|e| e.model)
+            .collect();
+        assert_eq!(models, ["a", "b", "c"]);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn keeps_the_directory_and_month_files_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir();
+        Ledger::at(dir.clone()).record(&entry("2026-10-02T00:00:00Z", "a"));
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&dir), 0o700);
+        assert_eq!(mode(&dir.join("2026-10.jsonl")), 0o600);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn counts_what_a_failed_write_lost_and_writes_again_once_it_can() {
+        let dir = temp_dir();
+        // A file where the directory should be.
+        fs::write(&dir, b"").unwrap();
+        let ledger = Ledger::at(dir.clone());
+        ledger.record(&entry("2026-10-02T00:00:00Z", "a"));
+        assert_eq!(ledger.dropped(), 1);
+        fs::remove_file(&dir).unwrap();
+        ledger.record(&entry("2026-10-02T00:00:01Z", "b"));
+        assert_eq!(read(&dir, Timestamp::UNIX_EPOCH).len(), 1);
+        assert_eq!(ledger.dropped(), 1);
         fs::remove_dir_all(dir).unwrap();
     }
 }

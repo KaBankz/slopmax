@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::ledger::{self, Entry};
 use crate::pricing::{self, Custom};
-use crate::time::{SignedDuration, Timestamp};
+use crate::time::Timestamp;
 
 /// The periods a summary covers, counted in local days.
 pub const RANGES: &[&str] = &["today", "7d", "30d", "all"];
@@ -111,10 +111,10 @@ pub fn since(range: &str, now: Timestamp) -> Option<Timestamp> {
         "all" => return Some(Timestamp::UNIX_EPOCH),
         _ => return None,
     };
-    let offset = now.local_offset();
-    let (y, m, d) = now.date(offset);
-    let today = Timestamp::midnight(y, m, d, offset).unwrap_or(now);
-    Some(today - SignedDuration::from_hours(24 * days))
+    // The first day's own midnight: a week that spans a daylight saving
+    // change is not 7 × 24 hours long.
+    let (y, m, d) = Timestamp::add_days(now.date(now.local_offset()), -days);
+    Some(Timestamp::local_midnight(y, m, d).unwrap_or(now))
 }
 
 /// Summarizes the ledger in `dir` from `since`, grouped `by` one of
@@ -161,6 +161,7 @@ pub fn build(
 mod tests {
     use super::*;
     use crate::provider::ProviderId;
+    use crate::time::SignedDuration;
 
     fn entry(model: &str, input: u64) -> Entry {
         Entry {
@@ -219,10 +220,9 @@ mod tests {
         let today = since("today", now).unwrap();
         let week = since("7d", now).unwrap();
         assert!(today <= now && now.duration_since(today) < SignedDuration::from_hours(25));
-        assert_eq!(
-            today.duration_since(week),
-            SignedDuration::from_hours(24 * 6)
-        );
+        // Six days, give or take a daylight saving hour.
+        let span = today.duration_since(week).as_secs();
+        assert!((span - 6 * 86_400).abs() <= 3_600, "{span}");
         assert_eq!(since("1y", now), None);
     }
 }

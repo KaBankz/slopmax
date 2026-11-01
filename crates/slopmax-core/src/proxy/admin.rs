@@ -65,10 +65,10 @@ pub(super) async fn handle(app: Arc<App>, request: Request) -> Response {
             reload(&app, Ok(()))
         }
         (&Method::POST, ["shutdown"]) => {
-            app.shutdown.notify_one();
+            app.stop.cancel();
             json_reply(StatusCode::OK, &json!({ "status": "stopping" }))
         }
-        (&Method::GET, ["usage"]) => usage(&app, &query),
+        (&Method::GET, ["usage"]) => usage(&app, &query).await,
         (&Method::GET, ["history"]) => history(&app, &query).await,
         (&Method::GET, ["settings"]) => json_reply(StatusCode::OK, &settings(&app.config())),
         (&Method::POST, ["settings"]) => {
@@ -134,7 +134,7 @@ fn dashboard() -> Response {
 }
 
 /// `?range=7d&by=day` → a usage summary.
-fn usage(app: &App, query: &str) -> Response {
+async fn usage(app: &App, query: &str) -> Response {
     let params = crate::net::form::decode(query);
     let param = |name: &str, default: &'static str| {
         params
@@ -163,7 +163,11 @@ fn usage(app: &App, query: &str) -> Response {
         .into_iter()
         .map(|a| (a.id.clone(), a.name()))
         .collect();
-    let report = summary::build(&app.home.usage(), since, &by, &app.config().prices, &names);
+    let (dir, prices) = (app.home.usage(), app.config());
+    // Reading the ledger takes a moment: off the thread serving requests.
+    let report =
+        crate::blocking::run(move || summary::build(&dir, since, &by, &prices.prices, &names))
+            .await;
     json_reply(StatusCode::OK, &report)
 }
 
@@ -186,15 +190,12 @@ async fn history(app: &App, query: &str) -> Response {
     let home = app.home.clone();
     let config = app.config();
     // Reading a month of the ledger takes a moment: off the request threads.
-    let loaded = tokio::task::spawn_blocking(move || {
+    let history = crate::blocking::run(move || {
         let prices = history::Prices::of(&config);
         history::load(&home, range, Timestamp::now(), &prices, &names)
     })
     .await;
-    match loaded {
-        Ok(history) => json_reply(StatusCode::OK, &history),
-        Err(e) => error(None, StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    }
+    json_reply(StatusCode::OK, &history)
 }
 
 /// The form fields of a POST, from its query and its body.
@@ -389,6 +390,7 @@ fn change_settings(app: &App, form: &str) -> Response {
 /// A server-sent event for each request answered from now on.
 fn events(app: &App) -> Response {
     let mut feed = app.events.subscribe();
+    let stop = app.stop.clone();
     let (tx, rx) = mpsc::channel::<Bytes>(64);
     tokio::spawn(async move {
         let _ = tx.send(Bytes::from_static(b": connected\n\n")).await;
@@ -400,6 +402,8 @@ fn events(app: &App) -> Response {
                     Err(broadcast::error::RecvError::Closed) => break,
                 },
                 () = tokio::time::sleep(KEEPALIVE) => Bytes::from_static(b": keepalive\n\n"),
+                // The daemon is stopping: end the stream so it can.
+                () = stop.cancelled() => break,
             };
             // The client went away.
             if tx.send(chunk).await.is_err() {
@@ -449,10 +453,13 @@ async fn account(app: &App, id: &str, action: &str, query: &str) -> Response {
     let value = crate::net::form::decode(query)
         .into_iter()
         .find_map(|(k, v)| (k == "value").then_some(v));
-    let changed = match action {
+    // The account's lock is waited for while a refresh holds it, so the
+    // change is made on a blocking thread.
+    let (store, home) = (app.store.clone(), app.home.clone());
+    let change: Box<dyn FnOnce() -> anyhow::Result<()> + Send> = match action {
         "enable" | "disable" => {
             let disabled = action == "disable";
-            app.store.update(&id, |a| a.disabled = disabled).map(|_| ())
+            Box::new(move || store.update(&id, |a| a.disabled = disabled).map(|_| ()))
         }
         "priority" => {
             let Some(priority) = value.and_then(|v| v.parse::<i32>().ok()) else {
@@ -462,19 +469,20 @@ async fn account(app: &App, id: &str, action: &str, query: &str) -> Response {
                     "priority needs ?value=<number>",
                 );
             };
-            app.store.update(&id, |a| a.priority = priority).map(|_| ())
+            Box::new(move || store.update(&id, |a| a.priority = priority).map(|_| ()))
         }
         "label" => {
             let label = value.filter(|v| !v.trim().is_empty());
-            app.store.update(&id, |a| a.label = label).map(|_| ())
+            Box::new(move || store.update(&id, |a| a.label = label).map(|_| ()))
         }
-        "use" => pin(&app.home, &account),
+        "use" => Box::new(move || pin(&home, &account)),
         // Refresh here, rather than follow the tool it was imported from.
-        "own" => app.store.update(&id, |a| a.link = None).map(|_| ()),
-        "remove" => forget(&app.store, &app.home, &account),
+        "own" => Box::new(move || store.update(&id, |a| a.link = None).map(|_| ())),
+        "remove" => Box::new(move || forget(&store, &home, &account)),
         "redeem" => return redeem(app, &account, value).await,
         _ => return error(None, StatusCode::NOT_FOUND, "no such account action"),
     };
+    let changed = crate::blocking::run(change).await;
     reload(app, changed)
 }
 

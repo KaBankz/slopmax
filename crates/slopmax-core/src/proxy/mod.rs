@@ -26,6 +26,8 @@ use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use serde::Serialize;
 use serde_json::json;
 use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use crate::account::{Account, Store};
 use crate::auth::{self, RefreshError};
@@ -43,6 +45,9 @@ use crate::report::{self, Report};
 use crate::time::{SignedDuration, Timestamp};
 use crate::wire::Dialect;
 
+/// A background task, boxed to share one task type.
+pub type BoxedTask = std::pin::Pin<Box<dyn Future<Output = ()> + Send>>;
+
 /// Shared state for request handlers and background tasks.
 pub struct App {
     /// The config, swapped whole when config.toml changes.
@@ -55,8 +60,11 @@ pub struct App {
     http: Client,
     /// OAuth and usage calls, with bounded timeouts.
     pub auth_http: Client,
-    /// Signaled by `POST /slopmax/shutdown`.
-    pub shutdown: tokio::sync::Notify,
+    /// Cancelled when the daemon stops: by a signal or `POST
+    /// /slopmax/shutdown`. Background loops and event streams end on it.
+    pub stop: CancellationToken,
+    /// The background work the daemon waits for when it stops.
+    pub tasks: TaskTracker,
     /// Held while redeeming a reset credit, so concurrent requests that
     /// all find the pool spent redeem one credit, not one each.
     pub redeeming: tokio::sync::Mutex<()>,
@@ -76,6 +84,8 @@ pub struct App {
     warmed: Mutex<HashMap<String, Instant>>,
     /// config.toml as last read, to tell when it changes.
     config_text: Mutex<Option<String>>,
+    /// The account files and pins as last read, to tell when they change.
+    seen: Mutex<Option<u64>>,
 }
 
 impl App {
@@ -89,7 +99,7 @@ impl App {
             .rev()
             .find(|e| e.provider == ProviderId::Codex)
             .and_then(|e| e.model);
-        let ledger = Ledger::start(home.usage());
+        let ledger = Ledger::at(home.usage());
         let config_text = std::fs::read_to_string(home.config()).ok();
         let http = Client::builder()
             .connect_timeout(Duration::from_secs(10))
@@ -109,7 +119,8 @@ impl App {
             pool,
             http,
             auth_http: crate::auth::http_client(origins),
-            shutdown: tokio::sync::Notify::new(),
+            stop: CancellationToken::new(),
+            tasks: TaskTracker::new(),
             redeeming: tokio::sync::Mutex::new(()),
             ledger,
             replay: Default::default(),
@@ -119,7 +130,16 @@ impl App {
             codex_model: Mutex::new(codex_model),
             warmed: Default::default(),
             config_text: Mutex::new(config_text),
+            seen: Mutex::default(),
         })
+    }
+
+    /// Runs `task` in the background, as work the daemon finishes before it
+    /// stops.
+    pub fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) {
+        // Boxed, so every caller shares one copy of the task machinery.
+        let task: BoxedTask = Box::pin(task);
+        self.tasks.spawn(task);
     }
 
     /// The config as it stands.
@@ -167,22 +187,63 @@ impl App {
     /// Reloads accounts and pins from disk, picking up logins, removals,
     /// refreshed tokens, and `slopmax use` from other processes.
     pub fn sync(&self) -> Result<()> {
+        let seen = self.fingerprint();
         let accounts = self.store.list()?;
         let pins: Pins = fsx::read_json(&self.home.pins())?.unwrap_or_default();
         self.pool.sync(accounts, pins);
+        *self.seen.lock().unwrap_or_else(|p| p.into_inner()) = seen;
         Ok(())
     }
 
+    /// Reloads accounts and pins if a file changed since they were last
+    /// read, which costs a directory listing and a stat per file otherwise.
+    pub fn rescan(&self) -> Result<()> {
+        let now = self.fingerprint();
+        if now.is_some() && now == *self.seen.lock().unwrap_or_else(|p| p.into_inner()) {
+            return Ok(());
+        }
+        self.sync()
+    }
+
+    /// The names, sizes and modification times of the account files and
+    /// pins, hashed: what changes when another process writes one.
+    fn fingerprint(&self) -> Option<u64> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::hash::DefaultHasher::new();
+        let stat = |path: &std::path::Path, hasher: &mut std::hash::DefaultHasher| {
+            match std::fs::metadata(path) {
+                Ok(meta) => (meta.len(), meta.modified().ok()).hash(hasher),
+                Err(_) => 0u8.hash(hasher),
+            }
+        };
+        stat(&self.home.pins(), &mut hasher);
+        let mut names: Vec<_> = match std::fs::read_dir(self.store.dir()) {
+            Ok(listing) => listing.filter_map(|e| e.ok()).map(|e| e.path()).collect(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(_) => return None,
+        };
+        names.sort();
+        for path in names
+            .iter()
+            .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        {
+            path.hash(&mut hasher);
+            stat(path, &mut hasher);
+        }
+        Some(hasher.finish())
+    }
+
     /// The account with current credentials, or `None` if it cannot be used.
+    /// The pool's copy is current: refreshes here put their tokens back into
+    /// it, and changes from other processes arrive with [`App::sync`], so a
+    /// request reads no files unless its token is due.
     pub async fn ready(&self, picked: &Account) -> Option<Account> {
         let account = self
-            .store
-            .get(&picked.id)
-            .ok()
-            .flatten()
+            .pool
+            .account(&picked.id)
             .unwrap_or_else(|| picked.clone());
-        // Another process may have found its sign-in revoked since the pool
-        // last read the disk; trying it would cost a refusal and a refresh.
+        // Another process may have found its sign-in revoked; trying it
+        // would cost a refusal and a refresh.
         if let Some(error) = &account.auth_error {
             self.pool.record_error(&account.id, error);
             return None;
@@ -193,16 +254,40 @@ impl App {
             return Some(account);
         }
         match auth::ensure_fresh(&self.auth_http, &self.store, &account, false).await {
-            Ok(fresh) => Some(fresh),
+            Ok(fresh) => {
+                self.adopt(&account, &fresh);
+                Some(fresh)
+            }
             Err(RefreshError::Transient(e)) if !account.tokens.is_expired(Timestamp::now()) => {
                 log::warn!("{}: refresh failed, using current token: {e:#}", account.id);
                 Some(account)
             }
             Err(e) => {
                 log::warn!("{}: {e}", account.id);
-                self.pool.record_error(&account.id, &e.to_string());
+                self.refresh_failed(&account, &e);
                 None
             }
+        }
+    }
+
+    /// Records a failed refresh. A revoked sign-in is marked on the pool's
+    /// copy too, as the refresh marked the stored one, so no request tries
+    /// it again.
+    pub fn refresh_failed(&self, account: &Account, error: &RefreshError) {
+        self.pool.record_error(&account.id, &error.to_string());
+        if let RefreshError::Revoked(reason) = error {
+            let mut revoked = account.clone();
+            revoked.auth_error = Some(reason.clone());
+            self.pool.put(&revoked);
+        }
+    }
+
+    /// Keeps the tokens of a refreshed account for the requests after it.
+    pub fn adopt(&self, held: &Account, fresh: &Account) {
+        if fresh.tokens.access_token != held.tokens.access_token
+            || fresh.auth_error != held.auth_error
+        {
+            self.pool.put(fresh);
         }
     }
 
@@ -226,9 +311,10 @@ impl App {
             .clone()
     }
 
-    /// Tells the dashboard's live feed about an answered request, and
-    /// remembers the model of a Codex one.
-    pub(crate) fn broadcast(&self, entry: &crate::ledger::Entry) {
+    /// Writes a finished request to the usage ledger, tells the dashboard's
+    /// live feed about it, and remembers the model of a Codex one.
+    pub(crate) fn record(&self, entry: &crate::ledger::Entry) {
+        self.ledger.record(entry);
         if entry.provider == ProviderId::Codex
             && let Some(model) = &entry.model
         {

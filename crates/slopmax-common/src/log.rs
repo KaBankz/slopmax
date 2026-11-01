@@ -5,7 +5,7 @@
 //! Filters in the `slopmax=debug` form that earlier versions documented are
 //! read too.
 
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::io::{IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
@@ -90,7 +90,12 @@ pub fn write(level: Level, args: fmt::Arguments<'_>) {
     } else {
         level.label().to_owned()
     };
-    let _ = writeln!(std::io::stderr().lock(), "{time} {label} {args}");
+    // Formatted whole, then written in one call: stderr is unbuffered, and
+    // each piece would be a write of its own, interleaving with other
+    // threads' lines in the log file.
+    let mut line = String::with_capacity(128);
+    let _ = writeln!(line, "{time} {label} {args}");
+    let _ = std::io::stderr().lock().write_all(line.as_bytes());
 }
 
 #[doc(hidden)]

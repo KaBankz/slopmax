@@ -355,6 +355,22 @@ impl Pool {
         self.lock().accounts.clone()
     }
 
+    /// The account as the pool holds it: its tokens as last refreshed here
+    /// or read from the disk.
+    pub fn account(&self, id: &str) -> Option<Account> {
+        self.lock().accounts.iter().find(|a| a.id == id).cloned()
+    }
+
+    /// Puts a refreshed copy of an account in place of the one held, so the
+    /// next request uses its new tokens without reading the disk. An account
+    /// removed meanwhile stays removed.
+    pub fn put(&self, account: &Account) {
+        let mut inner = self.lock();
+        if let Some(held) = inner.accounts.iter_mut().find(|a| a.id == account.id) {
+            held.clone_from(account);
+        }
+    }
+
     pub fn pins(&self) -> Pins {
         self.lock().pins.clone()
     }

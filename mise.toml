@@ -13,6 +13,8 @@ run = [
   "cargo fmt --all --check",
   "cargo clippy --all-targets --all-features --locked -- -D warnings",
   "cargo test --locked",
+  # Day boundaries across a daylight saving change, in a zone that has one.
+  "TZ=America/New_York cargo test --locked -p slopmax-common local_midnight",
 ]
 
 [tasks.msrv]
@@ -21,7 +23,7 @@ tools = { rust = "1.89" }
 run = "cargo check --all-targets --all-features --locked"
 
 [tasks.budget]
-description = "Hold the binary's dependencies to 70 crates and the binary to 6 MB"
+description = "Hold the binary's dependencies to 70 crates and the binary to 6.6 MB"
 run = '''
 host=$(rustc -vV | sed -n 's/host: //p')
 # Third-party crates only: slopmax's own (path) crates are left out.
@@ -31,8 +33,10 @@ echo "$count crates for $host (budget 70)"
 [ "$count" -le 70 ] || { printf '%s\n' "$crates"; exit 1; }
 cargo build --release --locked -p slopmax
 bytes=$(wc -c < target/release/slopmax | tr -d ' ')
-echo "$bytes bytes (budget 6291456)"
-[ "$bytes" -le 6291456 ]
+# 6.6 MB: v0.3.0 measured 6.52 MB. Raising it needs the reason in the
+# commit (ARCHITECTURE-NEXT.md gives each phase's budget).
+echo "$bytes bytes (budget 6600000)"
+[ "$bytes" -le 6600000 ]
 '''
 
 [tasks.bench]

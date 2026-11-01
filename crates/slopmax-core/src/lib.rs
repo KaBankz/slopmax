@@ -10,6 +10,7 @@ pub mod account;
 pub mod agent;
 pub mod auth;
 pub mod background;
+pub mod blocking;
 pub mod config;
 pub mod daemon;
 pub mod doctor;

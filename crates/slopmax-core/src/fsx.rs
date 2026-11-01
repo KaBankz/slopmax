@@ -3,6 +3,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -10,23 +11,41 @@ use serde::de::DeserializeOwned;
 /// Atomically replaces `path` with `data`, readable only by the owner.
 ///
 /// Writes to a sibling temp file, syncs it, then renames over the target so
-/// readers never observe a partially written file.
+/// readers never observe a partially written file, and syncs the directory
+/// so the rename outlasts a crash. Each write has a temp file of its own, so
+/// writers in one process never share one.
 pub fn write_private(path: &Path, data: &[u8]) -> io::Result<()> {
+    static WRITES: AtomicU64 = AtomicU64::new(0);
     let dir = path.parent().unwrap_or(Path::new("."));
     private_dir(dir)?;
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
-    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    let n = WRITES.fetch_add(1, Ordering::Relaxed);
+    let tmp = dir.join(format!(".{name}.{}.{n}.tmp", std::process::id()));
 
     let mut file = private_options().open(&tmp)?;
     let result = file.write_all(data).and_then(|()| file.sync_all());
     drop(file);
     match result.and_then(|()| fs::rename(&tmp, path)) {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            sync_dir(dir);
+            Ok(())
+        }
         Err(err) => {
             let _ = fs::remove_file(&tmp);
             Err(err)
         }
     }
+}
+
+/// Flushes a directory's entries to the disk. Windows has no such call;
+/// there the rename is as durable as the file system makes it.
+fn sync_dir(dir: &Path) {
+    #[cfg(unix)]
+    if let Ok(dir) = File::open(dir) {
+        let _ = dir.sync_all();
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
 }
 
 /// Serializes `value` as pretty JSON and writes it with [`write_private`].
@@ -123,5 +142,25 @@ mod tests {
     fn read_json_missing_file_is_none() {
         let missing = std::env::temp_dir().join("slopmax-definitely-missing.json");
         assert!(read_json::<serde_json::Value>(&missing).unwrap().is_none());
+    }
+
+    #[test]
+    fn concurrent_writes_leave_one_whole_file() {
+        let dir = std::env::temp_dir().join(format!("slopmax-fsx-{}", crate::ids::token()));
+        let path = dir.join("state.json");
+        std::thread::scope(|scope| {
+            for n in 0..16 {
+                let path = &path;
+                scope.spawn(move || {
+                    let value = serde_json::json!({ "writer": n, "pad": "x".repeat(4096) });
+                    write_json(path, &value).unwrap();
+                });
+            }
+        });
+        let value: serde_json::Value = read_json(&path).unwrap().unwrap();
+        assert!(value["writer"].is_u64());
+        let left: Vec<_> = fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).collect();
+        assert_eq!(left.len(), 1, "temp files left behind: {left:?}");
+        fs::remove_dir_all(dir).unwrap();
     }
 }

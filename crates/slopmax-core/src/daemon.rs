@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use tokio::net::TcpListener;
 
 use crate::account::Account;
@@ -17,7 +17,7 @@ use crate::pool::State;
 use crate::provider::credits::Outcome;
 use crate::proxy::{self, App};
 use crate::time::{SignedDuration, Timestamp};
-use crate::{fsx, notify, usage};
+use crate::{blocking, fsx, notify, usage};
 
 /// How often blocked accounts are re-checked, in case quota frees up early.
 const RECHECK_BLOCKED: SignedDuration = SignedDuration::from_mins(10);
@@ -37,13 +37,46 @@ const LIST_CREDITS_GAP: SignedDuration = SignedDuration::from_mins(10);
 /// How often account conditions are compared for notifications.
 const WATCH_EVERY: Duration = Duration::from_secs(15);
 
+/// The runtime every command runs on: one thread unless `SLOPMAX_WORKERS`
+/// asks for more. One thread carries a desktop's agents with room to spare,
+/// and it hands no work between threads and holds the least memory. A
+/// proxy shared by many clients sets `SLOPMAX_WORKERS` to a number of
+/// threads, or to `auto` for one per CPU; blocking work (the disk, name
+/// lookups) runs on threads of its own either way.
+pub fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    let workers = std::env::var("SLOPMAX_WORKERS").ok();
+    let mut builder = match workers.as_deref().map(str::trim) {
+        Some("auto") => tokio::runtime::Builder::new_multi_thread(),
+        Some(n) => match n.parse::<usize>() {
+            Ok(n) if n > 1 => {
+                let mut builder = tokio::runtime::Builder::new_multi_thread();
+                builder.worker_threads(n);
+                builder
+            }
+            _ => tokio::runtime::Builder::new_current_thread(),
+        },
+        None => tokio::runtime::Builder::new_current_thread(),
+    };
+    builder.enable_all().build()
+}
+
 pub async fn run(config: Config) -> Result<()> {
     serve(config, Home::current(), Origins::default()).await
 }
 
+/// How long the daemon waits, when it stops, for background work in
+/// flight: a usage poll, a refresh whose new token must be saved.
+const SETTLE: Duration = Duration::from_secs(5);
+
 /// Runs the proxy from `home`, sending provider traffic to `origins`
 /// (benchmarks point them at a local mock).
+///
+/// Stopping runs in order: the listener stops taking connections and
+/// drains the ones open, background loops end and the work they started
+/// finishes, refreshes in flight save their tokens, and state is saved
+/// last, by the only writer left.
 pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<()> {
+    let serving = serve_lock(&home)?;
     let listen = config.listen;
     let listener = TcpListener::bind(listen).await.with_context(|| {
         match server::port_holder(listen.port()) {
@@ -51,30 +84,28 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<()> {
             None => format!("cannot listen on {listen}"),
         }
     })?;
-    let state: State = fsx::read_json(&home.state())?.unwrap_or_default();
+    let state = read_state(&home);
     let app = App::new(config, home, state, origins);
     app.sync()?;
 
-    tokio::spawn(every(
-        Duration::from_secs(2),
-        app.clone(),
-        |app| async move {
-            if let Err(e) = app.sync() {
-                log::warn!("reloading accounts: {e:#}");
-            }
-            app.reload_config();
-        },
-    ));
-    tokio::spawn(every(
+    // Logins, removals and `slopmax use` from the CLI and the apps are told
+    // to the daemon at once (`/slopmax/sync`); this catches the rest.
+    app.spawn(every(RESCAN, app.clone(), |app| async move {
+        if let Err(e) = app.rescan() {
+            log::warn!("reloading accounts: {e:#}");
+        }
+        app.reload_config();
+    }));
+    app.spawn(every(
         Duration::from_secs(10),
         app.clone(),
         |app| async move {
-            save_state(&app);
+            blocking::run(move || save_state(&app)).await;
         },
     ));
     // Each task asks the config as it runs, so a changed config.toml turns
     // it on or off without a restart.
-    tokio::spawn(every(
+    app.spawn(every(
         Duration::from_secs(300),
         app.clone(),
         |app| async move {
@@ -83,14 +114,14 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<()> {
             }
         },
     ));
-    tokio::spawn(every(
+    app.spawn(every(
         Duration::from_secs(60),
         app.clone(),
         |app| async move {
             list_credits(&app, false).await;
         },
     ));
-    tokio::spawn(every(
+    app.spawn(every(
         Duration::from_secs(1800),
         app.clone(),
         |app| async move {
@@ -99,7 +130,7 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<()> {
             }
         },
     ));
-    tokio::spawn(every(
+    app.spawn(every(
         Duration::from_secs(60),
         app.clone(),
         |app| async move {
@@ -108,8 +139,8 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<()> {
             }
         },
     ));
-    tokio::spawn(watch(app.clone()));
-    tokio::spawn(every(
+    app.spawn(watch(app.clone()));
+    app.spawn(every(
         Duration::from_secs(60),
         app.clone(),
         |app| async move {
@@ -129,22 +160,110 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<()> {
         move |request| proxy::handle(Arc::clone(&app), request)
     };
     server::serve(listener, handler, shutdown(app.clone())).await;
+    app.tasks.close();
+    if tokio::time::timeout(SETTLE, app.tasks.wait())
+        .await
+        .is_err()
+    {
+        log::warn!("stopping without waiting longer for background work");
+    }
+    auth::settle(SETTLE).await;
     save_state(&app);
+    app.ledger.sync();
+    drop(serving);
     log::info!("stopped");
     Ok(())
 }
 
-/// Runs `task` now and then every `period`.
+/// How often the account files are checked for changes the daemon was not
+/// told about.
+const RESCAN: Duration = Duration::from_secs(30);
+
+/// Takes the home's serve lock, held while the daemon runs, so a second
+/// daemon on the same home fails to start instead of racing the first for
+/// its files.
+fn serve_lock(home: &Home) -> Result<std::fs::File> {
+    use std::io::{Read, Seek, Write};
+    let path = home.dir().join(".serve.lock");
+    fsx::private_dir(home.dir())?;
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    match file.try_lock() {
+        Ok(()) => {
+            file.set_len(0)?;
+            write!(file, "{}", std::process::id())?;
+            Ok(file)
+        }
+        Err(std::fs::TryLockError::WouldBlock) => {
+            let mut pid = String::new();
+            let _ = file.rewind().and_then(|()| file.read_to_string(&mut pid));
+            let holder = match pid.trim() {
+                "" => String::new(),
+                pid => format!(" (pid {pid})"),
+            };
+            bail!(
+                "another slopmax{holder} is already serving {}",
+                home.dir().display()
+            )
+        }
+        Err(std::fs::TryLockError::Error(e)) => {
+            Err(e).with_context(|| format!("locking {}", path.display()))
+        }
+    }
+}
+
+/// The state saved at the last stop. One that cannot be read is moved
+/// aside, and the daemon starts without it: health and readings come back
+/// with the next requests and polls, while a daemon that refused to start
+/// would stop every agent.
+fn read_state(home: &Home) -> State {
+    let path = home.state();
+    match fsx::read_json(&path) {
+        Ok(state) => state.unwrap_or_default(),
+        Err(e) => {
+            let at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            let aside = path.with_file_name(format!("state.json.bad-{at}"));
+            match std::fs::rename(&path, &aside) {
+                Ok(()) => log::warn!(
+                    "state.json could not be read ({e}); moved it to {} and started afresh",
+                    aside.display()
+                ),
+                Err(moving) => log::warn!(
+                    "state.json could not be read ({e}) or moved aside ({moving}); started afresh"
+                ),
+            }
+            State::default()
+        }
+    }
+}
+
+/// Runs `task` now and then every `period` after each run, until the daemon
+/// stops. A run that panics is logged, and the schedule goes on.
 async fn every<F, Fut>(period: Duration, app: Arc<App>, task: F)
 where
     F: Fn(Arc<App>) -> Fut,
-    Fut: Future<Output = ()>,
+    Fut: Future<Output = ()> + Send + 'static,
 {
     let mut ticker = tokio::time::interval(period);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
-        ticker.tick().await;
-        task(app.clone()).await;
+        tokio::select! {
+            _ = ticker.tick() => {}
+            () = app.stop.cancelled() => return,
+        }
+        let run: proxy::BoxedTask = Box::pin(task(app.clone()));
+        if let Err(e) = tokio::spawn(run).await
+            && e.is_panic()
+        {
+            log::error!("a background task failed; it runs again on schedule: {e}");
+        }
     }
 }
 
@@ -167,8 +286,9 @@ async fn shutdown(app: Arc<App>) {
     tokio::select! {
         () = ctrl_c => {},
         () = terminate => {},
-        () = app.shutdown.notified() => {},
+        () = app.stop.cancelled() => {},
     }
+    app.stop.cancel();
 }
 
 /// Sends a notification for each change in the accounts' conditions.
@@ -180,7 +300,10 @@ async fn watch(app: Arc<App>) {
     let mut ticker = tokio::time::interval(WATCH_EVERY);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
-        ticker.tick().await;
+        tokio::select! {
+            _ = ticker.tick() => {}
+            () = app.stop.cancelled() => return,
+        }
         let now = Timestamp::now();
         let accounts = app.pool.accounts();
         let mut events = watcher.changes(&accounts, |id| app.pool.state(id), now);
@@ -257,9 +380,12 @@ async fn refresh_all(app: &App) {
         if account.auth_error.is_some() {
             continue;
         }
-        if let Err(e) = auth::ensure_fresh(&app.auth_http, &app.store, &account, false).await {
-            log::warn!("{}: {e}", account.id);
-            app.pool.record_error(&account.id, &e.to_string());
+        match auth::ensure_fresh(&app.auth_http, &app.store, &account, false).await {
+            Ok(fresh) => app.adopt(&account, &fresh),
+            Err(e) => {
+                log::warn!("{}: {e}", account.id);
+                app.refresh_failed(&account, &e);
+            }
         }
     }
 }
@@ -294,19 +420,26 @@ pub async fn poll_one(app: &App, account: &Account) {
     .await;
     match result {
         Ok((fresh, reading)) => {
+            app.adopt(account, &fresh);
             app.pool
                 .observe(&account.id, reading.limits, Timestamp::now());
             if reading.plan.is_some() && reading.plan != fresh.plan {
                 let (store, id, plan) = (app.store.clone(), fresh.id.clone(), reading.plan);
-                let saved =
-                    tokio::task::spawn_blocking(move || store.update(&id, |a| a.plan = plan)).await;
-                if let Ok(Err(e)) = saved {
+                let saved = blocking::run(move || store.update(&id, |a| a.plan = plan)).await;
+                if let Err(e) = saved {
                     log::warn!("{}: saving plan: {e:#}", fresh.id);
                 }
             }
         }
         Err(e) => {
             log::warn!("{}: usage poll failed: {e:#}", account.id);
+            // A refresh during the poll may have found the sign-in revoked,
+            // and marked the stored copy.
+            if let Ok(Some(stored)) = app.store.get(&account.id)
+                && stored.auth_error.is_some()
+            {
+                app.pool.put(&stored);
+            }
             app.pool
                 .record_error(&account.id, &format!("usage poll: {e:#}"));
         }

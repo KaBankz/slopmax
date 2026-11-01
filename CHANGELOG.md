@@ -22,6 +22,9 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ### Changed
 
+- The proxy runs on one thread, which carries a desktop's agents with room to spare, adds less to each request, and holds less memory. `SLOPMAX_WORKERS` spreads it over more threads (`auto` for one per CPU, which the Docker image sets) for a proxy shared by many clients.
+- The proxy serves requests from the accounts it holds in memory, and no longer reads an account's file for each one. It learns of changes when told (`POST /slopmax/sync`, which the CLI now sends after each change to accounts or pins) and checks the files for any it was not told of every 30 seconds, instead of reading every account every 2 seconds.
+- A usage record is written to the ledger as the request ends, in one write to the month file the proxy keeps open, instead of by a background writer.
 - Reset credits are now called limit resets, as claude.ai calls Claude's; on Claude, credits are money.
 - The dashboard counts an account's limit resets as listed, and offers Redeem on any account that holds one, not just ChatGPT's.
 - The source is a Cargo workspace: the `slopmax` CLI on top of `slopmax-core`, the engine it shares with the coming desktop app, and three small libraries beneath. Installing from source now names the package: `cargo install --locked --git https://github.com/KaBankz/slopmax slopmax`.
@@ -31,6 +34,16 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ### Fixed
 
+- The last usage records could be lost when the proxy stopped. Stopping now runs in order: open requests finish, background work in flight finishes, a token refresh in flight saves what it got, state is saved, and the ledger is flushed to disk.
+- A refreshed token is saved before slopmax asks the provider who the account is, so a lookup that hangs or fails can no longer lose a token whose predecessor is already spent.
+- A second `slopmax serve` on the same home refuses to start, naming the process that serves it, instead of racing the first for its files.
+- An unreadable `state.json` no longer stops the proxy from starting: it is moved aside as `state.json.bad-<time>` and the proxy starts without it.
+- Stopping the proxy no longer waits 10 seconds while a dashboard follows its events.
+- The `7d` and `30d` usage ranges start at the first day's own midnight when they span a daylight saving change, instead of an hour off.
+- A `Retry-After` days or years away no longer sidelines an account for good: a week is the longest wait taken, and one that is not a number or a date is ignored.
+- Changing an account from the dashboard no longer holds up requests while a token refresh holds the account's lock, and reading usage no longer holds them up while the ledger is read.
+- Two writes of the same file at once within one process no longer share a temporary file, and a replaced file's directory is synced so the replacement outlasts a crash.
+- A log line is written whole, in one write, instead of in pieces that another thread's line could split.
 - When several slopmax processes started at once on a fresh home, each could write its own `api_key`, leaving a proxy with a key no client had.
 - A request no longer tries an account whose sign-in another process found revoked, before the proxy reloads its accounts.
 - A browser sign-in that could neither receive the callback nor read a pasted address now fails at once instead of waiting 10 minutes.

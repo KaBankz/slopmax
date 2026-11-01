@@ -531,3 +531,37 @@ async fn claude_paths_refuse_other_clients_before_routing() {
     assert!(body.contains("this request came from curl/8.7.1"), "{body}");
     assert!(h.seen("/v1/messages/count_tokens").is_empty());
 }
+
+#[tokio::test]
+async fn a_sign_in_another_process_found_revoked_is_neither_refreshed_nor_tried() {
+    let h = harness(
+        |_| {
+            let mut due = oauth(ProviderId::Claude, "a", "tok-due", "refresh-good", 1000);
+            due.tokens.expires_at = Some(Timestamp::now() + SignedDuration::from_secs(30));
+            vec![
+                due,
+                oauth(ProviderId::Claude, "b", "tok-ok", "refresh-b", 1001),
+            ]
+        },
+        true,
+    )
+    .await;
+    // Another process's refresh was refused, and it marked the stored copy;
+    // this proxy was not told and holds the account as it was.
+    h.app
+        .store
+        .update(&h.ids[0], |a| {
+            a.auth_error = Some("refresh token revoked".into())
+        })
+        .unwrap();
+    let (status, body) = claude_code(&h).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(h.seen("/v1/oauth/token").is_empty(), "no refresh was sent");
+    let tried: Vec<String> = h
+        .seen("/v1/messages")
+        .into_iter()
+        .map(|s| s.authorization)
+        .collect();
+    assert_eq!(tried, ["Bearer tok-ok"]);
+    assert!(h.app.pool.account(&h.ids[0]).unwrap().auth_error.is_some());
+}

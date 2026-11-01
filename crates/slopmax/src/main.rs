@@ -16,16 +16,21 @@ use slopmax_core::log::{self, Level};
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
     // The proxy reports each request; other commands only warn.
     log::init(if std::env::args().nth(1).as_deref() == Some("serve") {
         Level::Info
     } else {
         Level::Warn
     });
-
-    match commands::run(std::env::args().skip(1)).await {
+    let runtime = match slopmax_core::daemon::runtime() {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            eprintln!("{} starting: {e}", ui::red("error:"));
+            return ExitCode::FAILURE;
+        }
+    };
+    match runtime.block_on(commands::run(std::env::args().skip(1))) {
         Ok(code) => ExitCode::from(code.clamp(0, 255) as u8),
         Err(e) => {
             eprintln!("{} {e:#}", ui::red("error:"));

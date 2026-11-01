@@ -121,7 +121,6 @@ async fn warm(app: &App, account: &Account, model: &str) -> Result<(), String> {
         agent: Some("slopmax".to_owned()),
         session: None,
     };
-    app.broadcast(&entry);
-    app.ledger.record(entry);
+    app.record(&entry);
     Ok(())
 }

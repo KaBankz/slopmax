@@ -24,5 +24,6 @@ Then, with `<bin>` being `$B`:
 | `compare.sh <repo> <bin> <out> [rounds] [seconds]` | Both proxies and the Bun raw probe behind one mock (the Rust rig's), the same oha loads interleaved per round, CPU per request from `/proc`, memory idle and after. `PROXY_CPUS=0` pins the proxies to one CPU; `ONLY=c32` and `TARGETS="rust ts"` narrow the run. |
 | `startup.sh <repo> <bin> <out>` | Binary size and xz size, `--version` and `status --json` (hyperfine, 100 runs), `serve` until `/healthz` (20 runs), the shipped daemon's idle memory. |
 | `desktop.sh rust\|ts <repo> <app> <out>` | One desktop app under Xvfb against its own demo daemon: time to the first visible window, PSS over every process, idle CPU, a screenshot. |
+| `ab.sh <rig a> <rig b> <out> [rounds] [seconds]` | Two Rust bench rigs (two commits) behind one mock, the same loads interleaved, CPU per request, idle memory, threads and wake-ups. The gate for each phase of `ARCHITECTURE-NEXT.md`; `SLOPMAX_WORKERS` passes through to both. |
 | `probe-rust.sh <rust bench rig>` | strace syscall counts for 1000 sequential requests through the Rust proxy. |
 | `loc.py <repo>` | Code lines (not blank, not comment) per component, product and tests apart. |

@@ -6407,6 +6407,7 @@ dependencies = [
  "slopmax-net",
  "slopmax-wire",
  "tokio",
+ "tokio-util",
  "toml_edit 0.25.15+spec-1.1.0",
 ]
 
@@ -7079,6 +7080,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "libc",
  "pin-project-lite",
  "tokio",

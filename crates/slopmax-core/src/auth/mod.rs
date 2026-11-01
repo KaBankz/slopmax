@@ -234,25 +234,47 @@ pub async fn ensure_fresh(
         return follow(store, account, force).await;
     }
     let (http, store, stale) = (http.clone(), store.clone(), account.clone());
-    let task = tokio::spawn(async move {
-        let id = stale.id.clone();
-        let lock_store = store.clone();
-        let _lock = tokio::task::spawn_blocking(move || lock_store.lock(&id))
-            .await
-            .map_err(|e| RefreshError::Transient(e.into()))?
-            .map_err(RefreshError::Transient)?;
-
-        let current = store
-            .get(&stale.id)
-            .map_err(RefreshError::Transient)?
-            .unwrap_or(stale.clone());
+    let task = REFRESHES.spawn(async move {
+        // The stored copy is read under the lock, which waits for a refresh
+        // in another process: both on a blocking thread.
+        let (locking, id) = (store.clone(), stale.id.clone());
+        let (_lock, stored) = crate::blocking::run(move || {
+            let lock = locking.lock(&id)?;
+            anyhow::Ok((lock, locking.get(&id)?))
+        })
+        .await
+        .map_err(RefreshError::Transient)?;
+        let current = stored.unwrap_or(stale.clone());
         let rotated_elsewhere = current.tokens.access_token != stale.tokens.access_token;
+        // Another process found this sign-in revoked since the caller read
+        // it: refreshing it again would only be refused again. (A caller
+        // that knows of the failure may retry it.)
+        if !rotated_elsewhere
+            && stale.auth_error.is_none()
+            && let Some(reason) = &current.auth_error
+        {
+            return Err(RefreshError::Revoked(reason.clone()));
+        }
         if rotated_elsewhere || !due(&current) {
             return Ok(current);
         }
         refresh_and_save(&http, &store, current).await
     });
     task.await.map_err(|e| RefreshError::Transient(e.into()))?
+}
+
+/// Refreshes in flight, which a stopping daemon waits for: one that sent a
+/// single-use refresh token must save what came back.
+static REFRESHES: std::sync::LazyLock<tokio_util::task::TaskTracker> =
+    std::sync::LazyLock::new(tokio_util::task::TaskTracker::new);
+
+/// Waits up to `limit` for the refreshes in flight to save their tokens.
+pub async fn settle(limit: std::time::Duration) {
+    REFRESHES.close();
+    if tokio::time::timeout(limit, REFRESHES.wait()).await.is_err() {
+        log::warn!("stopping while a token refresh is still running");
+    }
+    REFRESHES.reopen();
 }
 
 /// For a linked account: adopts the tokens its source tool rotated, since
@@ -263,7 +285,7 @@ async fn follow(store: &Store, account: &Account, force: bool) -> Result<Account
         .clone()
         .expect("only linked accounts are followed");
     let (store, id) = (store.clone(), account.id.clone());
-    let followed = tokio::task::spawn_blocking(move || -> Result<Option<Account>> {
+    let followed = crate::blocking::run(move || -> Result<Option<Account>> {
         let tokens = import::linked_tokens(&link)?;
         let _lock = store.lock(&id)?;
         let Some(mut current) = store.get(&id)? else {
@@ -278,7 +300,6 @@ async fn follow(store: &Store, account: &Account, force: bool) -> Result<Account
         Ok(Some(current))
     })
     .await
-    .map_err(|e| RefreshError::Transient(e.into()))?
     .map_err(RefreshError::Transient)?;
     let current = followed.unwrap_or_else(|| account.clone());
     let rotated = current.tokens.access_token != account.tokens.access_token;
@@ -308,7 +329,7 @@ async fn refresh_and_save(
         Err(err) => {
             if let RefreshError::Revoked(reason) = &err {
                 account.auth_error = Some(reason.clone());
-                let _ = store.save(&account);
+                let _ = save(store, &account).await;
             }
             return Err(err);
         }
@@ -322,12 +343,25 @@ async fn refresh_and_save(
     account.tokens = tokens;
     account.auth_error = None;
 
-    provider.identify(http, &mut account).await;
-    // Persist before anyone uses the new token: the old refresh token is dead.
-    if let Err(e) = store.save(&account) {
+    // Saved before anything else, reading who it is included, can hang or
+    // fail: the old refresh token is dead.
+    if let Err(e) = save(store, &account).await {
         log::error!("refreshed {} but could not save it: {e:#}", account.id);
     }
+    let before = serde_json::to_vec(&account).ok();
+    provider.identify(http, &mut account).await;
+    if serde_json::to_vec(&account).ok() != before
+        && let Err(e) = save(store, &account).await
+    {
+        log::warn!("{}: saving who it is: {e:#}", account.id);
+    }
     Ok(account)
+}
+
+/// Saves an account on a blocking thread, off the runtime's.
+async fn save(store: &Store, account: &Account) -> Result<()> {
+    let (store, account) = (store.clone(), account.clone());
+    crate::blocking::run(move || store.save(&account)).await
 }
 
 #[cfg(test)]
@@ -448,6 +482,44 @@ mod tests {
             _ => testkit::reply(404, ""),
         })
         .await
+    }
+
+    #[tokio::test]
+    async fn saves_a_refreshed_token_before_asking_who_it_is() {
+        let mock = anthropic(
+            200,
+            json!({ "access_token": "new", "refresh_token": "rt2", "expires_in": 28800 }),
+        )
+        .await;
+        // The profile endpoint takes the connection and never answers.
+        let silent = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let silent_url = format!("http://{}", silent.local_addr().unwrap());
+        let held = tokio::spawn(async move {
+            let mut open = Vec::new();
+            while let Ok((stream, _)) = silent.accept().await {
+                open.push(stream);
+            }
+        });
+        let origins = Origins::new([
+            ("https://platform.claude.com", mock.url.as_str()),
+            ("https://api.anthropic.com", silent_url.as_str()),
+        ]);
+        let http = Client::builder().plain_http().origins(origins).build();
+        let store = store();
+        let account = claude_account("old", Some("rt1"), 600);
+        store.save(&account).unwrap();
+
+        // The caller gives up while the profile hangs.
+        let waited = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            ensure_fresh(&http, &store, &account, false),
+        )
+        .await;
+        assert!(waited.is_err(), "the profile lookup should still hang");
+        let saved = store.get(&account.id).unwrap().unwrap();
+        assert_eq!(saved.tokens.access_token, "new");
+        assert_eq!(saved.tokens.refresh_token.as_deref(), Some("rt2"));
+        held.abort();
     }
 
     #[tokio::test]

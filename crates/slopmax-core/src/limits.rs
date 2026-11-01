@@ -358,13 +358,20 @@ pub(crate) fn header_time(headers: &HeaderMap, name: &str) -> Option<Timestamp> 
     Timestamp::from_second(secs as i64)
 }
 
-/// `Retry-After` as seconds or an HTTP date.
+/// The longest wait a `Retry-After` is taken at: longer ones are a
+/// misreading, or would sideline an account for good.
+const RETRY_AFTER_CAP: SignedDuration = SignedDuration::from_hours(24 * 7);
+
+/// `Retry-After` as seconds or an HTTP date, at most a week away. A value
+/// that is not a finite number of seconds or a date is ignored.
 pub fn retry_after(headers: &HeaderMap, now: Timestamp) -> Option<Timestamp> {
     let raw = header(headers, "retry-after")?;
-    if let Ok(secs) = raw.parse::<f64>() {
-        return Some(now + SignedDuration::from_secs_f64(secs.max(0.0)));
-    }
-    Timestamp::from_http_date(raw)
+    let at = match raw.parse::<f64>() {
+        Ok(secs) if secs.is_finite() => now + SignedDuration::from_secs_f64(secs.max(0.0)),
+        Ok(_) => return None,
+        Err(_) => Timestamp::from_http_date(raw)?,
+    };
+    Some(at.min(now + RETRY_AFTER_CAP))
 }
 
 pub(crate) fn parse_time(value: &Value) -> Option<Timestamp> {
@@ -394,6 +401,26 @@ mod tests {
 
     fn ts(secs: i64) -> Timestamp {
         Timestamp::from_second(secs).unwrap()
+    }
+
+    #[test]
+    fn retry_after_reads_seconds_and_dates_and_waits_a_week_at_most() {
+        let now = ts(1_000_000);
+        let after = |value: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert("retry-after", value.parse().unwrap());
+            retry_after(&headers, now)
+        };
+        assert_eq!(after("30"), Some(ts(1_000_030)));
+        assert_eq!(after("-5"), Some(now));
+        assert_eq!(after("Thu, 01 Jan 1970 12:00:00 GMT"), Some(ts(12 * 3_600)));
+        let week = ts(1_000_000 + 7 * 86_400);
+        assert_eq!(after("99999999999"), Some(week));
+        assert_eq!(after("1e300"), Some(week));
+        assert_eq!(after("Fri, 31 Dec 2261 23:59:59 GMT"), Some(week));
+        assert_eq!(after("NaN"), None);
+        assert_eq!(after("inf"), None);
+        assert_eq!(after("soon"), None);
     }
 
     #[test]

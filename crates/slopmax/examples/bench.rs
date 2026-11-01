@@ -39,18 +39,22 @@ const DELTA: &str = "The quick brown fox jumps over the lazy dog, then naps for 
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
+    // The mock answers on every core it is given; the proxy runs on the
+    // runtime slopmax runs on, one thread unless `SLOPMAX_WORKERS` says.
+    let mock = || {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+    };
     match args
         .iter()
         .map(String::as_str)
         .collect::<Vec<_>>()
         .as_slice()
     {
-        ["upstream", listen] => runtime.block_on(upstream(listen.parse()?)),
+        ["upstream", listen] => mock()?.block_on(upstream(listen.parse()?)),
         ["proxy", listen, upstream, home] => {
-            runtime.block_on(proxy(listen.parse()?, upstream, home))
+            slopmax_core::daemon::runtime()?.block_on(proxy(listen.parse()?, upstream, home))
         }
         ["bodies", dir] => bodies(Path::new(dir)),
         _ => bail!(

@@ -382,7 +382,8 @@ fn reset_quota(app: Arc<App>, index: &str) -> Response {
     let models = app.pool.clear_blocks(&account.id);
     let id = account.id.clone();
     if app.config().poll_mins > 0 && account.auth_error.is_none() {
-        tokio::spawn(async move { daemon::poll_one(&app, &account).await });
+        let polling = Arc::clone(&app);
+        app.spawn(async move { daemon::poll_one(&polling, &account).await });
     }
     json_reply(
         StatusCode::OK,

@@ -554,7 +554,7 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
         "disable" => set_disabled(&store, &m.get::<String>("account")?, true)?,
         "remove" => remove(&store, &m.get::<String>("account")?)?,
         "redeem" => redeem(&config, &store, &m.get::<String>("account")?, m.flag("yes")).await?,
-        "serve" => daemon::run(config).await?,
+        "serve" => return daemon::run(config).await.map(|()| 0),
         "start" => start(&config).await?,
         "stop" => stop(&config).await?,
         "service" => service(&config, &m.get::<String>("action")?).await?,
@@ -624,8 +624,18 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
         "completions" => print!("{}", args::completions(&APP, m.get("shell")?)),
         name => unreachable!("`{name}` is in the command table but not dispatched"),
     }
+    // A running daemon picks up the change now, rather than at its next
+    // check of the files.
+    if CHANGES_ACCOUNTS.contains(&m.command.name) {
+        let _ = slopmax_core::background::Daemon::new(&config).sync().await;
+    }
     Ok(0)
 }
+
+/// The commands that change accounts or pins on disk.
+const CHANGES_ACCOUNTS: &[&str] = &[
+    "setup", "login", "import", "own", "use", "label", "priority", "enable", "disable", "remove",
+];
 
 /// The agent named by the `agent` argument.
 /// `slopmax key list|add|remove`.

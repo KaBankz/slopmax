@@ -107,6 +107,10 @@ impl Timestamp {
         let month = parts.next()?;
         let month = MONTHS.iter().position(|m| *m == month)? as u32 + 1;
         let year: i64 = parts.next()?.parse().ok()?;
+        // Within the years a timestamp holds, so no arithmetic overflows.
+        if !(1970..=2261).contains(&year) {
+            return None;
+        }
         let clock = parts.next()?;
         if parts.next()? != "GMT" || parts.next().is_some() {
             return None;
@@ -174,6 +178,25 @@ impl Timestamp {
             second: 0,
         };
         civil.to_timestamp(offset.as_secs(), 0)
+    }
+
+    /// Local midnight starting `(year, month, day)`, at this machine's UTC
+    /// offset on that day: across a daylight saving change, the offset of
+    /// the day itself rather than today's.
+    pub fn local_midnight(year: i64, month: u32, day: u32) -> Option<Self> {
+        let mut at = Self::midnight(year, month, day, SignedDuration::ZERO)?;
+        // The offset at a guess decides the next guess; two settle it, as
+        // offsets change by at most a day.
+        for _ in 0..2 {
+            at = Self::midnight(year, month, day, at.local_offset())?;
+        }
+        Some(at)
+    }
+
+    /// The date `days` after `(year, month, day)`, or before it when
+    /// negative.
+    pub fn add_days((year, month, day): (i64, u32, u32), days: i64) -> (i64, u32, u32) {
+        civil_from_days(days_from_civil(year, month, day) + days)
     }
 
     /// This machine's UTC offset at this instant (daylight saving
@@ -540,6 +563,55 @@ mod tests {
             None
         );
         assert_eq!(Timestamp::from_http_date("120"), None);
+    }
+
+    #[test]
+    fn http_dates_outside_the_years_a_timestamp_holds_are_refused() {
+        assert_eq!(
+            Timestamp::from_http_date("Sun, 06 Nov 99999999999 08:49:37 GMT"),
+            None
+        );
+        assert_eq!(
+            Timestamp::from_http_date("Thu, 01 Jan 1960 00:00:00 GMT"),
+            None
+        );
+        assert!(Timestamp::from_http_date("Fri, 31 Dec 2261 23:59:59 GMT").is_some());
+    }
+
+    #[test]
+    fn dates_step_across_months_years_and_leap_days() {
+        assert_eq!(Timestamp::add_days((2026, 3, 1), -1), (2026, 2, 28));
+        assert_eq!(Timestamp::add_days((2028, 3, 1), -1), (2028, 2, 29));
+        assert_eq!(Timestamp::add_days((2026, 12, 31), 1), (2027, 1, 1));
+        assert_eq!(Timestamp::add_days((2026, 11, 1), -29), (2026, 10, 3));
+    }
+
+    /// Run with `TZ=America/New_York`, which `mise run check` does; skipped
+    /// in any other zone.
+    #[test]
+    fn local_midnight_takes_the_offset_of_its_own_day() {
+        if std::env::var("TZ").as_deref() != Ok("America/New_York") {
+            return;
+        }
+        // Clocks went back at 2:00 on 2026-11-01: summer time (-4) before,
+        // standard time (-5) after.
+        assert_eq!(
+            Timestamp::local_midnight(2026, 11, 1),
+            Some(parse("2026-11-01T04:00:00Z"))
+        );
+        assert_eq!(
+            Timestamp::local_midnight(2026, 11, 2),
+            Some(parse("2026-11-02T05:00:00Z"))
+        );
+        // And forward at 2:00 on 2026-03-08.
+        assert_eq!(
+            Timestamp::local_midnight(2026, 3, 8),
+            Some(parse("2026-03-08T05:00:00Z"))
+        );
+        assert_eq!(
+            Timestamp::local_midnight(2026, 3, 9),
+            Some(parse("2026-03-09T04:00:00Z"))
+        );
     }
 
     #[test]
