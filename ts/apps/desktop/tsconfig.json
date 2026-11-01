@@ -5,6 +5,6 @@
     "rootDir": ".",
     "lib": ["es2024", "dom", "dom.iterable"]
   },
-  "include": ["src"],
-  "references": [{ "path": "../../packages/domain" }]
+  "include": ["src", "test", "build.ts", "package.ts", "shots.ts", "drive.ts"],
+  "references": [{ "path": "../../tools/test" }, { "path": "../../packages/domain" }, { "path": "../ui" }]
 }

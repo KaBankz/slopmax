@@ -16,7 +16,7 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http"
 
 /** What a path slopmax does not serve under `/slopmax/` hears, in the API's error shape. */
 export const notFoundAnswer: HttpServerResponse.HttpServerResponse = HttpServerResponse.jsonUnsafe(
-  Schema.encodeSync(NotFound)(new NotFound({ what: "slopmax endpoint" })),
+  Schema.encodeSync(NotFound)(NotFound.of({ what: "slopmax endpoint" })),
   { status: 404 },
 )
 

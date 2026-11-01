@@ -154,7 +154,7 @@ export const makeStub = (options: StubOptions = {}): Stub => {
 
   const known = (id: string) => {
     const account = find(id)
-    return account === undefined ? Effect.fail(new NotFound({ what: `account ${id}` })) : Effect.succeed(account)
+    return account === undefined ? Effect.fail(NotFound.of({ what: `account ${id}` })) : Effect.succeed(account)
   }
 
   const System = HttpApiBuilder.group(SlopmaxApi, "system", (handlers) =>
@@ -473,7 +473,7 @@ export const makeStub = (options: StubOptions = {}): Stub => {
                 keys = keys.filter((key) => key.name !== params.name)
                 return keys
               })
-            : Effect.fail(new NotFound({ what: `key ${JSON.stringify(params.name)}` })),
+            : Effect.fail(NotFound.of({ what: `key ${JSON.stringify(params.name)}` })),
         ),
       ),
   )

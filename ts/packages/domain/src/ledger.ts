@@ -18,13 +18,17 @@ export class Usage extends Schema.Class<Usage>("Usage")({
   static readonly zero: Usage = Schema.decodeUnknownSync(Usage)({})
 
   plus(that: Usage): Usage {
-    return new Usage({
-      requests: this.requests + that.requests,
-      input: this.input + that.input,
-      output: this.output + that.output,
-      cacheRead: this.cacheRead + that.cacheRead,
-      cacheWrite: this.cacheWrite + that.cacheWrite,
-    })
+    // Sums of counts already checked are whole and never negative: the checks are skipped, as every answer adds one.
+    return new Usage(
+      {
+        requests: this.requests + that.requests,
+        input: this.input + that.input,
+        output: this.output + that.output,
+        cacheRead: this.cacheRead + that.cacheRead,
+        cacheWrite: this.cacheWrite + that.cacheWrite,
+      },
+      { disableChecks: true },
+    )
   }
 
   /** Every token, read from cache or not. */

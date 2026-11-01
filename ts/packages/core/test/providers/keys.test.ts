@@ -112,7 +112,7 @@ describe("API keys", () => {
       }
       // A vendor that cannot answer right now does not stop the sign-in.
       expect((yield* openai.login({ key: Redacted.make("flaky") })).secret).toBe("flaky")
-    }).pipe(Effect.provide(api.layer), Effect.provide(signInServices))
+    }).pipe(Effect.provide(api.layer.pipe(Layer.provideMerge(signInServices))))
   })
 
   it.effect("tolerate outages and open endpoints when checking a key, but not a refusal", () => {
@@ -143,7 +143,7 @@ describe("API keys", () => {
       expect(yield* openai.catalog(keyAccount("openai", "sk-good"), {})).toEqual(["m-1", "m-2"])
       expect(yield* openai.catalog(keyAccount("openai", "flaky"), {})).toEqual([])
       expect((yield* Effect.flip(openai.catalog(keyAccount("openai", "revoked"), {})))._tag).toBe("ProviderFailed")
-    }).pipe(Effect.provide(api.layer), Effect.provide(signInServices))
+    }).pipe(Effect.provide(api.layer.pipe(Layer.provideMerge(signInServices))))
   })
 
   it.effect("have no usage windows, refreshes, or state bound to an account", () =>

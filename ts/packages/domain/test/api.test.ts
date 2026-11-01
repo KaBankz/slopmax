@@ -85,7 +85,7 @@ const Accounts = HttpApiBuilder.group(SlopmaxApi, "accounts", (handlers) =>
     .handle("update", ({ params, payload }) =>
       params.id === account.id
         ? Effect.sync(() => received.push(payload)).pipe(Effect.as(report))
-        : Effect.fail(new NotFound({ what: "account" })),
+        : Effect.fail(NotFound.of({ what: "account" })),
     )
     .handle("pin", () => notReached)
     .handle("unpinAll", () => Effect.succeed(report))
@@ -105,7 +105,7 @@ const Logins = HttpApiBuilder.group(SlopmaxApi, "logins", (handlers) =>
       Effect.sync(() => received.push(payload)).pipe(Effect.as(new LoginStarted({ id: LoginId.make("login-1") }))),
     )
     .handle("paste", () => notReached)
-    .handle("cancel", () => Effect.fail(new NotFound({ what: "sign-in" }))),
+    .handle("cancel", () => Effect.fail(NotFound.of({ what: "sign-in" }))),
 )
 
 const Config = HttpApiBuilder.group(SlopmaxApi, "config", (handlers) =>
@@ -118,7 +118,7 @@ const Config = HttpApiBuilder.group(SlopmaxApi, "config", (handlers) =>
     .handle("makeKey", ({ payload }) =>
       Effect.succeed(new NewKey({ name: payload.name, key: "sm-new", models: payload.models })),
     )
-    .handle("removeKey", ({ params }) => Effect.fail(new NotFound({ what: `key ${JSON.stringify(params.name)}` }))),
+    .handle("removeKey", ({ params }) => Effect.fail(NotFound.of({ what: `key ${JSON.stringify(params.name)}` }))),
 )
 
 const Agents = HttpApiBuilder.group(SlopmaxApi, "agents", (handlers) =>

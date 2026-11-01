@@ -14,7 +14,20 @@
 // roots and Bun's bundled ones, so proxies that intercept TLS keep working.
 import tls from "node:tls"
 import { slopmaxVersion } from "@slopmax/domain"
-import { Config, Context, Data, Duration, Effect, Layer, Option, Result, type Scope, Stream } from "effect"
+import {
+  Clock,
+  Config,
+  Context,
+  Data,
+  Duration,
+  Effect,
+  Latch,
+  Layer,
+  Option,
+  Result,
+  type Scope,
+  Stream,
+} from "effect"
 import { type Dns, NetAddress } from "effect/net"
 import * as BunDns from "@effect/platform-bun/BunDns"
 import { FetchHttpClient, HttpClient, type HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http"
@@ -196,6 +209,30 @@ export const trustedRoots = (): ReadonlyArray<string> => [
   ...new Set([...tls.getCACertificates("system"), ...tls.getCACertificates("bundled")]),
 ]
 
+/** A root's base64 body, so the same certificate read from two stores compares equal however it is wrapped. */
+const pemBody = (pem: string): string => pem.replace(/-----[^-]+-----/g, "").replace(/\s+/g, "")
+
+/**
+ * The roots an inference `fetch` must be handed, or none when Bun's own
+ * trust already covers the system's. Bun builds a TLS context afresh from a
+ * `tls.ca` list on every call (about 1 ms for 260 roots, measured), which
+ * would be most of what the proxy costs per request. On Linux it needs
+ * none: Bun's default context trusts its bundled roots and also verifies
+ * against the system store (OpenSSL's default bundle and hashed directory,
+ * where distributions and corporate proxies install theirs). Elsewhere the
+ * list is passed only when the system trusts a root Bun does not bundle.
+ */
+export const inferenceRoots = (
+  platform: string,
+  system: ReadonlyArray<string>,
+  bundled: ReadonlyArray<string>,
+): ReadonlyArray<string> | undefined => {
+  if (platform === "linux") return undefined
+  const known = new Set(bundled.map(pemBody))
+  const extra = system.filter((root) => !known.has(pemBody(root)))
+  return extra.length === 0 ? undefined : [...bundled, ...extra]
+}
+
 type FetchInit = BunFetchRequestInit
 type FetchFunction = (input: string | URL | Request, init?: FetchInit) => Promise<Response>
 
@@ -293,29 +330,75 @@ interface Route {
   readonly proxy: Option.Option<string>
 }
 
-const build = (route: Route): Effect.Effect<Shape> =>
+/** A send waiting for its answer's headers: when it began (clock milliseconds), and how to end it when the wait runs out. */
+interface Waiting {
+  readonly since: number
+  readonly expire: () => void
+}
+
+const build = (route: Route): Effect.Effect<Shape, never, Scope.Scope> =>
   Effect.gen(function* () {
+    // One watcher ends every send that has waited too long for its headers. A
+    // timeout per request would race two fibers and a timer against each
+    // fetch, which costs more than the rest of sending it. The watcher sleeps
+    // until the earliest send could run out, and while nothing is being sent
+    // it waits for a send rather than a timer, so it never ticks on its own.
+    const clock = yield* Clock.Clock
+    const waiting = new Set<Waiting>()
+    const wait = Duration.toMillis(headersWait)
+    const sending = yield* Latch.make(false)
+    const watch = Effect.gen(function* () {
+      for (;;) {
+        yield* sending.close
+        if (waiting.size === 0) yield* sending.await
+        const now = clock.currentTimeMillisUnsafe()
+        let earliest = Number.POSITIVE_INFINITY
+        for (const entry of waiting) {
+          if (now - entry.since >= wait) entry.expire()
+          else earliest = Math.min(earliest, entry.since + wait)
+        }
+        if (Number.isFinite(earliest)) yield* Effect.sleep(Duration.millis(earliest - now))
+      }
+    })
+    yield* Effect.forkScoped(watch)
+
     const send = (request: UpstreamRequest): Effect.Effect<Response, Unreachable | TimedOut> =>
-      Effect.callback<Response, Unreachable>((resume, signal) => {
+      Effect.callback<Response, Unreachable | TimedOut>((resume) => {
+        const controller = new AbortController()
+        const entry: Waiting = {
+          since: clock.currentTimeMillisUnsafe(),
+          expire: () => {
+            waiting.delete(entry)
+            controller.abort()
+            resume(Effect.fail(new TimedOut({ after: headersWait })))
+          },
+        }
+        waiting.add(entry)
+        if (waiting.size === 1) sending.openUnsafe()
         route
           .fetch(request.url, {
             method: request.method,
             headers: request.headers,
             body: request.body,
-            signal,
+            signal: controller.signal,
             decompress: false,
             redirect: "manual",
           })
           .then(
-            (response) => resume(Effect.succeed(response)),
-            (cause: unknown) => resume(Effect.fail(new Unreachable({ url: request.url, cause }))),
+            (response) => {
+              if (waiting.delete(entry)) resume(Effect.succeed(response))
+              else response.body?.cancel().catch(() => undefined)
+            },
+            (cause: unknown) => {
+              if (waiting.delete(entry)) resume(Effect.fail(new Unreachable({ url: request.url, cause })))
+            },
           )
-      }).pipe(
-        Effect.timeoutOrElse({
-          duration: headersWait,
-          orElse: () => Effect.fail(new TimedOut({ after: headersWait })),
-        }),
-      )
+        // The caller hung up: the request goes with it.
+        return Effect.sync(() => {
+          waiting.delete(entry)
+          controller.abort()
+        })
+      })
 
     const fetchForClient = Object.assign(
       (input: string | URL | Request, init?: RequestInit) => route.fetch(input, init),
@@ -368,7 +451,9 @@ export interface RouteOptions {
 export const networkRoute = (options: RouteOptions): Effect.Effect<Route, SocksFailed, Scope.Scope | Dns.Dns> =>
   Effect.gen(function* () {
     const ca = trustedRoots()
-    const tlsOptions = { ca: [...ca] }
+    const roots = inferenceRoots(process.platform, tls.getCACertificates("system"), tls.getCACertificates("bundled"))
+    // Built once: plain HTTP (a local provider, a test mock) never needs roots, and HTTPS only when Bun's own trust falls short.
+    const tlsOptions: FetchInit["tls"] = roots === undefined ? undefined : { ca: [...roots] }
     let viaProxy: { readonly url: string; readonly headers: Readonly<Record<string, string>> } | undefined
     if (Option.isSome(options.proxy)) {
       const proxy = options.proxy.value
@@ -402,7 +487,11 @@ export const networkRoute = (options: RouteOptions): Effect.Effect<Route, SocksF
     const routed: FetchFunction = (input, init) => {
       const url = rewriteOrigin(urlOf(input), options.origins)
       const target = typeof input === "string" || input instanceof URL ? url : new Request(url, input)
-      return fetch(target, { ...init, proxy: goesDirect(url) ? false : proxyOption, tls: tlsOptions })
+      const proxy = goesDirect(url) ? false : proxyOption
+      return fetch(
+        target,
+        tlsOptions !== undefined && url.startsWith("https:") ? { ...init, proxy, tls: tlsOptions } : { ...init, proxy },
+      )
     }
     return {
       fetch: routed,

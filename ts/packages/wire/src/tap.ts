@@ -10,7 +10,7 @@
 // error, which are a handful per answer.
 import type { Dialect } from "@slopmax/domain"
 import { dataStart, Lines, maxLine, parseJson, parseText } from "./lines.ts"
-import { observers, TapOutcome, type Observer } from "./observe.ts"
+import { observedTypes, observers, TapOutcome, type Observer } from "./observe.ts"
 
 /**
  * How an answer's body is read, from its headers:
@@ -43,6 +43,8 @@ export const maxDocument = 16 * 1024 * 1024
  */
 export class Tap {
   private readonly observe: Observer
+  /** The event types the observer reads, as bytes; undefined when events name no type up front. */
+  private readonly types: ReadonlyArray<Uint8Array> | undefined
   private readonly lines: Lines | undefined
   private outcome = TapOutcome.empty
   private finished: TapOutcome | undefined
@@ -56,6 +58,7 @@ export class Tap {
     readonly shape: TapShape = "events",
   ) {
     this.observe = observers[dialect]
+    this.types = typeBytes[dialect]
     this.lines = shape === "events" ? new Lines(maxLine) : undefined
     this.decoder = shape === "document" ? new TextDecoder() : undefined
   }
@@ -92,13 +95,18 @@ export class Tap {
     return this.finished
   }
 
-  /** Only `data:` lines worth reading can change the outcome, so only they are parsed. */
+  /**
+   * Only `data:` lines worth reading can change the outcome, so only they are
+   * parsed: an event that names its type first is read when the observer
+   * reads that type, and any other when it mentions usage or an error.
+   */
   private readonly line = (bytes: Uint8Array, start: number, end: number): boolean => {
     const data = dataStart(bytes, start, end)
-    if (data >= 0 && worthReading(bytes, data, end)) {
-      const event = parseJson(bytes, data, end)
-      if (event !== undefined) this.outcome = this.observe(this.outcome, event)
-    }
+    if (data < 0) return false
+    const named = this.types === undefined ? undefined : namedType(bytes, data, end, this.types)
+    if (named === false || (named === undefined && !worthReading(bytes, data, end))) return false
+    const event = parseJson(bytes, data, end)
+    if (event !== undefined) this.outcome = this.observe(this.outcome, event)
     return false
   }
 }
@@ -107,7 +115,7 @@ const QUOTE = 0x22
 const COLON = 0x3a
 const SPACE = 0x20
 
-const spelled = (bytes: Uint8Array, at: number, word: ReadonlyArray<number>): boolean => {
+const spelled = (bytes: Uint8Array, at: number, word: ArrayLike<number>): boolean => {
   for (let k = 0; k < word.length; k++) if (bytes[at + k] !== word[k]) return false
   return true
 }
@@ -138,6 +146,45 @@ const worthReading = (bytes: Uint8Array, start: number, end: number): boolean =>
     if (i + word.length <= end && spelled(bytes, i, word) && !nullAfter(bytes, i + word.length)) return true
   }
   return false
+}
+
+const utf8 = new TextEncoder()
+
+const encodeTypes = (types: ReadonlyArray<string> | undefined) => types?.map((type) => utf8.encode(type))
+
+const typeBytes: { readonly [D in Dialect]: ReadonlyArray<Uint8Array> | undefined } = {
+  messages: encodeTypes(observedTypes.messages),
+  responses: encodeTypes(observedTypes.responses),
+  chat: encodeTypes(observedTypes.chat),
+}
+
+/** `{"type":"`, the way every Messages and Responses event begins. */
+const TYPE_FIRST = utf8.encode('{"type":"')
+const BACKSLASH = 0x5c
+
+/**
+ * Whether an event that names its type first has one of `types`; undefined
+ * when it does not begin with its type (or spells it with an escape), and
+ * must be looked into instead.
+ */
+const namedType = (
+  bytes: Uint8Array,
+  data: number,
+  end: number,
+  types: ReadonlyArray<Uint8Array>,
+): boolean | undefined => {
+  let at = data
+  while (at < end && bytes[at] === SPACE) at++
+  if (end - at < TYPE_FIRST.length || !spelled(bytes, at, TYPE_FIRST)) return undefined
+  const from = at + TYPE_FIRST.length
+  for (const type of types) if (bytes[from + type.length] === QUOTE && spelled(bytes, from, type)) return true
+  // Another type, unless it is spelled with an escape: such a line is looked into.
+  for (let i = from; i < end; i++) {
+    const b = bytes[i]
+    if (b === QUOTE) return false
+    if (b === BACKSLASH) return undefined
+  }
+  return undefined
 }
 
 /**

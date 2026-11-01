@@ -219,8 +219,8 @@ export const findAccount = (
   )
   const matches = exact.length > 0 ? exact : accounts.filter((account) => account.id.startsWith(text))
   const [only, ...others] = matches
-  if (only === undefined || text === "") return Effect.fail(new AccountNotFound({ query }))
-  if (others.length > 0) return Effect.fail(new AccountAmbiguous({ query, ids: matches.map((account) => account.id) }))
+  if (only === undefined || text === "") return Effect.fail(AccountNotFound.of({ query }))
+  if (others.length > 0) return Effect.fail(AccountAmbiguous.of({ query, ids: matches.map((account) => account.id) }))
   return Effect.succeed(only)
 }
 

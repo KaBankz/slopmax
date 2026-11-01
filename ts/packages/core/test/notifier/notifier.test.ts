@@ -560,8 +560,11 @@ describe("Notifier.look", () => {
       yield* notifier.look(report([a], [spareWeek]))
       expect(warnings).toEqual(["sending a notification: webhook: HTTP 500"])
     }).pipe(
-      Effect.provide(notifierWith({ webhook: "https://hooks.example/slopmax" }, webhookServer(500).layer)),
-      Effect.provide(capture),
+      Effect.provide(
+        notifierWith({ webhook: "https://hooks.example/slopmax" }, webhookServer(500).layer).pipe(
+          Layer.provideMerge(capture),
+        ),
+      ),
     )
   })
 })

@@ -59,6 +59,15 @@ describe("Window", () => {
     expect(Schema.decodeUnknownSync(Limits)({})).toEqual(Limits.empty)
   })
 
+  it("hands out the window it made before for the same reading, and a new one when anything differs", () => {
+    const first = Window.of("5h", 21, ts(9000))
+    expect(Window.of("5h", 21, ts(9000))).toBe(first)
+    expect(Window.of("5h", 21.5, ts(9000))).not.toBe(first)
+    expect(Window.of("5h", 21, ts(9001))).not.toBe(first)
+    expect(Window.of("5h", 21, ts(9000), "opus")).not.toBe(first)
+    expect(Window.of("7d", 21, ts(9000))).not.toBe(first)
+  })
+
   it("refuses a reading over 100 percent in a file", () => {
     expect(() => Schema.decodeUnknownSync(Window)({ span: "5h", used: 101 })).toThrow()
   })
@@ -85,6 +94,17 @@ describe("Limits", () => {
   it("scores the fullest shared window, ignoring windows for one model", () => {
     const limits = limitsOf([Window.of("5h", 30), Window.of("7d", 55), Window.of("7d", 99, undefined, "opus")])
     expect(score(limits, ts(0))).toBe(55)
+  })
+
+  it("takes a newer reading that replaces every window and keeps nothing else as it is", () => {
+    const older = limitsOf([Window.of("5h", 10, ts(5_000)), Window.of("7d", 20, ts(90_000))], ts(500))
+    const newer = limitsOf([Window.of("5h", 11, ts(5_000)), Window.of("7d", 20, ts(90_000))], ts(600))
+    expect(merge(older, newer, ts(600))).toBe(newer)
+    // Out of slot order, or with credits the older one knew, it is a new reading.
+    const unsorted = limitsOf([Window.of("7d", 20, ts(90_000)), Window.of("5h", 11, ts(5_000))], ts(600))
+    expect(merge(older, unsorted, ts(600)).windows.map((w) => w.span)).toEqual(["5h", "7d"])
+    const credited = new Limits({ windows: older.windows, observedAt: ts(500), resetCredits: 1 })
+    expect(merge(credited, newer, ts(600)).resetCredits).toBe(1)
   })
 
   it("merges a newer reading by slot, sorted by span then model, keeping credits it does not report", () => {

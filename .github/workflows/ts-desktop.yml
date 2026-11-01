@@ -1,0 +1,82 @@
+name: TS Desktop
+
+# The TypeScript desktop app (ts/apps/desktop) for Linux, macOS and Windows:
+# the CLI it ships (compiled ahead of time with Bun canary where canary has a
+# build; Windows gets the fallback binary), the app packaged around it (asar,
+# en-US only, the CLI in resources/bin, slopmax's icon), and the packaged
+# app's smoke test, which opens its window against a stand-in proxy (under
+# Xvfb on Linux). The summary lists the sizes; the archives are kept so a
+# build can be tried on a real desktop. Pull requests run it too, so a change
+# that breaks packaging or the window is seen before it lands.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: &paths
+      - "ts/apps/desktop/**"
+      - "ts/apps/ui/**"
+      - "ts/apps/cli/**"
+      - "ts/packages/**"
+      - "ts/assets/icon/**"
+      - "ts/bun.lock"
+      - ".github/workflows/ts-desktop.yml"
+  push:
+    branches: [master]
+    paths: *paths
+
+defaults:
+  run:
+    working-directory: ts
+    shell: bash
+
+jobs:
+  package:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            cli-task: compile
+            cli: apps/cli/dist/slopmax
+            app: apps/desktop/pkg/slopmax-linux-x64/slopmax-desktop
+          - os: macos-latest
+            cli-task: compile
+            cli: apps/cli/dist/slopmax
+            app: apps/desktop/pkg/slopmax-darwin-arm64/slopmax.app/Contents/MacOS/slopmax-desktop
+          - os: windows-latest
+            cli-task: build
+            cli: apps/cli/dist/slopmax.exe
+            app: apps/desktop/pkg/slopmax-win32-x64/slopmax-desktop.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v5
+        with:
+          working_directory: ts
+      - run: mise run deps
+      # Bun runs no install scripts, so Electron's binary is fetched here.
+      - run: node apps/desktop/node_modules/electron/install.js
+      - name: Display and libraries for Electron
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb libnss3 libgbm1 libasound2t64 libgtk-3-0
+      # The CLI the app ships.
+      - run: mise run ${{ matrix.cli-task }}
+      # Writes the unpacked and archived sizes to the job summary.
+      - run: bun apps/desktop/package.ts --cli ${{ matrix.cli }} --archive
+      - name: Smoke test
+        env:
+          SLOPMAX_DESKTOP_SMOKE: "1"
+          SLOPMAX_DESKTOP_APP: ${{ github.workspace }}/ts/${{ matrix.app }}
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a bun test apps/desktop/test/smoke.test.ts
+          else
+            bun test apps/desktop/test/smoke.test.ts
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slopmax-desktop-ts-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            ts/apps/desktop/pkg/*.tar.xz
+            ts/apps/desktop/pkg/*.zip

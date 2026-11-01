@@ -16,7 +16,9 @@
 #   apps/cli:    compile (AOT binary at dist/slopmax), build (the --no-aot
 #                --minify --bytecode fallback), budget (ARCHITECTURE.md §16 size)
 #   tools/bench: bench (oha runs against the mock provider), gates (§16's
-#                limits on the AOT binary), demo (a throwaway home with fake accounts)
+#                limits on the AOT binary), demo (a throwaway home with fake accounts);
+#                bench and gates compile the rig and the raw probe ahead of time
+#                too, so they run on Bun canary like compile
 
 [tools]
 bun = "1.4.4"
@@ -81,13 +83,13 @@ run = "true"
 [tasks.bench]
 description = "Measure the latency, throughput, memory, and startup slopmax adds"
 depends = ["compile"]
-tools = { oha = "1.16", jq = "1.8", hyperfine = "1.20" }
+tools = { oha = "1.16", jq = "1.8", hyperfine = "1.20", "github:oven-sh/bun" = { version = "canary", platforms = { linux-x64 = { asset_pattern = "bun-linux-x64.zip" }, linux-arm64 = { asset_pattern = "bun-linux-aarch64.zip" }, macos-arm64 = { asset_pattern = "bun-darwin-aarch64.zip" }, macos-x64 = { asset_pattern = "bun-darwin-x64.zip" } } } }
 run = "bun run --cwd tools/bench bench"
 
 [tasks.gates]
 description = "Fail when the AOT binary misses a performance budget of ARCHITECTURE.md §16"
 depends = ["compile"]
-tools = { oha = "1.16", jq = "1.8", hyperfine = "1.20" }
+tools = { oha = "1.16", jq = "1.8", hyperfine = "1.20", "github:oven-sh/bun" = { version = "canary", platforms = { linux-x64 = { asset_pattern = "bun-linux-x64.zip" }, linux-arm64 = { asset_pattern = "bun-linux-aarch64.zip" }, macos-arm64 = { asset_pattern = "bun-darwin-aarch64.zip" }, macos-x64 = { asset_pattern = "bun-darwin-x64.zip" } } } }
 run = "bun run --cwd tools/bench gates"
 
 [tasks.demo]

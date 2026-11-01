@@ -12,9 +12,11 @@
 import {
   type AccountId,
   Event,
+  formatInstant,
   type Lapse,
   LedgerRecord,
   type ProviderId,
+  type RequestRecord,
   type Usage,
   type WindowEndedRecord,
 } from "@slopmax/domain"
@@ -25,6 +27,7 @@ import {
   DateTime,
   Deferred,
   Effect,
+  FileSystem,
   Layer,
   type Option,
   Order,
@@ -32,9 +35,10 @@ import {
   Queue,
   Result,
   Schema,
+  ScopedRef,
   Stream,
 } from "effect"
-import { causeText, type FileError, Home } from "./home.ts"
+import { causeText, FileError, Home } from "./home.ts"
 import { Events } from "./events.ts"
 
 /** The month file a record belongs in: the UTC month of its time. */
@@ -45,19 +49,26 @@ export const recordedAt = (record: LedgerRecord): DateTime.Utc => record.at
 
 const encodeRecord = Schema.encodeSync(LedgerRecord)
 
+const unchecked = { disableChecks: true } as const
+
 type Counts = typeof Usage.Encoded
 
 const countNames = ["requests", "input", "output", "cacheRead", "cacheWrite"] as const satisfies ReadonlyArray<
   keyof Counts
 >
 
-const nonZero = (counts: Counts): Counts => {
+/** The counts that are not zero, or nothing when all are. */
+const nonZero = (counts: Usage): Counts | undefined => {
   const kept: { -readonly [K in keyof Counts]?: number } = {}
+  let any = false
   for (const name of countNames) {
     const value = counts[name]
-    if (value !== undefined && value !== 0) kept[name] = value
+    if (value !== 0) {
+      kept[name] = value
+      any = true
+    }
   }
-  return kept
+  return any ? kept : undefined
 }
 
 /**
@@ -65,16 +76,32 @@ const nonZero = (counts: Counts): Counts => {
  * absent (one attempt, over HTTP, no tokens of a kind) are left out, so a
  * month of requests stays small.
  */
-export const lineOf = (record: LedgerRecord): typeof LedgerRecord.Encoded => {
-  const encoded = encodeRecord(record)
-  if (encoded._tag !== "Request") return encoded
-  const { attempts, via, usage, ...rest } = encoded
-  const counts = usage === undefined ? {} : nonZero(usage)
+export const lineOf = (record: LedgerRecord): typeof LedgerRecord.Encoded =>
+  record._tag === "Request" ? requestLine(record) : encodeRecord(record, unchecked)
+
+/**
+ * A request's line, written field by field: every answer writes one, and
+ * this is several times cheaper than encoding it through the schema. Its
+ * type is the schema's encoded form, so a required field the schema adds or
+ * renames stops the build; an optional one would type-check while left out,
+ * so a test checks that every field the schema knows is written.
+ */
+const requestLine = (record: RequestRecord): typeof LedgerRecord.cases.Request.Encoded => {
+  const counts = nonZero(record.usage)
   return {
-    ...rest,
-    ...(Object.keys(counts).length === 0 ? {} : { usage: counts }),
-    ...(attempts === undefined || attempts === 1 ? {} : { attempts }),
-    ...(via === undefined || via === "http" ? {} : { via }),
+    _tag: "Request",
+    at: formatInstant(record.at),
+    ...(record.account === undefined ? {} : { account: record.account }),
+    provider: record.provider,
+    ...(record.model === undefined ? {} : { model: record.model }),
+    status: record.status,
+    ...(counts === undefined ? {} : { usage: counts }),
+    ms: record.ms,
+    ...(record.firstByteMs === undefined ? {} : { firstByteMs: record.firstByteMs }),
+    ...(record.attempts === 1 ? {} : { attempts: record.attempts }),
+    ...(record.agent === undefined ? {} : { agent: record.agent }),
+    ...(record.session === undefined ? {} : { session: record.session }),
+    ...(record.via === "http" ? {} : { via: record.via }),
   }
 }
 
@@ -142,6 +169,12 @@ export interface Shape {
   readonly flush: Effect.Effect<void>
 }
 
+/** The month file the writer keeps open, and which month it is. */
+interface OpenMonth {
+  readonly name: string
+  readonly file: FileSystem.File
+}
+
 type Queued =
   | { readonly _tag: "Record"; readonly record: LedgerRecord }
   | { readonly _tag: "Flush"; readonly done: Deferred.Deferred<void> }
@@ -187,6 +220,49 @@ export const make = Effect.gen(function* () {
 
   const queue = yield* Queue.unbounded<Queued>()
 
+  // The writer keeps the month file it appends to open between batches. A
+  // busy proxy writes a batch every few requests, and making the directory,
+  // opening, writing and closing each time costs more than the records. The
+  // file is opened `O_APPEND` like every other append, so the CLI's own
+  // appends still never interleave inside a line. Closed when the month
+  // turns, when a write fails (so the next batch opens it afresh), and after
+  // the last batch on the way out.
+  const fs = yield* FileSystem.FileSystem
+  // Made before the writer starts, so the file closes after the last flush when the scope closes.
+  const month = yield* ScopedRef.make<OpenMonth | undefined>(() => undefined)
+  const closeMonth = ScopedRef.set(month, Effect.succeed(undefined))
+
+  /** The month file's handle, opening it (and closing the last month's) when the month turned. */
+  const monthHandle = Effect.fnUntraced(function* (name: string) {
+    const was = ScopedRef.getUnsafe(month)
+    if (was?.name === name) return was.file
+    const file = path.join(dir, name)
+    yield* home.privateDir(dir)
+    yield* ScopedRef.set(
+      month,
+      fs.open(file, { flag: "a", mode: 0o600 }).pipe(
+        Effect.map((handle): OpenMonth => ({ name, file: handle })),
+        Effect.mapError((cause) => new FileError({ path: file, action: "write", cause })),
+      ),
+    )
+    const now = ScopedRef.getUnsafe(month)
+    return now === undefined ? yield* Effect.die("the month file just opened is not kept") : now.file
+  })
+
+  const encoder = new TextEncoder()
+
+  /** Appends a batch through the open month files: one write per month. */
+  const writeBatch = Effect.fnUntraced(function* (records: ReadonlyArray<LedgerRecord>) {
+    const byFile = Arr.groupBy(records, (record) => monthFile(record.at))
+    for (const [name, batch] of Object.entries(byFile)) {
+      const handle = yield* monthHandle(name)
+      yield* handle.writeAll(encoder.encode(linesOf(batch))).pipe(
+        Effect.mapError((cause) => new FileError({ path: path.join(dir, name), action: "write", cause })),
+        Effect.tapError(() => closeMonth),
+      )
+    }
+  })
+
   const writeQueued = Effect.gen(function* () {
     const queued = yield* Queue.takeAll(queue)
     const records = queued.flatMap((item) => (item._tag === "Record" ? [item.record] : []))
@@ -194,7 +270,7 @@ export const make = Effect.gen(function* () {
       // A batch is written whole even while shutting down, so no line is cut
       // short. Whatever goes wrong is logged and the writer carries on: if it
       // stopped, records would pile up and shutdown would wait on it forever.
-      yield* Effect.uninterruptible(append(records)).pipe(
+      yield* Effect.uninterruptible(writeBatch(records)).pipe(
         Effect.catchCause((cause) => Effect.logWarning(`writing the usage ledger: ${causeText(Cause.squash(cause))}`)),
       )
     }
@@ -212,10 +288,13 @@ export const make = Effect.gen(function* () {
   yield* Effect.addFinalizer(() => flush)
 
   // Untraced: every request that settles records here, and a span each
-  // would cost more than queueing the record.
+  // would cost more than queueing the record. The event feed hears of it
+  // only while someone watches: nobody else reads those events.
   const record = Effect.fnUntraced(function* (entry: LedgerRecord) {
     yield* Queue.offer(queue, { _tag: "Record", record: entry })
-    if (entry._tag === "Request") yield* events.publish(Event.cases.Request.make({ record: entry }))
+    if (entry._tag === "Request" && (yield* events.watching)) {
+      yield* events.publish(Event.cases.Request.make({ record: entry }, unchecked))
+    }
   })
 
   return { record, read, load, append, flush } satisfies Shape
@@ -224,5 +303,8 @@ export const make = Effect.gen(function* () {
 /** The usage ledger. */
 export class Ledger extends Context.Service<Ledger, Shape>()("@slopmax/core/Ledger", { make }) {
   /** One writer for the life of the scope; queued records are written before it closes. */
-  static readonly layer: Layer.Layer<Ledger, never, Home | Events | Path.Path> = Layer.effect(Ledger, Ledger.make)
+  static readonly layer: Layer.Layer<Ledger, never, Home | Events | Path.Path | FileSystem.FileSystem> = Layer.effect(
+    Ledger,
+    Ledger.make,
+  )
 }

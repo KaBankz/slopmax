@@ -57,6 +57,11 @@ import { Upstream } from "./upstream.ts"
 /** A blocked account's usage is read this often, as quota often frees up before the stated reset. */
 export const recheckBlocked: Duration.Duration = Duration.minutes(10)
 
+/** Who asked for a reset to be redeemed: someone through the CLI or the API, or a hub client. */
+export type Asker = "request" | "hub"
+
+const askedBy: Record<Asker, string> = { request: "on request", hub: "for a hub client" }
+
 /** A limit reset this close to expiring is redeemed rather than lost. */
 export const expiryLead: Duration.Duration = Duration.hours(3)
 
@@ -101,10 +106,15 @@ export interface Shape {
   ) => Effect.Effect<ReadonlyArray<LimitReset>, NoLimitResets | NotReady | NeedsAgent | ProviderFailed>
   /** Lists the limit resets of each account whose list is due (every one, forced), one account at a time. */
   readonly listDue: (options?: { readonly force?: boolean }) => Effect.Effect<void>
-  /** Redeems the named reset, or the first the provider would spend, as listed now. */
+  /**
+   * Redeems the named reset, or the first the provider would spend, as listed
+   * now. A reset spent is logged once, naming who asked: someone on
+   * request (the default), or a hub client.
+   */
   readonly redeem: (
     account: Account,
     resetId?: string,
+    asker?: Asker,
   ) => Effect.Effect<RedeemOutcome, NoLimitResets | NotReady | NeedsAgent | ProviderFailed>
   /** Redeems each account's next reset when it expires within 3 hours and the account has usage to reset. */
   readonly redeemExpiring: Effect.Effect<void>
@@ -304,7 +314,7 @@ const make = Effect.gen(function* () {
     }
   })
 
-  const redeem = Effect.fn("Quota.redeem")(function* (account: Account, resetId?: string) {
+  const redeem = Effect.fn("Quota.redeem")(function* (account: Account, resetId?: string, asker: Asker = "request") {
     const { resets, userAgent } = yield* resetsOf(account)
     return yield* redeeming.withPermit(
       Effect.gen(function* () {
@@ -317,7 +327,7 @@ const make = Effect.gen(function* () {
           if (id === undefined) return "no-credit" as const
         }
         const outcome = yield* spend(resets, current, id, userAgent)
-        if (outcome === "reset") yield* Effect.logInfo(`${account.id}: redeemed a limit reset on request`)
+        if (outcome === "reset") yield* Effect.logInfo(`${account.id}: redeemed a limit reset ${askedBy[asker]}`)
         return outcome
       }),
     )

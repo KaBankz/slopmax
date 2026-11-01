@@ -26,7 +26,7 @@ export interface Shape {
   readonly cancel: (id: LoginId) => Effect.Effect<void, NotFound>
 }
 
-const missing = new NotFound({ what: "sign-in" })
+const missing = NotFound.of({ what: "sign-in" })
 
 const make = Effect.gen(function* () {
   const events = yield* Events

@@ -37,18 +37,18 @@ const roundTrip = <S extends Schema.Codec<unknown, unknown>>(schema: S, value: S
 describe("errors", () => {
   it("are worded for people and carry the status slopmax's API answers them with", () => {
     expect(new Unauthorized().message).toBe("missing or invalid slopmax key; see `slopmax env`")
-    expect(new NotFound({ what: "account" }).message).toBe("no such account")
-    expect(new NotFound({ what: "slopmax endpoint" }).message).toBe("no such slopmax endpoint")
-    expect(new AccountNotFound({ query: "bob" }).message).toBe('no account matches "bob"')
+    expect(NotFound.of({ what: "account" }).message).toBe("no such account")
+    expect(NotFound.of({ what: "slopmax endpoint" }).message).toBe("no such slopmax endpoint")
+    expect(AccountNotFound.of({ query: "bob" }).message).toBe('no account matches "bob"')
     const ids = [AccountId.make("codex-1"), AccountId.make("codex-2")]
-    expect(new AccountAmbiguous({ query: "a@x.com", ids }).message).toBe(
+    expect(AccountAmbiguous.of({ query: "a@x.com", ids }).message).toBe(
       '"a@x.com" matches 2 accounts: codex-1, codex-2',
     )
-    expect(new AccountGone({ id: AccountId.make("codex-1") }).message).toBe("the account codex-1 is gone")
-    expect(new SettingsInvalid({ path: "/h/config.json", issue: "lisen: Expected no excess property" }).message).toBe(
+    expect(AccountGone.of({ id: AccountId.make("codex-1") }).message).toBe("the account codex-1 is gone")
+    expect(SettingsInvalid.of({ path: "/h/config.json", issue: "lisen: Expected no excess property" }).message).toBe(
       "invalid settings in /h/config.json: lisen: Expected no excess property",
     )
-    expect(new SettingRejected({ name: "pollMinutes", reason: "pollMinutes is a number of minutes" }).message).toBe(
+    expect(SettingRejected.of({ name: "pollMinutes", reason: "pollMinutes is a number of minutes" }).message).toBe(
       "pollMinutes is a number of minutes",
     )
     const statuses = ApiErrors.map((error) => [error.identifier, Schema.resolveAnnotations(error)?.["httpApiStatus"]])
@@ -69,7 +69,7 @@ describe("errors", () => {
       message: "range is today, 7d, 30d, or all",
     })
     expect(roundTrip(BadRequest, error)).toBeInstanceOf(BadRequest)
-    expect(roundTrip(NotFound, new NotFound({ what: "key" })).message).toBe("no such key")
+    expect(roundTrip(NotFound, NotFound.of({ what: "key" })).message).toBe("no such key")
   })
 
   it("turn a Schema failure into one line naming where each problem is", () => {

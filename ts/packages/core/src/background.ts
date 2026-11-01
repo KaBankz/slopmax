@@ -190,14 +190,16 @@ export const makeWith = (
         stdout: "ignore",
         stderr: "ignore",
       })
-      yield* Effect.scoped(Effect.flatMap(spawner.spawn(command), (handle) => handle.unref))
+      // Unreferenced for good: the effect that would reference it again is dropped on purpose.
+      yield* Effect.scoped(Effect.flatMap(spawner.spawn(command), (handle) => Effect.asVoid(handle.unref)))
     })
 
     const ensure: Shape["ensure"] = Effect.gen(function* () {
       if (Option.isSome(yield* running)) return { started: false }
       const service = yield* manager
       const status = yield* service.status
-      yield* Option.isSome(service.kind) && status.installed ? service.start : launchDetached
+      if (Option.isSome(service.kind) && status.installed) yield* service.start
+      else yield* launchDetached
       yield* settle(true)
       return { started: true }
     }).pipe(

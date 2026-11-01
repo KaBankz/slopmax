@@ -60,6 +60,26 @@ describe("Ledger", () => {
     }).pipe(Effect.provide(services())),
   )
 
+  it.effect("appends batch after batch to the month file it keeps open, beside the CLI's own appends", () =>
+    Effect.gen(function* () {
+      const ledger = yield* Ledger
+      const fs = yield* FileSystem.FileSystem
+      const lines = () => Effect.map(fs.readFileString(`${usage}/2026-10.ndjson`), (text) => text.trimEnd().split("\n"))
+      yield* ledger.record(request("2026-10-05T10:00:00Z"))
+      yield* ledger.flush
+      // Another process appends meanwhile; the open file is opened to append, so nothing is overwritten.
+      yield* ledger.append([request("2026-10-05T10:00:01Z")])
+      yield* ledger.record(request("2026-10-05T10:00:02Z"))
+      yield* ledger.flush
+      expect(yield* lines()).toHaveLength(3)
+      // A new month opens its own file.
+      yield* ledger.record(request("2026-11-01T00:00:00Z"))
+      yield* ledger.flush
+      expect(yield* fs.readDirectory(usage)).toEqual(["2026-10.ndjson", "2026-11.ndjson"])
+      expect((yield* ledger.load(since("2026-10-01T00:00:00Z"))).length).toBe(4)
+    }).pipe(Effect.provide(services())),
+  )
+
   it.effect("keeps lines short by leaving out what reads back as the default", () =>
     Effect.gen(function* () {
       const ledger = yield* Ledger
@@ -195,9 +215,8 @@ describe("Ledger", () => {
           services({
             fault: ({ method, path }) =>
               failing && method === "open" && path.startsWith(usage) ? "PermissionDenied" : undefined,
-          }),
+          }).pipe(Layer.provideMerge(capture)),
         ),
-        Effect.provide(capture),
       )
       expect(warnings.length).toBe(1)
       expect(warnings[0]).toStartWith("writing the usage ledger: ")
@@ -237,9 +256,9 @@ describe("Ledger", () => {
             Layer.provideMerge(Events.layer),
             Layer.provideMerge(Home.layerAt(root)),
             Layer.provideMerge(breakingDisk),
+            Layer.provideMerge(capture),
           ),
         ),
-        Effect.provide(capture),
       )
       expect(warnings).toEqual(["writing the usage ledger: the disk fell off"])
     }),
@@ -282,6 +301,40 @@ describe("ledger lines", () => {
     const record = request("2026-10-05T10:00:00.25Z", { agent: "claude-code", session: "s-1" })
     expect(parseLine(JSON.stringify(lineOf(record)))).toEqual(Option.some(record))
     expect(parseLine("not json")._tag).toBe("None")
+  })
+
+  it("write each request as the schema encodes it, less what reads back as the default", () => {
+    const encode = Schema.encodeSync(LedgerRecord.cases.Request)
+    const records = [
+      request("2026-10-05T10:00:00Z"),
+      request("2026-10-05T10:00:00.25Z", { agent: "claude-code", session: "s-1", attempts: 3, via: "socket" }),
+      decodeRequest({ _tag: "Request", at: "2026-10-05T10:00:01.5Z", provider: "codex", status: 503, ms: 12 }),
+      request("2026-10-05T10:00:02Z", { usage: {}, agent: "slopmax" }),
+      request("2026-10-05T10:00:03Z", { usage: { requests: 1, input: 1, output: 2, cacheRead: 3, cacheWrite: 4 } }),
+    ]
+    for (const record of records) {
+      const line = lineOf(record)
+      const { attempts, via, usage: tokens, ...schema } = encode(record)
+      const counts = Object.fromEntries(Object.entries(tokens ?? {}).filter(([, n]) => n !== 0))
+      expect(line).toEqual({
+        ...schema,
+        ...(Object.keys(counts).length === 0 ? {} : { usage: counts }),
+        ...(attempts === 1 ? {} : { attempts }),
+        ...(via === "http" ? {} : { via }),
+      })
+      expect(parseLine(JSON.stringify(line))).toEqual(Option.some(record))
+    }
+  })
+
+  it("write every field the schema knows when a request has them all", () => {
+    const full = request("2026-10-05T10:00:04Z", {
+      usage: { requests: 1, input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+      attempts: 2,
+      agent: "codex",
+      session: "s-2",
+      via: "socket",
+    })
+    expect(Object.keys(lineOf(full)).toSorted()).toEqual(Object.keys(LedgerRecord.cases.Request.fields).toSorted())
   })
 })
 

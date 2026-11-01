@@ -14,7 +14,7 @@ export {
   retell,
 } from "./errors.ts"
 export * as lines from "./lines.ts"
-export { type Observer, observe, observers, TapOutcome, textOf } from "./observe.ts"
+export { type Counts, noCounts, type Observer, observe, observers, TapOutcome, textOf } from "./observe.ts"
 export { holdsStart, judge, Opening, Verdict } from "./opening.ts"
 export * as scan from "./scan.ts"
 export {

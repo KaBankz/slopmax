@@ -3,7 +3,7 @@
 import { describe, expect } from "bun:test"
 import { Limits, Window } from "@slopmax/domain"
 import { it } from "@slopmax/test"
-import { DateTime, Duration, Effect } from "effect"
+import { DateTime, Duration, Effect, Layer, Logger } from "effect"
 import { TestClock } from "effect/testing"
 import { Account } from "../../src/account.ts"
 import {
@@ -291,6 +291,20 @@ describe("hub", () => {
       expect(sent).toHaveLength(1)
       expect(JSON.parse(sent[0]?.text ?? "{}")).toMatchObject({ credit_id: "credit-later" })
     }).pipe(Effect.provide(layer))
+  })
+
+  it.effect("logs a reset a hub client redeems once, naming the hub client", () => {
+    const lines: Array<string> = []
+    const logs = Logger.layer([Logger.make(({ message }) => void lines.push(String(message)))])
+    const { layer, upstream } = apiStack({ accounts: [codex], routes: chatgptApi })
+    return Effect.gen(function* () {
+      yield* followClock(upstream)
+      const consumed = yield* apiCall(codex.id, "POST", codexConsumeUrl, { credit_id: "credit-later" })
+      expect([consumed.inner, consumed.body]).toEqual([200, { code: "reset" }])
+      expect(lines.filter((line) => line.includes("redeemed a limit reset"))).toEqual([
+        `${codex.id}: redeemed a limit reset for a hub client`,
+      ])
+    }).pipe(Effect.provide(layer.pipe(Layer.provide(logs))))
   })
 
   it.effect("lists no resets for an account whose usage counts none, without asking", () => {

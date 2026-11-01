@@ -37,6 +37,7 @@
           "@effect/platform-node",
           "@effect/atom-react"
         ],
+        "allowedExperimentalApis": ["effect/net/Dns", "effect/net/Host", "@effect/platform-bun/BunDns"],
         "diagnosticSeverity": {
           "unstableApiUsage": "message",
           "floatingEffect": "error"

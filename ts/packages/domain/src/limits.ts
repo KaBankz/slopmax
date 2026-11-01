@@ -5,6 +5,9 @@
 import { Array, DateTime, Duration, Option, Order, Schema } from "effect"
 import { Instant, NonNegativeInt, Span, withDefault } from "./ids.ts"
 
+/** Values built from parts already checked skip the schema's checks: readings are made on every answer. */
+const unchecked = { disableChecks: true } as const
+
 /** A usage window, such as Claude's 5-hour session or ChatGPT's week. */
 export class Window extends Schema.Class<Window>("Window")({
   span: Span,
@@ -16,14 +19,32 @@ export class Window extends Schema.Class<Window>("Window")({
 }) {
   /** A window read from a provider, with its use clamped to 0–100 (providers overshoot). */
   static of(span: Span, used: number, resetsAt?: DateTime.Utc, model?: string): Window {
-    return new Window({
-      span,
-      used: Math.min(100, Math.max(0, Number.isFinite(used) ? used : 0)),
-      ...(resetsAt === undefined ? {} : { resetsAt }),
-      ...(model === undefined ? {} : { model }),
-    })
+    // Clamped here, so the schema's own range check has nothing left to catch.
+    const clamped = Math.min(100, Math.max(0, Number.isFinite(used) ? used : 0))
+    // Every answer's headers carry a reading, and most repeat the last one, so
+    // the same window is handed out again rather than built anew: windows are
+    // values, never changed once made.
+    const key = `${span} ${clamped} ${resetsAt === undefined ? "" : resetsAt.epochMilliseconds} ${model ?? ""}`
+    const known = recentWindows.get(key)
+    if (known !== undefined) return known
+    const window = new Window(
+      {
+        span,
+        used: clamped,
+        ...(resetsAt === undefined ? {} : { resetsAt }),
+        ...(model === undefined ? {} : { model }),
+      },
+      unchecked,
+    )
+    if (recentWindows.size >= recentLimit) recentWindows.clear()
+    recentWindows.set(key, window)
+    return window
   }
 }
+
+/** Windows read lately, by what they read; a few accounts' windows at a time, so a small table holds them. */
+const recentWindows = new Map<string, Window>()
+const recentLimit = 256
 
 /** The last known windows of one account. */
 export class Limits extends Schema.Class<Limits>("Limits")({
@@ -103,7 +124,7 @@ export const spanMinutes = (span: Span): number => (span === "5h" ? 300 : span =
 
 /** A reading taken at `now`, or nothing when it carries no windows. */
 export const observed = (windows: ReadonlyArray<Window>, now: DateTime.Utc): Option.Option<Limits> =>
-  windows.length === 0 ? Option.none() : Option.some(new Limits({ windows, observedAt: now }))
+  windows.length === 0 ? Option.none() : Option.some(new Limits({ windows, observedAt: now }, unchecked))
 
 /** The windows that cover every request. */
 export const sharedWindows = (windows: ReadonlyArray<Window>): ReadonlyArray<Window> =>
@@ -133,6 +154,16 @@ const bySlot = (a: Window, b: Window): number => {
   return a.model < b.model ? -1 : 1
 }
 
+/** The windows in slot order, as they are when a provider lists them shortest first: then no copy is made. */
+const sortedBySlot = (windows: ReadonlyArray<Window>): ReadonlyArray<Window> => {
+  for (let i = 1; i < windows.length; i++) {
+    const before = windows[i - 1]
+    const after = windows[i]
+    if (before !== undefined && after !== undefined && bySlot(before, after) > 0) return windows.toSorted(bySlot)
+  }
+  return windows
+}
+
 /**
  * Folds a newer reading into an older one. Windows the newer one carries
  * replace older readings of the same slot; slots it leaves out are kept
@@ -148,12 +179,25 @@ export const merge = (older: Limits | undefined, newer: Limits, now: DateTime.Ut
   const observedAt = newer.observedAt ?? older?.observedAt
   const resetCredits = newer.resetCredits ?? older?.resetCredits
   const plan = newer.plan ?? older?.plan
-  return new Limits({
-    windows: [...kept, ...newer.windows].toSorted(bySlot),
-    ...(observedAt === undefined ? {} : { observedAt }),
-    ...(resetCredits === undefined ? {} : { resetCredits }),
-    ...(plan === undefined ? {} : { plan }),
-  })
+  const windows = kept.length === 0 ? sortedBySlot(newer.windows) : [...kept, ...newer.windows].toSorted(bySlot)
+  // A reading that replaces every window and adds nothing kept is the result as it is: most answers' are.
+  if (
+    windows === newer.windows &&
+    observedAt === newer.observedAt &&
+    resetCredits === newer.resetCredits &&
+    plan === newer.plan
+  ) {
+    return newer
+  }
+  return new Limits(
+    {
+      windows,
+      ...(observedAt === undefined ? {} : { observedAt }),
+      ...(resetCredits === undefined ? {} : { resetCredits }),
+      ...(plan === undefined ? {} : { plan }),
+    },
+    unchecked,
+  )
 }
 
 const newPeriodAfter = Duration.hours(1)
@@ -193,19 +237,28 @@ export const score = (limits: Limits | undefined, now: DateTime.Utc): number => 
  * windows count too). A full window without a reset time counts only while
  * the reading is fresh, so stale data cannot park an account forever.
  */
+const isFresh = (limits: Limits, now: DateTime.Utc): boolean =>
+  limits.observedAt !== undefined &&
+  DateTime.toEpochMillis(now) - DateTime.toEpochMillis(limits.observedAt) < Duration.toMillis(staleAfter)
+
+/** Whether `window` stops requests for `model` (every model when absent), given whether its reading is fresh. */
+const stops = (window: Window, now: DateTime.Utc, model: string | undefined, fresh: boolean): boolean =>
+  (window.model === undefined || window.model === model) &&
+  isFull(window, now) &&
+  (fresh || (window.resetsAt !== undefined && DateTime.isGreaterThan(window.resetsAt, now)))
+
 const fullWindows = (limits: Limits, now: DateTime.Utc, model?: string): ReadonlyArray<Window> => {
-  const fresh =
-    limits.observedAt !== undefined && Duration.isLessThan(DateTime.distance(limits.observedAt, now), staleAfter)
-  return limits.windows.filter(
-    (window) =>
-      (window.model === undefined || window.model === model) &&
-      isFull(window, now) &&
-      (fresh || Option.isSome(upcomingReset(window, now))),
-  )
+  const fresh = isFresh(limits, now)
+  return limits.windows.filter((window) => stops(window, now, model, fresh))
 }
 
-export const isExhausted = (limits: Limits, now: DateTime.Utc, model?: string): boolean =>
-  fullWindows(limits, now, model).length > 0
+/** Whether a full window stops requests (for `model`, when given, its own windows count too). Every placement asks, so nothing is allocated. */
+export const isExhausted = (limits: Limits, now: DateTime.Utc, model?: string): boolean => {
+  if (limits.windows.length === 0) return false
+  const fresh = isFresh(limits, now)
+  for (const window of limits.windows) if (stops(window, now, model, fresh)) return true
+  return false
+}
 
 /** When a full window lets the account serve again: the latest of their resets, since all must reopen. */
 export const exhaustedUntil = (limits: Limits, now: DateTime.Utc, model?: string): Option.Option<DateTime.Utc> =>

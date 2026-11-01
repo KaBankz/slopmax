@@ -1,0 +1,112 @@
+name: TS release
+
+# Releases the TypeScript slopmax. On a pushed `v*` tag that names its
+# version (ts/packages/domain/src/version.ts), it creates the GitHub release
+# with notes from CHANGELOG.md, then builds the binary ahead of time on each
+# platform (Bun compiles for the machine it runs on) and uploads
+# `slopmax-{target}.tar.gz`, with `slopmax` at the archive's root, and its
+# `.sha256`, the files ts/install.sh downloads. A manual run builds every
+# target as a dry run and publishes nothing; the archives are kept as
+# workflow artifacts instead.
+#
+# Until the TypeScript slopmax is chosen to ship, release.yml (crates/) still
+# answers every `v*` tag, so this workflow runs only by hand, as a dry run.
+# To ship it, add `push: tags: ["v*"]` here and narrow release.yml's tags.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    working-directory: ts
+    shell: bash
+
+jobs:
+  check:
+    name: Version and notes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v5
+        with:
+          working_directory: ts
+      - run: mise run deps
+      - if: github.event_name == 'push'
+        run: mise exec -- bun tools/bench release-check --tag "$GITHUB_REF_NAME"
+      - if: github.event_name != 'push'
+        run: mise exec -- bun tools/bench release-check
+
+  release:
+    needs: check
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/create-gh-release-action@v1
+        with:
+          changelog: CHANGELOG.md
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  binaries:
+    needs: [check, release]
+    # Runs after the release is created, or alone in a manual run.
+    if: ${{ !failure() && !cancelled() }}
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest, via: mise }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm, via: mise }
+          # musl builds come from the Dockerfile's Alpine build stage.
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, via: docker }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm, via: docker }
+          - { target: x86_64-apple-darwin, os: macos-15-intel, via: mise }
+          - { target: aarch64-apple-darwin, os: macos-latest, via: mise }
+    steps:
+      - uses: actions/checkout@v4
+      - if: matrix.via == 'mise'
+        uses: jdx/mise-action@v5
+        with:
+          working_directory: ts
+      # The CLI's ahead-of-time build, listing what compiled to a slow path.
+      - if: matrix.via == 'mise'
+        run: mise run compile -- --explain
+      # The musl binary needs musl's loader, which the Ubuntu runner lacks, so
+      # it is tried in the Alpine image it ships in rather than on the host.
+      - if: matrix.via == 'docker'
+        run: |
+          docker build --target build -t slopmax-build .
+          docker build -t slopmax .
+          docker run --rm slopmax --version
+          id=$(docker create slopmax-build)
+          mkdir -p apps/cli/dist
+          docker cp "$id:/src/apps/cli/dist/slopmax" apps/cli/dist/slopmax
+          docker rm "$id"
+      - name: Package
+        run: |
+          archive="slopmax-${{ matrix.target }}.tar.gz"
+          out="$RUNNER_TEMP/release"
+          mkdir -p "$out/root"
+          cp apps/cli/dist/slopmax "$out/root/slopmax"
+          if [ "${{ matrix.via }}" = mise ]; then "$out/root/slopmax" --version; fi
+          tar -C "$out/root" -czf "$out/$archive" slopmax
+          (cd "$out" && shasum -a 256 "$archive" > "$archive.sha256")
+          echo "- \`$archive\`: $(wc -c < "$out/$archive" | tr -d ' ') bytes" >> "$GITHUB_STEP_SUMMARY"
+      - if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          archive="slopmax-${{ matrix.target }}.tar.gz"
+          gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/release/$archive" "$RUNNER_TEMP/release/$archive.sha256" --clobber
+      - if: github.event_name != 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: slopmax-${{ matrix.target }}
+          path: |
+            ${{ runner.temp }}/release/slopmax-${{ matrix.target }}.tar.gz
+            ${{ runner.temp }}/release/slopmax-${{ matrix.target }}.tar.gz.sha256

@@ -20,6 +20,7 @@ import {
   LedgerRecord,
   type ProviderId,
   providerFacts,
+  type Settings,
   Usage,
 } from "@slopmax/domain"
 import { duration } from "@slopmax/domain/format"
@@ -36,7 +37,7 @@ import { Quota } from "../quota.ts"
 import type { Plan, Step } from "../router.ts"
 import { SettingsService } from "../settings.ts"
 import { Upstream } from "../upstream.ts"
-import { type Failure, makeAttempt, returnable, Translation } from "./attempt.ts"
+import { type Failure, makeAttempt, shownHeaders, Translation } from "./attempt.ts"
 import { authenticate, heldKey, keyRing } from "./auth.ts"
 import type { Route } from "./classify.ts"
 import { estimated, speaks } from "./count-tokens.ts"
@@ -127,10 +128,16 @@ const make = Effect.gen(function* () {
     const version = clientVersion(headers)
     const claudeCode = claudeCodeAgent(headers)
     if (version === undefined && claudeCode === undefined) return Effect.void
-    return pool.update((m) => {
-      const seen = version === undefined ? m : sawCodex(m, { version })
-      return claudeCode === undefined ? seen : sawAgent(seen, "claude", claudeCode)
-    })
+    // Agents send the same release on every request: only a new one changes the pool.
+    return Effect.flatMap(pool.model, (seen) =>
+      (version === undefined || seen.codex.version === version) &&
+      (claudeCode === undefined || seen.agents.claude === claudeCode)
+        ? Effect.void
+        : pool.update((m) => {
+            const codex = version === undefined ? m : sawCodex(m, { version })
+            return claudeCode === undefined ? codex : sawAgent(codex, "claude", claudeCode)
+          }),
+    )
   }
 
   /** Records a request that ended without an answer, so the ledger counts failures beside answers. */
@@ -173,14 +180,16 @@ const make = Effect.gen(function* () {
   /** A provider's refusal for the client: as it came, or retold in the client's format when translated. */
   const passBack = Effect.fnUntraced(function* (failure: Failure, inbound: Inbound) {
     if (failure.lane._tag === "Translate") return fromReply(retell(inbound.route.dialect, failure.status, failure.body))
-    const headers = returnable(failure.headers)
-    const pooled = yield* pool.pooled(failure.provider)
-    const shown = pooled.length > 0 ? providers[failure.provider].showPool(headers, pooled) : headers
+    const shown = shownHeaders(providers[failure.provider], failure.headers, yield* pool.pooled(failure.provider))
     return new Response(failure.body.length === 0 ? null : failure.body, { status: failure.status, headers: shown })
   })
 
-  const forward = Effect.fnUntraced(function* (inbound: Inbound, steps: ReadonlyArray<Step>, first: Step) {
-    const values = yield* settings.get
+  const forward = Effect.fnUntraced(function* (
+    inbound: Inbound,
+    steps: ReadonlyArray<Step>,
+    first: Step,
+    values: Settings,
+  ) {
     const routing = routingOf(values, inbound.affinity)
     const translation = new Translation(inbound)
     const tried = new Set<AccountId>()
@@ -277,7 +286,7 @@ const make = Effect.gen(function* () {
     if (first === undefined) return error(dialect, 503, "no account could take the request")
     // Only a Messages API can count Messages tokens; anywhere else gets an estimate.
     if (route.countTokens && !(yield* countsExactly(first, dialect))) return estimated(inbound.body)
-    return yield* forward(inbound, allowed.steps, first)
+    return yield* forward(inbound, allowed.steps, first, values)
   })
 
   const models = Effect.fn("Proxy.models")(function* (request: Request) {

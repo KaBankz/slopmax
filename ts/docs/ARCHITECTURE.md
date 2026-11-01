@@ -1549,7 +1549,7 @@ What is peeked and what is decoded:
 | ----------------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------- |
 | key (`authorization` / `x-api-key`) | header read; `timingSafeEqual` against precomputed buffers                             | every request (PRX-006)            |
 | agent, Codex version, client UA     | `startsWith` on `user-agent`                                                           | every request (PRX-008/009)        |
-| body inspectable?                   | no `content-encoding` (or `identity`) and `wire.scan.isJson`                           | every POST (PRX-031)               |
+| body inspectable?                   | no `content-encoding` (or `identity`), framed as one object; `isJson` for held keys    | every POST (PRX-031, NOT-PORTED)   |
 | `model`, count of top-level `model` | `wire.scan.find(bytes, "model")`, `countTopLevel`                                      | every POST (PRX-032/034)           |
 | `stream`                            | `wire.scan.find` → the literal `true`                                                  | translated requests                |
 | session                             | headers, else `metadata.user_id` / `prompt_cache_key` by `scan.find`                   | every request                      |

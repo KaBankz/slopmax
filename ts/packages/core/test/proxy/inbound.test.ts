@@ -144,6 +144,20 @@ describe("inspecting a request", () => {
     expect(isInspectable(new Headers(), new Uint8Array(0))).toBe(false)
   })
 
+  it("reads a body framed as one JSON object without checking every byte, but checks every byte for a held key", () => {
+    // Broken after the model: read as JSON, routed by its model, and forwarded as sent for the provider to refuse.
+    const broken = '{"model":"gpt-6-sol","input":[oops]}'
+    expect(isInspectable(new Headers(), utf8.encode(broken))).toBe(true)
+    expect(isInspectable(new Headers(), utf8.encode(broken), true)).toBe(false)
+    expect(isInspectable(new Headers(), utf8.encode('  {"model":"m"}\n'))).toBe(true)
+    expect(isInspectable(new Headers(), utf8.encode('["model"]'))).toBe(false)
+    expect(isInspectable(new Headers(), utf8.encode("{"))).toBe(false)
+    expect(inbound("/codex/responses", broken).model).toBe("gpt-6-sol")
+    // A key held to some models reads only a body it can prove names one model.
+    const held = inbound("/codex/responses", broken, { caller: laptop ?? owner })
+    expect([held.json, held.model]).toEqual([false, undefined])
+  })
+
   it("finds the model, the agent, the session and the affinity a request asks for", () => {
     const seen = inbound(
       "/codex/responses",

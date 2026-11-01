@@ -231,8 +231,8 @@ export const hubHandlers = HttpApiBuilder.group(HubApi, "management", (handlers)
       const credit = creditIdOf(data)
       if (credit === undefined) return yield* new CallRefused({ status: 400, message: "no credit_id to redeem" })
       // Redeeming takes the one redemption at a time that every redeemer shares.
-      const outcome = yield* quota.redeem(account, credit).pipe(Effect.mapError(upstreamRefused))
-      if (outcome === "reset") yield* Effect.logInfo(`${account.id}: redeemed a limit reset for a hub client`)
+      // The redemption logs itself, once, naming the hub client as the one who asked.
+      const outcome = yield* quota.redeem(account, credit, "hub").pipe(Effect.mapError(upstreamRefused))
       // ChatGPT's own codes.
       return { code: outcome.replaceAll("-", "_") }
     })

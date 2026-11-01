@@ -48,7 +48,13 @@ adds what it changes.
   connect timeout. A refused connection fails at once; a black-holed one is
   bounded by the OS, then by the 600 s wait for headers.
 - **TLS roots** (NET-007). The system's roots plus Bun's bundled ones, so
-  "no system CA certificates found" can never happen.
+  "no system CA certificates found" can never happen. An inference `fetch`
+  is handed no list of roots on Linux, where Bun's own TLS context already
+  verifies against the system store (OpenSSL's default bundle and hashed
+  directory) beside its bundled roots; elsewhere it is handed one only when
+  the system trusts a root Bun does not bundle. Bun builds a context from a
+  `tls.ca` list on every call (about 1 ms for 260 roots), and plain-HTTP
+  providers never need one.
 - **Pins, nudged and windows files** (FS-004; `pins.json`, `nudged.json`,
   `windows.jsonl`). Folded into `state.json` (pins, notices already told) and
   the ledger (`WindowEnded` records).
@@ -222,8 +228,11 @@ adds what it changes.
 - **History on the request path** (ADM-009). The history view is worked out
   in the request's own fiber, not on a separate thread: the aggregation is
   one synchronous pass over the records, and a Bun worker would need its own
-  entry in the compiled binary and a copy of every record. A 30-day ledger of
-  50,000 requests takes about 0.15 s, during which live streams wait.
+  entry in the compiled binary and a copy of every record. Each record is
+  read once per view (whether it answered or failed, and its cost, with each
+  model's prices looked up once), so a 30-day ledger of 50,000 requests takes
+  about 0.09 s on a loaded 8-core host (0.23 s before), during which live
+  streams wait.
 - **Reset windows go through the ledger's queue** (DMN-019). Ended windows
   are queued for the ledger's one writer, like every other record, and taken
   from the pool in the same uninterruptible step, so a stop cannot lose
@@ -311,3 +320,149 @@ paidOverflow on`, prices under `prices` in `config.json`); `start --json`
   (idle 58 MB against 45, peak 153 MB against 120), most of it the binary's
   own code paged in; that is the engine's to bring down, gated by
   `tools/bench gates`.
+
+## Bench, gates and distribution (C16)
+
+- **The bench rig** (CLI-220..225, DIST-012). `bun tools/bench` with
+  `mock`, `bodies`, `rig`, `run` (`mise run bench`), `demo` and `gates`.
+  The rig is the daemon over the same four bench accounts with provider
+  origins rewritten to the mock, compiled with the CLI's AOT flags; the
+  bodies are the same shapes from the same xorshift seed. Changed: ports
+  are free ones the bench picks rather than 9100–9102, `run` prints the raw
+  probe's row under each load, and figures come from Schema-decoded oha and
+  hyperfine reports instead of jq.
+- **The demo** (DIST-013). The seed is Effect's `Random` with seed 7 rather
+  than Python's, so the month differs in detail but has the same shape
+  (weekday-heavy sessions, model listings, daily warmups, 1% requests no
+  account could take, 1% provider errors, 4% failovers, four weeks of ended
+  windows). The files are the TypeScript slopmax's own (`state.json`, the
+  `usage/*.ndjson` ledger), encoded with the engine's Schemas; no files are
+  shared with the Rust slopmax.
+- **Release targets** (DIST-008, DIST-009). Bun's runtime is linked against
+  a C library, so Linux gets a glibc build (`*-unknown-linux-gnu`, new) and a
+  musl one (`*-unknown-linux-musl`, built in the Dockerfile's Alpine stage);
+  `install.sh` picks by the C library the machine runs and refuses an
+  x86-64 CPU without AVX2, which Bun's runtime needs. Releases come from `v*`
+  tags whose version is `slopmaxVersion`, checked by
+  `bun tools/bench release-check` (a manual run reports missing notes
+  without failing). The Rust slopmax's `release.yml` now answers only the
+  tags before v0.4.0 (`v0.[0-3].*`) and `ts-release.yml` every later one,
+  so no tag is released by both. The musl binaries are tried in the
+  Alpine image, since the Ubuntu runners have no musl loader.
+- **The performance budgets do not hold yet** (DIST-004, DIST-014). The
+  gates (`mise run gates`) measure ARCHITECTURE.md §16 for real and fail
+  six of its nine budgets: on 2026-11-01 (linux-x64, 8 shared vCPUs,
+  1.4.4-canary.1+da867c60b) serve to the first `/healthz` 200 took
+  90–126 ms (budget 60), idle RSS was 57.6–58.7 MB (45), peak RSS
+  152–157 MB (120), small requests 32 at once ran at 9–10% of the raw
+  probe's rate (70%), 300 KB requests at 15–18% (80%), and one at a time
+  added 1.1–1.7 ms to the probe's p50 (0.15 ms). Size (71.4 MB, 23.9 MB as
+  xz) and `--version` (12.5–14 ms) hold. The shortfall is the engine's,
+  not the bench's; until it is closed the CI job `Performance gates` is
+  marked `continue-on-error`, still red on every run, and the budgets stay
+  as they are. After C17 (below) the same gates measure 27% and 46% of the
+  probe and 0.37 ms over its p50.
+- **Installing from source** (DIST-011). `cargo install --git` becomes a
+  checkout: `cd ts && mise install && mise run install`. There is no
+  `--features mimalloc` (CLI-010).
+- **The container** (DIST-010). Built from `ts/` (`docker build -t slopmax
+ts`) with Bun canary on Alpine, run on `alpine:3` with `libstdc++` for Bun's
+  runtime, and `SLOPMAX_NO_SERVICE=1`, since a container has no login service.
+
+## Desktop (C15)
+
+- **The app's own watcher** (APP-010..012, APP-015..018). The app keeps no
+  snapshot of its own and polls nothing: main follows the daemon's event
+  stream (`Hello`, `Status`, `Notice`), reconnecting after a second and then
+  backing off to every 15 s, and looks at the proxy's last address on the
+  same schedule while it is stopped, so one started from a terminal is taken
+  up. The window's state, notices (as toasts) and the agents' and service's
+  status are the UI's atoms over the same API.
+- **Starting the proxy** (APP-013, APP-014). Main runs the bundled CLI's
+  `start --json` at launch, which starts the proxy or reports the running
+  one, and takes the owner key from it; a start that fails leaves the proxy
+  Stopped and posts `Could not start the proxy` as a notification. The CLI
+  is looked for in `resources/bin`, beside the app's executable, then on
+  `PATH`; `SLOPMAX_CLI` names one directly for development. A call from the
+  window while the proxy starts waits for it (up to 20 s) instead of failing.
+- **Actions** (APP-020..022). Changes go through the daemon's API, which
+  answers the new report and tells every front end; there is no `sync` after
+  each and no action of the window's own that reads account files.
+- **The menus** (DESK-002, DESK-003, DESK-004). Sign In with Claude…, Sign In
+  with ChatGPT…, Import Logins and Add an API Key… open the window at the
+  Access page, where each flow lives. Hiding the sidebar is Ctrl+Cmd+S on
+  macOS and Ctrl+Shift+S elsewhere (Ctrl+Ctrl does not exist).
+- **The panel** (DESK-106, DESK-108, DESK-170). On macOS and Windows a click
+  on the tray item opens it under the item. Linux trays (AppIndicator) send
+  no clicks, so there the item carries a menu (the proxy's state, each pool,
+  Open, Settings, Start or Stop, Quit), and a second launch with `--panel` (for a
+  desktop shortcut) opens the panel at the top right of the screen. As
+  ARCHITECTURE.md §13 says, the panel also closes when it loses focus, after
+  a 150 ms guard; a click on the item that took the focus away leaves it
+  closed. A panel hidden for a minute is destroyed.
+- **Notifications** (DESK-120..122). Electron posts on every platform it
+  supports, so there is no bundle-identifier check or "posts notifications on
+  macOS" sentence. The kinds posted are the ones that ask someone to act
+  (every account limited, accounts back, sign in again, a limit reset about to
+  lapse, quota about to go unused), and the test notice; one account being
+  limited or back is not.
+- **Screenshots** (DESK-160). `apps/desktop/shots.ts` drives the app with
+  playwright-core's `_electron` instead of a build flag: every page, then the
+  panel, in light and dark (`nativeTheme`, not saved), at 1160 wide, with
+  notifications turned off in the run's throwaway preferences.
+- **Icons and the bundle** (DESK-165..167). The UI's icons are Lucide. The
+  tray, window and app icons are slopmax's own set (`ts/assets/icon`): the
+  macOS menu bar gets its template image of the ⌥ mark instead of the SF
+  Symbol `chart.bar.fill`, and the bundles embed `icon.icns` and `icon.ico`.
+  While the proxy is not running on this release, the macOS title says
+  `Stopped` or `Restart needed` instead of the last usage, and the Linux menu
+  drops the pools. `package.ts` (`@electron/packager`, asar) replaces
+  `bundle.sh`: the bundle is `slopmax.app` (bundle id `dev.slopmax.desktop`,
+  macOS 12 or later, Electron 45's floor), the executable `slopmax-desktop`,
+  and the CLI sits in `Contents/Resources/bin`; both are signed ad hoc.
+
+## Speed (C17)
+
+- **A body read as JSON** (PRX-031). A body is read (for its model and
+  session) when it is not compressed and is framed as one JSON object: `{`
+  first and `}` last, whitespace aside. Every byte is checked only for a
+  client key held to some models, where only a valid body proves it names
+  one model and no other. Checking every byte costs about 1 ns a byte
+  (0.3 ms for a 300 KB conversation, more than everything else the proxy
+  does for it); the scanner walks only what lies before the fields it reads
+  and finds nothing in anything malformed on the way. A body broken further
+  on is routed by its model and forwarded as sent, and its provider refuses
+  it, where it was forwarded with no model read before.
+- **Readings renewed within 10 seconds** (POOL, LED). An answer whose
+  rate-limit reading repeats its account's last one (nearly all do) leaves
+  the account's health as it was; the kept reading is renewed once it is 10
+  seconds old. So "fresh" (the 5 minutes after which a full window with no
+  reset time stops counting) is measured from a reading at most 10 seconds
+  older than the newest. An account's last use and the tokens it served
+  live beside its health in the pool and join it when it is read whole or
+  saved to `state.json`.
+- **The ledger's month file stays open** (LED). The writer keeps the month
+  file it appends to open between batches (opened to append, so the CLI's
+  own appends still never interleave inside a line) and opens the next one
+  when the month turns. A file removed while the daemon runs is written
+  again only from the next month or the next start.
+- **Request events only while someone watches** (ADM-012). The event feed
+  hears of each request only while a front end is connected; nobody else
+  reads those events.
+- **The speed budgets do not hold** (§16). Measured with `tools/bench gates`
+  on 2026-11-01 (linux-x64, 8 shared vCPUs, load about 2,
+  1.4.4-canary.1+da867c60b, AOT binary and rig): small requests 32 at once
+  at 27.4% of the raw probe (2,540 against 9,282 req/s; budget 70%, was
+  9.1%), 300 KB requests at 46.4% (1,510 against 3,254; budget 80%, was
+  14.5%), one at a time 0.37 ms over the probe's p50 (budget 0.15 ms, was
+  1.7 ms); idle RSS 58.4 MB (45) and peak 154.4 MB (120) are as before. A
+  CPU profile of the rig under the small load puts its main thread at about
+  350 µs a request against the probe's 100 µs: Bun's HTTP server, `fetch`
+  and stream plumbing, which the probe pays too, about 140 µs; Headers
+  work (the agent's headers forwarded, the answer's readings and the
+  pool's windows shown in its place) about 50 µs; the SSE tap about
+  35 µs; Effect's fibers and Schema classes about 50 µs; the pool, the
+  ledger and the request's log line about 35 µs. Every piece of it is a
+  feature the probe does not have, and JavaScript on the proxy's thread
+  runs about twice as slow under the full load (the mock, oha and Bun's
+  HTTP thread share the host's four cores) as it does alone.

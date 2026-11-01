@@ -38,7 +38,7 @@ import {
 } from "@slopmax/domain"
 import { money } from "@slopmax/domain/format"
 import { DateTime } from "effect"
-import { costAt, type Pricing } from "./pricing.ts"
+import { costAt, type Pricing, type Rates } from "./pricing.ts"
 
 /** Everything the views need besides the records. */
 export interface ViewContext {
@@ -103,8 +103,8 @@ const localClock = (zone: DateTime.TimeZone): ((at: DateTime.DateTime) => Local)
 
 /** A local day's calendar date. */
 const dateOf = (day: number): { readonly year: number; readonly month: number; readonly date: number } => {
-  const at = new Date(day * dayMillis)
-  return { year: at.getUTCFullYear(), month: at.getUTCMonth() + 1, date: at.getUTCDate() }
+  const { year, month, day: date } = DateTime.toPartsUtc(DateTime.makeUnsafe(day * dayMillis))
+  return { year, month, date }
 }
 
 const two = (n: number) => String(n).padStart(2, "0")
@@ -136,6 +136,42 @@ export const rangeStart = (range: SummaryRange, now: DateTime.Utc, zone: DateTim
 // ---------------------------------------------------------------------------
 // Totals
 
+/**
+ * A request as the views add it up, read once: whether it was an answer or
+ * a failure, and what it cost (undefined when its model has no price). A
+ * record is added to several totals at once, so these are worked out once
+ * per record, and each model's prices once per view.
+ */
+interface Read {
+  readonly record: RequestRecord
+  readonly answered: boolean
+  readonly failed: boolean
+  readonly cost: number | undefined
+  readonly rates: Rates | undefined
+}
+
+/** Reads records for one view, looking each model's prices up once. */
+const readerOf = (pricing: Pricing): ((record: RequestRecord) => Read) => {
+  const known = new Map<string, Rates | undefined>()
+  const ratesOf = (model: string): Rates | undefined => {
+    if (known.has(model)) return known.get(model)
+    const rates = pricing.rates(model)
+    known.set(model, rates)
+    return rates
+  }
+  return (record) => {
+    const answered = isAnswer(record)
+    const rates = answered && record.model !== undefined ? ratesOf(record.model) : undefined
+    return {
+      record,
+      answered,
+      failed: isFailed(record),
+      cost: rates === undefined ? undefined : costAt(rates, record.usage),
+      rates,
+    }
+  }
+}
+
 /** Totals while they are added up. */
 class Tally {
   requests = 0
@@ -148,15 +184,15 @@ class Tally {
   failed = 0
 
   /** Counts a request: an answer everywhere, a failure as failed, housekeeping not at all. */
-  add(record: RequestRecord, pricing: Pricing): void {
-    if (isFailed(record)) {
+  add(read: Read): void {
+    if (read.failed) {
       this.failed += 1
       return
     }
-    if (!isAnswer(record)) return
-    const rates = record.model === undefined ? undefined : pricing.rates(record.model)
-    if (rates === undefined) this.unpriced += 1
-    else this.cost += costAt(rates, record.usage)
+    if (!read.answered) return
+    const { record, cost } = read
+    if (cost === undefined) this.unpriced += 1
+    else this.cost += cost
     this.requests += 1
     this.input += record.usage.input
     this.output += record.usage.output
@@ -196,9 +232,10 @@ export const costLabel = (totals: Totals): string => {
 }
 
 const requestsOf = (records: ReadonlyArray<LedgerRecord>, since: DateTime.Utc): ReadonlyArray<RequestRecord> => {
+  const from = since.epochMilliseconds
   const found: Array<RequestRecord> = []
   for (const record of records) {
-    if (record._tag === "Request" && DateTime.isGreaterThanOrEqualTo(record.at, since)) found.push(record)
+    if (record._tag === "Request" && record.at.epochMilliseconds >= from) found.push(record)
   }
   return found
 }
@@ -232,17 +269,19 @@ export const summary = (
   }
   const rows = new Map<string, Tally>()
   const total = new Tally()
+  const readOf = readerOf(ctx.pricing)
   for (const record of requestsOf(records, since)) {
+    const read = readOf(record)
     // Housekeeping makes no row of its own.
-    if (!isAnswer(record) && !isFailed(record)) continue
+    if (!read.answered && !read.failed) continue
     const key = keyOf(record)
     let row = rows.get(key)
     if (row === undefined) {
       row = new Tally()
       rows.set(key, row)
     }
-    row.add(record, ctx.pricing)
-    total.add(record, ctx.pricing)
+    row.add(read)
+    total.add(read)
   }
   return new Summary({
     range,
@@ -297,7 +336,7 @@ export const windowsEnded = (
 ): ReadonlyArray<WindowEndedRecord> => {
   const seen = new Map<string, WindowEndedRecord>()
   for (const record of records) {
-    if (record._tag !== "WindowEnded" || DateTime.isLessThan(record.at, since)) continue
+    if (record._tag !== "WindowEnded" || record.at.epochMilliseconds < since.epochMilliseconds) continue
     const key = [record.account, record.span, record.model ?? "", DateTime.toEpochMillis(record.at)].join("\0")
     if (!seen.has(key)) seen.set(key, record)
   }
@@ -398,7 +437,7 @@ const sortedNumbers = (values: ReadonlyArray<number>): ReadonlyArray<number> => 
 const dayLabels = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" })
 
 const labelOf = (range: HistoryRange, first: Local, index: number): string =>
-  range === "today" ? `${two(index)}:00` : dayLabels.format(new Date((first.day + index) * dayMillis))
+  range === "today" ? `${two(index)}:00` : dayLabels.format((first.day + index) * dayMillis)
 
 /** Most tokens first, then most failures; ties keep their order. */
 const ranked = <A extends { readonly totals: Tally }>(groups: ReadonlyArray<A>): ReadonlyArray<A> =>
@@ -436,25 +475,27 @@ export const history = (records: ReadonlyArray<LedgerRecord>, range: HistoryRang
   const agents = new Map<string, { name: string; totals: Tally }>()
   const speeds = new Map<string, { model: string; provider: ProviderId; each: Array<number> }>()
 
+  const readOf = readerOf(ctx.pricing)
   for (const record of requests) {
     const local = localOf(record.at)
     const bucket = buckets[slotOf(range, local, first)]
     if (bucket === undefined) continue
-    bucket.totals.add(record, ctx.pricing)
-    total.add(record, ctx.pricing)
-    const answered = isAnswer(record)
+    const read = readOf(record)
+    bucket.totals.add(read)
+    total.add(read)
+    const { answered, failed } = read
     // A failure counts against the account it reached, when it reached one.
-    if (record.account !== undefined && (answered || isFailed(record))) {
+    if (record.account !== undefined && (answered || failed)) {
       const name = nameOf(ctx, record.account)
       const key = `${name}\0${record.provider}`
       const account = accounts.get(key) ?? { name, provider: record.provider, totals: new Tally() }
-      account.totals.add(record, ctx.pricing)
+      account.totals.add(read)
       accounts.set(key, account)
     }
-    if (isFailed(record) && record.account === undefined) unplaced += 1
+    if (failed && record.account === undefined) unplaced += 1
     if (!answered) continue
 
-    if (!isSubscription(record.provider)) billed.add(record, ctx.pricing)
+    if (!isSubscription(record.provider)) billed.add(read)
     const column = providers.indexOf(record.provider)
     if (column >= 0) bucket.tokens[column] = (bucket.tokens[column] ?? 0) + record.usage.tokens
     if (record.attempts > 1) {
@@ -471,7 +512,7 @@ export const history = (records: ReadonlyArray<LedgerRecord>, range: HistoryRang
       sessions.add(record.session)
     }
     const model = record.model ?? "unknown"
-    const rates = record.model === undefined ? undefined : ctx.pricing.rates(record.model)
+    const rates = read.rates
     if (rates !== undefined) cacheSaved += (record.usage.cacheRead * (rates.input - rates.cacheRead)) / 1e6
     const speed = speedOf(record)
     if (speed !== undefined) {
@@ -482,17 +523,17 @@ export const history = (records: ReadonlyArray<LedgerRecord>, range: HistoryRang
     }
     // Warmups keep a window open at slopmax's hours; they are not the work, and never read the cache.
     if (record.agent !== "slopmax") {
-      bucket.work.add(record, ctx.pricing)
-      work.add(record, ctx.pricing)
+      bucket.work.add(read)
+      work.add(read)
       const row = activity[local.weekday]
       if (row !== undefined) row[local.hour] = (row[local.hour] ?? 0) + 1
     }
     const modelGroup = models.get(model) ?? { name: model, totals: new Tally() }
-    modelGroup.totals.add(record, ctx.pricing)
+    modelGroup.totals.add(read)
     models.set(model, modelGroup)
     const agent = senderName(record.agent)
     const agentGroup = agents.get(agent) ?? { name: agent, totals: new Tally() }
-    agentGroup.totals.add(record, ctx.pricing)
+    agentGroup.totals.add(read)
     agents.set(agent, agentGroup)
   }
 

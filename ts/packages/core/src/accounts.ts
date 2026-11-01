@@ -201,11 +201,11 @@ const make = Effect.gen(function* () {
   })
 
   const update = Effect.fn("Accounts.update")(function* (id: AccountId, f: (account: Account) => Account) {
-    if (!isFileId(id)) return yield* new AccountGone({ id })
+    if (!isFileId(id)) return yield* AccountGone.of({ id })
     return yield* withAccountLock(id)(
       Effect.gen(function* () {
         const stored = yield* fresh(id)
-        if (Option.isNone(stored)) return yield* new AccountGone({ id })
+        if (Option.isNone(stored)) return yield* AccountGone.of({ id })
         const next = new Account({ ...f(stored.value), id })
         yield* save(next)
         return next
@@ -214,12 +214,12 @@ const make = Effect.gen(function* () {
   })
 
   const remove = Effect.fn("Accounts.remove")(function* (id: AccountId) {
-    if (!isFileId(id)) return yield* new AccountGone({ id })
+    if (!isFileId(id)) return yield* AccountGone.of({ id })
     yield* withAccountLock(id)(
       Effect.gen(function* () {
         const removed = yield* home.remove(fileOf(id))
         yield* change((byId) => byId.delete(id))
-        if (!removed) return yield* new AccountGone({ id })
+        if (!removed) return yield* AccountGone.of({ id })
       }),
     )
   })

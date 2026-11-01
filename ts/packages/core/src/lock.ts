@@ -95,8 +95,10 @@ export interface Liveness {
   readonly startedAt: (pid: number) => Effect.Effect<Option.Option<string>>
 }
 
-const errorCode = (cause: unknown): unknown =>
-  typeof cause === "object" && cause !== null && "code" in cause ? cause.code : undefined
+const errorCode = (cause: unknown): string | undefined =>
+  typeof cause === "object" && cause !== null && "code" in cause && typeof cause.code === "string"
+    ? cause.code
+    : undefined
 
 const pidAlive = (pid: number): Effect.Effect<boolean> =>
   Effect.try({

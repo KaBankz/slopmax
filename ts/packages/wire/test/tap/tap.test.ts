@@ -56,6 +56,18 @@ describe("Tap over events", () => {
     expect(outcome.exhausted).toBe(false)
   })
 
+  it("reads only the event types its format counts from, however the type is spelled", () => {
+    const outcome = tapped("messages", [
+      // A delta that mentions usage in its text counts for nothing; it is not read at all.
+      'data: {"type":"content_block_delta","delta":{"text":"\\"usage\\":{\\"output_tokens\\":99}"}}\n\n',
+      // The same type spelled with an escape, with spaces, or not first, is still read.
+      'data:{"type":"message_\\u0073tart","message":{"usage":{"input_tokens":3}}}\n\n',
+      'data:   {"usage":{"cache_read_input_tokens":4},"type":"message_delta"}\n\n',
+      'data: {"type":"message_delta","usage":{"output_tokens":5}}\n\n',
+    ])
+    expect(outcome.usage).toMatchObject({ requests: 1, input: 3, output: 5, cacheRead: 4, cacheWrite: 0 })
+  })
+
   it("separates cached input in a Responses stream", () => {
     const outcome = tapped("responses", [
       'data: {"type":"response.completed","response":{"id":"r","usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":25},"output_tokens":40,"total_tokens":140}}}',

@@ -10,7 +10,7 @@
 // else is the request's own problem, which goes back to the client.
 //
 // An attempt never fails: every outcome is a value the failover loop acts on.
-import { type AccountId, type Dialect, type ProviderId, slopmaxVersion } from "@slopmax/domain"
+import { type AccountId, type Dialect, type PoolWindow, type ProviderId, slopmaxVersion } from "@slopmax/domain"
 import {
   canTranslate,
   collect,
@@ -31,7 +31,7 @@ import {
   type UpstreamDialect,
   wholeReply,
 } from "@slopmax/wire"
-import { Clock, Data, DateTime, Duration, Effect, Result } from "effect"
+import { Clock, Data, DateTime, Duration, Effect, Option, Result } from "effect"
 import type { Account } from "../account.ts"
 import { Accounts } from "../accounts.ts"
 import {
@@ -42,7 +42,7 @@ import {
   observe,
   Pool,
   type PoolModel,
-  succeeded,
+  serving,
   throttle,
 } from "../pool.ts"
 import type { Provider } from "../providers/provider.ts"
@@ -141,6 +141,20 @@ const notReturned = [
  */
 export const returnable = (upstream: Headers): Headers => {
   const out = new Headers(upstream)
+  for (const name of notReturned) out.delete(name)
+  return out
+}
+
+/**
+ * The headers a client gets for a provider's answer, with the pool's
+ * windows shown in place of the account's when the pool reads as one. The
+ * provider's rewrite already makes a copy, so the headers that never pass
+ * are dropped from that copy rather than copying twice.
+ */
+export const shownHeaders = (provider: Provider, upstream: Headers, pooled: ReadonlyArray<PoolWindow>): Headers => {
+  if (pooled.length === 0) return returnable(upstream)
+  const out = provider.showPool(upstream, pooled)
+  if (out === upstream) return returnable(upstream)
   for (const name of notReturned) out.delete(name)
   return out
 }
@@ -305,9 +319,7 @@ export const makeAttempt = Effect.gen(function* () {
     tap: ReportingTap,
     provider: Provider,
   ) {
-    const headers = returnable(response.headers)
-    const pooled = yield* pool.pooled(provider.id)
-    const shown = pooled.length > 0 ? provider.showPool(headers, pooled) : headers
+    const shown = shownHeaders(provider, response.headers, yield* pool.pooled(provider.id))
     const body = relayOf(response, started, tap, undefined)
     return new Response(body, { status: response.status, headers: shown })
   })
@@ -487,7 +499,7 @@ export const makeAttempt = Effect.gen(function* () {
         const tap = reportingTap(inbound, step, id, response.status, attempts, Tap.forResponse(wire, response.headers))
         // From here the upstream body belongs to the relay: a client gone meanwhile is seen by the
         // relay (Bun cancels the response), not by interrupting the steps that build it.
-        yield* pool.update((m, time) => succeeded(observed(m, time), id, undefined, time))
+        yield* pool.update((m, time) => serving(m, id, Option.getOrUndefined(limits), time))
         yield* Effect.logInfo(`${id} ${inbound.route.method} ${path} ${model ?? "-"} → ${response.status}${as}`)
         const served =
           lane._tag === "Translate"

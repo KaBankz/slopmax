@@ -168,7 +168,7 @@ describe("Daemon schedules", () => {
       yield* TestClock.adjust("2 minutes")
       expect(yield* Ref.get(count)).toBe(3)
       expect(logs.text("Warn").some((line) => line.includes("disk full"))).toBe(true)
-    }).pipe(Effect.provide(SettingsService.layerValue()), Effect.provide(logs.layer))
+    }).pipe(Effect.provide(SettingsService.layerValue().pipe(Layer.provideMerge(logs.layer))))
   })
 })
 
@@ -356,8 +356,7 @@ describe("Daemon start and stop", () => {
           SLOPMAX_NO_SERVICE: "1",
         })
         const serving = yield* Daemon.serve({ log }).pipe(
-          Effect.provide(Assets.none),
-          Effect.provide(ConfigProvider.layer(config)),
+          Effect.provide(Assets.none.pipe(Layer.provideMerge(ConfigProvider.layer(config)))),
           Effect.forkScoped,
         )
         const fs = yield* FileSystem.FileSystem

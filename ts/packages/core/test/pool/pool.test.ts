@@ -28,6 +28,7 @@ import {
   SavedState,
   sawAgent,
   sawCodex,
+  serving,
   sessionCounts,
   succeeded,
   sync,
@@ -37,6 +38,7 @@ import {
   unpinAll,
 } from "../../src/pool.ts"
 import { claude, Driver, id, limits, some, subscription, ts, window } from "./fixtures.ts"
+import type { PoolModel } from "../../src/pool.ts"
 
 const a = claude("a", 1)
 const b = claude("b", 2)
@@ -44,6 +46,12 @@ const c = claude("c", 3)
 
 const served = (requests: number, input: number, output: number) =>
   new Usage({ requests, input, output, cacheRead: 0, cacheWrite: 0 })
+
+/** The same reading of two windows, taken at second `at`. */
+const reading = (at: number) => limits([window("5h", 21, 9000), window("7d", 43, 90_000)], at)
+
+/** The accounts' health as the model keeps it, apart from what they did. */
+const standing = (m: PoolModel) => m.health
 
 const reason = (driver: Driver, at = 1000) => some(next(driver.m, "claude", driver.strategy, ts(at)))?.reason
 
@@ -409,6 +417,58 @@ describe("what the pool learns", () => {
     const codex = sawCodex(clean, { lastModel: "gpt-6-sol" })
     expect(codex.codex.lastModel).toBe("gpt-6-sol")
     expect(sawCodex(codex, { lastModel: "gpt-6-sol" })).toBe(codex)
+  })
+
+  it("an answer repeating the last reading leaves the account's health and the pooled windows as they were", () => {
+    let m = serving(new Driver([a]).m, a.id, reading(1000), ts(1000))
+    const kept = standing(m)
+    const version = m.version
+    m = serving(m, a.id, reading(1001), ts(1001))
+    m = serving(m, a.id, reading(1005), ts(1005))
+    expect(m.health).toBe(kept)
+    expect(m.version).toBe(version)
+    // Its use still shows, and the reading is renewed once 10 seconds have passed.
+    expect(healthOf(m, a.id).lastUsed).toEqual(ts(1005))
+    m = serving(m, a.id, reading(1011), ts(1011))
+    expect(healthOf(m, a.id).limits.observedAt).toEqual(ts(1011))
+    expect(m.version).toBe(version)
+    // A reading that moves is taken at once, and the pooled windows read afresh.
+    m = serving(m, a.id, limits([window("5h", 22, 9000), window("7d", 43, 90_000)], 1012), ts(1012))
+    expect(healthOf(m, a.id).limits.windows[0]?.used).toBe(22)
+    expect(m.version).toBe(version + 1)
+  })
+
+  it("an answer clears throttling and the last error, and lifts a block a fresh reading shows is over", () => {
+    let m = new Driver([a]).m
+    m = block(throttle(failed(m, a.id, "boom"), a.id, ts(5000)), a.id, ts(9000), undefined, "limit")
+    m = serving(m, a.id, limits([window("5h", 50, 9000)], 1000), ts(1000))
+    const health = healthOf(m, a.id)
+    expect([health.throttledUntil, health.lastError, health.blockedUntil]).toEqual([undefined, undefined, undefined])
+  })
+
+  it("keeps what each account did apart from its health, and saves the two together", () => {
+    let m = new Driver([a]).m
+    m = addUsage(m, a.id, served(1, 10, 5))
+    m = succeeded(m, a.id, served(1, 20, 5), ts(1002))
+    expect(HashMap.size(m.health)).toBe(0)
+    const saved = toSaved(m, ts(1003))
+    expect(saved.health[a.id]?.lastUsed).toEqual(ts(1002))
+    expect(saved.health[a.id]?.served).toMatchObject({ requests: 2, input: 30, output: 10 })
+    // A restart reads them back as the account's health, and what it serves after adds to them.
+    const restored = addUsage(fromSaved(saved), a.id, served(1, 1, 1))
+    expect(healthOf(restored, a.id).served).toMatchObject({ requests: 3, input: 31, output: 11 })
+    expect(healthOf(restored, a.id).lastUsed).toEqual(ts(1002))
+  })
+
+  it("counts what an account served once, however many readings come after it", () => {
+    let m = new Driver([a]).m
+    m = succeeded(m, a.id, served(1, 100, 0), ts(1000))
+    m = observe(m, a.id, limits([window("5h", 10, 5000)]), ts(1001))
+    m = observe(m, a.id, limits([window("5h", 20, 5000)]), ts(1002))
+    m = addUsage(m, a.id, served(0, 1, 0))
+    expect(healthOf(m, a.id).served).toMatchObject({ requests: 1, input: 101 })
+    expect(toSaved(m, ts(1003)).health[a.id]?.served).toMatchObject({ requests: 1, input: 101 })
+    expect(healthOf(m, a.id).limits.windows[0]?.used).toBe(20)
   })
 
   it("warm-up usage adds to what an account served without marking it used", () => {

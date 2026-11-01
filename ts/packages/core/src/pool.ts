@@ -49,8 +49,10 @@ import {
   withDefault,
 } from "@slopmax/domain"
 import { nextReasonText } from "@slopmax/domain/format"
+import { type Counts, noCounts } from "@slopmax/wire"
 import {
   Array as Arr,
+  Clock,
   Context,
   Data,
   DateTime,
@@ -182,9 +184,8 @@ const quotaBack = (health: Health, now: DateTime.Utc, model?: string): DateTime.
  */
 export const blockedFor = (health: Health, model: string | undefined, now: DateTime.Utc): DateTime.Utc | undefined => {
   const capped = model === undefined ? undefined : health.modelBlocks[model]
-  return [health.blockedUntil, health.throttledUntil, quotaBack(health, now, model), capped].reduce<
-    DateTime.Utc | undefined
-  >((latest, at) => later(latest, after(at, now)), undefined)
+  const blocked = later(after(health.blockedUntil, now), after(health.throttledUntil, now))
+  return later(later(blocked, after(quotaBack(health, now, model), now)), after(capped, now))
 }
 
 /** Whether the account sits out for its quota (a refusal or a full window), not for throttling. */
@@ -211,9 +212,12 @@ export interface AccountLapse {
 export interface PoolModel {
   /** Every account, in list order. */
   readonly accounts: ReadonlyArray<Account>
+  /** Each account's standing: its readings, blocks and errors (its activity apart, see {@link healthOf}). */
   readonly health: HashMap.HashMap<AccountId, Health>
+  /** What each account did since the model was made: kept apart from its health, as it changes on every answer. */
+  readonly activity: HashMap.HashMap<AccountId, Activity>
   /** By {@link sessionKey}. */
-  readonly sessions: HashMap.HashMap<string, Session>
+  readonly sessions: HashMap.HashMap<string, Placed>
   readonly turns: HashMap.HashMap<AccountId, number>
   /** The last turn handed out. */
   readonly picks: number
@@ -232,10 +236,46 @@ export interface PoolModel {
 
 export const sessionKey = (provider: ProviderId, session: string): string => `${provider}\u0000${session}`
 
+/**
+ * A session as the live model keeps it: a plain value with a
+ * {@link Session}'s fields. Every request moves its session's time, and
+ * building a schema class each time costs more than placing the request;
+ * `state.json` gets them as `Session`s.
+ */
+export interface Placed {
+  readonly provider: ProviderId
+  readonly id: string
+  readonly account: AccountId
+  readonly at: DateTime.Utc
+}
+
+const plus = (a: Counts, b: Counts): Counts => ({
+  requests: a.requests + b.requests,
+  input: a.input + b.input,
+  output: a.output + b.output,
+  cacheRead: a.cacheRead + b.cacheRead,
+  cacheWrite: a.cacheWrite + b.cacheWrite,
+})
+
+/**
+ * What an account did since the model was made: when it last answered and
+ * the tokens it served. Every answer changes both, so they are plain values
+ * kept beside the account's {@link Health} (a schema class, which costs
+ * more to make than placing a request) and join it when the health is read
+ * whole or saved.
+ */
+export interface Activity {
+  readonly lastUsed: DateTime.Utc | undefined
+  readonly served: Counts
+}
+
+const noActivity: Activity = { lastUsed: undefined, served: noCounts }
+
 /** A model with nothing known yet. */
 export const emptyModel: PoolModel = {
   accounts: [],
   health: HashMap.empty(),
+  activity: HashMap.empty(),
   sessions: HashMap.empty(),
   turns: HashMap.empty(),
   picks: 0,
@@ -285,10 +325,11 @@ const dropExpiredCaps = (health: Health, now: DateTime.Utc): Health => {
 export const toSaved = (m: PoolModel, now: DateTime.Utc): SavedState => {
   const known = new Set(m.accounts.map((account) => account.id))
   const health: Record<string, Health> = {}
-  for (const [id, entry] of m.health) if (known.size === 0 || known.has(id)) health[id] = dropExpiredCaps(entry, now)
+  const ids = new Set([...HashMap.keys(m.health), ...HashMap.keys(m.activity)])
+  for (const id of ids) if (known.size === 0 || known.has(id)) health[id] = dropExpiredCaps(healthOf(m, id), now)
   return new SavedState({
     health,
-    sessions: [...HashMap.values(m.sessions)],
+    sessions: Array.from(HashMap.values(m.sessions), (placed) => new Session(placed, unchecked)),
     turns: Object.fromEntries(m.turns),
     pins: m.pins,
     agents: m.agents,
@@ -298,8 +339,35 @@ export const toSaved = (m: PoolModel, now: DateTime.Utc): SavedState => {
   })
 }
 
-export const healthOf = (m: PoolModel, id: AccountId): Health =>
+/** The account's standing as kept: readings, blocks, errors; its activity is not in it. */
+const standing = (m: PoolModel, id: AccountId): Health =>
   Option.getOrElse(HashMap.get(m.health, id), () => Health.empty)
+
+/** What the account did since the model was made. */
+export const activityOf = (m: PoolModel, id: AccountId): Activity =>
+  Option.getOrElse(HashMap.get(m.activity, id), () => noActivity)
+
+/**
+ * Everything known about the account, its activity included: when it was
+ * last used, and what it served (as saved, plus since).
+ */
+export const healthOf = (m: PoolModel, id: AccountId): Health => {
+  const kept = standing(m, id)
+  const done = HashMap.get(m.activity, id)
+  if (Option.isNone(done)) return kept
+  const { lastUsed, served } = done.value
+  return changed(kept, {
+    ...(lastUsed === undefined ? {} : { lastUsed }),
+    served: new Usage(plus(kept.served, served), unchecked),
+  })
+}
+
+/** The model with the account's activity changed. */
+const withActivity = (m: PoolModel, id: AccountId, f: (activity: Activity) => Activity): PoolModel => ({
+  ...m,
+  activity: HashMap.set(m.activity, id, f(activityOf(m, id))),
+  dirty: true,
+})
 
 /**
  * The model with one account's health changed. Only a new reading or a
@@ -307,15 +375,43 @@ export const healthOf = (m: PoolModel, id: AccountId): Health =>
  * bump the version; a served request keeps their cache.
  */
 const withHealth = (m: PoolModel, id: AccountId, f: (health: Health) => Health): PoolModel => {
-  const old = healthOf(m, id)
+  const old = standing(m, id)
   const health = f(old)
-  const reread = health.limits !== old.limits || health.blockedUntil !== old.blockedUntil
+  if (health === old) return m
+  const reread =
+    health.blockedUntil !== old.blockedUntil ||
+    (health.limits !== old.limits && !sameReading(old.limits, health.limits))
   return {
     ...m,
     health: HashMap.set(m.health, id, health),
     version: reread ? m.version + 1 : m.version,
     dirty: true,
   }
+}
+
+const sameInstant = (a: DateTime.Utc | undefined, b: DateTime.Utc | undefined): boolean =>
+  a === undefined || b === undefined ? a === b : DateTime.toEpochMillis(a) === DateTime.toEpochMillis(b)
+
+/**
+ * Whether a newer reading reads as the older one did: the same plan and
+ * windows, taken while the older one was still fresh. Every answer carries
+ * a reading and most repeat the last, so the pooled windows read from them
+ * stay as they were: freshness only lapses at a time their cache already
+ * waits for.
+ */
+export const sameReading = (older: Limits, newer: Limits): boolean => {
+  if (older.plan !== newer.plan || older.windows.length !== newer.windows.length) return false
+  if (older.observedAt === undefined || newer.observedAt === undefined) return false
+  const gap = DateTime.toEpochMillis(newer.observedAt) - DateTime.toEpochMillis(older.observedAt)
+  if (gap < 0 || gap >= Duration.toMillis(staleAfter)) return false
+  for (let i = 0; i < older.windows.length; i++) {
+    const a = older.windows[i]
+    const b = newer.windows[i]
+    if (a === undefined || b === undefined) return false
+    if (a.span !== b.span || a.model !== b.model || a.used !== b.used || !sameInstant(a.resetsAt, b.resetsAt))
+      return false
+  }
+  return true
 }
 
 /**
@@ -396,7 +492,7 @@ export const isWorking = (account: Account): boolean => !account.disabled && acc
 
 const of = (provider: ProviderId) => (account: Account) => account.provider === provider
 
-const sessionLive = (session: Session, now: DateTime.Utc, ttl: Duration.Duration): boolean =>
+const sessionLive = (session: Placed, now: DateTime.Utc, ttl: Duration.Duration): boolean =>
   DateTime.toEpochMillis(now) - DateTime.toEpochMillis(session.at) < Duration.toMillis(ttl)
 
 /** Unknown last use sorts first: an account never used is the one to use. */
@@ -456,8 +552,8 @@ const place = (
   const top = Math.max(...ready.map((account) => account.priority))
   const tier = ready.filter((account) => account.priority === top)
   const room = (account: Account): Room => {
-    const health = healthOf(m, account.id)
-    return { score: score(health.limits, now), lastUsed: health.lastUsed }
+    const health = standing(m, account.id)
+    return { score: score(health.limits, now), lastUsed: activityOf(m, account.id).lastUsed ?? health.lastUsed }
   }
   switch (strategy) {
     // Accounts list oldest first within a priority, so the oldest is the one to keep filling.
@@ -468,7 +564,7 @@ const place = (
     case "reset-first":
       return firstBy(
         tier,
-        (account): Urgent => ({ ...room(account), urgency: urgency(healthOf(m, account.id).limits, now) }),
+        (account): Urgent => ({ ...room(account), urgency: urgency(standing(m, account.id).limits, now) }),
         urgentOrder,
       )
     case "least-used":
@@ -502,10 +598,12 @@ export const pick = (m: PoolModel, r: PickRequest, now: DateTime.Utc): readonly 
       sessionLive(session, now, r.ttl),
     ),
   )?.account
-  const candidates = r.candidates === undefined ? undefined : new Set(r.candidates)
+  const candidates = r.candidates
   const usable = m.accounts.filter(
     (account) =>
-      account.provider === r.provider && isWorking(account) && (candidates === undefined || candidates.has(account.id)),
+      account.provider === r.provider &&
+      isWorking(account) &&
+      (candidates === undefined || candidates.includes(account.id)),
   )
   if (usable.length === 0) {
     const reason = m.accounts.some(of(r.provider))
@@ -516,7 +614,7 @@ export const pick = (m: PoolModel, r: PickRequest, now: DateTime.Utc): readonly 
   const ready: Array<Account> = []
   let soonest: DateTime.Utc | undefined
   for (const account of usable) {
-    const until = blockedFor(healthOf(m, account.id), r.model, now)
+    const until = blockedFor(standing(m, account.id), r.model, now)
     if (until !== undefined) soonest = soonest === undefined ? until : DateTime.min(soonest, until)
     else if (!r.exclude.has(account.id)) ready.push(account)
   }
@@ -543,11 +641,7 @@ export const pick = (m: PoolModel, r: PickRequest, now: DateTime.Utc): readonly 
     sessions:
       key === undefined || r.session === undefined
         ? m.sessions
-        : HashMap.set(
-            m.sessions,
-            key,
-            new Session({ provider: r.provider, id: r.session, account: chosen.id, at: now }, unchecked),
-          ),
+        : HashMap.set(m.sessions, key, { provider: r.provider, id: r.session, account: chosen.id, at: now }),
     dirty: m.dirty || key !== undefined || !r.housekeeping,
   }
   const movedFrom = bound !== undefined && bound !== chosen.id ? bound : undefined
@@ -572,7 +666,7 @@ export const next = (
     (account) =>
       account.provider === provider &&
       isWorking(account) &&
-      blockedFor(healthOf(m, account.id), undefined, now) === undefined,
+      blockedFor(standing(m, account.id), undefined, now) === undefined,
   )
   const pinned = ready.find((account) => account.id === m.pins[provider])
   if (pinned !== undefined) return view(pinned, "pinned")
@@ -581,7 +675,7 @@ export const next = (
   if (ready.filter((account) => account.priority === chosen.priority).length === 1) return view(chosen, "only-one")
   switch (strategy) {
     case "reset-first": {
-      const u = urgency(healthOf(m, chosen.id).limits, now)
+      const u = urgency(standing(m, chosen.id).limits, now)
       if (Option.isSome(u.weekEnding)) return view(chosen, "week-ending")
       if (Option.isSome(u.short) || Option.isSome(u.long)) return view(chosen, "resets-first")
       return view(chosen, "most-room")
@@ -611,20 +705,65 @@ export const sessionCounts = (
 // ---------------------------------------------------------------------------
 // What requests and readings teach the pool
 
-/** A request the account served: it was used now, and is no longer throttled or failing. */
-export const succeeded = (m: PoolModel, id: AccountId, usage: Usage | undefined, now: DateTime.Utc): PoolModel =>
-  withHealth(m, id, (health) =>
-    changed(
-      health,
-      { lastUsed: now, served: usage === undefined ? health.served : health.served.plus(usage) },
-      "throttledUntil",
-      "lastError",
-    ),
-  )
+/** An account no longer throttled or failing: nothing to clear from its health. */
+const cleared = (health: Health): boolean => health.throttledUntil === undefined && health.lastError === undefined
 
-/** Tokens the account served outside a request the proxy relayed (a warmup). */
+/** A request the account served: it was used now, and is no longer throttled or failing. */
+export const succeeded = (m: PoolModel, id: AccountId, usage: Usage | undefined, now: DateTime.Utc): PoolModel => {
+  const kept = cleared(standing(m, id))
+    ? m
+    : withHealth(m, id, (health) => changed(health, {}, "throttledUntil", "lastError"))
+  return withActivity(kept, id, (activity) => ({
+    lastUsed: now,
+    served: usage === undefined ? activity.served : plus(activity.served, usage),
+  }))
+}
+
+/**
+ * How long a reading that repeats the kept one may go before the kept one
+ * is renewed. Nearly every answer repeats its account's last reading, and
+ * renewing it means rebuilding the account's health; renewing it every 10
+ * seconds keeps it fresh to within 10 seconds of the 5 minutes after which
+ * a full window without a reset time stops counting.
+ */
+export const readingRenewal: Duration.Duration = Duration.seconds(10)
+
+const renewalDue = (older: Limits, newer: Limits): boolean =>
+  older.observedAt === undefined ||
+  newer.observedAt === undefined ||
+  DateTime.toEpochMillis(newer.observedAt) - DateTime.toEpochMillis(older.observedAt) >=
+    Duration.toMillis(readingRenewal)
+
+/**
+ * An answer the account began to serve, in one change: the reading its
+ * headers carried folded in (as {@link observe} does), and then the account
+ * used now and no longer throttled or failing (as {@link succeeded} does).
+ * Every answer the proxy relays goes through here, so the account's health
+ * is rebuilt only when the answer changes it.
+ */
+export const serving = (m: PoolModel, id: AccountId, reading: Limits | undefined, now: DateTime.Utc): PoolModel => {
+  const old = standing(m, id)
+  let limits = old.limits
+  if (reading !== undefined) {
+    const merged = merge(old.limits, reading, now)
+    if (!sameReading(old.limits, merged) || renewalDue(old.limits, merged)) limits = merged
+  }
+  const lifted = reading !== undefined && old.blockedUntil !== undefined && !isExhausted(limits, now)
+  const dropped: ReadonlyArray<Droppable> = lifted
+    ? ["throttledUntil", "lastError", "blockedUntil"]
+    : ["throttledUntil", "lastError"]
+  const kept =
+    limits === old.limits && !lifted && cleared(old) ? m : withHealth(m, id, () => changed(old, { limits }, ...dropped))
+  const ended = reading === undefined ? [] : lapsed(old.limits, reading, now)
+  const used = withActivity(kept, id, (activity) => ({ lastUsed: now, served: activity.served }))
+  return ended.length === 0
+    ? used
+    : { ...used, pending: [...used.pending, ...ended.map((lapse) => ({ account: id, lapse }))] }
+}
+
+/** Tokens the account served outside a request the proxy relayed (a warmup), or an answer's, once it ended. */
 export const addUsage = (m: PoolModel, id: AccountId, usage: Usage): PoolModel =>
-  withHealth(m, id, (health) => changed(health, { served: health.served.plus(usage) }))
+  withActivity(m, id, (activity) => ({ lastUsed: activity.lastUsed, served: plus(activity.served, usage) }))
 
 /**
  * Folds a usage reading into the account's limits. A fresh reading below
@@ -633,7 +772,9 @@ export const addUsage = (m: PoolModel, id: AccountId, usage: Usage): PoolModel =
  * {@link lapses}.
  */
 export const observe = (m: PoolModel, id: AccountId, limits: Limits, now: DateTime.Utc): PoolModel => {
-  const old = healthOf(m, id)
+  // The standing alone: activity joined in here would be kept as standing
+  // and counted again on every later read.
+  const old = standing(m, id)
   const ended = lapsed(old.limits, limits, now)
   const merged = merge(old.limits, limits, now)
   const lifted = old.blockedUntil !== undefined && !isExhausted(merged, now)
@@ -712,7 +853,7 @@ export const recordReset = (m: PoolModel, id: AccountId, now: DateTime.Utc, rese
     })
     const listed = health.resets
     const spent = listed?.list.findIndex((reset) => reset.id === resetId) ?? -1
-    const { counted: _unknown, ...uncounted } = listed ?? { list: [], listedAt: now }
+    const { counted: _unknown, ...uncounted } = listed ?? new ResetList({ list: [], listedAt: now }, unchecked)
     const resets =
       listed === undefined
         ? undefined
@@ -735,7 +876,7 @@ export const recordReset = (m: PoolModel, id: AccountId, now: DateTime.Utc, rese
  * models whose caps were lifted.
  */
 export const clearBlocks = (m: PoolModel, id: AccountId): readonly [ReadonlyArray<string>, PoolModel] => {
-  const models = Object.keys(healthOf(m, id).modelBlocks)
+  const models = Object.keys(standing(m, id).modelBlocks)
   return [models, withHealth(m, id, (health) => changed(health, { modelBlocks: {} }, "blockedUntil", "throttledUntil"))]
 }
 
@@ -779,7 +920,7 @@ const holders = (m: PoolModel): ReadonlyMap<AccountId, WindowHolder> =>
   new Map(
     m.accounts.map((account) => [
       account.id,
-      { provider: account.provider, plan: account.identity.plan ?? healthOf(m, account.id).limits.plan },
+      { provider: account.provider, plan: account.identity.plan ?? standing(m, account.id).limits.plan },
     ]),
   )
 
@@ -846,7 +987,7 @@ interface Member {
 /** The provider's working accounts (enabled and signed in), each with its share of the pool when every plan's size is known. */
 const members = (m: PoolModel, provider: ProviderId): ReadonlyArray<Member> => {
   const working = m.accounts.filter((account) => account.provider === provider && isWorking(account))
-  const healths = working.map((account) => healthOf(m, account.id))
+  const healths = working.map((account) => standing(m, account.id))
   const split = shares(
     provider,
     working.map((account, index) => account.identity.plan ?? healths[index]?.limits.plan),
@@ -972,42 +1113,50 @@ const makeWith = (
   write: (saved: SavedState) => Effect.Effect<void, FileError>,
 ): Effect.Effect<Shape> =>
   Effect.gen(function* () {
+    // The one live model. Every change is a pure function applied in one
+    // synchronous `Ref.modify`, and the time comes from the clock captured
+    // here rather than through `DateTime.now`: a request changes the model
+    // three times (placing it, its answer's reading, its tokens), so each
+    // change costs one step.
     const ref = yield* Ref.make(initial)
+    const clock = yield* Clock.Clock
     const signal = yield* PubSub.sliding<void>(1)
+    const nowUtc = () => DateTime.makeUnsafe(clock.currentTimeMillisUnsafe())
     // A plain map: it is read and filled synchronously, and only ever holds
     // one entry per provider.
     const cache = new Map<ProviderId, Cached>()
 
     const modify = <A>(f: (m: PoolModel, now: DateTime.Utc) => readonly [A, PoolModel]): Effect.Effect<A> =>
-      Effect.flatMap(DateTime.now, (now) =>
-        Effect.flatMap(
-          Ref.modify(ref, (m): [readonly [A, boolean], PoolModel] => {
-            const [answer, updated] = f(m, now)
-            return [[answer, updated !== m], updated]
-          }),
-          ([answer, moved]) => (moved ? Effect.as(PubSub.publish(signal, undefined), answer) : Effect.succeed(answer)),
-        ),
+      Effect.map(
+        Ref.modify(ref, (m) => {
+          const [answer, updated] = f(m, nowUtc())
+          return [[answer, updated !== m] as const, updated] as const
+        }),
+        ([answer, moved]) => {
+          // A reader that has not taken the last signal yet has one waiting: this one adds nothing.
+          if (moved) PubSub.publishUnsafe(signal, undefined)
+          return answer
+        },
       )
 
     const update = (f: (m: PoolModel, now: DateTime.Utc) => PoolModel): Effect.Effect<void> =>
       modify((m, now) => [undefined, f(m, now)] as const)
 
     const pooled = (provider: ProviderId): Effect.Effect<ReadonlyArray<PoolWindow>> =>
-      Effect.flatMap(DateTime.now, (now) =>
-        Effect.map(Ref.get(ref), (m) => {
-          const hit = cache.get(provider)
-          const at = DateTime.toEpochMillis(now)
-          if (hit !== undefined && hit.version === m.version && at < hit.validUntil) return hit.windows
-          const windows = pooledWindows(m, provider, now)
-          cache.set(provider, { version: m.version, validUntil: pooledValidUntil(m, provider, now), windows })
-          return windows
-        }),
-      )
+      Effect.sync(() => {
+        const m = Ref.getUnsafe(ref)
+        const now = nowUtc()
+        const hit = cache.get(provider)
+        const at = DateTime.toEpochMillis(now)
+        if (hit !== undefined && hit.version === m.version && at < hit.validUntil) return hit.windows
+        const windows = pooledWindows(m, provider, now)
+        cache.set(provider, { version: m.version, validUntil: pooledValidUntil(m, provider, now), windows })
+        return windows
+      })
 
     const save = Effect.gen(function* () {
-      const now = yield* DateTime.now
-      const saved = yield* Ref.modify(ref, (m): [SavedState | undefined, PoolModel] =>
-        m.dirty ? [toSaved(m, now), { ...m, dirty: false }] : [undefined, m],
+      const saved = yield* Ref.modify(ref, (m) =>
+        m.dirty ? ([toSaved(m, nowUtc()), { ...m, dirty: false }] as const) : ([undefined, m] as const),
       )
       if (saved === undefined) return
       // A write that failed or was cut short leaves the model dirty, so the next save tries again.

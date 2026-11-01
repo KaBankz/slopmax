@@ -189,12 +189,14 @@ const listen = Effect.gen(function* () {
         fetch: (request, srv) => fetch(request, srv),
         websocket,
       }),
-    catch: (cause) => cause,
+    catch: (cause) => new ListenFailed({ address, holder: undefined, cause }),
   }).pipe(
-    Effect.catch((cause) =>
+    // Name the program holding the port, when the system can say.
+    Effect.catchTag("ListenFailed", (failed) =>
       Effect.flatMap(
         Effect.orElseSucceed(portHolder(port), () => Option.none<string>()),
-        (holder) => Effect.fail(new ListenFailed({ address, holder: Option.getOrUndefined(holder), cause })),
+        (holder) =>
+          Effect.fail(new ListenFailed({ address, holder: Option.getOrUndefined(holder), cause: failed.cause })),
       ),
     ),
   )

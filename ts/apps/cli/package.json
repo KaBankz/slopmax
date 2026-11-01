@@ -13,7 +13,8 @@
     "budget": "Measured 2026-10-31 on linux-x64 with 1.4.4-canary.1+da867c60b (docs/AOT.md, \"The slopmax binary\"): the AOT binary 71,284,968 bytes (budget 70 MiB), 23.9 MB as xz (26 MB), --version 22 ms (30 ms); the daemon idle at 58 MB and peaking at 153 MB, over its 45 and 120 MB."
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./build": "./build.ts"
   },
   "bin": {
     "slopmax": "./src/main.ts"

@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { type Dialect } from "@slopmax/domain"
 import { it } from "@slopmax/test"
-import { Effect, Redacted } from "effect"
+import { Effect, Layer, Redacted } from "effect"
 import { Account, Credential } from "../../src/account.ts"
 import { compat, modelsUrl } from "../../src/providers/compat.ts"
 import { identified, Verdict } from "../../src/providers/provider.ts"
@@ -68,7 +68,7 @@ describe("compatible endpoints", () => {
       // Anthropic-style endpoints list under /v1 with x-api-key.
       const messages = yield* compat.login(options("http://gpu.test/anthropic", "messages", [], "good"))
       expect(messages.credential).toMatchObject({ models: ["local-1", "local-2"], dialect: "messages" })
-    }).pipe(Effect.provide(api.layer), Effect.provide(signInServices))
+    }).pipe(Effect.provide(api.layer.pipe(Layer.provideMerge(signInServices))))
   })
 
   it.effect("keep named models when the endpoint cannot list, and need some", () => {
@@ -81,14 +81,14 @@ describe("compatible endpoints", () => {
       expect(none.message).toBe(`could not list the models at ${base}; name them with --models`)
       const wrong = yield* Effect.flip(compat.login(options(base, "chat", [], "wrong")))
       expect(wrong.message).toContain("rejected the key")
-    }).pipe(Effect.provide(api.layer), Effect.provide(signInServices))
+    }).pipe(Effect.provide(api.layer.pipe(Layer.provideMerge(signInServices))))
   })
 
   it.effect("need an address to sign in", () =>
     Effect.gen(function* () {
       const error = yield* Effect.flip(compat.login({}))
       expect(error.message).toBe("a compatible endpoint needs its address: --url <base url>")
-    }).pipe(Effect.provide(downUpstream), Effect.provide(signInServices)),
+    }).pipe(Effect.provide(downUpstream.pipe(Layer.provideMerge(signInServices)))),
   )
 
   it.effect("list named models but not patterns", () =>

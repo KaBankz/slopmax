@@ -95,23 +95,29 @@ export const recordRequest = (
 /** The ledger record of an answer that ended. */
 export const servedRecord = (served: Served): RequestRecord => {
   const { report } = served
-  return LedgerRecord.cases.Request.make({
-    at: DateTime.makeUnsafe(served.endedAt),
-    account: served.account,
-    provider: served.provider,
-    ...(served.model === undefined ? {} : { model: served.model }),
-    status: served.status,
-    usage: report.outcome.usage,
-    ms: Math.max(0, Math.round(served.endedAt - served.startedAt)),
-    ...(report.firstByteAt === undefined
-      ? {}
-      : { firstByteMs: Math.max(0, Math.round(report.firstByteAt - served.startedAt)) }),
-    attempts: served.attempts,
-    ...(served.agent === undefined ? {} : { agent: served.agent }),
-    ...(served.session === undefined ? {} : { session: served.session }),
-    via: served.via,
-  })
+  return LedgerRecord.cases.Request.make(
+    {
+      at: DateTime.makeUnsafe(served.endedAt),
+      account: served.account,
+      provider: served.provider,
+      ...(served.model === undefined ? {} : { model: served.model }),
+      status: served.status,
+      usage: report.outcome.usage,
+      ms: Math.max(0, Math.round(served.endedAt - served.startedAt)),
+      ...(report.firstByteAt === undefined
+        ? {}
+        : { firstByteMs: Math.max(0, Math.round(report.firstByteAt - served.startedAt)) }),
+      attempts: served.attempts,
+      ...(served.agent === undefined ? {} : { agent: served.agent }),
+      ...(served.session === undefined ? {} : { session: served.session }),
+      via: served.via,
+      // Built from values already checked (counts, statuses, clock times): every answer that ends makes one.
+    },
+    unchecked,
+  )
 }
+
+const unchecked = { disableChecks: true } as const
 
 // ---------------------------------------------------------------------------
 // The settler

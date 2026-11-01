@@ -106,7 +106,7 @@ export const ApiDoctorOptions = Context.Reference<DoctorOptions>("@slopmax/core/
 /** Any failure that is slopmax's own, with its words. */
 const internal = (error: { readonly message: string }) => new Internal({ message: error.message })
 
-const noSuchAccount = new NotFound({ what: "account" })
+const noSuchAccount = NotFound.of({ what: "account" })
 
 /** A sign-in that needs nobody: keys and endpoints are checked with their provider, and nothing opens or is pasted. */
 const quietLogin = Layer.succeed(LoginUi)({ tell: () => Effect.void, pasted: Stream.never, openBrowser: false })
@@ -355,7 +355,7 @@ const configGroup = HttpApiBuilder.group(SlopmaxApi, "config", (handlers) =>
       .handle("removeKey", ({ params }) =>
         Effect.gen(function* () {
           const removed = yield* settings.removeKey(params.name).pipe(Effect.mapError(internal))
-          if (!removed) return yield* new NotFound({ what: `key ${JSON.stringify(params.name)}` })
+          if (!removed) return yield* NotFound.of({ what: `key ${JSON.stringify(params.name)}` })
           return yield* keys
         }),
       )

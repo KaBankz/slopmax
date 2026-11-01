@@ -222,7 +222,12 @@ export const Daemon = {
    */
   serve: (options: { readonly log?: string | undefined } = {}) =>
     Effect.flatMap(Effect.service(Shutdown), (shutdown) => shutdown.requested).pipe(
-      Effect.provide(daemonLayer().pipe(Layer.provide(CoreBase))),
-      Effect.provide(Log.layer({ fallback: "Info", file: options.log })),
+      // The log reaches every part: the core services and the daemon as they start, and the wait itself.
+      Effect.provide(
+        daemonLayer().pipe(
+          Layer.provide(CoreBase),
+          Layer.provideMerge(Log.layer({ fallback: "Info", file: options.log })),
+        ),
+      ),
     ),
 }

@@ -36,12 +36,15 @@ const empty = new Uint8Array(0)
 
 /** Reads a request's body whole, up to {@link maxBody}. */
 export const readBody = (request: Request): Effect.Effect<Uint8Array<ArrayBuffer>, BodyTooLarge | BodyUnreadable> => {
-  const body = request.body
-  if (body === null) return Effect.succeed(empty)
+  // `request.body` is made on first use, as a stream: a body of declared length is read whole without it.
   const declared = request.headers.get("content-length")
-  if (declared === null) return readCounting(body)
+  if (declared === null) {
+    const body = request.body
+    return body === null ? Effect.succeed(empty) : readCounting(body)
+  }
   // A declared length is the body's length: one past the limit is refused before a byte is read.
   if (Number(declared) > maxBody) return Effect.fail(new BodyTooLarge())
+  if (declared.trim() === "0") return Effect.succeed(empty)
   return Effect.callback<Uint8Array<ArrayBuffer>, BodyTooLarge | BodyUnreadable>((resume) => {
     request.arrayBuffer().then(
       (buffer) =>
@@ -98,10 +101,35 @@ export interface Inbound {
   readonly startedAt: number
 }
 
-/** Whether the bytes can be read: not compressed, and valid JSON. */
-export const isInspectable = (headers: Headers, body: Uint8Array): boolean => {
+const isSpace = (b: number | undefined): boolean => b === 0x20 || b === 0x0a || b === 0x0d || b === 0x09
+
+/** Whether the bytes hold one JSON object as far as its ends show: `{` first and `}` last, whitespace aside. */
+export const framedAsObject = (body: Uint8Array): boolean => {
+  let first = 0
+  while (isSpace(body[first])) first++
+  let last = body.length - 1
+  while (last > first && isSpace(body[last])) last--
+  return last > first && body[first] === 0x7b && body[last] === 0x7d
+}
+
+/**
+ * Whether the bytes can be read: not compressed, and JSON. Checking every
+ * byte of a body costs about 1 ns a byte (0.3 ms for a long conversation,
+ * more than everything else the proxy does for it), so a body framed as
+ * one JSON object is read as one: the scanner finds the model and the
+ * session by walking only what lies before them, and answers "not found"
+ * on anything malformed it meets on the way. A body broken further on is
+ * still forwarded as sent, and its provider refuses it. `strict` checks
+ * every byte, for a client key held to some models: only a valid body can
+ * prove it names one model, and no other.
+ */
+export const isInspectable = (headers: Headers, body: Uint8Array, strict = false): boolean => {
   const encoding = headers.get("content-encoding")
-  return (encoding === null || encoding.trim() === "identity") && body.length > 0 && scan.isJson(body)
+  return (
+    (encoding === null || encoding.trim() === "identity") &&
+    body.length > 0 &&
+    (strict ? scan.isJson(body) : framedAsObject(body))
+  )
 }
 
 /** Reads what routing needs from a request whose body is in. */
@@ -112,7 +140,7 @@ export const inspect = (
   caller: Caller,
   startedAt: number,
 ): Inbound => {
-  const json = isInspectable(headers, body)
+  const json = isInspectable(headers, body, heldKey(caller) !== undefined)
   const readable = json ? body : empty
   const agent = detect(headers)
   return {

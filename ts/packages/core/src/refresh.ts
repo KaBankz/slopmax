@@ -319,7 +319,9 @@ export const makeRefresher = (
         return yield* Fiber.join(fiber)
       })
 
-    const ready = Effect.fn("Accounts.ready")(function* (given: Account, options?: { readonly force?: boolean }) {
+    // Untraced: every request readies its account, and a traced function opens a span and captures a
+    // stack on each call (several microseconds) even with tracing off.
+    const ready = Effect.fnUntraced(function* (given: Account, options?: { readonly force?: boolean }) {
       const force = options?.force === true
       return yield* strict(given, force).pipe(
         Effect.catchTag("RefreshTransient", (error) =>

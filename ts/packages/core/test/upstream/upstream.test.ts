@@ -8,6 +8,7 @@ import { SettingsService } from "../../src/settings.ts"
 import {
   bypassesProxy,
   chooseProxy,
+  inferenceRoots,
   isLoopback,
   parseNoProxy,
   parseProxyUrl,
@@ -23,6 +24,10 @@ import {
 import { httpProxy, provider } from "./servers.ts"
 
 const noEnv = ConfigProvider.layer(ConfigProvider.fromEnvRecord({}))
+
+/** A root as PEM, its body wrapped at `wrap` characters. */
+const pem = (body: string, wrap = 64) =>
+  `-----BEGIN CERTIFICATE-----\n${body.match(new RegExp(`.{1,${wrap}}`, "g"))?.join("\n")}\n-----END CERTIFICATE-----`
 
 /** Upstream over the network, with these settings and this environment (and nothing from the real one). */
 const network = (settings: Parameters<typeof SettingsService.layerValue>[0] = {}, env: Record<string, string> = {}) =>
@@ -390,6 +395,25 @@ describe("Upstream", () => {
       )
       expect(error).toBeInstanceOf(Unreachable)
     }).pipe(Effect.provide(Upstream.layerHandler(() => new Response()))),
+  )
+
+  it("hands inference fetches no list of roots unless Bun's own trust would miss one the system has", () => {
+    const bundled = [pem("A".repeat(100)), pem("B".repeat(100))]
+    // Bun on Linux verifies against the system's store itself.
+    expect(inferenceRoots("linux", [pem("C".repeat(100))], bundled)).toBeUndefined()
+    // The same root wrapped differently is the same root.
+    expect(inferenceRoots("darwin", [pem("A".repeat(100), 76)], bundled)).toBeUndefined()
+    expect(inferenceRoots("darwin", [pem("C".repeat(100))], bundled)).toEqual([...bundled, pem("C".repeat(100))])
+  })
+
+  it.effect("keeps no timer running while nothing is being sent", () =>
+    Effect.gen(function* () {
+      const upstream = yield* Upstream
+      // Days pass in an instant: a watcher ticking every second would take ages to catch up.
+      yield* TestClock.adjust("1000 days")
+      const answer = yield* upstream.send(request("https://api.anthropic.com/v1/messages"))
+      expect(answer.status).toBe(200)
+    }).pipe(Effect.provide(Upstream.layerHandler(() => new Response("ok")))),
   )
 
   it("trusts the system's roots and Bun's bundled ones", () => {

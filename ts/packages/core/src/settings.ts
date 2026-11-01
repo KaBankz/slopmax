@@ -153,11 +153,11 @@ export const parseSettings = (
   Effect.try({
     try: (): unknown => JSON.parse(text),
     catch: (cause) =>
-      new SettingsInvalid({ path, issue: `not JSON: ${cause instanceof Error ? cause.message : String(cause)}` }),
+      SettingsInvalid.of({ path, issue: `not JSON: ${cause instanceof Error ? cause.message : String(cause)}` }),
   }).pipe(
     Effect.flatMap((json) =>
       decodeSettings(json).pipe(
-        Effect.mapError((error) => new SettingsInvalid({ path, issue: issueText(error.issue) })),
+        Effect.mapError((error) => SettingsInvalid.of({ path, issue: issueText(error.issue) })),
         Effect.map((settings) => ({ contents: isContents(json) ? json : {}, settings })),
       ),
     ),
@@ -165,13 +165,12 @@ export const parseSettings = (
 
 const checkListen = (value: string): Effect.Effect<string, SettingsInvalid> =>
   Schema.decodeUnknownEffect(Listen)(value).pipe(
-    Effect.mapError(
-      (error) =>
-        new SettingsInvalid({
-          path: "SLOPMAX_LISTEN",
-          issue: issueText(error.issue),
-          message: `SLOPMAX_LISTEN=${JSON.stringify(value)} is not an address`,
-        }),
+    Effect.mapError((error) =>
+      SettingsInvalid.of({
+        path: "SLOPMAX_LISTEN",
+        issue: issueText(error.issue),
+        message: `SLOPMAX_LISTEN=${JSON.stringify(value)} is not an address`,
+      }),
     ),
   )
 
@@ -193,9 +192,8 @@ const edits = {
     (patch: LivePatch): Edit<SettingRejected> =>
     (contents) =>
       Schema.decodeUnknownEffect(LivePatch)(patch).pipe(
-        Effect.mapError(
-          (error) =>
-            new SettingRejected({ name: Object.keys(patch)[0] ?? "settings", reason: firstMessage(error.issue) }),
+        Effect.mapError((error) =>
+          SettingRejected.of({ name: Object.keys(patch)[0] ?? "settings", reason: firstMessage(error.issue) }),
         ),
         Effect.map((checked) => ({ ...contents, ...checked })),
       ),
@@ -203,7 +201,7 @@ const edits = {
     (name: KeyName, key: string, models: ReadonlyArray<string>): Edit<SettingRejected> =>
     (contents, current) =>
       current.keys.some((existing) => existing.name === name)
-        ? Effect.fail(new SettingRejected({ name, reason: `a key named ${JSON.stringify(name)} already exists` }))
+        ? Effect.fail(SettingRejected.of({ name, reason: `a key named ${JSON.stringify(name)} already exists` }))
         : Effect.succeed({ ...contents, keys: [...encodeKeys(current.keys), { name, key, models }] }),
   removeKey:
     (name: KeyName): Edit<never> =>
@@ -246,25 +244,24 @@ const changesOver = (
   makeKey: Effect.Effect<string>,
 ): Pick<Shape, "update" | "setLive" | "addKey" | "removeKey"> => ({
   update: Effect.fn("Settings.update")(function* (f: (settings: Settings) => Settings) {
-    const { after } = yield* commit(edits.update(f), (issue) => new SettingsInvalid({ path: "config.json", issue }))
+    const { after } = yield* commit(edits.update(f), (issue) => SettingsInvalid.of({ path: "config.json", issue }))
     return after
   }),
   setLive: Effect.fn("Settings.setLive")(function* (patch: LivePatch) {
     const name = Object.keys(patch)[0] ?? "settings"
-    const { after } = yield* commit(edits.setLive(patch), (reason) => new SettingRejected({ name, reason }))
+    const { after } = yield* commit(edits.setLive(patch), (reason) => SettingRejected.of({ name, reason }))
     return after
   }),
   addKey: Effect.fn("Settings.addKey")(function* (name: KeyName, models: ReadonlyArray<string>) {
     const key = yield* makeKey
-    const { after } = yield* commit(edits.addKey(name, key, models), (reason) => new SettingRejected({ name, reason }))
+    const { after } = yield* commit(edits.addKey(name, key, models), (reason) => SettingRejected.of({ name, reason }))
     return (
       after.keys.find((existing) => existing.name === name) ?? new ClientKey({ name, key: Redacted.make(key), models })
     )
   }),
   removeKey: Effect.fn("Settings.removeKey")(function* (name: KeyName) {
-    const { before, after } = yield* commit(
-      edits.removeKey(name),
-      (issue) => new SettingsInvalid({ path: "config.json", issue }),
+    const { before, after } = yield* commit(edits.removeKey(name), (issue) =>
+      SettingsInvalid.of({ path: "config.json", issue }),
     )
     return after.keys.length < before.keys.length
   }),

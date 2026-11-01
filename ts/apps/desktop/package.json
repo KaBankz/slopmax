@@ -4,11 +4,33 @@
   "type": "module",
   "description": "The desktop app: an Electron shell over the daemon's HttpApi, with the UI's desktop build and the bundled CLI",
   "main": "out/main.js",
+  "//": {
+    "effect": "Main's whole program: services and layers for the CLI, the proxy's state, preferences and the event stream; Schema decodes everything the CLI prints and the window sends; HttpApiClient talks to the daemon.",
+    "@effect/platform-node": "FileSystem, Path and the ChildProcessSpawner on Electron's Node, to read and write the preferences and run the bundled CLI. Only src/main/ imports it.",
+    "@slopmax/domain": "The daemon's SlopmaxApi and events, the bridge's schemas, the report and doctor shapes the CLI prints, and the words the tray and notifications use.",
+    "@slopmax/test": "it.effect / it.live and the in-memory FileSystem for the tests.",
+    "@slopmax/ui": "Its desktop build is the window; build.ts runs it and copies dist/desktop into the app.",
+    "electron": "The shell (ARCHITECTURE.md §14).",
+    "@electron/packager": "Packages the app (asar, en-US only) with the CLI in resources/bin: the same bytes as electron-builder, in half the time (RUNTIME.md §3).",
+    "playwright-core": "Drives the packaged app under Xvfb in the smoke test and the screenshot script (`_electron`), with no browser download.",
+    "measured": "See README.md: the packaged app's size and the memory of every process, measured 2026-11-01."
+  },
+  "scripts": {
+    "build": "bun build.ts",
+    "package": "bun package.ts",
+    "shots": "bun shots.ts",
+    "start": "bun build.ts && electron ."
+  },
   "dependencies": {
-    "effect": "4.1.1",
-    "@slopmax/domain": "workspace:*"
+    "@effect/platform-node": "4.1.1",
+    "@slopmax/domain": "workspace:*",
+    "effect": "4.1.1"
   },
   "devDependencies": {
-    "@slopmax/test": "workspace:*"
+    "@electron/packager": "20.3.0",
+    "@slopmax/test": "workspace:*",
+    "@slopmax/ui": "workspace:*",
+    "electron": "45.2.1",
+    "playwright-core": "1.64.1"
   }
 }

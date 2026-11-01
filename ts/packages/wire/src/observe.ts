@@ -7,29 +7,58 @@
 //
 // The small readers of parsed JSON they use come first; the error bodies and
 // the opening judge use them too, and `textOf` reads a message's text.
-import { Usage, type Dialect } from "@slopmax/domain"
+import { type Dialect, Usage } from "@slopmax/domain"
 import { Data, Predicate } from "effect"
+
+/** Token counts as an answer reports them, before they settle as the request's `Usage`. */
+export interface Counts {
+  readonly requests: number
+  readonly input: number
+  readonly output: number
+  readonly cacheRead: number
+  readonly cacheWrite: number
+}
+
+/** No tokens, and no request yet. */
+export const noCounts: Counts = { requests: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+
+/**
+ * Counts the observers checked already (whole numbers, never negative)
+ * skip the schema's checks when they become `Usage`.
+ */
+const unchecked = { disableChecks: true } as const
 
 /** What a finished (or abandoned) answer said about its account. */
 export class TapOutcome extends Data.Class<{
   /** The tokens it moved, and the one request it was once the answer ended. */
-  readonly usage: Usage
+  readonly counts: Counts
   /** The answer said the account's quota ran out partway. */
   readonly exhausted: boolean
   /** The answer carried an error event of its own, whatever its cause. */
   readonly failed: boolean
 }> {
-  static readonly empty: TapOutcome = new TapOutcome({ usage: Usage.zero, exhausted: false, failed: false })
+  static readonly empty: TapOutcome = new TapOutcome({ counts: noCounts, exhausted: false, failed: false })
 
-  /** The same outcome with other usage. Fields are named, not spread, so the compiler keeps their types. */
-  withUsage(usage: Usage): TapOutcome {
-    return new TapOutcome({ usage, exhausted: this.exhausted, failed: this.failed })
+  #usage: Usage | undefined
+
+  /**
+   * The counts as `Usage`, made once and only when asked: an answer's
+   * events update its counts several times, and only the last is settled.
+   */
+  get usage(): Usage {
+    this.#usage ??= new Usage(this.counts, unchecked)
+    return this.#usage
+  }
+
+  /** The same outcome with other counts. Fields are named, not spread, so the compiler keeps their types. */
+  withCounts(counts: Counts): TapOutcome {
+    return new TapOutcome({ counts, exhausted: this.exhausted, failed: this.failed })
   }
 
   /** The same outcome, counted as the one request it was. */
   counted(): TapOutcome {
-    const { input, output, cacheRead, cacheWrite } = this.usage
-    return this.withUsage(new Usage({ requests: 1, input, output, cacheRead, cacheWrite }))
+    const { input, output, cacheRead, cacheWrite } = this.counts
+    return this.withCounts({ requests: 1, input, output, cacheRead, cacheWrite })
   }
 }
 
@@ -81,23 +110,12 @@ const countAt = (value: unknown, ...path: ReadonlyArray<string>): number | undef
 const failedWith = (outcome: TapOutcome, exhausted: boolean): TapOutcome =>
   outcome.failed && (outcome.exhausted || !exhausted)
     ? outcome
-    : new TapOutcome({ usage: outcome.usage, failed: true, exhausted: outcome.exhausted || exhausted })
+    : new TapOutcome({ counts: outcome.counts, failed: true, exhausted: outcome.exhausted || exhausted })
 
 // --- Messages ---------------------------------------------------------------
 
-/**
- * Messages: `message_start` carries the usage so far under `message`, each
- * `message_delta` (and a whole `message`) under `usage`. The counts are
- * running totals, and a zero means "unchanged", so each non-zero count
- * replaces the one before. An `error` event typed `rate_limit_error` means the
- * quota ran out mid-stream.
- */
-export const observeMessages: Observer = (outcome, event) => {
-  const type = stringAt(event, "type")
-  let usage: unknown
-  if (type === "message_start") usage = jsonAt(event, "message", "usage")
-  else if (type === "message_delta" || type === "message") usage = jsonAt(event, "usage")
-  else if (type === "error") return failedWith(outcome, stringAt(event, "error", "type") === "rate_limit_error")
+/** Each non-zero count in a Messages `usage` replaces the one before. */
+const messagesUsage = (outcome: TapOutcome, usage: unknown): TapOutcome => {
   if (!Predicate.isObject(usage)) return outcome
   const nonZero = (name: string): number | undefined => {
     const n = countAt(usage, name)
@@ -108,17 +126,53 @@ export const observeMessages: Observer = (outcome, event) => {
   const cacheRead = nonZero("cache_read_input_tokens")
   const cacheWrite = nonZero("cache_creation_input_tokens")
   if (input === undefined && output === undefined && cacheRead === undefined && cacheWrite === undefined) return outcome
-  const was = outcome.usage
-  return outcome.withUsage(
-    new Usage({
-      requests: was.requests,
-      input: input ?? was.input,
-      output: output ?? was.output,
-      cacheRead: cacheRead ?? was.cacheRead,
-      cacheWrite: cacheWrite ?? was.cacheWrite,
-    }),
-  )
+  const was = outcome.counts
+  return outcome.withCounts({
+    requests: was.requests,
+    input: input ?? was.input,
+    output: output ?? was.output,
+    cacheRead: cacheRead ?? was.cacheRead,
+    cacheWrite: cacheWrite ?? was.cacheWrite,
+  })
 }
+
+/**
+ * An observer that reads only events of the types in `byType`. The tap
+ * passes over events of any other type without parsing them (see
+ * {@link observedTypes}), so the types it reads and the ones it skips come
+ * from this one table.
+ */
+interface Typed {
+  readonly byType: ReadonlyMap<string, Observer>
+  readonly observe: Observer
+}
+
+const typed = (byType: ReadonlyMap<string, Observer>, whole: Observer = (outcome) => outcome): Typed => ({
+  byType,
+  observe: (outcome, event) => {
+    const type = stringAt(event, "type")
+    const read = type === undefined ? undefined : byType.get(type)
+    return read === undefined ? whole(outcome, event) : read(outcome, event)
+  },
+})
+
+const messages = typed(
+  new Map<string, Observer>([
+    ["message_start", (outcome, event) => messagesUsage(outcome, jsonAt(event, "message", "usage"))],
+    ["message_delta", (outcome, event) => messagesUsage(outcome, jsonAt(event, "usage"))],
+    ["message", (outcome, event) => messagesUsage(outcome, jsonAt(event, "usage"))],
+    ["error", (outcome, event) => failedWith(outcome, stringAt(event, "error", "type") === "rate_limit_error")],
+  ]),
+)
+
+/**
+ * Messages: `message_start` carries the usage so far under `message`, each
+ * `message_delta` (and a whole `message`) under `usage`. The counts are
+ * running totals, and a zero means "unchanged", so each non-zero count
+ * replaces the one before. An `error` event typed `rate_limit_error` means the
+ * quota ran out mid-stream.
+ */
+export const observeMessages: Observer = messages.observe
 
 // --- Responses --------------------------------------------------------------
 
@@ -138,15 +192,13 @@ export const isSpentCode = (code: string | undefined): boolean =>
 
 /** Responses and Chat count cached input inside the input: slopmax counts it apart. */
 const openAiUsage = (outcome: TapOutcome, input: number, cached: number, output: number): TapOutcome =>
-  outcome.withUsage(
-    new Usage({
-      requests: outcome.usage.requests,
-      input: Math.max(0, input - cached),
-      output,
-      cacheRead: cached,
-      cacheWrite: outcome.usage.cacheWrite,
-    }),
-  )
+  outcome.withCounts({
+    requests: outcome.counts.requests,
+    input: Math.max(0, input - cached),
+    output,
+    cacheRead: cached,
+    cacheWrite: outcome.counts.cacheWrite,
+  })
 
 const responsesUsage = (outcome: TapOutcome, usage: unknown): TapOutcome =>
   Predicate.isObject(usage)
@@ -158,22 +210,29 @@ const responsesUsage = (outcome: TapOutcome, usage: unknown): TapOutcome =>
       )
     : outcome
 
+const responsesEnd: Observer = (outcome, event) => responsesUsage(outcome, jsonAt(event, "response", "usage"))
+const responsesFailed: Observer = (outcome, event) => failedWith(outcome, isSpentCode(responsesFailureCode(event)))
+
+const responses = typed(
+  new Map<string, Observer>([
+    ["response.completed", responsesEnd],
+    ["response.incomplete", responsesEnd],
+    ["response.done", responsesEnd],
+    ["response.failed", responsesFailed],
+    ["error", responsesFailed],
+  ]),
+  // A whole answer names no type first, so the tap never skips it.
+  (outcome, event) =>
+    stringAt(event, "object") === "response" ? responsesUsage(outcome, jsonAt(event, "usage")) : outcome,
+)
+
 /**
  * Responses: a whole `response` object carries `usage`, as does the last
  * event of a stream (`response.completed`, `.incomplete` or `.done`) under
  * `response`. A `response.failed` or `error` coded as a spent quota means it
  * ran out mid-stream.
  */
-export const observeResponses: Observer = (outcome, event) => {
-  if (stringAt(event, "object") === "response") return responsesUsage(outcome, jsonAt(event, "usage"))
-  const type = stringAt(event, "type")
-  if (type === "response.completed" || type === "response.incomplete" || type === "response.done") {
-    return responsesUsage(outcome, jsonAt(event, "response", "usage"))
-  }
-  if (type === "response.failed" || type === "error")
-    return failedWith(outcome, isSpentCode(responsesFailureCode(event)))
-  return outcome
-}
+export const observeResponses: Observer = responses.observe
 
 // --- Chat -------------------------------------------------------------------
 
@@ -193,6 +252,19 @@ export const observeChat: Observer = (outcome, event) => {
     )
   }
   return Predicate.isObject(jsonAt(event, "error")) ? failedWith(outcome, false) : outcome
+}
+
+/**
+ * The event types each format's observer reads, from the tables it reads
+ * them by. Streams of those formats name an event's type first
+ * (`{"type":"…"`), so the tap passes over every other event (the many text
+ * deltas) without reading it. Chat chunks name no type up front, so the tap
+ * looks into each of them for usage or an error.
+ */
+export const observedTypes: { readonly [D in Dialect]: ReadonlyArray<string> | undefined } = {
+  messages: [...messages.byType.keys()],
+  responses: [...responses.byType.keys()],
+  chat: undefined,
 }
 
 /** Each format's observer. */

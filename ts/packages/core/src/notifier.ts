@@ -470,7 +470,7 @@ export const make = Effect.gen(function* () {
         const [code, stderr] = yield* Effect.all([handle.exitCode, Stream.mkString(Stream.decodeText(handle.stderr))], {
           concurrency: 2,
         }).pipe(Effect.mapError((cause) => new CommandFailed({ reason: "output", cause })))
-        if (code !== 0) yield* new CommandFailed({ reason: "exit", code, stderr: stderr.trim() })
+        if (code !== 0) return yield* new CommandFailed({ reason: "exit", code, stderr: stderr.trim() })
       }),
     ).pipe(
       // Closing the scope stops the command when it runs too long, and kills
@@ -492,7 +492,7 @@ export const make = Effect.gen(function* () {
       { concurrency: "unbounded" },
     )
     if (webhook !== undefined || command !== undefined) {
-      yield* new NotifyFailed({
+      return yield* new NotifyFailed({
         ...(webhook === undefined ? {} : { webhook }),
         ...(command === undefined ? {} : { command }),
       })

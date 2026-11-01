@@ -1,8 +1,9 @@
 // Errors that cross a boundary: slopmax's own API answers them with their
 // status, and the CLI prints their message. Every message is written for
 // people, in slopmax's words, and travels with the error, so a front end shows
-// it as it is. Errors made from a few facts word their message themselves;
-// one decoded from the wire keeps the message it came with.
+// it as it is. Errors made from a few facts word their message themselves
+// through a static `of` (a Schema class keeps its own constructor, which
+// decoding uses); one decoded from the wire keeps the message it came with.
 import { Effect, Schema, SchemaIssue } from "effect"
 // For the `httpApiStatus` annotation.
 // oxlint-disable-next-line import/no-empty-named-blocks, unicorn/require-module-specifiers
@@ -26,8 +27,9 @@ export class NotFound extends Schema.TaggedError<NotFound>()(
   { what: Schema.String, message: Schema.String },
   { httpApiStatus: 404 },
 ) {
-  constructor(props: { readonly what: string; readonly message?: string }) {
-    super({ what: props.what, message: props.message ?? `no such ${props.what}` })
+  /** `no such {what}`, unless a message is given. */
+  static of(props: { readonly what: string; readonly message?: string }): NotFound {
+    return new NotFound({ what: props.what, message: props.message ?? `no such ${props.what}` })
   }
 }
 
@@ -63,8 +65,12 @@ export class SettingsInvalid extends Schema.TaggedError<SettingsInvalid>()(
   { path: Schema.String, issue: Schema.String, message: Schema.String },
   { httpApiStatus: 500 },
 ) {
-  constructor(props: { readonly path: string; readonly issue: string; readonly message?: string }) {
-    super({ ...props, message: props.message ?? `invalid settings in ${props.path}: ${props.issue}` })
+  /** `invalid settings in {path}: {issue}`, unless a message is given. */
+  static of(props: { readonly path: string; readonly issue: string; readonly message?: string }): SettingsInvalid {
+    return new SettingsInvalid({
+      ...props,
+      message: props.message ?? `invalid settings in ${props.path}: ${props.issue}`,
+    })
   }
 }
 
@@ -74,8 +80,9 @@ export class SettingRejected extends Schema.TaggedError<SettingRejected>()(
   { name: Schema.String, reason: Schema.String, message: Schema.String },
   { httpApiStatus: 400 },
 ) {
-  constructor(props: { readonly name: string; readonly reason: string; readonly message?: string }) {
-    super({ ...props, message: props.message ?? props.reason })
+  /** The reason as the message, unless a message is given. */
+  static of(props: { readonly name: string; readonly reason: string; readonly message?: string }): SettingRejected {
+    return new SettingRejected({ ...props, message: props.message ?? props.reason })
   }
 }
 
@@ -85,8 +92,12 @@ export class AccountNotFound extends Schema.TaggedError<AccountNotFound>()(
   { query: Schema.String, message: Schema.String },
   { httpApiStatus: 404 },
 ) {
-  constructor(props: { readonly query: string; readonly message?: string }) {
-    super({ ...props, message: props.message ?? `no account matches ${JSON.stringify(props.query)}` })
+  /** `no account matches "{query}"`, unless a message is given. */
+  static of(props: { readonly query: string; readonly message?: string }): AccountNotFound {
+    return new AccountNotFound({
+      ...props,
+      message: props.message ?? `no account matches ${JSON.stringify(props.query)}`,
+    })
   }
 }
 
@@ -96,8 +107,13 @@ export class AccountAmbiguous extends Schema.TaggedError<AccountAmbiguous>()(
   { query: Schema.String, ids: Schema.Array(AccountId), message: Schema.String },
   { httpApiStatus: 409 },
 ) {
-  constructor(props: { readonly query: string; readonly ids: ReadonlyArray<AccountId>; readonly message?: string }) {
-    super({
+  /** `"{query}" matches {n} accounts: {ids}`, unless a message is given. */
+  static of(props: {
+    readonly query: string
+    readonly ids: ReadonlyArray<AccountId>
+    readonly message?: string
+  }): AccountAmbiguous {
+    return new AccountAmbiguous({
       ...props,
       message:
         props.message ?? `${JSON.stringify(props.query)} matches ${props.ids.length} accounts: ${props.ids.join(", ")}`,
@@ -111,8 +127,9 @@ export class AccountGone extends Schema.TaggedError<AccountGone>()(
   { id: AccountId, message: Schema.String },
   { httpApiStatus: 404 },
 ) {
-  constructor(props: { readonly id: AccountId; readonly message?: string }) {
-    super({ ...props, message: props.message ?? `the account ${props.id} is gone` })
+  /** `the account {id} is gone`, unless a message is given. */
+  static of(props: { readonly id: AccountId; readonly message?: string }): AccountGone {
+    return new AccountGone({ ...props, message: props.message ?? `the account ${props.id} is gone` })
   }
 }
 
