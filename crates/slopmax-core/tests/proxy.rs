@@ -192,6 +192,10 @@ fn mock_socket(log: Log, request: &mut Request) -> Response {
                 body: Bytes::from(text),
             });
             let events: Vec<Value> = match token.as_str() {
+                // Starts an answer and never finishes it.
+                "Bearer tok-slow" => {
+                    vec![json!({"type": "response.created", "response": {"id": "r"}})]
+                }
                 "Bearer tok-limited" => vec![
                     json!({"type": "response.created", "response": {"id": "r"}}),
                     json!({"type": "error", "status": 429,
@@ -1174,6 +1178,42 @@ async fn codex_websockets_are_relayed_to_chatgpt() {
     .await;
     let state = h.app.pool.state(&h.ids[0]);
     assert_eq!(state.limits.windows[0].used, 33.0);
+}
+
+#[tokio::test]
+async fn a_stop_closes_open_sockets_and_records_the_turn_it_cut() {
+    let h = harness(ProviderId::Codex, &["tok-slow"]).await;
+    let (_, socket) = open_socket(&h, "gpt-6-sol").await;
+    let (mut reader, mut writer) = socket.unwrap();
+    let create = json!({"type": "response.create", "model": "gpt-6-sol", "input": []});
+    writer
+        .send(&ws::Message::Text(create.to_string()))
+        .await
+        .unwrap();
+    let Some(ws::Message::Text(created)) = reader.message().await.unwrap() else {
+        panic!("the answer started");
+    };
+    assert!(created.contains("response.created"));
+    h.app.stop.cancel();
+    let closed = tokio::time::timeout(Duration::from_secs(5), reader.message())
+        .await
+        .expect("closed at once")
+        .unwrap();
+    assert_eq!(
+        closed,
+        Some(ws::Message::Close(Some((
+            1001,
+            "slopmax is stopping".into()
+        ))))
+    );
+    // Recorded just after the close went out.
+    let usage = h.dir.join("usage");
+    eventually(|| !ledger::read(&usage, Timestamp::UNIX_EPOCH).is_empty()).await;
+    let entries = ledger::read(&usage, Timestamp::UNIX_EPOCH);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].end, Some(ledger::End::Cut));
+    assert_eq!(entries[0].model.as_deref(), Some("gpt-6-sol"));
+    assert!(entries[0].failed());
 }
 
 #[tokio::test]

@@ -27,6 +27,7 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 - A usage record is written to the ledger as the request ends, in one write to the month file the proxy keeps open, instead of by a background writer.
 - The ledger records how a streamed answer ended when it did not complete (`"end"`: the upstream broke it off, it stalled, the agent hung up, or the proxy stopped). A stream the upstream broke off, stalled, or cut by a stop counts as a failure; one the agent hung up on, as when you interrupt Claude Code, does not.
 - A request body is checked for its framing instead of parsed whole, which costs a third as much on a long conversation. A key held to some models still has its body parsed in full.
+- A Codex WebSocket is relayed by one task instead of four, reading only the type of each message unless it must edit one. When slopmax stops it closes each open socket with 1001 (going away), so Codex reconnects, and records the turn it cut short; a socket that carries nothing either way for 10 minutes is closed.
 - Translating a long conversation for a model of another format runs beside the proxy's thread instead of on it, so the other streams it carries do not wait on it.
 - Reset credits are now called limit resets, as claude.ai calls Claude's; on Claude, credits are money.
 - The dashboard counts an account's limit resets as listed, and offers Redeem on any account that holds one, not just ChatGPT's.

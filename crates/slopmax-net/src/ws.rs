@@ -6,6 +6,7 @@ use std::io;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use bytes::BytesMut;
 use ring::digest;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -55,8 +56,14 @@ fn invalid(message: &str) -> io::Error {
 }
 
 /// Reads messages, joining fragmented ones.
+///
+/// [`Reader::message`] is cancel-safe: whatever it has read is kept in the
+/// reader, not in the future, so it can race other work in a `select!` and
+/// be called again without losing a byte.
 pub struct Reader<R> {
     inner: R,
+    /// Bytes read and not yet framed.
+    buf: BytesMut,
     /// A fragmented message being received: its opcode and data so far.
     partial: Option<(u8, Vec<u8>)>,
 }
@@ -65,6 +72,7 @@ impl<R: AsyncRead + Unpin> Reader<R> {
     pub fn new(inner: R) -> Self {
         Self {
             inner,
+            buf: BytesMut::with_capacity(8 * 1024),
             partial: None,
         }
     }
@@ -72,79 +80,125 @@ impl<R: AsyncRead + Unpin> Reader<R> {
     /// The next message, or `None` when the connection ends.
     pub async fn message(&mut self) -> io::Result<Option<Message>> {
         loop {
-            let Some((fin, opcode, payload)) = self.frame().await? else {
-                return Ok(None);
-            };
-            match opcode {
-                CLOSE => {
-                    let close = (payload.len() >= 2).then(|| {
-                        let code = u16::from_be_bytes([payload[0], payload[1]]);
-                        (code, String::from_utf8_lossy(&payload[2..]).into_owned())
-                    });
-                    return Ok(Some(Message::Close(close)));
+            while let Some(frame) = parse(&mut self.buf)? {
+                if let Some(message) = self.join(frame)? {
+                    return Ok(Some(message));
                 }
-                PING => return Ok(Some(Message::Ping(payload))),
-                PONG => return Ok(Some(Message::Pong(payload))),
-                TEXT | BINARY if self.partial.is_some() => {
-                    return Err(invalid("a new message began inside a fragmented one"));
-                }
-                TEXT | BINARY if !fin => self.partial = Some((opcode, payload)),
-                TEXT | BINARY => return message(opcode, payload).map(Some),
-                CONTINUATION => {
-                    let Some((first, mut data)) = self.partial.take() else {
-                        return Err(invalid("a continuation frame without a message"));
-                    };
-                    if data.len() + payload.len() > MAX_MESSAGE {
-                        return Err(invalid("message too large"));
-                    }
-                    data.extend_from_slice(&payload);
-                    if fin {
-                        return message(first, data).map(Some);
-                    }
-                    self.partial = Some((first, data));
-                }
-                _ => return Err(invalid("unknown opcode")),
+            }
+            // Cancel-safe: dropped before it completes, it has read nothing.
+            if self.inner.read_buf(&mut self.buf).await? == 0 {
+                return match self.buf.is_empty() && self.partial.is_none() {
+                    true => Ok(None),
+                    false => Err(io::ErrorKind::UnexpectedEof.into()),
+                };
             }
         }
     }
 
-    /// One frame: whether it is final, its opcode, and its unmasked
-    /// payload. `None` at a clean end of the stream.
-    async fn frame(&mut self) -> io::Result<Option<(bool, u8, Vec<u8>)>> {
-        let mut head = [0u8; 2];
-        match self.inner.read_exact(&mut head).await {
-            Ok(_) => {}
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
-            Err(e) => return Err(e),
+    /// Folds one frame in: a whole message when it completes one.
+    fn join(&mut self, frame: Frame) -> io::Result<Option<Message>> {
+        let Frame {
+            fin,
+            opcode,
+            payload,
+        } = frame;
+        match opcode {
+            CLOSE => {
+                let close = (payload.len() >= 2).then(|| {
+                    let code = u16::from_be_bytes([payload[0], payload[1]]);
+                    (code, String::from_utf8_lossy(&payload[2..]).into_owned())
+                });
+                Ok(Some(Message::Close(close)))
+            }
+            PING => Ok(Some(Message::Ping(payload))),
+            PONG => Ok(Some(Message::Pong(payload))),
+            TEXT | BINARY if self.partial.is_some() => {
+                Err(invalid("a new message began inside a fragmented one"))
+            }
+            TEXT | BINARY if !fin => {
+                self.partial = Some((opcode, payload));
+                Ok(None)
+            }
+            TEXT | BINARY => message(opcode, payload).map(Some),
+            CONTINUATION => {
+                let Some((first, mut data)) = self.partial.take() else {
+                    return Err(invalid("a continuation frame without a message"));
+                };
+                if data.len() + payload.len() > MAX_MESSAGE {
+                    return Err(invalid("message too large"));
+                }
+                data.extend_from_slice(&payload);
+                if fin {
+                    return message(first, data).map(Some);
+                }
+                self.partial = Some((first, data));
+                Ok(None)
+            }
+            _ => Err(invalid("unknown opcode")),
         }
-        let fin = head[0] & 0x80 != 0;
-        if head[0] & 0x70 != 0 {
-            return Err(invalid("reserved bits set without an extension"));
-        }
-        let opcode = head[0] & 0x0F;
-        let masked = head[1] & 0x80 != 0;
-        let len = match head[1] & 0x7F {
-            126 => u64::from(self.inner.read_u16().await?),
-            127 => self.inner.read_u64().await?,
-            n => u64::from(n),
-        };
-        if opcode >= CLOSE && (len > 125 || !fin) {
-            return Err(invalid("control frames are short and whole"));
-        }
-        if len > MAX_MESSAGE as u64 {
-            return Err(invalid("message too large"));
-        }
-        let mut key = [0u8; 4];
-        if masked {
-            self.inner.read_exact(&mut key).await?;
-        }
-        let mut payload = vec![0u8; len as usize];
-        self.inner.read_exact(&mut payload).await?;
-        if masked {
-            apply_mask(&mut payload, key);
-        }
-        Ok(Some((fin, opcode, payload)))
     }
+}
+
+/// One frame: whether it is final, its opcode, and its unmasked payload.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Frame {
+    pub fin: bool,
+    pub opcode: u8,
+    pub payload: Vec<u8>,
+}
+
+/// Takes the first whole frame off the front of `buf`, if one is there.
+/// Pure: it reads nothing, so it is tested and fuzzed on bytes alone.
+pub fn parse(buf: &mut BytesMut) -> io::Result<Option<Frame>> {
+    let Some(&[first, second]) = buf.get(..2).map(|h| <&[u8; 2]>::try_from(h).unwrap()) else {
+        return Ok(None);
+    };
+    if first & 0x70 != 0 {
+        return Err(invalid("reserved bits set without an extension"));
+    }
+    let (fin, opcode, masked) = (first & 0x80 != 0, first & 0x0F, second & 0x80 != 0);
+    let (len, mut at) = match second & 0x7F {
+        126 => match buf.get(2..4) {
+            Some(n) => (u64::from(u16::from_be_bytes([n[0], n[1]])), 4),
+            None => return Ok(None),
+        },
+        127 => match buf.get(2..10) {
+            Some(n) => (u64::from_be_bytes(n.try_into().expect("eight bytes")), 10),
+            None => return Ok(None),
+        },
+        n => (u64::from(n), 2),
+    };
+    if opcode >= CLOSE && (len > 125 || !fin) {
+        return Err(invalid("control frames are short and whole"));
+    }
+    if len > MAX_MESSAGE as u64 {
+        return Err(invalid("message too large"));
+    }
+    let key = if masked {
+        let Some(key) = buf.get(at..at + 4) else {
+            return Ok(None);
+        };
+        at += 4;
+        Some([key[0], key[1], key[2], key[3]])
+    } else {
+        None
+    };
+    let end = at + len as usize;
+    if buf.len() < end {
+        // Room for the rest, so it arrives in as few reads as it can.
+        buf.reserve(end - buf.len());
+        return Ok(None);
+    }
+    let mut frame = buf.split_to(end);
+    let mut payload = frame.split_off(at).to_vec();
+    if let Some(key) = key {
+        apply_mask(&mut payload, key);
+    }
+    Ok(Some(Frame {
+        fin,
+        opcode,
+        payload,
+    }))
 }
 
 fn message(opcode: u8, payload: Vec<u8>) -> io::Result<Message> {
@@ -157,9 +211,36 @@ fn message(opcode: u8, payload: Vec<u8>) -> io::Result<Message> {
     }
 }
 
+/// XORs `data` with the repeating `key`, eight bytes at a time.
 fn apply_mask(data: &mut [u8], key: [u8; 4]) {
-    for (i, byte) in data.iter_mut().enumerate() {
-        *byte ^= key[i % 4];
+    let word = u64::from_ne_bytes([
+        key[0], key[1], key[2], key[3], key[0], key[1], key[2], key[3],
+    ]);
+    let (words, rest) = data.as_chunks_mut::<8>();
+    for chunk in words {
+        *chunk = (u64::from_ne_bytes(*chunk) ^ word).to_ne_bytes();
+    }
+    // The rest starts at a multiple of eight, so on a key boundary.
+    for (byte, k) in rest.iter_mut().zip(key.iter().cycle()) {
+        *byte ^= k;
+    }
+}
+
+/// Mask keys for one connection: drawn from the system's RNG once, then
+/// from xorshift, so a frame costs no system call. Masks keep a browser's
+/// proxies from reading frames as HTTP; they need not be secret.
+struct Masks(u64);
+
+impl Masks {
+    fn new() -> Self {
+        Self(u64::from_ne_bytes(slopmax_common::ids::random::<8>()) | 1)
+    }
+
+    fn next(&mut self) -> [u8; 4] {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        (self.0 as u32).to_ne_bytes()
     }
 }
 
@@ -167,7 +248,8 @@ fn apply_mask(data: &mut [u8], key: [u8; 4]) {
 /// server must not.
 pub struct Writer<W> {
     inner: W,
-    masked: bool,
+    masks: Option<Masks>,
+    frame: Vec<u8>,
 }
 
 impl<W: AsyncWrite + Unpin> Writer<W> {
@@ -175,7 +257,8 @@ impl<W: AsyncWrite + Unpin> Writer<W> {
     pub fn client(inner: W) -> Self {
         Self {
             inner,
-            masked: true,
+            masks: Some(Masks::new()),
+            frame: Vec::new(),
         }
     }
 
@@ -183,7 +266,8 @@ impl<W: AsyncWrite + Unpin> Writer<W> {
     pub fn server(inner: W) -> Self {
         Self {
             inner,
-            masked: false,
+            masks: None,
+            frame: Vec::new(),
         }
     }
 
@@ -202,9 +286,12 @@ impl<W: AsyncWrite + Unpin> Writer<W> {
                 (CLOSE, data.into())
             }
         };
-        let mut frame = Vec::with_capacity(payload.len() + 14);
+        // One buffer per writer, reused: one write per frame.
+        let frame = &mut self.frame;
+        frame.clear();
+        frame.reserve(payload.len() + 14);
         frame.push(0x80 | opcode);
-        let mask_bit = if self.masked { 0x80 } else { 0 };
+        let mask_bit = if self.masks.is_some() { 0x80 } else { 0 };
         match payload.len() {
             n if n < 126 => frame.push(mask_bit | n as u8),
             n if n <= usize::from(u16::MAX) => {
@@ -216,8 +303,8 @@ impl<W: AsyncWrite + Unpin> Writer<W> {
                 frame.extend_from_slice(&(n as u64).to_be_bytes());
             }
         }
-        if self.masked {
-            let key = slopmax_common::ids::random::<4>();
+        if let Some(masks) = &mut self.masks {
+            let key = masks.next();
             frame.extend_from_slice(&key);
             let start = frame.len();
             frame.extend_from_slice(&payload);
@@ -225,7 +312,7 @@ impl<W: AsyncWrite + Unpin> Writer<W> {
         } else {
             frame.extend_from_slice(&payload);
         }
-        self.inner.write_all(&frame).await?;
+        self.inner.write_all(frame).await?;
         self.inner.flush().await
     }
 }
@@ -287,6 +374,72 @@ mod tests {
                     Some(Message::Close(Some((1000, "bye".into()))))
                 );
             }
+        }
+    }
+
+    #[test]
+    fn frames_split_anywhere_parse_the_same() {
+        let mut wire = Vec::new();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let mut writer = Writer::client(&mut wire);
+            writer.send(&Message::Text("x".repeat(300))).await.unwrap();
+            writer.send(&Message::Ping(b"p".to_vec())).await.unwrap();
+        });
+        for cut in 0..=wire.len() {
+            let mut buf = BytesMut::from(&wire[..cut]);
+            let mut frames = Vec::new();
+            while let Some(frame) = parse(&mut buf).unwrap() {
+                frames.push(frame);
+            }
+            buf.extend_from_slice(&wire[cut..]);
+            while let Some(frame) = parse(&mut buf).unwrap() {
+                frames.push(frame);
+            }
+            assert_eq!(frames.len(), 2, "cut at {cut}");
+            assert_eq!(frames[0].payload, "x".repeat(300).into_bytes());
+            assert_eq!(frames[1].payload, b"p");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_read_dropped_midway_loses_nothing() {
+        let (mut ours, theirs) = tokio::io::duplex(64);
+        let mut reader = Reader::new(theirs);
+        let mut wire = Vec::new();
+        Writer::client(&mut wire)
+            .send(&Message::Text("hello there".into()))
+            .await
+            .unwrap();
+        // Half the frame, then a read that is abandoned.
+        ours.write_all(&wire[..5]).await.unwrap();
+        let abandoned =
+            tokio::time::timeout(std::time::Duration::from_millis(20), reader.message()).await;
+        assert!(abandoned.is_err());
+        ours.write_all(&wire[5..]).await.unwrap();
+        assert_eq!(
+            reader.message().await.unwrap(),
+            Some(Message::Text("hello there".into()))
+        );
+        drop(ours);
+        assert_eq!(reader.message().await.unwrap(), None);
+    }
+
+    #[test]
+    fn masking_by_words_matches_masking_by_bytes() {
+        let key = [0x37, 0xfa, 0x21, 0x3d];
+        for len in 0..40 {
+            let data: Vec<u8> = (0..len as u8).collect();
+            let mut fast = data.clone();
+            apply_mask(&mut fast, key);
+            let slow: Vec<u8> = data
+                .iter()
+                .enumerate()
+                .map(|(i, b)| b ^ key[i % 4])
+                .collect();
+            assert_eq!(fast, slow);
         }
     }
 
