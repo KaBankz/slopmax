@@ -95,7 +95,7 @@ fn free_port() -> SocketAddr {
 struct Daemon {
     home: PathBuf,
     base: String,
-    run: JoinHandle<anyhow::Result<()>>,
+    run: JoinHandle<anyhow::Result<daemon::Stopped>>,
 }
 
 /// A home with `accounts`, and a daemon serving it on a port of its own.

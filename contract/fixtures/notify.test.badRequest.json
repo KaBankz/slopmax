@@ -1,0 +1,7 @@
+{
+  "status": 400,
+  "body": {
+    "_tag": "BadRequest",
+    "message": "no notifications are set up: add a webhook or a command under [notify]"
+  }
+}

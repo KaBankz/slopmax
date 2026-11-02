@@ -1,0 +1,10 @@
+{
+  "status": 200,
+  "body": {
+    "name": "phone",
+    "key": "sm-<secret>",
+    "models": [
+      "gpt-*"
+    ]
+  }
+}

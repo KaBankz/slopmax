@@ -1,0 +1,17 @@
+[package]
+name = "slopmax-api"
+description = "slopmax's own API under /slopmax/api: the types every front end shares"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+slopmax-common.workspace = true
+
+[lints]
+workspace = true

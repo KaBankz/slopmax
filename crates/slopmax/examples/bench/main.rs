@@ -375,7 +375,9 @@ async fn proxy(listen: SocketAddr, upstream: &str, home: &str) -> Result<()> {
         ("https://api.anthropic.com", upstream),
         ("https://chatgpt.com/backend-api", upstream),
     ]);
-    slopmax_core::daemon::serve(config, home, origins).await
+    slopmax_core::daemon::serve(config, home, origins)
+        .await
+        .map(drop)
 }
 
 /// How long translating a request takes: what one such request holds up

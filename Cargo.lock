@@ -6391,6 +6391,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "slopmax-api"
+version = "0.3.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "slopmax-common",
+]
+
+[[package]]
 name = "slopmax-app"
 version = "0.3.0"
 dependencies = [
@@ -6424,6 +6433,7 @@ dependencies = [
  "memchr",
  "serde",
  "serde_json",
+ "slopmax-api",
  "slopmax-common",
  "slopmax-net",
  "slopmax-wire",

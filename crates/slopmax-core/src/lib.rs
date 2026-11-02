@@ -8,6 +8,7 @@
 
 pub mod account;
 pub mod agent;
+pub mod api;
 pub mod auth;
 pub mod background;
 pub mod blocking;

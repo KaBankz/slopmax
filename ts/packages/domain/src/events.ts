@@ -6,8 +6,12 @@ import { Notice } from "./notice.ts"
 import { Report } from "./report.ts"
 
 export const Event = Schema.TaggedUnion({
-  /** The first event on every connection: the proxy is live, and its version. */
-  Hello: { version: Schema.String },
+  /**
+   * The first event on every connection: the proxy is live, its version, and
+   * the program serving it, so a client can tell a daemon it started from one
+   * it did not.
+   */
+  Hello: { version: Schema.String, exe: Schema.optionalKey(Schema.String) },
   /** The report, at connect and whenever it changes. */
   Status: { report: Report },
   /** One per request slopmax answered. */

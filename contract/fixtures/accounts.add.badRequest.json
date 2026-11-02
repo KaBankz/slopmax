@@ -1,0 +1,7 @@
+{
+  "status": 400,
+  "body": {
+    "_tag": "BadRequest",
+    "message": "Claude accounts sign in with a browser: `slopmax login claude`, or the app"
+  }
+}

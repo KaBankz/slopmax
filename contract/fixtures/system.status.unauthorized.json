@@ -1,0 +1,7 @@
+{
+  "status": 401,
+  "body": {
+    "_tag": "Unauthorized",
+    "message": "missing or invalid slopmax key; see `slopmax env`"
+  }
+}

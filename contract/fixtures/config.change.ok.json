@@ -1,0 +1,110 @@
+{
+  "status": 200,
+  "body": {
+    "settings": {
+      "listen": "127.0.0.1:7567",
+      "strategy": "reset-first",
+      "sessionAffinity": true,
+      "sessionMinutes": 45,
+      "redeemExpiring": true,
+      "redeemWhenExhausted": false,
+      "warmWindows": false,
+      "paidOverflow": false,
+      "pollMinutes": 0,
+      "refreshTokens": false,
+      "websockets": false,
+      "aliases": {},
+      "fallbacks": {},
+      "prices": {},
+      "planPrices": {},
+      "notify": {
+        "events": [
+          "exhausted",
+          "recovered",
+          "signed-out",
+          "reset-expiring",
+          "quota-unused"
+        ]
+      },
+      "keys": [
+        {
+          "name": "laptop",
+          "models": [
+            "claude-*"
+          ]
+        }
+      ]
+    },
+    "live": [
+      {
+        "name": "strategy",
+        "summary": "How a new session picks its account: reset-first, fill-first, least-used, or round-robin",
+        "kind": "choice"
+      },
+      {
+        "name": "sessionAffinity",
+        "summary": "Keep a session on its account, for the prompt cache",
+        "kind": "switch"
+      },
+      {
+        "name": "sessionMinutes",
+        "summary": "Idle minutes before a session's account is forgotten",
+        "kind": "minutes"
+      },
+      {
+        "name": "redeemExpiring",
+        "summary": "Redeem a limit reset before it expires unused",
+        "kind": "switch"
+      },
+      {
+        "name": "redeemWhenExhausted",
+        "summary": "Redeem one when every account is spent",
+        "kind": "switch"
+      },
+      {
+        "name": "warmWindows",
+        "summary": "Start idle ChatGPT accounts' windows as they reset",
+        "kind": "switch"
+      },
+      {
+        "name": "paidOverflow",
+        "summary": "Let API keys take over once subscriptions are limited",
+        "kind": "switch"
+      },
+      {
+        "name": "pollMinutes",
+        "summary": "Minutes between usage polls (0 turns them off)",
+        "kind": "minutes"
+      },
+      {
+        "name": "refreshTokens",
+        "summary": "Refresh sign-ins before they expire",
+        "kind": "switch"
+      },
+      {
+        "name": "websockets",
+        "summary": "Relay Codex's WebSocket connections",
+        "kind": "switch"
+      }
+    ],
+    "strategies": [
+      {
+        "id": "reset-first",
+        "summary": "Spend the quota that resets soonest, so none is lost"
+      },
+      {
+        "id": "fill-first",
+        "summary": "Use accounts in priority order; fail over when one is limited"
+      },
+      {
+        "id": "least-used",
+        "summary": "Balance load toward the least used account"
+      },
+      {
+        "id": "round-robin",
+        "summary": "Take turns across accounts"
+      }
+    ],
+    "restartNeeded": []
+  }
+}

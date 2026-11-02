@@ -1,0 +1,59 @@
+{
+  "status": 200,
+  "body": {
+    "range": "30d",
+    "by": "model",
+    "since": "2026-11-01T12:00:00Z",
+    "rows": [
+      {
+        "key": "claude-fable-5-1",
+        "totals": {
+          "requests": 1,
+          "input": 1200,
+          "output": 640,
+          "cacheRead": 48000,
+          "cacheWrite": 900,
+          "cost": 0.06725,
+          "unpriced": 0,
+          "failed": 0
+        }
+      },
+      {
+        "key": "claude-opus-5-5",
+        "totals": {
+          "requests": 1,
+          "input": 1200,
+          "output": 640,
+          "cacheRead": 48000,
+          "cacheWrite": 900,
+          "cost": 0.0317,
+          "unpriced": 0,
+          "failed": 0
+        }
+      },
+      {
+        "key": "gpt-6-sol",
+        "totals": {
+          "requests": 1,
+          "input": 1200,
+          "output": 640,
+          "cacheRead": 48000,
+          "cacheWrite": 900,
+          "cost": 0.0202,
+          "unpriced": 0,
+          "failed": 0
+        }
+      }
+    ],
+    "total": {
+      "requests": 3,
+      "input": 3600,
+      "output": 1920,
+      "cacheRead": 144000,
+      "cacheWrite": 2700,
+      "cost": 0.11915,
+      "unpriced": 0,
+      "failed": 0
+    }
+  }
+}

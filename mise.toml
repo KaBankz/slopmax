@@ -23,7 +23,7 @@ tools = { rust = "1.89" }
 run = "cargo check --all-targets --all-features --locked"
 
 [tasks.budget]
-description = "Hold the binary's dependencies to 70 crates and the binary to 6.6 MB"
+description = "Hold the binary's dependencies to 70 crates and the binary to 7 MiB"
 run = '''
 host=$(rustc -vV | sed -n 's/host: //p')
 # Third-party crates only: slopmax's own (path) crates are left out.
@@ -33,10 +33,11 @@ echo "$count crates for $host (budget 70)"
 [ "$count" -le 70 ] || { printf '%s\n' "$crates"; exit 1; }
 cargo build --release --locked -p slopmax
 bytes=$(wc -c < target/release/slopmax | tr -d ' ')
-# 6.6 MB: v0.3.0 measured 6.52 MB. Raising it needs the reason in the
-# commit (ARCHITECTURE-NEXT.md gives each phase's budget).
-echo "$bytes bytes (budget 6600000)"
-[ "$bytes" -le 6600000 ]
+# 7 MiB, ARCHITECTURE-NEXT.md's hard budget from phase 3 on: v0.3.0
+# measured 6.52 MB, the typed API added 0.39 MB. Raising it needs the
+# reason in the commit.
+echo "$bytes bytes (budget 7340032)"
+[ "$bytes" -le 7340032 ]
 '''
 
 [tasks.bench]

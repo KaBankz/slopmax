@@ -6,6 +6,7 @@
 //! that account's credentials.
 
 mod admin;
+mod api;
 mod forward;
 mod hub;
 mod models;
@@ -85,6 +86,13 @@ pub struct App {
     config_text: Mutex<Option<String>>,
     /// The account files and pins as last read, to tell when they change.
     seen: Mutex<Option<u64>>,
+    /// The API's event stream, as server-sent event frames: each request
+    /// answered and each sign-in's progress.
+    pub api_events: broadcast::Sender<Bytes>,
+    /// Sign-ins started through the API, by id.
+    logins: Mutex<HashMap<String, api::Login>>,
+    /// Asked to stop so the service manager starts it again.
+    pub restart: std::sync::atomic::AtomicBool,
 }
 
 impl App {
@@ -130,6 +138,9 @@ impl App {
             warmed: Default::default(),
             config_text: Mutex::new(config_text),
             seen: Mutex::default(),
+            api_events: broadcast::channel(256).0,
+            logins: Mutex::default(),
+            restart: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -318,7 +329,7 @@ impl App {
 
     /// Writes a finished request to the usage ledger, tells the dashboard's
     /// live feed about it, and remembers the model of a Codex one.
-    pub(crate) fn record(&self, entry: &crate::ledger::Entry) {
+    pub fn record(&self, entry: &crate::ledger::Entry) {
         self.ledger.record(entry);
         if entry.provider == ProviderId::Codex
             && let Some(model) = &entry.model
@@ -330,6 +341,17 @@ impl App {
         {
             let _ = self.events.send(line.into());
         }
+        if self.api_events.receiver_count() > 0 {
+            let event = slopmax_api::events::Event::Request {
+                record: slopmax_api::ledger::LedgerRecord::Request(crate::api::record(entry)),
+            };
+            let _ = self.api_events.send(event.frame().into());
+        }
+    }
+
+    /// The status report in the API's types.
+    pub fn api_report(&self) -> slopmax_api::report::Report {
+        crate::api::report(&self.report(), &self.config(), Timestamp::now())
     }
 
     pub fn report(&self) -> Report {
@@ -362,6 +384,7 @@ pub async fn handle(app: Arc<App>, request: Request) -> Response {
         ),
         // Claude Code's unauthenticated connectivity check; HEAD probes alike.
         (_, "/api/hello") | (&Method::HEAD, _) => empty_reply(StatusCode::OK),
+        (_, path) if path.starts_with("/slopmax/api/") => api::handle(app, request).await,
         (_, path) if path.starts_with("/slopmax/") => admin::handle(app, request).await,
         (_, path) if path.starts_with("/v0/management/") => hub::handle(app, request).await,
         (&Method::GET, "/v1/models")

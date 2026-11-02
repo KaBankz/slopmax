@@ -1,0 +1,413 @@
+{
+  "status": 200,
+  "body": {
+    "range": "7d",
+    "buckets": [
+      {
+        "label": "Oct 27",
+        "tokens": [
+          0.0,
+          0.0
+        ],
+        "requests": 0,
+        "failed": 0,
+        "rescued": 0,
+        "sessions": 0,
+        "cost": 0.0
+      },
+      {
+        "label": "Oct 28",
+        "tokens": [
+          0.0,
+          0.0
+        ],
+        "requests": 0,
+        "failed": 0,
+        "rescued": 0,
+        "sessions": 0,
+        "cost": 0.0
+      },
+      {
+        "label": "Oct 29",
+        "tokens": [
+          0.0,
+          0.0
+        ],
+        "requests": 0,
+        "failed": 0,
+        "rescued": 0,
+        "sessions": 0,
+        "cost": 0.0
+      },
+      {
+        "label": "Oct 30",
+        "tokens": [
+          0.0,
+          0.0
+        ],
+        "requests": 0,
+        "failed": 0,
+        "rescued": 0,
+        "sessions": 0,
+        "cost": 0.0
+      },
+      {
+        "label": "Oct 31",
+        "tokens": [
+          0.0,
+          0.0
+        ],
+        "requests": 0,
+        "failed": 0,
+        "rescued": 0,
+        "sessions": 0,
+        "cost": 0.0
+      },
+      {
+        "label": "Nov 1",
+        "tokens": [
+          0.0,
+          0.0
+        ],
+        "requests": 0,
+        "failed": 0,
+        "rescued": 0,
+        "sessions": 0,
+        "cost": 0.0
+      },
+      {
+        "label": "Nov 2",
+        "tokens": [
+          101480.0,
+          50740.0
+        ],
+        "requests": 3,
+        "failed": 0,
+        "rescued": 0,
+        "sessions": 1,
+        "cost": 0.11915,
+        "cached": 0.9580838084220886,
+        "firstByte": [
+          900.0,
+          900.0
+        ]
+      }
+    ],
+    "providers": [
+      "claude",
+      "codex"
+    ],
+    "total": {
+      "requests": 3,
+      "input": 3600,
+      "output": 1920,
+      "cacheRead": 144000,
+      "cacheWrite": 2700,
+      "cost": 0.11915,
+      "unpriced": 0,
+      "failed": 0
+    },
+    "rescued": 0,
+    "unplaced": 0,
+    "billed": 0.0,
+    "left": {
+      "windows": 0,
+      "unused": 0.0,
+      "dollars": 0.0,
+      "unpriced": 0,
+      "accounts": []
+    },
+    "cacheSaved": 0.7368,
+    "cached": 0.9580838084220886,
+    "sessions": 1,
+    "firstByte": 900.0,
+    "monthly": 0.5106428571428572,
+    "activity": [
+      [
+        0,
+        0,
+        0,
+        1,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    ],
+    "models": [
+      {
+        "name": "claude-fable-5-1",
+        "totals": {
+          "requests": 1,
+          "input": 1200,
+          "output": 640,
+          "cacheRead": 48000,
+          "cacheWrite": 900,
+          "cost": 0.06725,
+          "unpriced": 0,
+          "failed": 0
+        }
+      },
+      {
+        "name": "claude-opus-5-5",
+        "totals": {
+          "requests": 1,
+          "input": 1200,
+          "output": 640,
+          "cacheRead": 48000,
+          "cacheWrite": 900,
+          "cost": 0.0317,
+          "unpriced": 0,
+          "failed": 0
+        }
+      },
+      {
+        "name": "gpt-6-sol",
+        "totals": {
+          "requests": 1,
+          "input": 1200,
+          "output": 640,
+          "cacheRead": 48000,
+          "cacheWrite": 900,
+          "cost": 0.0202,
+          "unpriced": 0,
+          "failed": 0
+        }
+      }
+    ],
+    "accounts": [
+      {
+        "name": "Main",
+        "provider": "claude",
+        "totals": {
+          "requests": 2,
+          "input": 2400,
+          "output": 1280,
+          "cacheRead": 96000,
+          "cacheWrite": 1800,
+          "cost": 0.09895,
+          "unpriced": 0,
+          "failed": 0
+        }
+      },
+      {
+        "name": "codex@example.com",
+        "provider": "codex",
+        "totals": {
+          "requests": 1,
+          "input": 1200,
+          "output": 640,
+          "cacheRead": 48000,
+          "cacheWrite": 900,
+          "cost": 0.0202,
+          "unpriced": 0,
+          "failed": 0
+        }
+      }
+    ],
+    "agents": [
+      {
+        "name": "Claude Code",
+        "totals": {
+          "requests": 3,
+          "input": 3600,
+          "output": 1920,
+          "cacheRead": 144000,
+          "cacheWrite": 2700,
+          "cost": 0.11915,
+          "unpriced": 0,
+          "failed": 0
+        }
+      }
+    ],
+    "speeds": [
+      {
+        "model": "claude-fable-5-1",
+        "provider": "claude",
+        "tokensPerSecond": 193.9393939393939
+      },
+      {
+        "model": "claude-opus-5-5",
+        "provider": "claude",
+        "tokensPerSecond": 193.9393939393939
+      },
+      {
+        "model": "gpt-6-sol",
+        "provider": "codex",
+        "tokensPerSecond": 193.9393939393939
+      }
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "status": 400,
+  "body": {
+    "_tag": "BadRequest",
+    "message": "this account's provider has no limit resets"
+  }
+}

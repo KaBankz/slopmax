@@ -194,6 +194,15 @@ pub fn setup(agent: &dyn Agent, config: &Config) -> Result<PathBuf> {
 }
 
 /// Reverts `setup`. Returns the file changed.
+/// Whether `agent`'s settings from before slopmax wired it are kept, for
+/// [`undo`] to put back.
+pub fn backed_up(agent: &dyn Agent) -> bool {
+    fsx::read_json::<BTreeMap<String, Value>>(&backup_file())
+        .ok()
+        .flatten()
+        .is_some_and(|saved| saved.contains_key(agent.id()))
+}
+
 pub fn undo(agent: &dyn Agent) -> Result<PathBuf> {
     let file = config_file(agent);
     let backup = backup_file();

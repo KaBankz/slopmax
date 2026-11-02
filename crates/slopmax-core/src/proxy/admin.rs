@@ -422,7 +422,7 @@ fn events(app: &App) -> Response {
 }
 
 /// A body fed from a channel.
-struct Feed(mpsc::Receiver<Bytes>);
+pub(super) struct Feed(pub(super) mpsc::Receiver<Bytes>);
 
 impl HttpBody for Feed {
     type Data = Bytes;

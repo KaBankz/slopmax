@@ -1,0 +1,261 @@
+{
+  "status": 200,
+  "body": {
+    "version": "<version>",
+    "live": true,
+    "generatedAt": "2026-11-01T12:00:00Z",
+    "strategy": "reset-first",
+    "accounts": [
+      {
+        "id": "claude-7cad1d23",
+        "provider": "claude",
+        "name": "Spare",
+        "email": "spare@example.com",
+        "plan": "max 5x",
+        "disabled": false,
+        "priority": 2,
+        "pinned": false,
+        "tokenExpiresAt": "2026-11-01T12:00:00Z",
+        "models": [],
+        "sessions": 0,
+        "condition": {
+          "_tag": "Ready"
+        },
+        "notes": [
+          {
+            "_tag": "Priority",
+            "value": 2
+          }
+        ],
+        "windows": [
+          {
+            "span": "5h",
+            "used": 12.0,
+            "resetsAt": "2026-11-01T12:00:00Z"
+          },
+          {
+            "span": "7d",
+            "used": 30.0,
+            "resetsAt": "2026-11-01T12:00:00Z"
+          }
+        ],
+        "resets": [],
+        "served": {
+          "requests": 0,
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        }
+      },
+      {
+        "id": "claude-df8fd9fa",
+        "provider": "claude",
+        "name": "Main",
+        "email": "claude@example.com",
+        "plan": "max 20x",
+        "disabled": false,
+        "priority": 1,
+        "pinned": false,
+        "tokenExpiresAt": "2026-11-01T12:00:00Z",
+        "models": [],
+        "sessions": 0,
+        "condition": {
+          "_tag": "Ready"
+        },
+        "notes": [
+          {
+            "_tag": "Priority",
+            "value": 1
+          }
+        ],
+        "windows": [
+          {
+            "span": "5h",
+            "used": 82.0,
+            "resetsAt": "2026-11-01T12:00:00Z"
+          },
+          {
+            "span": "7d",
+            "used": 47.0,
+            "resetsAt": "2026-11-01T12:00:00Z"
+          },
+          {
+            "span": "7d",
+            "model": "Fable",
+            "used": 64.0,
+            "resetsAt": "2026-11-01T12:00:00Z"
+          }
+        ],
+        "resets": [],
+        "served": {
+          "requests": 0,
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        }
+      },
+      {
+        "id": "codex-fbfb76d8",
+        "provider": "codex",
+        "name": "codex@example.com",
+        "email": "codex@example.com",
+        "plan": "pro",
+        "disabled": false,
+        "priority": 0,
+        "pinned": false,
+        "tokenExpiresAt": "2026-11-01T12:00:00Z",
+        "models": [],
+        "sessions": 0,
+        "condition": {
+          "_tag": "Limited",
+          "until": "2026-11-01T12:00:00Z"
+        },
+        "notes": [
+          {
+            "_tag": "Resets",
+            "count": 1
+          }
+        ],
+        "windows": [
+          {
+            "span": "5h",
+            "used": 100.0,
+            "resetsAt": "2026-11-01T12:00:00Z"
+          },
+          {
+            "span": "7d",
+            "used": 64.0,
+            "resetsAt": "2026-11-01T12:00:00Z"
+          }
+        ],
+        "resets": [
+          {
+            "id": "credit-1",
+            "title": "Rate limit reset",
+            "grantedAt": "2026-11-01T12:00:00Z",
+            "expiresAt": "2026-11-01T12:00:00Z"
+          }
+        ],
+        "served": {
+          "requests": 0,
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        }
+      },
+      {
+        "id": "anthropic-1c344608",
+        "provider": "anthropic",
+        "name": "Anthropic API key …ract",
+        "disabled": false,
+        "priority": 0,
+        "pinned": false,
+        "endpoint": "https://api.anthropic.com",
+        "models": [
+          "claude-*"
+        ],
+        "sessions": 0,
+        "condition": {
+          "_tag": "Ready"
+        },
+        "notes": [],
+        "windows": [],
+        "resets": [],
+        "served": {
+          "requests": 0,
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        }
+      },
+      {
+        "id": "compat-97d65ea9",
+        "provider": "compat",
+        "name": "Local",
+        "disabled": false,
+        "priority": 0,
+        "pinned": false,
+        "endpoint": "http://127.0.0.1:11434/v1",
+        "models": [
+          "llama-*"
+        ],
+        "sessions": 0,
+        "condition": {
+          "_tag": "Ready"
+        },
+        "notes": [],
+        "windows": [],
+        "resets": [],
+        "served": {
+          "requests": 0,
+          "input": 0,
+          "output": 0,
+          "cacheRead": 0,
+          "cacheWrite": 0
+        }
+      }
+    ],
+    "pools": [
+      {
+        "provider": "claude",
+        "accounts": 2,
+        "windows": [
+          {
+            "span": "5h",
+            "used": 68.00000000000001,
+            "resetsAt": "2026-11-01T12:00:00Z",
+            "weighted": true
+          },
+          {
+            "span": "7d",
+            "used": 43.6,
+            "resetsAt": "2026-11-01T12:00:00Z",
+            "weighted": true
+          }
+        ],
+        "scoped": [
+          {
+            "span": "7d",
+            "model": "Fable",
+            "used": 64.0,
+            "resetsAt": "2026-11-01T12:00:00Z"
+          }
+        ],
+        "shares": {
+          "claude-7cad1d23": 0.2,
+          "claude-df8fd9fa": 0.8
+        },
+        "next": {
+          "account": "claude-7cad1d23",
+          "reason": "only-one",
+          "why": "the only account ready"
+        }
+      },
+      {
+        "provider": "codex",
+        "accounts": 1,
+        "windows": [
+          {
+            "span": "5h",
+            "used": 100.0,
+            "resetsAt": "2026-11-01T12:00:00Z",
+            "weighted": false
+          },
+          {
+            "span": "7d",
+            "used": 64.0,
+            "resetsAt": "2026-11-01T12:00:00Z",
+            "weighted": false
+          }
+        ],
+        "scoped": [],
+        "shares": {}
+      }
+    ],
+    "nudges": []
+  }
+}

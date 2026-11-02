@@ -1,0 +1,7 @@
+{
+  "status": 400,
+  "body": {
+    "_tag": "BadRequest",
+    "message": "range is today, 7d, 30d, or all"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "status": 200,
+  "body": [
+    {
+      "name": "laptop",
+      "models": [
+        "claude-*"
+      ]
+    }
+  ]
+}

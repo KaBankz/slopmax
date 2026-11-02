@@ -1,0 +1,8 @@
+{
+  "status": 404,
+  "body": {
+    "_tag": "NotFound",
+    "what": "slopmax endpoint",
+    "message": "no such slopmax endpoint"
+  }
+}

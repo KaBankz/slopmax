@@ -19,6 +19,7 @@ hyper-util.workspace = true
 memchr.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+slopmax-api.workspace = true
 slopmax-common.workspace = true
 slopmax-net.workspace = true
 slopmax-wire.workspace = true

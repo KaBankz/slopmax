@@ -60,8 +60,29 @@ pub fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
     builder.enable_all().build()
 }
 
-pub async fn run(config: Config) -> Result<()> {
+pub async fn run(config: Config) -> Result<Stopped> {
     serve(config, Home::current(), Origins::default()).await
+}
+
+/// How the daemon stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stopped {
+    /// Asked to stop, or signalled.
+    Done,
+    /// Asked to stop so it is started again (`POST /shutdown {"restart":
+    /// true}` after an update): the service manager restarts it on exit
+    /// code 75.
+    Restart,
+}
+
+impl Stopped {
+    /// The process's exit code: 75 (`EX_TEMPFAIL`) asks for a restart.
+    pub fn code(self) -> i32 {
+        match self {
+            Self::Done => 0,
+            Self::Restart => 75,
+        }
+    }
 }
 
 /// How long the daemon waits, when it stops, for background work in
@@ -75,7 +96,7 @@ const SETTLE: Duration = Duration::from_secs(5);
 /// drains the ones open, background loops end and the work they started
 /// finishes, refreshes in flight save their tokens, and state is saved
 /// last, by the only writer left.
-pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<()> {
+pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<Stopped> {
     let serving = serve_lock(&home)?;
     let listen = config.listen;
     let listener = TcpListener::bind(listen).await.with_context(|| {
@@ -172,7 +193,12 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<()> {
     app.ledger.sync();
     drop(serving);
     log::info!("stopped");
-    Ok(())
+    Ok(
+        match app.restart.load(std::sync::atomic::Ordering::Relaxed) {
+            true => Stopped::Restart,
+            false => Stopped::Done,
+        },
+    )
 }
 
 /// How often the account files are checked for changes the daemon was not
