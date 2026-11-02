@@ -1,0 +1,56 @@
+# The macOS app, generated into Slopmax.xcodeproj by XcodeGen
+# (`mise x xcodegen -- xcodegen` here). The project file is not committed.
+name: Slopmax
+options:
+  bundleIdPrefix: dev.slopmax
+  deploymentTarget:
+    macOS: "14.0"
+packages:
+  SlopmaxKit:
+    path: .
+settings:
+  base:
+    MARKETING_VERSION: "0.4.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "6.0"
+    ENABLE_HARDENED_RUNTIME: YES
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+targets:
+  Slopmax:
+    type: application
+    platform: macOS
+    sources:
+      - path: Slopmax
+    dependencies:
+      - package: SlopmaxKit
+    info:
+      path: Slopmax/Info.plist
+      properties:
+        CFBundleDisplayName: slopmax
+        CFBundleIdentifier: dev.slopmax.app
+        LSApplicationCategoryType: public.app-category.developer-tools
+        # A menu bar app: no Dock icon.
+        LSUIElement: true
+        NSAppTransportSecurity:
+          # The daemon is on this machine, over plain HTTP.
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.slopmax.app
+    postBuildScripts:
+      # The CLI is the daemon: it goes beside the app's own executable,
+      # signed first, and its launch agent under Library/LaunchAgents.
+      - name: Bundle the daemon
+        script: |
+          set -euo pipefail
+          cli="${SLOPMAX_CLI:-$SRCROOT/../target/release/slopmax}"
+          test -x "$cli" || { echo "error: build the CLI first (cargo build --release -p slopmax)"; exit 1; }
+          macos="$TARGET_BUILD_DIR/$EXECUTABLE_FOLDER_PATH"
+          cp "$cli" "$macos/slopmax"
+          codesign --force --options runtime --timestamp=none --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" "$macos/slopmax"
+          agents="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/LaunchAgents"
+          mkdir -p "$agents"
+          cp "$SRCROOT/LaunchAgents/dev.slopmax.agent.plist" "$agents/"
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(EXECUTABLE_FOLDER_PATH)/slopmax

@@ -1,0 +1,31 @@
+# The macOS app: SlopmaxKit's tests (the contract fixtures among them),
+# then the app built around a freshly built CLI. Unsigned here; releases
+# sign and notarize (apple/README.md).
+name: apple
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    paths: ["apple/**", "contract/**", "crates/slopmax-api/**", ".github/workflows/apple.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v5
+      - name: SlopmaxKit
+        working-directory: apple
+        run: swift test
+      - name: The CLI the app bundles
+        run: cargo build --release --locked -p slopmax
+      - name: The app
+        working-directory: apple
+        run: |
+          mise x xcodegen -- xcodegen
+          xcodebuild -scheme Slopmax -configuration Release -derivedDataPath build CODE_SIGNING_ALLOWED=YES build
+          test -x build/Build/Products/Release/Slopmax.app/Contents/MacOS/slopmax

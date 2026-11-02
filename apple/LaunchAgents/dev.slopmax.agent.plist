@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The daemon: the bundled CLI, serving, started at login and again
+     whenever it exits with an error, as after `/shutdown {"restart": true}`
+     (exit 75) once the app is updated. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.slopmax.agent</string>
+    <key>BundleProgram</key>
+    <string>Contents/MacOS/slopmax</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>slopmax</string>
+        <string>serve</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

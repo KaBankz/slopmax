@@ -433,6 +433,11 @@ pub static APP: App = App {
         ),
         command("doctor", "Check the setup and say how to fix problems", &[]),
         command(
+            "daemon-info",
+            "Where the proxy listens and its key, for the apps that drive it",
+            &[arg("json", "As JSON (the only form)", Kind::Flag(None))],
+        ),
+        command(
             "completions",
             "Print a shell completion script",
             &[arg("shell", "Which shell", Kind::Required(SHELLS))],
@@ -621,6 +626,22 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
             }
         }
         "doctor" => return doctor::run(&config, &store).await,
+        "daemon-info" => {
+            // What an app needs to reach the proxy, and to tell a daemon it
+            // started (this binary) from one another install runs.
+            let daemon = slopmax_core::background::Daemon::new(&config);
+            let running = daemon.version().await;
+            let info = serde_json::json!({
+                "base": config.base_url(),
+                "key": config.api_key,
+                "version": env!("CARGO_PKG_VERSION"),
+                "exe": std::env::current_exe().ok().map(|p| p.display().to_string()),
+                "home": slopmax_core::paths::Home::current().dir().display().to_string(),
+                "running": running.is_some(),
+                "runningVersion": running,
+            });
+            println!("{info}");
+        }
         "completions" => print!("{}", args::completions(&APP, m.get("shell")?)),
         name => unreachable!("`{name}` is in the command table but not dispatched"),
     }
