@@ -14,6 +14,7 @@ mod relay;
 mod socket;
 mod start;
 mod transcode;
+mod ui;
 pub mod warm;
 
 use std::collections::HashMap;
@@ -385,6 +386,10 @@ pub async fn handle(app: Arc<App>, request: Request) -> Response {
         // Claude Code's unauthenticated connectivity check; HEAD probes alike.
         (_, "/api/hello") | (&Method::HEAD, _) => empty_reply(StatusCode::OK),
         (_, path) if path.starts_with("/slopmax/api/") => api::handle(app, request).await,
+        (&Method::GET, "/slopmax" | "/slopmax/dashboard") => ui::to_page(),
+        (&Method::GET, path) if path.strip_prefix("/slopmax/").is_some_and(ui::serves) => {
+            ui::answer(&path["/slopmax/".len()..], request.headers())
+        }
         (_, path) if path.starts_with("/slopmax/") => admin::handle(app, request).await,
         (_, path) if path.starts_with("/v0/management/") => hub::handle(app, request).await,
         (&Method::GET, "/v1/models")

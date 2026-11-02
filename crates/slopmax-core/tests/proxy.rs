@@ -2728,3 +2728,55 @@ async fn the_api_does_what_the_cli_does_for_keys_endpoints_and_the_doctor() {
     assert!(titles.contains(&"Accounts"), "{titles:?}");
     assert!(sections[0]["findings"][0]["level"].is_string());
 }
+
+#[tokio::test]
+async fn the_web_ui_is_served_compressed_cached_and_locked_down() {
+    let h = harness(ProviderId::Claude, &["tok-ok"]).await;
+    let get = |path: &str, etag: Option<&str>| {
+        let mut request = client()
+            .get(format!("{}{path}", h.proxy))
+            .header("accept-encoding", "gzip");
+        if let Some(etag) = etag {
+            request = request.header("if-none-match", etag);
+        }
+        request.send()
+    };
+    // The page needs no key: it carries none of the data.
+    let page = get("/slopmax/", None).await.unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    assert!(
+        page.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/html")
+    );
+    let csp = page.headers()["content-security-policy"].to_str().unwrap();
+    assert!(csp.contains("default-src 'none'") && csp.contains("frame-ancestors 'none'"));
+    assert_eq!(page.headers()["x-content-type-options"], "nosniff");
+    if page.headers().get("content-encoding").is_some() {
+        // Built with the UI: sent gzip, and a reload costs a 304.
+        assert_eq!(page.headers()["content-encoding"], "gzip");
+        assert_eq!(page.headers()["cache-control"], "no-cache");
+        let etag = page.headers()["etag"].to_str().unwrap().to_owned();
+        let again = get("/slopmax/", Some(&etag)).await.unwrap();
+        assert_eq!(again.status(), StatusCode::NOT_MODIFIED);
+        let plain = client()
+            .get(format!("{}/slopmax/", h.proxy))
+            .header("accept-encoding", "identity")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(plain.status(), StatusCode::NOT_ACCEPTABLE);
+    }
+    // The old dashboard's address, and the bare prefix, lead to the page.
+    for old in ["/slopmax", "/slopmax/dashboard"] {
+        let moved = get(old, None).await.unwrap();
+        assert_eq!(moved.status(), StatusCode::PERMANENT_REDIRECT, "{old}");
+        assert_eq!(moved.headers()["location"], "/slopmax/");
+    }
+    // The endpoints beside it still need the key.
+    assert_eq!(
+        get("/slopmax/status", None).await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+}

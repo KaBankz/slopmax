@@ -423,7 +423,7 @@ impl Config {
     /// The dashboard's address. The key travels in the fragment, which
     /// browsers never send to a server.
     pub fn dashboard_url(&self) -> String {
-        format!("{}/slopmax/dashboard#key={}", self.base_url(), self.api_key)
+        format!("{}/slopmax/#key={}", self.base_url(), self.api_key)
     }
 }
 

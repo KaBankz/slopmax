@@ -23,6 +23,7 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ### Changed
 
+- The dashboard is the React UI the desktop app has, served by the proxy at `/slopmax/` and built into the binary (about 300 KB, gzip-compressed, on the system's font). It speaks the typed API and follows the event stream, so it updates the moment something changes instead of every few seconds. `slopmax dashboard` opens it; the old address, `/slopmax/dashboard`, leads there.
 - The proxy runs on one thread, which carries a desktop's agents with room to spare, adds less to each request, and holds less memory. `SLOPMAX_WORKERS` spreads it over more threads (`auto` for one per CPU, which the Docker image sets) for a proxy shared by many clients.
 - The proxy serves requests from the accounts it holds in memory, and no longer reads an account's file for each one. It learns of changes when told (`POST /slopmax/sync`, which the CLI now sends after each change to accounts or pins) and checks the files for any it was not told of every 30 seconds, instead of reading every account every 2 seconds.
 - A usage record is written to the ledger as the request ends, in one write to the month file the proxy keeps open, instead of by a background writer.

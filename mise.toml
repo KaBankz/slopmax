@@ -2,6 +2,8 @@
 
 [tools]
 rust = { version = "1.99", components = "clippy,rustfmt" }
+# Builds the web UI the binary embeds (`mise run ui`); as ts/ pins it.
+bun = "1.4.4"
 
 [tasks.build]
 description = "Build an optimized release binary"
@@ -16,6 +18,11 @@ run = [
   # Day boundaries across a daylight saving change, in a zone that has one.
   "TZ=America/New_York cargo test --locked -p slopmax-common local_midnight",
 ]
+
+[tasks.ui]
+description = "Build the web UI the binary embeds, into ts/apps/ui/dist/rust"
+dir = "ts"
+run = ["bun install --frozen-lockfile", "bun apps/ui/build.ts --rust"]
 
 [tasks.msrv]
 description = "Check that the minimum supported Rust version still builds"

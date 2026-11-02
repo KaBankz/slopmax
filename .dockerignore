@@ -1,2 +1,6 @@
 /target
 .git
+# The TypeScript tree's installs and builds; the UI is built in the image.
+ts/node_modules
+ts/**/node_modules
+ts/**/dist

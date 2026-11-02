@@ -233,6 +233,14 @@ fn steady(value: &mut Value, home: &str) {
                     // The program and the release: true of any build.
                     "exe" => *value = "<exe>".into(),
                     "version" if value.is_string() => *value = "<version>".into(),
+                    // What depends on the day and hour the test runs.
+                    "label" if value.is_string() => *value = "<day>".into(),
+                    "monthly" => *value = 0.into(),
+                    "activity" => {
+                        for cell in value.as_array_mut().into_iter().flatten().flat_map(|d| d.as_array_mut().into_iter().flatten()) {
+                            *cell = 0.into();
+                        }
+                    }
                     _ => steady(value, home),
                 }
             }

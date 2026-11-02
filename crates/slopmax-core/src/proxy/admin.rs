@@ -1,11 +1,9 @@
-//! slopmax's own API under `/slopmax/`: status, usage, a live feed of
-//! answered requests, account actions, and the dashboard that uses them.
-//! Account actions call the same functions as the CLI, so both behave
-//! alike.
-//!
-//! Everything but the dashboard page itself needs the slopmax key. The page
-//! carries no data; it reads the key from its URL fragment (`#key=…`),
-//! which browsers never send to the server.
+//! The first API, under `/slopmax/`: status, usage, a live feed of answered
+//! requests and account actions, in the shapes the desktop app and
+//! `slopmax`'s own commands read. It stays until they speak the typed API
+//! under `/slopmax/api` (`api.rs`), which the web UI uses. Account actions
+//! call the same functions as the CLI, so both behave alike. Everything
+//! needs the slopmax key.
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -30,7 +28,6 @@ use crate::provider::credits::Outcome;
 use crate::time::Timestamp;
 use crate::{daemon, history, log, summary};
 
-const DASHBOARD: &str = include_str!("dashboard.html");
 /// How often an idle feed says it is still there.
 const KEEPALIVE: Duration = Duration::from_secs(15);
 
@@ -39,9 +36,6 @@ pub(super) async fn handle(app: Arc<App>, request: Request) -> Response {
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
     let query = request.uri().query().unwrap_or("").to_owned();
-    if method == Method::GET && path == "/slopmax/dashboard" {
-        return dashboard();
-    }
     if !authorized(&app.config(), request.headers()) {
         return error(
             None,
@@ -109,28 +103,6 @@ pub(super) async fn handle(app: Arc<App>, request: Request) -> Response {
         },
         _ => error(None, StatusCode::NOT_FOUND, "no such slopmax endpoint"),
     }
-}
-
-fn dashboard() -> Response {
-    let mut response = Response::new(body::full(DASHBOARD));
-    let headers = response.headers_mut();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("text/html; charset=utf-8"),
-    );
-    // The page loads nothing from elsewhere, and nothing may frame it.
-    headers.insert(
-        header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(
-            "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
-             connect-src 'self'; img-src data:; frame-ancestors 'none'",
-        ),
-    );
-    headers.insert(
-        header::REFERRER_POLICY,
-        HeaderValue::from_static("no-referrer"),
-    );
-    response
 }
 
 /// `?range=7d&by=day` → a usage summary.

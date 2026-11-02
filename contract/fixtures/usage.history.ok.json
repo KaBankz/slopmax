@@ -4,7 +4,7 @@
     "range": "7d",
     "buckets": [
       {
-        "label": "Oct 27",
+        "label": "<day>",
         "tokens": [
           0.0,
           0.0
@@ -16,7 +16,7 @@
         "cost": 0.0
       },
       {
-        "label": "Oct 28",
+        "label": "<day>",
         "tokens": [
           0.0,
           0.0
@@ -28,7 +28,7 @@
         "cost": 0.0
       },
       {
-        "label": "Oct 29",
+        "label": "<day>",
         "tokens": [
           0.0,
           0.0
@@ -40,7 +40,7 @@
         "cost": 0.0
       },
       {
-        "label": "Oct 30",
+        "label": "<day>",
         "tokens": [
           0.0,
           0.0
@@ -52,7 +52,7 @@
         "cost": 0.0
       },
       {
-        "label": "Oct 31",
+        "label": "<day>",
         "tokens": [
           0.0,
           0.0
@@ -64,7 +64,7 @@
         "cost": 0.0
       },
       {
-        "label": "Nov 1",
+        "label": "<day>",
         "tokens": [
           0.0,
           0.0
@@ -76,7 +76,7 @@
         "cost": 0.0
       },
       {
-        "label": "Nov 2",
+        "label": "<day>",
         "tokens": [
           101480.0,
           50740.0
@@ -121,14 +121,14 @@
     "cached": 0.9580838084220886,
     "sessions": 1,
     "firstByte": 900.0,
-    "monthly": 0.5106428571428572,
+    "monthly": 0,
     "activity": [
       [
         0,
         0,
         0,
-        1,
-        2,
+        0,
+        0,
         0,
         0,
         0,

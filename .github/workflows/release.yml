@@ -39,7 +39,11 @@ jobs:
       - uses: actions/checkout@v4
       # The Rust that mise.toml pins, as in development and CI.
       - uses: jdx/mise-action@v5
+      # The web UI the binary serves; the build fails without it.
+      - run: mise run ui
       - uses: taiki-e/upload-rust-binary-action@v1
+        env:
+          SLOPMAX_UI_REQUIRED: "1"
         with:
           bin: slopmax
           target: ${{ matrix.target }}

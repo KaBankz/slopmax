@@ -46,7 +46,7 @@ const fontFaces = async (): Promise<string> =>
     )
   ).join("\n")
 
-const tailwind = (minify: boolean): BunPlugin => ({
+const tailwind = (minify: boolean, withFonts: boolean): BunPlugin => ({
   name: "tailwind",
   setup(build) {
     build.onLoad({ filter: /\.css$/ }, async ({ path: file }) => {
@@ -57,7 +57,7 @@ const tailwind = (minify: boolean): BunPlugin => ({
       const sources = compiler.sources.map(({ base: from, pattern, negated }) => ({ base: from, pattern, negated }))
       if (compiler.root !== "none" && compiler.root !== null) sources.push({ ...compiler.root, negated: false })
       const candidates = new Scanner({ sources }).scan()
-      const css = `${await fontFaces()}\n${compiler.build(candidates)}`
+      const css = `${withFonts ? await fontFaces() : ""}\n${compiler.build(candidates)}`
       return { contents: minify ? optimize(css, { minify: true }).code : css, loader: "css" }
     })
   },
@@ -69,6 +69,10 @@ export interface BuildOptions {
   readonly minify?: boolean
   /** Brotli and gzip copies for the server to pick from; the web copy has them unless told otherwise. */
   readonly compress?: boolean
+  /** IBM Plex shipped as files; without them, the page uses the system's font. On unless told otherwise. */
+  readonly fonts?: boolean
+  /** A brotli copy beside the gzip one, when compressing. On unless told otherwise. */
+  readonly brotli?: boolean
 }
 
 /** Builds one host's copy and answers the files it wrote, with their sizes. */
@@ -84,7 +88,7 @@ export const build = async (options: BuildOptions): Promise<ReadonlyArray<{ path
     publicPath: "./",
     naming: { entry: "[name].[ext]", chunk: "[name]-[hash].[ext]", asset: "[name]-[hash].[ext]" },
     define: { "process.env.NODE_ENV": JSON.stringify(minify ? "production" : "development") },
-    plugins: [tailwind(minify)],
+    plugins: [tailwind(minify, options.fonts ?? true)],
   })
   if (!result.success) {
     for (const message of result.logs) console.error(message)
@@ -92,7 +96,7 @@ export const build = async (options: BuildOptions): Promise<ReadonlyArray<{ path
   }
   // The fonts themselves, beside the CSS that now names them.
   const fontFiles = await Promise.all(
-    fonts.map(async (font) => {
+    (options.fonts ?? true ? fonts : []).map(async (font) => {
       const target = path.join(outdir, await fontName(font))
       await Bun.write(target, Bun.file(font.source))
       return target
@@ -104,26 +108,39 @@ export const build = async (options: BuildOptions): Promise<ReadonlyArray<{ path
     await Bun.write(output.path, css.replaceAll(fontScheme, "./"))
   }
   // The fonts' license travels with them.
-  await Bun.write(
-    path.join(outdir, "OFL.txt"),
-    Bun.file(path.join(root, "node_modules/@fontsource/ibm-plex-sans/LICENSE")),
-  )
-  const written = result.outputs.map((output) => output.path).concat(fontFiles, path.join(outdir, "OFL.txt"))
+  const license = path.join(outdir, "OFL.txt")
+  if (fontFiles.length > 0) {
+    await Bun.write(license, Bun.file(path.join(root, "node_modules/@fontsource/ibm-plex-sans/LICENSE")))
+  }
+  const written = result.outputs.map((output) => output.path).concat(fontFiles, fontFiles.length > 0 ? [license] : [])
   if (options.compress ?? options.host === "web") {
     // Fonts are compressed already; the rest gets a brotli and a gzip copy for the server to pick from.
     for (const file of written.filter((name) => !name.endsWith(".woff2"))) {
       const bytes = new Uint8Array(await Bun.file(file).arrayBuffer())
-      await Bun.write(
-        `${file}.br`,
-        brotliCompressSync(bytes, { params: { [constants.BROTLI_PARAM_QUALITY]: constants.BROTLI_MAX_QUALITY } }),
-      )
+      if (options.brotli ?? true) {
+        await Bun.write(
+          `${file}.br`,
+          brotliCompressSync(bytes, { params: { [constants.BROTLI_PARAM_QUALITY]: constants.BROTLI_MAX_QUALITY } }),
+        )
+      }
       await Bun.write(`${file}.gz`, gzipSync(bytes, { level: 9 }))
     }
   }
   return Promise.all(written.map(async (file) => ({ path: path.relative(outdir, file), bytes: Bun.file(file).size })))
 }
 
-if (import.meta.main) {
+if (import.meta.main && Bun.argv.includes("--rust")) {
+  // The copy the Rust daemon embeds and serves at /slopmax/: the system's
+  // font, and one gzip copy of each file (every browser takes gzip).
+  const files = await build({
+    host: "web",
+    outdir: path.join(root, "dist/rust"),
+    fonts: false,
+    brotli: false,
+    compress: true,
+  })
+  console.log(`rust: ${files.length} files, ${files.reduce((sum, file) => sum + file.bytes, 0)} bytes`)
+} else if (import.meta.main) {
   for (const host of ["web", "desktop"] as const) {
     const files = await build({ host })
     const total = files.reduce((sum, file) => sum + file.bytes, 0)
