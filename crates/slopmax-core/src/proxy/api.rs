@@ -34,7 +34,7 @@ use crate::net::body;
 use crate::net::server::{Request, Response};
 use crate::provider::credits::Outcome;
 use crate::time::Timestamp;
-use crate::{api, daemon, doctor, history, log, summary};
+use crate::{api, doctor, history, log, summary};
 
 /// Largest request body read.
 const MAX_BODY: usize = 64 * 1024;
@@ -148,8 +148,7 @@ async fn answer(app: &Arc<App>, route: Route<'_>, query: &str, body: &[u8]) -> A
     match route {
         Route::Status => ok(&app.api_report()),
         Route::Refresh => {
-            daemon::poll_all(app, true).await;
-            daemon::list_credits(app, true).await;
+            app.refresh().await;
             ok(&app.api_report())
         }
         Route::Sync => {

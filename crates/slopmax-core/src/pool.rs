@@ -741,6 +741,13 @@ impl Pool {
         self.lock().states.get(id).cloned().unwrap_or_default()
     }
 
+    /// Whether a save would write anything: state changed, or windows
+    /// reset and wait to be recorded.
+    pub fn needs_save(&self) -> bool {
+        let inner = self.lock();
+        inner.dirty || !inner.lapses.is_empty()
+    }
+
     /// A copy of all state, plus whether it changed since the last call.
     pub fn snapshot(&self, now: Timestamp) -> (State, bool) {
         let mut guard = self.lock();

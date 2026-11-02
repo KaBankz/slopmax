@@ -513,13 +513,16 @@ impl Main {
                 }
             }
         });
-        // Countdowns move every second; the charts reread the ledger now and
-        // then.
+        // The window redraws when a countdown it shows reads differently:
+        // every second only while one shows seconds, else each minute or
+        // hour. The charts reread the ledger now and then.
         let tick = cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut wait = Duration::from_secs(1);
             loop {
-                cx.background_executor().timer(Duration::from_secs(1)).await;
-                if this.update(cx, |main, cx| main.tick(cx)).is_err() {
-                    break;
+                cx.background_executor().timer(wait).await;
+                match this.update(cx, |main, cx| main.tick(cx)) {
+                    Ok(next) => wait = next,
+                    Err(_) => break,
                 }
             }
         });
@@ -559,7 +562,22 @@ impl Main {
         main
     }
 
-    fn tick(&mut self, cx: &mut Context<Self>) {
+    /// Redraws for the countdowns and rereads history when due; answers how
+    /// long until the next time either is needed.
+    fn tick(&mut self, cx: &mut Context<Self>) -> Duration {
+        self.tick_now(cx);
+        let countdown = self
+            .snapshot
+            .report
+            .as_ref()
+            .and_then(|report| view::next_change(report, Timestamp::now()))
+            .map_or(HISTORY_EVERY, |d| {
+                Duration::from_secs(d.as_secs().max(1) as u64)
+            });
+        countdown.min(HISTORY_EVERY)
+    }
+
+    fn tick_now(&mut self, cx: &mut Context<Self>) {
         let stale = |asked: Option<Instant>| asked.is_none_or(|at| at.elapsed() >= HISTORY_EVERY);
         match self.section {
             Section::Usage | Section::Performance => {

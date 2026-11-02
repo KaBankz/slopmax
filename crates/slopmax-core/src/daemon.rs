@@ -110,66 +110,61 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<Stopp
     app.sync()?;
 
     // Logins, removals and `slopmax use` from the CLI and the apps are told
-    // to the daemon at once (`/slopmax/sync`); this catches the rest.
-    app.spawn(every(RESCAN, app.clone(), |app| async move {
-        if let Err(e) = app.rescan() {
-            log::warn!("reloading accounts: {e:#}");
-        }
-        app.reload_config();
-    }));
-    app.spawn(every(
-        Duration::from_secs(10),
-        app.clone(),
-        |app| async move {
-            blocking::run(move || save_state(&app)).await;
-        },
-    ));
-    // Each task asks the config as it runs, so a changed config.toml turns
-    // it on or off without a restart.
-    app.spawn(every(
-        Duration::from_secs(300),
-        app.clone(),
-        |app| async move {
-            if app.config().refresh_tokens {
-                refresh_all(&app).await;
+    // to the daemon at once (`/slopmax/sync`); the rescan catches the rest.
+    // Each job asks the config as it runs, so a changed config.toml turns it
+    // on or off without a restart. Every period is a multiple of 15 s, so the
+    // jobs share their wakeups.
+    let watching = Arc::new(tokio::sync::Mutex::new(Watch::open(&app.home)));
+    let jobs: Vec<Job> = vec![
+        Job::new("save state", Duration::from_secs(15), |app| async move {
+            // Nothing to write: no blocking thread woken for nothing.
+            if app.pool.needs_save() {
+                blocking::run(move || save_state(&app)).await;
             }
-        },
-    ));
-    app.spawn(every(
-        Duration::from_secs(60),
-        app.clone(),
-        |app| async move {
-            list_credits(&app, false).await;
-        },
-    ));
-    app.spawn(every(
-        Duration::from_secs(1800),
-        app.clone(),
-        |app| async move {
-            if app.config().redeem_expiring_credits {
-                redeem_expiring(&app).await;
+        }),
+        Job::new("watch", WATCH_EVERY, move |app| {
+            let watching = watching.clone();
+            async move { watching.lock().await.step(&app).await }
+        }),
+        Job::new("rescan", RESCAN, |app| async move {
+            if let Err(e) = app.rescan() {
+                log::warn!("reloading accounts: {e:#}");
             }
-        },
-    ));
-    app.spawn(every(
-        Duration::from_secs(60),
-        app.clone(),
-        |app| async move {
-            if app.config().warm_windows {
-                proxy::warm::idle_accounts(&app).await;
-            }
-        },
-    ));
-    app.spawn(watch(app.clone()));
-    app.spawn(every(
-        Duration::from_secs(60),
-        app.clone(),
-        |app| async move {
+            app.reload_config();
+        }),
+        Job::new("poll", Duration::from_secs(60), |app| async move {
             if app.config().poll_mins > 0 {
                 poll_all(&app, false).await;
             }
-        },
-    ));
+        }),
+        Job::new("list credits", Duration::from_secs(60), |app| async move {
+            list_credits(&app, false).await;
+        }),
+        Job::new("warm windows", Duration::from_secs(60), |app| async move {
+            if app.config().warm_windows {
+                proxy::warm::idle_accounts(&app).await;
+            }
+        }),
+        Job::new(
+            "refresh tokens",
+            Duration::from_secs(300),
+            |app| async move {
+                if app.config().refresh_tokens {
+                    refresh_all(&app).await;
+                }
+            },
+        ),
+        Job::new(
+            "redeem expiring",
+            Duration::from_secs(1800),
+            |app| async move {
+                if app.config().redeem_expiring_credits {
+                    redeem_expiring(&app).await;
+                }
+            },
+        ),
+    ];
+    app.spawn(schedule(app.clone(), jobs));
 
     log::info!(
         "slopmax {} listening on {}",
@@ -279,25 +274,63 @@ fn read_state(home: &Home) -> State {
     }
 }
 
-/// Runs `task` now and then every `period` after each run, until the daemon
-/// stops. A run that panics is logged, and the schedule goes on.
-async fn every<F, Fut>(period: Duration, app: Arc<App>, task: F)
-where
-    F: Fn(Arc<App>) -> Fut,
-    Fut: Future<Output = ()> + Send + 'static,
-{
-    let mut ticker = tokio::time::interval(period);
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+/// One background job: what it is called, how often it runs, and what it
+/// does.
+struct Job {
+    name: &'static str,
+    every: Duration,
+    run: Box<dyn Fn(Arc<App>) -> proxy::BoxedTask + Send + Sync>,
+}
+
+impl Job {
+    fn new<F, Fut>(name: &'static str, every: Duration, run: F) -> Self
+    where
+        F: Fn(Arc<App>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        Self {
+            name,
+            every,
+            run: Box::new(move |app| Box::pin(run(app))),
+        }
+    }
+}
+
+/// Runs every job on one timer, until the daemon stops: it sleeps until the
+/// soonest is due, then starts each one due as a task of its own. A job runs
+/// once at a time and never catches up on runs it missed; one that panics is
+/// logged and runs again on schedule. Jobs due at once start together, so
+/// the daemon wakes once for them.
+async fn schedule(app: Arc<App>, jobs: Vec<Job>) {
+    let start = tokio::time::Instant::now();
+    let mut next = vec![start; jobs.len()];
+    let mut running: Vec<Option<tokio::task::JoinHandle<()>>> = jobs.iter().map(|_| None).collect();
     loop {
+        let soonest = next.iter().copied().min().unwrap_or(start);
         tokio::select! {
-            _ = ticker.tick() => {}
+            () = tokio::time::sleep_until(soonest) => {}
             () = app.stop.cancelled() => return,
         }
-        let run: proxy::BoxedTask = Box::pin(task(app.clone()));
-        if let Err(e) = tokio::spawn(run).await
-            && e.is_panic()
-        {
-            log::error!("a background task failed; it runs again on schedule: {e}");
+        let now = tokio::time::Instant::now();
+        for (i, job) in jobs.iter().enumerate() {
+            if next[i] > now {
+                continue;
+            }
+            // From the slot it was due in, so jobs of the same period stay
+            // in step however long a run takes.
+            while next[i] <= now {
+                next[i] += job.every;
+            }
+            if running[i].as_ref().is_some_and(|run| !run.is_finished()) {
+                continue;
+            }
+            if let Some(run) = running[i].take()
+                && let Err(e) = run.await
+                && e.is_panic()
+            {
+                log::error!("{} failed; it runs again on schedule: {e}", job.name);
+            }
+            running[i] = Some(app.tasks.spawn((job.run)(app.clone())));
         }
     }
 }
@@ -333,33 +366,44 @@ struct Told {
     told: Vec<String>,
 }
 
-/// Sends a notification for each change in the accounts' conditions.
-async fn watch(app: Arc<App>) {
-    // The nudges told before a restart stay told. An earlier version kept
-    // them as a JSON list, read here once.
-    let file = app.home.nudged();
-    let legacy = file.with_extension("json");
-    let told: Vec<String> = match file.exists() {
-        true => {
-            fsx::read_toml::<Told>(&file)
-                .ok()
-                .flatten()
-                .unwrap_or_default()
-                .told
+/// Watches the accounts' conditions, telling each change: in the log, on
+/// the API's event stream (which the apps post as notifications), and to
+/// the configured webhook or command.
+struct Watch {
+    watcher: notify::Watcher,
+    /// Where the nudges already told are kept, so a restart does not tell
+    /// them again, and the JSON an earlier version kept them in.
+    file: std::path::PathBuf,
+    legacy: std::path::PathBuf,
+}
+
+impl Watch {
+    fn open(home: &Home) -> Self {
+        let file = home.nudged();
+        let legacy = file.with_extension("json");
+        let told: Vec<String> = match file.exists() {
+            true => {
+                fsx::read_toml::<Told>(&file)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default()
+                    .told
+            }
+            false => fsx::read_json(&legacy).ok().flatten().unwrap_or_default(),
+        };
+        Self {
+            watcher: notify::Watcher::remembering(told),
+            file,
+            legacy,
         }
-        false => fsx::read_json(&legacy).ok().flatten().unwrap_or_default(),
-    };
-    let mut watcher = notify::Watcher::remembering(told);
-    let mut ticker = tokio::time::interval(WATCH_EVERY);
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    loop {
-        tokio::select! {
-            _ = ticker.tick() => {}
-            () = app.stop.cancelled() => return,
-        }
+    }
+
+    async fn step(&mut self, app: &App) {
         let now = Timestamp::now();
         let accounts = app.pool.accounts();
-        let mut events = watcher.changes(&accounts, |id| app.pool.state(id), now);
+        let mut events = self
+            .watcher
+            .changes(&accounts, |id| app.pool.state(id), now);
         let config = app.config();
         let report = app.report();
         let subjects: Vec<notify::Subject> =
@@ -370,19 +414,31 @@ async fn watch(app: Arc<App>) {
             &config.plan_prices,
             now,
         );
-        let fresh = watcher.new_nudges(nudges);
+        let fresh = self.watcher.new_nudges(nudges);
         if !fresh.is_empty() {
             let told = Told {
-                told: watcher.told(),
+                told: self.watcher.told(),
             };
-            match fsx::write_toml(&file, &told) {
-                Ok(()) => drop(std::fs::remove_file(&legacy)),
+            match fsx::write_toml(&self.file, &told) {
+                Ok(()) => drop(std::fs::remove_file(&self.legacy)),
                 Err(e) => log::warn!("saving the nudges told: {e}"),
             }
         }
         events.extend(fresh);
         for event in events {
             log::info!("{}", event.message);
+            if app.api_events.receiver_count() > 0 {
+                let key = format!(
+                    "{}:{}:{}",
+                    event.event.as_str(),
+                    event.account.as_deref().unwrap_or("-"),
+                    event.until.map_or(0, |at| at.as_second())
+                );
+                let notice = slopmax_api::events::Event::Notice {
+                    notice: crate::api::notice(&key, &event),
+                };
+                let _ = app.api_events.send(notice.frame().into());
+            }
             if !config.notify.is_enabled() {
                 continue;
             }

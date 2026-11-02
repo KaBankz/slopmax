@@ -26,7 +26,7 @@ use crate::net::server::{Request, Response};
 use crate::provider::ProviderId;
 use crate::provider::credits::Outcome;
 use crate::time::Timestamp;
-use crate::{daemon, history, log, summary};
+use crate::{history, log, summary};
 
 /// How often an idle feed says it is still there.
 const KEEPALIVE: Duration = Duration::from_secs(15);
@@ -49,8 +49,7 @@ pub(super) async fn handle(app: Arc<App>, request: Request) -> Response {
         // Polls every account's usage and lists its reset credits now, then
         // reports.
         (&Method::POST, ["refresh"]) => {
-            daemon::poll_all(&app, true).await;
-            daemon::list_credits(&app, true).await;
+            app.refresh().await;
             json_reply(StatusCode::OK, &app.report())
         }
         // Picks up changes on disk now, config.toml's too, then reports.

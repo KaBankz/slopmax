@@ -895,6 +895,33 @@ fn share(account: &AccountReport, slot: &Slot, weight: f32, now: Timestamp) -> S
     }
 }
 
+/// How long until any countdown the report shows reads differently: a
+/// window's reset, a block or throttle lifting, a limit reset expiring, a
+/// nudge's deadline. A UI redraws then, instead of every second; `None`
+/// when nothing counts down.
+pub fn next_change(report: &Report, now: Timestamp) -> Option<SignedDuration> {
+    let accounts = report.accounts.iter().flat_map(|a| {
+        let state = &a.state;
+        let windows = state.limits.windows.iter().filter_map(|w| w.resets_at);
+        let credits = state.unexpired_credits(now).filter_map(|c| c.expires_at);
+        windows
+            .chain(credits)
+            .chain(state.blocked_until)
+            .chain(state.throttled_until)
+            .chain(state.limited_until(now))
+    });
+    let pools = report
+        .pools
+        .iter()
+        .flat_map(|p| p.windows.iter().filter_map(|w| w.resets_at));
+    let nudges = report.nudges.iter().filter_map(|n| n.until);
+    accounts
+        .chain(pools)
+        .chain(nudges)
+        .filter_map(|at| human::next_change(at, now))
+        .min()
+}
+
 /// The menu bar's line: each subscription's use in its 5-hour window,
 /// across its working accounts, as `Claude 42% · ChatGPT 18%`.
 pub fn menu_bar(report: &Report, now: Timestamp) -> String {
@@ -2000,5 +2027,35 @@ mod tests {
         assert_eq!(device.code.as_deref(), Some("ABCD-1234"));
         assert_eq!(device.link, None);
         assert!(device.detail.contains(&url));
+    }
+
+    #[test]
+    fn a_window_redraws_when_its_soonest_countdown_reads_differently() {
+        let now = ts(1_000_000);
+        // Two hours and thirty seconds reads `2h00m` for 31 more seconds;
+        // a week off, the soonest wins.
+        let report = report_of(
+            now,
+            vec![
+                ("a@x.dev", vec![window("5h", 40.0, 1_000_000 + 7_230)]),
+                (
+                    "b@x.dev",
+                    vec![window("7d", 10.0, 1_000_000 + 7 * 86_400 + 1_800)],
+                ),
+            ],
+        );
+        assert_eq!(next_change(&report, now).map(|d| d.as_secs()), Some(31));
+        // Under the hour, the seconds show: every second.
+        let soon = report_of(
+            now,
+            vec![("a@x.dev", vec![window("5h", 40.0, 1_000_000 + 600)])],
+        );
+        assert_eq!(next_change(&soon, now).map(|d| d.as_secs()), Some(1));
+        // Nothing counting down: nothing to redraw for.
+        let still = report_of(
+            now,
+            vec![("a@x.dev", vec![window("5h", 40.0, 1_000_000 - 60)])],
+        );
+        assert_eq!(next_change(&still, now), None);
     }
 }

@@ -99,6 +99,17 @@ async fn mock(log: Log, mut request: Request) -> Response {
         (Method::POST, "/codex/responses") => mock_codex(&log, headers),
         (Method::GET, "/wham/rate-limit-reset-credits") => mock_credits(headers),
         (Method::GET, "/wham/usage") => {
+            // A poll that takes a while, for callers that ask at once.
+            if headers
+                .get("authorization")
+                .is_some_and(|v| v == "Bearer tok-slow-poll")
+            {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                let usage = json!({ "plan_type": "pro", "rate_limit": { "primary_window": {
+                    "used_percent": 5, "limit_window_seconds": 18000, "reset_at": reset_in(3600)
+                } } });
+                return reply(StatusCode::OK, &[], usage.to_string());
+            }
             let usage = json!({ "plan_type": "pro", "rate_limit": { "primary_window": {
                 "used_percent": 5, "limit_window_seconds": 18000, "reset_at": reset_in(3600)
             } } });
@@ -1758,7 +1769,7 @@ async fn the_dashboard_api_reports_acts_and_streams() {
         .unwrap();
     assert_eq!(account(&report, &second)["pinned"], true);
     // Pins live in this proxy's own home, not the user's.
-    assert!(h.dir.join("pins.json").exists());
+    assert!(h.dir.join("pins.toml").exists());
     let report: Value = admin(Method::POST, "/slopmax/use/auto")
         .send()
         .await
@@ -1802,8 +1813,9 @@ async fn the_dashboard_api_reports_acts_and_streams() {
         .map(|a| &a["id"])
         .collect();
     assert_eq!(ids, [&Value::from(first.clone())]);
-    let pins = std::fs::read_to_string(h.dir.join("pins.json")).unwrap();
-    assert_eq!(serde_json::from_str::<Value>(&pins).unwrap(), json!({}));
+    let pins = std::fs::read_to_string(h.dir.join("pins.toml")).unwrap();
+    // No pins left: an empty TOML document.
+    assert!(pins.parse::<toml_edit::DocumentMut>().unwrap().is_empty(), "{pins}");
 
     // A change the CLI or app makes on disk shows as soon as the proxy syncs.
     Store::at(h.dir.join("accounts"))
@@ -2780,4 +2792,27 @@ async fn the_web_ui_is_served_compressed_cached_and_locked_down() {
         get("/slopmax/status", None).await.unwrap().status(),
         StatusCode::UNAUTHORIZED
     );
+}
+
+#[tokio::test]
+async fn callers_refreshing_at_once_share_one_poll() {
+    let h = harness(ProviderId::Codex, &["tok-slow-poll"]).await;
+    let refresh = || {
+        client()
+            .post(format!("{}/slopmax/api/refresh", h.proxy))
+            .header("authorization", format!("Bearer {KEY}"))
+            .send()
+    };
+    let (a, b, c) = tokio::join!(refresh(), refresh(), refresh());
+    for answer in [a, b, c] {
+        assert_eq!(answer.unwrap().status(), StatusCode::OK);
+    }
+    let polls = h
+        .log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|s| s.path.starts_with("/wham/usage"))
+        .count();
+    assert_eq!(polls, 1);
 }

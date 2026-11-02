@@ -25,6 +25,7 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ### Changed
 
+- The proxy's background work (saving state, watching for notices, the rescan, polls, limit resets, warming, refreshes) runs on one timer instead of eight, waking about once every 15 seconds while idle, and the state is written only when it changed. The notices it tells now also go out on the API's event stream, which the macOS app posts as notifications.
 - slopmax keeps its accounts, state, pins and the nudges it told as TOML (`accounts/<id>.toml`, `state.toml`, `pins.toml`, `nudged.toml`), like `config.toml`. The JSON files earlier versions wrote are converted the first time they are read, and removed; an earlier version will not see the converted files. The usage ledger stays one JSON line per request, which keeps each record one atomic append.
 - The dashboard is the React UI the desktop app has, served by the proxy at `/slopmax/` and built into the binary (about 300 KB, gzip-compressed, on the system's font). It speaks the typed API and follows the event stream, so it updates the moment something changes instead of every few seconds. `slopmax dashboard` opens it; the old address, `/slopmax/dashboard`, leads there.
 - The proxy runs on one thread, which carries a desktop's agents with room to spare, adds less to each request, and holds less memory. `SLOPMAX_WORKERS` spreads it over more threads (`auto` for one per CPU, which the Docker image sets) for a proxy shared by many clients.
@@ -43,6 +44,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ### Fixed
 
+- The desktop app redrew its whole window every second for its countdowns, which kept a CPU busy where the GPU is drawn in software. It now redraws when a countdown it shows would read differently: each second only while one shows seconds, otherwise each minute or hour.
+- Several clients refreshing at once (the dashboard, the app, `slopmax status --refresh`) each polled every account; a refresh asked for while one runs now waits for it and shares what it found.
 - An answer translated from another format and read whole could be recorded twice when it carried an error; it is recorded once, with the status the client got.
 - A Codex stream that broke off while the proxy held back its start now reaches Codex as a broken stream instead of ending as if it had completed.
 - The last usage records could be lost when the proxy stopped. Stopping now runs in order: open requests finish, background work in flight finishes, a token refresh in flight saves what it got, state is saved, and the ledger is flushed to disk.

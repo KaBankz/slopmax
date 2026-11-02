@@ -69,6 +69,9 @@ pub struct App {
     /// Held while redeeming a reset credit, so concurrent requests that
     /// all find the pool spent redeem one credit, not one each.
     pub redeeming: tokio::sync::Mutex<()>,
+    /// Held while polling every account on request, so callers that ask
+    /// at once share one poll.
+    refreshing: tokio::sync::Mutex<()>,
     /// Where answered requests are recorded for `slopmax usage`.
     pub ledger: Ledger,
     /// Reasoning state kept between turns of translated conversations.
@@ -130,6 +133,7 @@ impl App {
             stop: CancellationToken::new(),
             tasks: TaskTracker::new(),
             redeeming: tokio::sync::Mutex::new(()),
+            refreshing: tokio::sync::Mutex::new(()),
             ledger,
             replay: Default::default(),
             catalogs: Default::default(),
@@ -347,6 +351,19 @@ impl App {
                 record: slopmax_api::ledger::LedgerRecord::Request(crate::api::record(entry)),
             };
             let _ = self.api_events.send(event.frame().into());
+        }
+    }
+
+    /// Polls every account's usage and lists its limit resets now. A
+    /// caller that asks while a poll runs waits for that one instead of
+    /// starting another, and sees what it found.
+    pub async fn refresh(self: &Arc<Self>) {
+        match self.refreshing.try_lock() {
+            Ok(_polling) => {
+                crate::daemon::poll_all(self, true).await;
+                crate::daemon::list_credits(self, true).await;
+            }
+            Err(_) => drop(self.refreshing.lock().await),
         }
     }
 
