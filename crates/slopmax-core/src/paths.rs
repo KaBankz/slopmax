@@ -44,7 +44,7 @@ impl Home {
 
     /// Last known limits and sessions, written by the proxy.
     pub fn state(&self) -> PathBuf {
-        self.0.join("state.json")
+        self.0.join("state.toml")
     }
 
     /// The usage ledger's monthly files.
@@ -59,12 +59,12 @@ impl Home {
 
     /// Manual account preferences set by `slopmax use`.
     pub fn pins(&self) -> PathBuf {
-        self.0.join("pins.json")
+        self.0.join("pins.toml")
     }
 
     /// The nudges already told, so a restart doesn't tell them again.
     pub fn nudged(&self) -> PathBuf {
-        self.0.join("nudged.json")
+        self.0.join("nudged.toml")
     }
 
     /// Each subscription window that reset, and how much of it was used.

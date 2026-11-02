@@ -211,7 +211,7 @@ pub(super) async fn redeem(config: &Config, store: &Store, query: &str, yes: boo
     };
     // As the proxy last saw the provider's own client, which some answer
     // alone.
-    let state: State = fsx::read_json(&paths::state_file())?.unwrap_or_default();
+    let state: State = fsx::read_toml(&paths::state_file())?.unwrap_or_default();
     let agent = state.agents.get(&account.provider).map(String::as_str);
     let available = credits.list(&http, &account, agent).await?;
     let Some(next) = available.first() else {

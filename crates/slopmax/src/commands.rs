@@ -880,6 +880,7 @@ mod tests {
             "logs -f -n 100",
             "dashboard --print",
             "doctor",
+            "daemon-info --json",
             "completions fish",
         ];
         for line in lines {

@@ -426,17 +426,17 @@ fn account_commands_change_the_store() {
     assert!(out.stdout.contains("Enabled work"), "{out:?}");
     assert!(!s.account(&a.id).disabled);
 
-    let pins = s.slopmax.join("pins.json");
+    let pins = s.slopmax.join("pins.toml");
     let out = s.run(&["use", "b@x.dev"]).ok();
     assert!(
         out.stdout.contains("New claude sessions will use"),
         "{out:?}"
     );
-    let pinned: Value = serde_json::from_str(&std::fs::read_to_string(&pins).unwrap()).unwrap();
-    assert_eq!(pinned["claude"], b.id.as_str());
+    let pinned: toml_edit::DocumentMut = std::fs::read_to_string(&pins).unwrap().parse().unwrap();
+    assert_eq!(pinned["claude"].as_str(), Some(b.id.as_str()));
     let out = s.run(&["use", "auto"]).ok();
     assert!(out.stdout.contains("automatically"), "{out:?}");
-    let pinned: Value = serde_json::from_str(&std::fs::read_to_string(&pins).unwrap()).unwrap();
+    let pinned: toml_edit::DocumentMut = std::fs::read_to_string(&pins).unwrap().parse().unwrap();
     assert!(pinned.get("claude").is_none(), "{pinned}");
 
     // Removing a pinned account drops its pin too.
@@ -444,7 +444,7 @@ fn account_commands_change_the_store() {
     let out = s.run(&["remove", "b@x.dev"]).ok();
     assert!(out.stdout.contains("Removed b@x.dev"), "{out:?}");
     assert!(s.store().get(&b.id).unwrap().is_none());
-    let pinned: Value = serde_json::from_str(&std::fs::read_to_string(&pins).unwrap()).unwrap();
+    let pinned: toml_edit::DocumentMut = std::fs::read_to_string(&pins).unwrap().parse().unwrap();
     assert!(pinned.get("claude").is_none(), "{pinned}");
 
     // Ambiguous and missing references are refused.
@@ -718,7 +718,7 @@ fn doctor_reports_findings_and_fails_on_problems() {
         let file = s
             .slopmax
             .join("accounts")
-            .join(format!("{}.json", signed_out.id));
+            .join(format!("{}.toml", signed_out.id));
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
     }
 

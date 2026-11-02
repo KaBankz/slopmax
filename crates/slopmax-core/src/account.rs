@@ -201,7 +201,7 @@ impl Store {
     }
 
     fn path(&self, id: &str) -> PathBuf {
-        self.dir.join(format!("{id}.json"))
+        self.dir.join(format!("{id}.toml"))
     }
 
     /// All accounts, ordered by provider, then priority, then age.
@@ -213,9 +213,17 @@ impl Store {
         };
         let mut accounts = Vec::new();
         for entry in entries {
-            let path = entry?.path();
+            let mut path = entry?.path();
+            // An account an earlier version wrote as JSON is read (and
+            // rewritten as TOML) once, unless its TOML is already there.
             if path.extension().is_some_and(|ext| ext == "json") {
-                match fsx::read_json::<Account>(&path) {
+                path.set_extension("toml");
+                if path.exists() {
+                    continue;
+                }
+            }
+            if path.extension().is_some_and(|ext| ext == "toml") {
+                match fsx::read_toml::<Account>(&path) {
                     Ok(Some(account)) => accounts.push(account),
                     Ok(None) => {}
                     Err(e) => log::warn!("skipping {}: {e}", path.display()),
@@ -229,14 +237,14 @@ impl Store {
     }
 
     pub fn get(&self, id: &str) -> Result<Option<Account>> {
-        fsx::read_json(&self.path(id)).with_context(|| format!("reading account {id}"))
+        fsx::read_toml(&self.path(id)).with_context(|| format!("reading account {id}"))
     }
 
     /// Writes `account` without locking. Callers that are not refreshing a
     /// token should use [`Store::update`] instead, so they cannot overwrite a
     /// token another process just rotated.
     pub fn save(&self, account: &Account) -> Result<()> {
-        fsx::write_json(&self.path(&account.id), account)
+        fsx::write_toml(&self.path(&account.id), account)
             .with_context(|| format!("saving account {}", account.id))
     }
 
@@ -269,6 +277,7 @@ impl Store {
     pub fn remove(&self, id: &str) -> Result<()> {
         let lock = self.lock(id)?;
         fs::remove_file(self.path(id)).with_context(|| format!("removing account {id}"))?;
+        let _ = fs::remove_file(self.path(id).with_extension("json"));
         drop(lock);
         let _ = fs::remove_file(self.lock_path(id));
         Ok(())
@@ -323,24 +332,24 @@ impl Store {
 /// long as it has quota.
 pub fn pin(home: &Home, account: &Account) -> Result<()> {
     let path = home.pins();
-    let mut pins: Pins = fsx::read_json(&path)?.unwrap_or_default();
+    let mut pins: Pins = fsx::read_toml(&path)?.unwrap_or_default();
     pins.insert(account.provider, account.id.clone());
-    Ok(fsx::write_json(&path, &pins)?)
+    Ok(fsx::write_toml(&path, &pins)?)
 }
 
 /// Lets slopmax choose every provider's accounts again.
 pub fn unpin_all(home: &Home) -> Result<()> {
-    Ok(fsx::write_json(&home.pins(), &Pins::new())?)
+    Ok(fsx::write_toml(&home.pins(), &Pins::new())?)
 }
 
 /// Forgets `account`, and its pin with it.
 pub fn forget(store: &Store, home: &Home, account: &Account) -> Result<()> {
     store.remove(&account.id)?;
     let path = home.pins();
-    let mut pins: Pins = fsx::read_json(&path)?.unwrap_or_default();
+    let mut pins: Pins = fsx::read_toml(&path)?.unwrap_or_default();
     if pins.get(&account.provider) == Some(&account.id) {
         pins.remove(&account.provider);
-        fsx::write_json(&path, &pins)?;
+        fsx::write_toml(&path, &pins)?;
     }
     Ok(())
 }

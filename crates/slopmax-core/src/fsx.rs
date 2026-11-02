@@ -66,6 +66,37 @@ pub fn read_json<T: DeserializeOwned>(path: &Path) -> io::Result<Option<T>> {
     }
 }
 
+/// Serializes `value` as TOML and writes it with [`write_private`].
+pub fn write_toml<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
+    let text = toml_edit::ser::to_string_pretty(value)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    write_private(path, text.as_bytes())
+}
+
+/// Reads and parses a TOML file, returning `None` if it does not exist.
+///
+/// Earlier versions wrote these files as JSON: when only `<name>.json`
+/// exists beside `<name>.toml`, it is read, written again as TOML, and
+/// removed, once.
+pub fn read_toml<T: Serialize + DeserializeOwned>(path: &Path) -> io::Result<Option<T>> {
+    match fs::read_to_string(path) {
+        Ok(text) => toml_edit::de::from_str(&text)
+            .map(Some)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            let old = path.with_extension("json");
+            let Some(value) = read_json::<T>(&old)? else {
+                return Ok(None);
+            };
+            write_toml(path, &value)?;
+            fs::remove_file(&old)?;
+            crate::log::info!("{} is now {}", old.display(), path.display());
+            Ok(Some(value))
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// Opens (creating if needed) a lock file and takes an exclusive lock on it.
 ///
 /// The lock is released when the returned handle is dropped. Used to keep
@@ -106,6 +137,36 @@ fn private_options() -> OpenOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_files_become_toml_once() {
+        let dir = crate::testkit::temp_dir("toml");
+        let toml = dir.join("pins.toml");
+        let mut pins = std::collections::BTreeMap::new();
+        pins.insert("claude".to_owned(), "claude-1".to_owned());
+        write_json(&dir.join("pins.json"), &pins).unwrap();
+        let read: std::collections::BTreeMap<String, String> = read_toml(&toml).unwrap().unwrap();
+        assert_eq!(read, pins);
+        assert!(!dir.join("pins.json").exists());
+        assert!(
+            fs::read_to_string(&toml)
+                .unwrap()
+                .contains("claude = \"claude-1\"")
+        );
+        // Read again, from the TOML now.
+        assert_eq!(
+            read_toml::<std::collections::BTreeMap<String, String>>(&toml)
+                .unwrap()
+                .unwrap(),
+            pins
+        );
+        assert!(
+            read_toml::<std::collections::BTreeMap<String, String>>(&dir.join("none.toml"))
+                .unwrap()
+                .is_none()
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[cfg(unix)]
     #[test]

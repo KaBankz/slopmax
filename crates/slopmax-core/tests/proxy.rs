@@ -1694,7 +1694,8 @@ async fn the_dashboard_api_reports_acts_and_streams() {
 
     // The page itself is public and inert; the data behind it is not.
     let page = client()
-        .get(format!("{}/slopmax/dashboard", h.proxy))
+        .get(format!("{}/slopmax/", h.proxy))
+        .header("accept-encoding", "gzip")
         .send()
         .await
         .unwrap();

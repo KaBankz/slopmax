@@ -200,7 +200,7 @@ impl App {
     pub fn sync(&self) -> Result<()> {
         let seen = self.fingerprint();
         let accounts = self.store.list()?;
-        let pins: Pins = fsx::read_json(&self.home.pins())?.unwrap_or_default();
+        let pins: Pins = fsx::read_toml(&self.home.pins())?.unwrap_or_default();
         self.pool.sync(accounts, pins);
         *self.seen.lock().unwrap_or_else(|p| p.into_inner()) = seen;
         Ok(())
@@ -236,7 +236,7 @@ impl App {
         names.sort();
         for path in names
             .iter()
-            .filter(|p| p.extension().is_some_and(|x| x == "json"))
+            .filter(|p| p.extension().is_some_and(|x| x == "toml" || x == "json"))
         {
             path.hash(&mut hasher);
             stat(path, &mut hasher);

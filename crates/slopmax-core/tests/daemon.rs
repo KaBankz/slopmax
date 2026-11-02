@@ -224,7 +224,7 @@ async fn stops_with_every_answer_in_the_ledger_and_state_saved() {
     let entries = ledger::read(&home.join("usage"), Timestamp::UNIX_EPOCH);
     assert_eq!(entries.len(), 20);
     assert!(entries.iter().all(|e| e.status == 200 && e.input == 10));
-    assert!(home.join("state.json").exists());
+    assert!(home.join("state.toml").exists());
     // The serve lock is let go: the home can be served again.
     let again = start(&home, &upstream).await;
     again.stop().await;
@@ -253,24 +253,23 @@ async fn refuses_to_start_beside_another_daemon_on_the_same_home() {
 async fn moves_an_unreadable_state_file_aside_and_starts() {
     let upstream = upstream(Seen::default()).await;
     let home = temp_home(&[claude("a@x", "tok-a", 1000)]);
-    std::fs::write(home.join("state.json"), "{ not json").unwrap();
+    std::fs::write(home.join("state.toml"), "[not toml").unwrap();
     let daemon = start(&home, &upstream).await;
     daemon.request().await;
     let (home, _) = daemon.stop().await;
     let aside: Vec<String> = std::fs::read_dir(&home)
         .unwrap()
         .filter_map(|e| e.ok()?.file_name().into_string().ok())
-        .filter(|name| name.starts_with("state.json.bad-"))
+        .filter(|name| name.starts_with("state.toml.bad-"))
         .collect();
     assert_eq!(aside.len(), 1, "{aside:?}");
     assert_eq!(
         std::fs::read_to_string(home.join(&aside[0])).unwrap(),
-        "{ not json"
+        "[not toml"
     );
-    // The fresh state was saved in its place.
-    let state: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(home.join("state.json")).unwrap()).unwrap();
-    assert!(state.is_object());
+    // The fresh state was saved in its place, and reads.
+    let saved = std::fs::read_to_string(home.join("state.toml")).unwrap();
+    saved.parse::<toml_edit::DocumentMut>().unwrap();
     std::fs::remove_dir_all(home).unwrap();
 }
 

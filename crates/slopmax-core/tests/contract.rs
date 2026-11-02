@@ -237,7 +237,12 @@ fn steady(value: &mut Value, home: &str) {
                     "label" if value.is_string() => *value = "<day>".into(),
                     "monthly" => *value = 0.into(),
                     "activity" => {
-                        for cell in value.as_array_mut().into_iter().flatten().flat_map(|d| d.as_array_mut().into_iter().flatten()) {
+                        for cell in value
+                            .as_array_mut()
+                            .into_iter()
+                            .flatten()
+                            .flat_map(|d| d.as_array_mut().into_iter().flatten())
+                        {
                             *cell = 0.into();
                         }
                     }

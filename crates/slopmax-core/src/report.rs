@@ -436,8 +436,8 @@ fn pool(provider: ProviderId, accounts: &[AccountReport], now: Timestamp) -> Opt
 /// providers directly with `refresh`. Failed polls show as the account's
 /// last error.
 pub async fn offline(config: &Config, store: &Store, refresh: bool) -> Result<Report> {
-    let state: State = fsx::read_json(&paths::state_file())?.unwrap_or_default();
-    let pins: Pins = fsx::read_json(&paths::pins_file())?.unwrap_or_default();
+    let state: State = fsx::read_toml(&paths::state_file())?.unwrap_or_default();
+    let pins: Pins = fsx::read_toml(&paths::pins_file())?.unwrap_or_default();
     let pool = Pool::new(config.strategy, SignedDuration::from_hours(1), state);
     pool.sync(store.list()?, pins.clone());
     if refresh {
@@ -453,7 +453,7 @@ pub async fn offline(config: &Config, store: &Store, refresh: bool) -> Result<Re
             }
         }
         let (state, _) = pool.snapshot(Timestamp::now());
-        fsx::write_json(&paths::state_file(), &state)?;
+        fsx::write_toml(&paths::state_file(), &state)?;
     }
     let now = Timestamp::now();
     Ok(build(

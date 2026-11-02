@@ -278,15 +278,24 @@ Stopping (a signal or `POST /slopmax/shutdown`) cancels `App::stop`, and then ru
 ~/.slopmax/                 (SLOPMAX_HOME moves it; directories 0700, files 0600)
   config.toml, .config.lock (held while the first run writes the proxy's key)
   .serve.lock               held by the running daemon, naming its pid
-  accounts/<provider>-<hash>.json, .<id>.lock
-  state.json                windows, blocks, sessions, limit resets, Claude Code's user agent
-  pins.json                 `slopmax use`
+  accounts/<provider>-<hash>.toml, .<id>.lock
+  state.toml                windows, blocks, sessions, limit resets, Claude Code's user agent
+  pins.toml                 `slopmax use`
   usage/<year>-<month>.jsonl
   windows.jsonl             each window as it reset and how much of it was used (waste.rs)
-  nudged.json               the nudges already sent, so a restart does not repeat them
+  nudged.toml               the nudges already sent, so a restart does not repeat them
   setup-backup.json         what `setup` replaced
   slopmax.log
 ```
+
+slopmax's own files are TOML, the format of `config.toml`. A file an earlier version wrote as JSON
+(`state.json`, an account's `.json`) is read once, written again as TOML, and removed
+(`fsx::read_toml`). Three kinds stay JSON on purpose: the usage ledger and `windows.jsonl` are
+append-only logs, where one JSON line per record is what makes each append a single atomic write
+and a torn last line repairable (a TOML document cannot be appended to safely);
+`setup-backup.json` holds other tools' settings exactly as they were, `null`s included, which TOML
+cannot hold; and the files of other tools (Claude Code's `settings.json`, Codex's `auth.json`,
+CLIProxyAPI's) are theirs.
 
 ## Dependencies
 

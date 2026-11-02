@@ -249,20 +249,29 @@ fn serve_lock(home: &Home) -> Result<std::fs::File> {
 /// would stop every agent.
 fn read_state(home: &Home) -> State {
     let path = home.state();
-    match fsx::read_json(&path) {
+    match fsx::read_toml(&path) {
         Ok(state) => state.unwrap_or_default(),
         Err(e) => {
+            // The file that failed: the TOML, or the JSON an earlier
+            // version left, which was being read in its place.
+            let bad = match path.exists() {
+                true => path,
+                false => path.with_extension("json"),
+            };
             let at = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs());
-            let aside = path.with_file_name(format!("state.json.bad-{at}"));
-            match std::fs::rename(&path, &aside) {
+            let name = bad
+                .file_name()
+                .map_or("state".into(), |n| n.to_string_lossy());
+            let aside = bad.with_file_name(format!("{name}.bad-{at}"));
+            match std::fs::rename(&bad, &aside) {
                 Ok(()) => log::warn!(
-                    "state.json could not be read ({e}); moved it to {} and started afresh",
+                    "{name} could not be read ({e}); moved it to {} and started afresh",
                     aside.display()
                 ),
                 Err(moving) => log::warn!(
-                    "state.json could not be read ({e}) or moved aside ({moving}); started afresh"
+                    "{name} could not be read ({e}) or moved aside ({moving}); started afresh"
                 ),
             }
             State::default()
@@ -317,11 +326,29 @@ async fn shutdown(app: Arc<App>) {
     app.stop.cancel();
 }
 
+/// The nudges already told, as `nudged.toml` keeps them.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct Told {
+    #[serde(default)]
+    told: Vec<String>,
+}
+
 /// Sends a notification for each change in the accounts' conditions.
 async fn watch(app: Arc<App>) {
-    // The nudges told before a restart stay told.
+    // The nudges told before a restart stay told. An earlier version kept
+    // them as a JSON list, read here once.
     let file = app.home.nudged();
-    let told: Vec<String> = fsx::read_json(&file).ok().flatten().unwrap_or_default();
+    let legacy = file.with_extension("json");
+    let told: Vec<String> = match file.exists() {
+        true => {
+            fsx::read_toml::<Told>(&file)
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+                .told
+        }
+        false => fsx::read_json(&legacy).ok().flatten().unwrap_or_default(),
+    };
     let mut watcher = notify::Watcher::remembering(told);
     let mut ticker = tokio::time::interval(WATCH_EVERY);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -344,10 +371,14 @@ async fn watch(app: Arc<App>) {
             now,
         );
         let fresh = watcher.new_nudges(nudges);
-        if !fresh.is_empty()
-            && let Err(e) = fsx::write_json(&file, &watcher.told())
-        {
-            log::warn!("saving the nudges told: {e}");
+        if !fresh.is_empty() {
+            let told = Told {
+                told: watcher.told(),
+            };
+            match fsx::write_toml(&file, &told) {
+                Ok(()) => drop(std::fs::remove_file(&legacy)),
+                Err(e) => log::warn!("saving the nudges told: {e}"),
+            }
         }
         events.extend(fresh);
         for event in events {
@@ -366,7 +397,7 @@ fn save_state(app: &App) {
     let now = Timestamp::now();
     record_lapses(app, now);
     let (state, dirty) = app.pool.snapshot(now);
-    if dirty && let Err(e) = fsx::write_json(&app.home.state(), &state) {
+    if dirty && let Err(e) = fsx::write_toml(&app.home.state(), &state) {
         log::warn!("saving state: {e}");
     }
 }
