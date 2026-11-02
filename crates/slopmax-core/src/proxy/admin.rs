@@ -160,7 +160,7 @@ async fn usage(app: &App, query: &str) -> Response {
     let names: HashMap<String, String> = app
         .pool
         .accounts()
-        .into_iter()
+        .iter()
         .map(|a| (a.id.clone(), a.name()))
         .collect();
     let (dir, prices) = (app.home.usage(), app.config());
@@ -184,7 +184,7 @@ async fn history(app: &App, query: &str) -> Response {
     let names: HashMap<String, String> = app
         .pool
         .accounts()
-        .into_iter()
+        .iter()
         .map(|a| (a.id.clone(), a.name()))
         .collect();
     let home = app.home.clone();
@@ -446,7 +446,7 @@ fn unpin(app: &App) -> Response {
 /// reset credit: `?value=<credit id>`, else the soonest to expire), remove,
 /// priority (`?value=N`), or label (`?value=name`, empty to clear).
 async fn account(app: &App, id: &str, action: &str, query: &str) -> Response {
-    let Some(account) = app.pool.accounts().into_iter().find(|a| a.id == id) else {
+    let Some(account) = app.pool.accounts().iter().find(|&a| a.id == id).cloned() else {
         return error(None, StatusCode::NOT_FOUND, "no such account");
     };
     let id = account.id.clone();

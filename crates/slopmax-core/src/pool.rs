@@ -18,7 +18,7 @@
 //! another account minted must be dropped when a request lands elsewhere.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -206,7 +206,7 @@ pub struct Pick<'a> {
 /// The account chosen for a request.
 #[derive(Debug, Clone)]
 pub struct Choice {
-    pub account: Account,
+    pub account: Arc<Account>,
     /// The account this session used before, when the pick moved it.
     /// Account-bound state in the request (e.g. encrypted reasoning) must
     /// then be dropped.
@@ -265,7 +265,9 @@ pub struct Unavailable {
 
 #[derive(Debug, Default)]
 struct Inner {
-    accounts: Vec<Account>,
+    /// Shared with requests as it is: a pick copies a pointer, not the
+    /// accounts. Replaced whole on change, which is rare.
+    accounts: Arc<[Arc<Account>]>,
     states: HashMap<String, AccountState>,
     sessions: HashMap<(ProviderId, String), Binding>,
     pins: Pins,
@@ -347,17 +349,18 @@ impl Pool {
         inner.sessions.retain(|(provider, _), binding| {
             ids.contains(&binding.account.as_str()) && !changed_pins.contains(provider)
         });
-        inner.accounts = accounts;
+        inner.accounts = accounts.into_iter().map(Arc::new).collect();
         inner.pins = pins;
     }
 
-    pub fn accounts(&self) -> Vec<Account> {
-        self.lock().accounts.clone()
+    /// The accounts as they stand: a shared snapshot, not a copy.
+    pub fn accounts(&self) -> Arc<[Arc<Account>]> {
+        Arc::clone(&self.lock().accounts)
     }
 
     /// The account as the pool holds it: its tokens as last refreshed here
     /// or read from the disk.
-    pub fn account(&self, id: &str) -> Option<Account> {
+    pub fn account(&self, id: &str) -> Option<Arc<Account>> {
         self.lock().accounts.iter().find(|a| a.id == id).cloned()
     }
 
@@ -366,8 +369,15 @@ impl Pool {
     /// removed meanwhile stays removed.
     pub fn put(&self, account: &Account) {
         let mut inner = self.lock();
-        if let Some(held) = inner.accounts.iter_mut().find(|a| a.id == account.id) {
-            held.clone_from(account);
+        if inner.accounts.iter().any(|a| a.id == account.id) {
+            inner.accounts = inner
+                .accounts
+                .iter()
+                .map(|held| match held.id == account.id {
+                    true => Arc::new(account.clone()),
+                    false => Arc::clone(held),
+                })
+                .collect();
         }
     }
 
@@ -403,7 +413,7 @@ impl Pool {
             .map(|b| b.account.clone());
         let sticky = req.affinity.unwrap_or(routing.affinity);
 
-        let usable: Vec<&Account> = inner
+        let usable: Vec<&Arc<Account>> = inner
             .accounts
             .iter()
             .filter(|a| a.provider == req.provider && !a.disabled && a.auth_error.is_none())
@@ -426,12 +436,19 @@ impl Pool {
 
         // Accounts already tried for this request are skipped, but their
         // blocks still count toward when the pool frees up again.
-        let state_of = |id: &str| inner.states.get(id).cloned().unwrap_or_default();
-        let mut ready = Vec::new();
+        let mut ready: Vec<&Account> = Vec::with_capacity(usable.len());
+        let mut held: Vec<&Arc<Account>> = Vec::with_capacity(usable.len());
         let mut soonest: Option<Timestamp> = None;
         for account in usable {
-            match state_of(&account.id).blocked(req.model, now) {
-                Ok(()) if !req.exclude.contains(&account.id) => ready.push(account),
+            let blocked = match inner.states.get(&account.id) {
+                Some(state) => state.blocked(req.model, now),
+                None => Ok(()),
+            };
+            match blocked {
+                Ok(()) if !req.exclude.contains(&account.id) => {
+                    ready.push(account);
+                    held.push(account);
+                }
                 Ok(()) => {}
                 Err(until) => soonest = Some(soonest.map_or(until, |s| s.min(until))),
             }
@@ -449,7 +466,9 @@ impl Pool {
             .copied()
             .or_else(|| place(routing.strategy, &ready, &inner, now));
 
-        let Some(account) = chosen.cloned() else {
+        // The pool's own pointer to it, so the choice copies nothing.
+        let chosen = chosen.and_then(|c| held.iter().find(|a| a.id == c.id).map(|a| Arc::clone(a)));
+        let Some(account) = chosen else {
             let reason = match soonest {
                 Some(_) => format!("every {} account is rate limited", req.provider),
                 None => format!("every {} account failed this request", req.provider),
@@ -497,6 +516,7 @@ impl Pool {
                     .get(&a.id)
                     .is_none_or(|s| s.blocked(None, now).is_ok())
             })
+            .map(|a| &**a)
             .collect();
         let next = |account: &Account, reason| {
             Some(Next {
@@ -705,6 +725,7 @@ impl Pool {
             .accounts
             .iter()
             .filter(|a| a.provider == provider && !a.disabled && a.auth_error.is_none())
+            .map(|a| &**a)
             .collect();
         let plans: Vec<Option<&str>> = working.iter().map(|a| a.plan.as_deref()).collect();
         let shares =
@@ -894,7 +915,7 @@ mod tests {
             candidates: None,
             exclude: &[],
         };
-        pool.pick(&req, ts(now)).map(|c| c.account.id)
+        pool.pick(&req, ts(now)).map(|c| c.account.id.clone())
     }
 
     #[test]
@@ -998,7 +1019,10 @@ mod tests {
             exclude: &[],
         };
         let first = pool.pick(&req(None), ts(1000)).unwrap();
-        assert_eq!((first.account.id, first.moved_from), (a.id.clone(), None));
+        assert_eq!(
+            (first.account.id.clone(), first.moved_from),
+            (a.id.clone(), None)
+        );
         // Placed afresh, on the next account, which must drop the first's
         // state.
         let second = pool.pick(&req(None), ts(1001)).unwrap();
@@ -1006,7 +1030,10 @@ mod tests {
         assert_eq!(second.moved_from, Some(a.id.clone()));
         // The request may ask for affinity anyway.
         let third = pool.pick(&req(Some(true)), ts(1002)).unwrap();
-        assert_eq!((third.account.id, third.moved_from), (b.id.clone(), None));
+        assert_eq!(
+            (third.account.id.clone(), third.moved_from),
+            (b.id.clone(), None)
+        );
     }
 
     #[test]

@@ -42,9 +42,13 @@ pub(super) async fn list(app: &Arc<App>, key: Option<&ClientKey>) -> Response {
         .unwrap_or_else(|p| p.into_inner())
         .clone()
         .unwrap_or_else(|| CODEX_VERSION.to_owned());
-    let accounts = app.pool.accounts().into_iter().filter(|a| {
-        !a.disabled && a.auth_error.is_none() && a.provider.spec().agent_only.is_none()
-    });
+    let all = app.pool.accounts();
+    let accounts = all
+        .iter()
+        .filter(|&a| {
+            !a.disabled && a.auth_error.is_none() && a.provider.spec().agent_only.is_none()
+        })
+        .cloned();
     let mut lists = tokio::task::JoinSet::new();
     for account in accounts {
         let (app, version) = (Arc::clone(app), version.clone());

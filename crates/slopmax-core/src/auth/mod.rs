@@ -225,8 +225,7 @@ pub async fn ensure_fresh(
     force: bool,
 ) -> Result<Account, RefreshError> {
     let now = Timestamp::now();
-    let due =
-        move |a: &Account| force || a.tokens.expires_within(a.provider.spec().refresh_lead, now);
+    let due = move |a: &Account| force || due(a, now);
     if !due(account) {
         return Ok(account.clone());
     }
@@ -261,6 +260,14 @@ pub async fn ensure_fresh(
         refresh_and_save(&http, &store, current).await
     });
     task.await.map_err(|e| RefreshError::Transient(e.into()))?
+}
+
+/// Whether `account`'s token is within its provider's refresh lead at `now`,
+/// so [`ensure_fresh`] would refresh it.
+pub fn due(account: &Account, now: Timestamp) -> bool {
+    account
+        .tokens
+        .expires_within(account.provider.spec().refresh_lead, now)
 }
 
 /// Refreshes in flight, which a stopping daemon waits for: one that sent a

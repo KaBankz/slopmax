@@ -34,7 +34,13 @@ use slopmax_core::provider::ProviderId;
 use slopmax_core::time::{SignedDuration, Timestamp};
 use tokio::net::TcpListener;
 
+mod allocs;
 mod swarm;
+
+// Without mimalloc, the system allocator, counted for `bench allocs`.
+#[cfg(not(feature = "mimalloc"))]
+#[global_allocator]
+static ALLOC: allocs::Counting = allocs::Counting;
 
 // As in the binary: `--features mimalloc` measures that allocator.
 #[cfg(feature = "mimalloc")]
@@ -66,6 +72,7 @@ fn main() -> Result<()> {
         }
         ["bodies", dir] => bodies(Path::new(dir)),
         ["translate", body] => translate(&std::fs::read(body)?),
+        ["allocs", n] => allocs::run(n.parse()?),
         ["raw", listen, upstream] => slopmax_core::daemon::runtime()?.block_on(raw(
             listen.parse()?,
             upstream.trim_end_matches('/').to_owned(),

@@ -236,11 +236,13 @@ impl App {
     /// The pool's copy is current: refreshes here put their tokens back into
     /// it, and changes from other processes arrive with [`App::sync`], so a
     /// request reads no files unless its token is due.
-    pub async fn ready(&self, picked: &Account) -> Option<Account> {
+    pub async fn ready(&self, picked: &Account) -> Option<Arc<Account>> {
+        // The pool's own copy, shared; a copy of `picked` only when it was
+        // removed meanwhile.
         let account = self
             .pool
             .account(&picked.id)
-            .unwrap_or_else(|| picked.clone());
+            .unwrap_or_else(|| Arc::new(picked.clone()));
         // Another process may have found its sign-in revoked; trying it
         // would cost a refusal and a refresh.
         if let Some(error) = &account.auth_error {
@@ -252,10 +254,14 @@ impl App {
         if !self.config().refresh_tokens && account.link.is_none() {
             return Some(account);
         }
+        // Not due, as nearly always: the pool's own copy serves.
+        if !auth::due(&account, Timestamp::now()) {
+            return Some(account);
+        }
         match auth::ensure_fresh(&self.auth_http, &self.store, &account, false).await {
             Ok(fresh) => {
                 self.adopt(&account, &fresh);
-                Some(fresh)
+                Some(Arc::new(fresh))
             }
             Err(RefreshError::Transient(e)) if !account.tokens.is_expired(Timestamp::now()) => {
                 log::warn!("{}: refresh failed, using current token: {e:#}", account.id);
@@ -329,7 +335,12 @@ impl App {
     pub fn report(&self) -> Report {
         let now = Timestamp::now();
         report::build(
-            self.pool.accounts(),
+            // A report owns its accounts; it is built only when asked for.
+            self.pool
+                .accounts()
+                .iter()
+                .map(|a| Account::clone(a))
+                .collect(),
             |id| self.pool.state(id),
             &self.pool.pins(),
             &self.pool.session_counts(now),

@@ -91,8 +91,9 @@ fn find(app: &App, index: &str) -> Option<Account> {
     let index = index.trim();
     app.pool
         .accounts()
-        .into_iter()
+        .iter()
         .find(|a| a.id == index && a.provider.spec().is_subscription())
+        .map(|a| Account::clone(a))
 }
 
 /// The subscription accounts, listed as CLIProxyAPI lists its auth files.

@@ -196,7 +196,16 @@ fn event(dialect: Dialect, line: &[u8], outcome: &mut Outcome) {
             .iter()
             .any(|needle| memchr::memmem::find(data, needle).is_some()),
     };
-    if worth && let Ok(event) = serde_json::from_slice::<Value>(data) {
+    if !worth {
+        return;
+    }
+    let read = match dialect {
+        Dialect::Messages => crate::messages::observe_raw(data, outcome),
+        Dialect::Responses => crate::responses::observe_raw(data, outcome),
+        Dialect::Chat => false,
+    };
+    // Another shape than the typed reader expects: read it as a value.
+    if !read && let Ok(event) = serde_json::from_slice::<Value>(data) {
         dialect.observe(&event, outcome);
     }
 }
@@ -436,7 +445,67 @@ mod tests {
             out
         }
 
+        /// An event of `kind` with numbers, nulls and odd shapes in the
+        /// places the readers look.
+        fn event() -> impl Strategy<Value = (Dialect, String)> {
+            let count = prop_oneof![
+                Just("null".to_owned()),
+                (0u64..5000).prop_map(|n| n.to_string()),
+                Just("\"7\"".to_owned()),
+            ];
+            let usage = (count.clone(), count.clone(), count.clone(), count).prop_map(|(a, b, c, d)| {
+                format!(r#"{{"input_tokens":{a},"output_tokens":{b},"cache_read_input_tokens":{c},"cache_creation_input_tokens":{d},"input_tokens_details":{{"cached_tokens":{c}}}}}"#)
+            });
+            let error = prop_oneof![
+                Just(r#"{"type":"rate_limit_error"}"#.to_owned()),
+                Just(r#"{"code":"usage_limit_reached"}"#.to_owned()),
+                Just(r#"{"type":"overloaded_error","code":null}"#.to_owned()),
+                Just(r#""a string""#.to_owned()),
+                Just("null".to_owned()),
+            ];
+            (
+                prop::sample::select(vec![Dialect::Messages, Dialect::Responses]),
+                prop::sample::select(vec![
+                    "message_start",
+                    "message_delta",
+                    "message",
+                    "error",
+                    "response.completed",
+                    "response.incomplete",
+                    "response.failed",
+                ]),
+                usage,
+                error,
+                0..4u8,
+            )
+                .prop_map(|(dialect, kind, usage, error, shape)| {
+                    let body = match shape {
+                        0 => format!(r#""message":{{"usage":{usage}}},"usage":{usage}"#),
+                        1 => format!(r#""response":{{"usage":{usage},"error":{error}}}"#),
+                        2 => format!(r#""error":{error},"usage":{usage}"#),
+                        _ => r#""response":null,"message":"text""#.to_string(),
+                    };
+                    (dialect, format!(r#"{{"type":"{kind}",{body}}}"#))
+                })
+        }
+
         proptest! {
+            /// The typed readers and the value readers agree on every event.
+            #[test]
+            fn typed_and_value_readers_agree((dialect, data) in event()) {
+                let value: Value = serde_json::from_str(&data).unwrap();
+                let mut by_value = Outcome::default();
+                dialect.observe(&value, &mut by_value);
+                let mut typed = Outcome::default();
+                let read = match dialect {
+                    Dialect::Messages => crate::messages::observe_raw(data.as_bytes(), &mut typed),
+                    _ => crate::responses::observe_raw(data.as_bytes(), &mut typed),
+                };
+                if read {
+                    prop_assert_eq!(typed, by_value, "{}", data);
+                }
+            }
+
             /// However a stream is cut into chunks, the tap and the opener
             /// reach what they reach on it whole.
             #[test]

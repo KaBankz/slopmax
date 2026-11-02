@@ -30,12 +30,12 @@ pub async fn idle_accounts(app: &Arc<App>) {
         return;
     };
     let now = Timestamp::now();
-    let idle: Vec<Account> = app
+    let idle: Vec<Arc<Account>> = app
         .pool
         .accounts()
-        .into_iter()
-        .filter(|a| a.provider == ProviderId::Codex && !a.disabled && a.auth_error.is_none())
-        .filter(|a| {
+        .iter()
+        .filter(|&a| a.provider == ProviderId::Codex && !a.disabled && a.auth_error.is_none())
+        .filter(|&a| {
             let state = app.pool.state(&a.id);
             let five_hours = state
                 .limits
@@ -44,6 +44,7 @@ pub async fn idle_accounts(app: &Arc<App>) {
                 .find(|w| w.span == "5h" && w.model.is_none());
             !state.is_blocked(now) && five_hours.is_some_and(|w| w.used_at(now) == 0.0)
         })
+        .cloned()
         .collect();
     for account in idle {
         {

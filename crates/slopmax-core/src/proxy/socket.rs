@@ -287,7 +287,7 @@ enum Next {
 /// backpressure a slow side should get.
 async fn relay(
     app: Arc<App>,
-    account: Account,
+    account: Arc<Account>,
     client: Socket,
     upstream: Socket,
     moved: bool,

@@ -12,6 +12,7 @@
 //! - fallbacks name models to try once the first is spent everywhere.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use crate::account::Account;
 use crate::agent;
@@ -31,7 +32,7 @@ pub struct Step {
 /// The configuration and accounts routing works from.
 #[derive(Debug, Clone, Copy)]
 pub struct Table<'a> {
-    pub accounts: &'a [Account],
+    pub accounts: &'a [Arc<Account>],
     pub aliases: &'a BTreeMap<String, String>,
     pub fallbacks: &'a BTreeMap<String, Vec<String>>,
     pub paid_overflow: bool,
@@ -252,7 +253,7 @@ mod tests {
     }
 
     struct Fixture {
-        accounts: Vec<Account>,
+        accounts: Vec<Arc<Account>>,
         aliases: BTreeMap<String, String>,
         fallbacks: BTreeMap<String, Vec<String>>,
         paid_overflow: bool,
@@ -261,7 +262,7 @@ mod tests {
     impl Fixture {
         fn new(accounts: Vec<Account>) -> Self {
             Self {
-                accounts,
+                accounts: accounts.into_iter().map(Arc::new).collect(),
                 aliases: BTreeMap::new(),
                 fallbacks: BTreeMap::new(),
                 paid_overflow: false,

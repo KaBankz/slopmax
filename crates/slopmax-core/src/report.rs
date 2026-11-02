@@ -442,12 +442,12 @@ pub async fn offline(config: &Config, store: &Store, refresh: bool) -> Result<Re
     pool.sync(store.list()?, pins.clone());
     if refresh {
         let http = auth::http_client(Origins::default());
-        let polled = pool
-            .accounts()
-            .into_iter()
+        let accounts = pool.accounts();
+        let polled = accounts
+            .iter()
             .filter(|a| a.auth_error.is_none() && a.provider.spec().is_subscription());
         for account in polled {
-            match usage::poll(&http, store, &account, config.refresh_tokens).await {
+            match usage::poll(&http, store, account, config.refresh_tokens).await {
                 Ok((_, reading)) => pool.observe(&account.id, reading.limits, Timestamp::now()),
                 Err(e) => pool.record_error(&account.id, &format!("usage poll: {e:#}")),
             }

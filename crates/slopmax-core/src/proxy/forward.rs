@@ -668,7 +668,7 @@ async fn attempt(
                 match auth::ensure_fresh(&app.auth_http, &app.store, &account, true).await {
                     Ok(fresh) => {
                         app.adopt(&account, &fresh);
-                        account = fresh;
+                        account = Arc::new(fresh);
                         continue;
                     }
                     Err(e) => {
@@ -869,11 +869,12 @@ async fn rescue(app: &App, provider: ProviderId) -> Option<String> {
     }
     let _redeeming = app.redeeming.lock().await;
     let now = Timestamp::now();
-    let accounts: Vec<Account> = app
+    let accounts: Vec<Arc<Account>> = app
         .pool
         .accounts()
-        .into_iter()
-        .filter(|a| a.provider == provider && !a.disabled && a.auth_error.is_none())
+        .iter()
+        .filter(|&a| a.provider == provider && !a.disabled && a.auth_error.is_none())
+        .cloned()
         .collect();
     // Another request may have redeemed while this one waited for the lock.
     if let Some(free) = accounts
@@ -882,7 +883,7 @@ async fn rescue(app: &App, provider: ProviderId) -> Option<String> {
     {
         return Some(free.id.clone());
     }
-    let mut spent: Vec<(Account, Timestamp)> = accounts
+    let mut spent: Vec<(Arc<Account>, Timestamp)> = accounts
         .into_iter()
         .filter_map(|a| {
             let state = app.pool.state(&a.id);
@@ -913,7 +914,7 @@ async fn rescue(app: &App, provider: ProviderId) -> Option<String> {
                 log::info!("{}: redeemed a limit reset", account.id);
                 app.pool
                     .record_reset(&account.id, Timestamp::now(), credit.as_deref());
-                return Some(account.id);
+                return Some(account.id.clone());
             }
             Ok(outcome) => log::info!("{}: limit reset not used ({outcome:?})", account.id),
             Err(e) => log::warn!("{}: redeeming a limit reset: {e:#}", account.id),

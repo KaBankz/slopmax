@@ -71,6 +71,77 @@ fn failure_code(event: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
+/// The fields of a stream event [`observe`] reads, borrowed.
+#[derive(serde::Deserialize)]
+struct Event<'a> {
+    #[serde(rename = "type", borrow)]
+    kind: std::borrow::Cow<'a, str>,
+    #[serde(borrow)]
+    response: Option<Response<'a>>,
+    #[serde(borrow)]
+    error: Option<Failure<'a>>,
+}
+
+#[derive(serde::Deserialize)]
+struct Response<'a> {
+    usage: Option<Counts>,
+    #[serde(borrow)]
+    error: Option<Failure<'a>>,
+}
+
+#[derive(serde::Deserialize)]
+struct Counts {
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    input_tokens_details: Option<Details>,
+}
+
+#[derive(serde::Deserialize)]
+struct Details {
+    cached_tokens: Option<u64>,
+}
+
+#[derive(serde::Deserialize)]
+struct Failure<'a> {
+    #[serde(borrow)]
+    code: Option<std::borrow::Cow<'a, str>>,
+    #[serde(rename = "type", borrow)]
+    kind: Option<std::borrow::Cow<'a, str>>,
+}
+
+/// [`observe`] on a stream event's raw JSON, without building a value.
+/// `false` when the event has another shape, for [`observe`] to read.
+pub fn observe_raw(data: &[u8], outcome: &mut Outcome) -> bool {
+    let Ok(event) = serde_json::from_slice::<Event>(data) else {
+        return false;
+    };
+    match &*event.kind {
+        "response.completed" | "response.incomplete" | "response.done" => {
+            if let Some(usage) = event.response.and_then(|r| r.usage) {
+                let cached = usage
+                    .input_tokens_details
+                    .and_then(|d| d.cached_tokens)
+                    .unwrap_or(0);
+                let total = &mut outcome.usage;
+                // Cached tokens are counted inside input_tokens.
+                total.input_tokens = usage.input_tokens.unwrap_or(0).saturating_sub(cached);
+                total.cache_read_tokens = cached;
+                total.output_tokens = usage.output_tokens.unwrap_or(0);
+            }
+        }
+        "response.failed" | "error" => {
+            let failure = event.response.and_then(|r| r.error).or(event.error);
+            let code = failure.and_then(|f| f.code.or(f.kind));
+            outcome.exhausted |= matches!(
+                code.as_deref(),
+                Some("usage_limit_reached" | "usage_limit_exceeded")
+            );
+        }
+        _ => {}
+    }
+    true
+}
+
 /// The final `response.*` event carries usage (as does a whole `response`
 /// object from a non-streaming request); a failure coded
 /// `usage_limit_reached` means the quota ran out mid-stream.

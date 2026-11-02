@@ -3,6 +3,7 @@
 //! one it saw last, so every change is reported exactly once.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -375,7 +376,7 @@ impl Watcher {
     /// stock: conditions that predate the proxy are not news.
     pub fn changes(
         &mut self,
-        accounts: &[Account],
+        accounts: &[Arc<Account>],
         state_of: impl Fn(&str) -> AccountState,
         now: Timestamp,
     ) -> Vec<Event> {
@@ -401,7 +402,7 @@ impl Watcher {
                         () if until.is_some() => Condition::Limited,
                         () => Condition::Ready,
                     };
-                    (a, condition, until)
+                    (&**a, condition, until)
                 })
                 .collect();
             let serving: Vec<_> = mine.iter().filter(|m| m.1 != Condition::Off).collect();
@@ -499,6 +500,7 @@ fn when(at: Timestamp, now: Timestamp) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::account::Tokens;
     use crate::time::SignedDuration;
 
@@ -522,10 +524,10 @@ mod tests {
         let later = now + SignedDuration::from_hours(2);
         let a = account(ProviderId::Claude, "a@x.dev");
         let b = account(ProviderId::Claude, "b@x.dev");
-        let accounts = [a.clone(), b.clone()];
+        let accounts = [Arc::new(a.clone()), Arc::new(b.clone())];
         let mut states: HashMap<String, AccountState> = HashMap::new();
         let mut watcher = Watcher::default();
-        let mut look = |states: &HashMap<String, AccountState>, accounts: &[Account]| {
+        let mut look = |states: &HashMap<String, AccountState>, accounts: &[Arc<Account>]| {
             watcher.changes(
                 accounts,
                 |id| states.get(id).cloned().unwrap_or_default(),
@@ -559,7 +561,7 @@ mod tests {
         // A sign-out names the fix.
         let mut signed_out = a.clone();
         signed_out.auth_error = Some("refresh token revoked".into());
-        let events = look(&states, &[signed_out, b.clone()]);
+        let events = look(&states, &[Arc::new(signed_out), Arc::new(b.clone())]);
         let kinds: Vec<Kind> = events.iter().map(|e| e.event).collect();
         assert_eq!(kinds, [Kind::SignedOut, Kind::Exhausted]);
         assert!(
@@ -579,7 +581,7 @@ mod tests {
         let ready = |_: &str| AccountState::default();
         assert!(
             watcher
-                .changes(&[a.clone(), off.clone()], ready, now)
+                .changes(&[Arc::new(a.clone()), Arc::new(off.clone())], ready, now)
                 .is_empty()
         );
         let limited_id = a.id.clone();
@@ -591,7 +593,7 @@ mod tests {
             }
         };
         let kinds: Vec<Kind> = watcher
-            .changes(&[a, off], blocked, now)
+            .changes(&[Arc::new(a), Arc::new(off)], blocked, now)
             .iter()
             .map(|e| e.event)
             .collect();

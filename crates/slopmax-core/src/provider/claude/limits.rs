@@ -10,18 +10,48 @@ use crate::time::Timestamp;
 
 const UNIFIED: &str = "anthropic-ratelimit-unified-";
 
+/// One of Claude's two unified windows, with its header names written out,
+/// so reading and writing them on every response formats nothing.
+struct Unified {
+    key: &'static str,
+    claim: &'static str,
+    utilization: &'static str,
+    reset: &'static str,
+    status: &'static str,
+    surpassed: &'static str,
+}
+
+const WINDOWS: [Unified; 2] = [
+    Unified {
+        key: "5h",
+        claim: "five_hour",
+        utilization: "anthropic-ratelimit-unified-5h-utilization",
+        reset: "anthropic-ratelimit-unified-5h-reset",
+        status: "anthropic-ratelimit-unified-5h-status",
+        surpassed: "anthropic-ratelimit-unified-5h-surpassed-threshold",
+    },
+    Unified {
+        key: "7d",
+        claim: "seven_day",
+        utilization: "anthropic-ratelimit-unified-7d-utilization",
+        reset: "anthropic-ratelimit-unified-7d-reset",
+        status: "anthropic-ratelimit-unified-7d-status",
+        surpassed: "anthropic-ratelimit-unified-7d-surpassed-threshold",
+    },
+];
+
 /// Claude: `anthropic-ratelimit-unified-{5h,7d}-{utilization,reset}`.
 /// Utilization is a 0–1 fraction; resets are unix seconds.
 pub fn from_headers(headers: &HeaderMap, now: Timestamp) -> Option<Limits> {
-    let windows: Vec<Window> = [("5h", "5h"), ("7d", "7d")]
-        .into_iter()
-        .filter_map(|(key, span)| {
-            let fraction = header_f64(
-                headers,
-                &format!("anthropic-ratelimit-unified-{key}-utilization"),
-            )?;
-            let reset = header_time(headers, &format!("anthropic-ratelimit-unified-{key}-reset"));
-            Some(Window::new(span, fraction * 100.0, reset))
+    let windows: Vec<Window> = WINDOWS
+        .iter()
+        .filter_map(|w| {
+            let fraction = header_f64(headers, w.utilization)?;
+            Some(Window::new(
+                w.key,
+                fraction * 100.0,
+                header_time(headers, w.reset),
+            ))
         })
         .collect();
     Limits::observed(windows, now)
@@ -40,39 +70,32 @@ pub fn pool_headers(windows: &[PoolWindow], headers: &mut HeaderMap) {
     for name in upstream {
         headers.remove(name);
     }
-    let mut set = |name: String, value: String| {
-        if let (Ok(name), Ok(value)) = (HeaderName::try_from(name), HeaderValue::try_from(value)) {
-            headers.insert(name, value);
+    let mut set = |name: &'static str, value: String| {
+        if let Ok(value) = HeaderValue::try_from(value) {
+            headers.insert(HeaderName::from_static(name), value);
         }
     };
     let mut fullest: Option<(&PoolWindow, &str)> = None;
     for window in windows {
-        let (key, claim) = match window.span {
-            "5h" => ("5h", "five_hour"),
-            "7d" => ("7d", "seven_day"),
-            _ => continue,
+        let Some(names) = WINDOWS.iter().find(|w| w.key == window.span) else {
+            continue;
         };
+        let claim = names.claim;
         // Below 1 while requests are still served.
         let fraction = (window.used / 100.0).clamp(0.0, 0.99);
         let passed = [0.95, 0.75].into_iter().find(|t| fraction >= *t);
-        set(
-            format!("{UNIFIED}{key}-utilization"),
-            format!("{fraction:.2}"),
-        );
+        set(names.utilization, format!("{fraction:.2}"));
         let status = if passed.is_some() {
             "allowed_warning"
         } else {
             "allowed"
         };
-        set(format!("{UNIFIED}{key}-status"), status.into());
+        set(names.status, status.into());
         if let Some(at) = window.resets_at {
-            set(format!("{UNIFIED}{key}-reset"), at.as_second().to_string());
+            set(names.reset, at.as_second().to_string());
         }
         if let Some(threshold) = passed {
-            set(
-                format!("{UNIFIED}{key}-surpassed-threshold"),
-                threshold.to_string(),
-            );
+            set(names.surpassed, threshold.to_string());
         }
         if fullest.is_none_or(|(f, _)| window.used > f.used) {
             fullest = Some((window, claim));
@@ -87,12 +110,18 @@ pub fn pool_headers(windows: &[PoolWindow], headers: &mut HeaderMap) {
     } else {
         "allowed"
     };
-    set(format!("{UNIFIED}status"), status.into());
+    set("anthropic-ratelimit-unified-status", status.into());
     if warning {
-        set(format!("{UNIFIED}representative-claim"), claim.into());
+        set(
+            "anthropic-ratelimit-unified-representative-claim",
+            claim.into(),
+        );
     }
     if let Some(at) = window.resets_at {
-        set(format!("{UNIFIED}reset"), at.as_second().to_string());
+        set(
+            "anthropic-ratelimit-unified-reset",
+            at.as_second().to_string(),
+        );
     }
 }
 

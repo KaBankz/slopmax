@@ -376,15 +376,15 @@ fn record_lapses(app: &App, now: Timestamp) {
 /// Refreshes tokens that are close to expiring, so a request never waits
 /// on a refresh. Disabled accounts are kept fresh too.
 async fn refresh_all(app: &App) {
-    for account in app.pool.accounts() {
+    for account in app.pool.accounts().iter() {
         if account.auth_error.is_some() {
             continue;
         }
-        match auth::ensure_fresh(&app.auth_http, &app.store, &account, false).await {
-            Ok(fresh) => app.adopt(&account, &fresh),
+        match auth::ensure_fresh(&app.auth_http, &app.store, account, false).await {
+            Ok(fresh) => app.adopt(account, &fresh),
             Err(e) => {
                 log::warn!("{}: {e}", account.id);
-                app.refresh_failed(&account, &e);
+                app.refresh_failed(account, &e);
             }
         }
     }
@@ -394,12 +394,13 @@ async fn refresh_all(app: &App) {
 pub async fn poll_all(app: &Arc<App>, force: bool) {
     let now = Timestamp::now();
     let interval = SignedDuration::from_mins(app.config().poll_mins.max(1) as i64);
-    let due: Vec<Account> = app
+    let due: Vec<Arc<Account>> = app
         .pool
         .accounts()
-        .into_iter()
-        .filter(|a| a.auth_error.is_none() && a.provider.spec().is_subscription())
-        .filter(|a| force || is_due(app, a, now, interval))
+        .iter()
+        .filter(|&a| a.auth_error.is_none() && a.provider.spec().is_subscription())
+        .filter(|&a| force || is_due(app, a, now, interval))
+        .cloned()
         .collect();
     let mut polls = tokio::task::JoinSet::new();
     for account in due {
@@ -453,7 +454,7 @@ pub async fn poll_one(app: &App, account: &Account) {
 /// them all now.
 pub async fn list_credits(app: &App, force: bool) {
     let now = Timestamp::now();
-    for account in app.pool.accounts() {
+    for account in app.pool.accounts().iter() {
         let Some(credits) = account.provider.get().credits() else {
             continue;
         };
@@ -483,7 +484,7 @@ pub async fn list_credits(app: &App, force: bool) {
         if !force && !due {
             continue;
         }
-        let Some(account) = app.ready(&account).await else {
+        let Some(account) = app.ready(account).await else {
             continue;
         };
         match credits
@@ -506,7 +507,7 @@ pub async fn list_credits(app: &App, force: bool) {
 /// A lapsed credit is simply lost, so spending it first is free quota.
 pub async fn redeem_expiring(app: &App) {
     let now = Timestamp::now();
-    for account in app.pool.accounts() {
+    for account in app.pool.accounts().iter() {
         let Some(credits) = account.provider.get().credits() else {
             continue;
         };
@@ -521,7 +522,7 @@ pub async fn redeem_expiring(app: &App) {
             continue;
         }
         let _redeeming = app.redeeming.lock().await;
-        let Some(account) = app.ready(&account).await else {
+        let Some(account) = app.ready(account).await else {
             continue;
         };
         match redeem_if_expiring(app, &account, now).await {
