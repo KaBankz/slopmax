@@ -9,10 +9,10 @@ The plan for the Rust slopmax after v0.3.0, carrying over what the TypeScript re
 | 1 | done (`789ed0d`) | No data lost at stop, no file read per request, one thread by default, serve lock, state quarantine, DST and Retry-After fixes |
 | 2 | done (`40d9da4`, `453fd60`, `e70ab6a`) | One `Relay` body and `Settle` (`end` recorded), typed taps in `wire::sse`, `rawjson` framing instead of a parse (proptested), large translations off-thread, one task per Codex socket with a cancel-safe frame reader, an `Arc` snapshot pool, the `raw`/`swarm`/`translate`/`allocs` bench modes |
 | 3 | mostly (`bc4fa6e`) | `slopmax-api`, the `live!` registry, `/slopmax/api/*` with the event stream, `contract/` (Rust blesses, TypeScript and Swift decode strictly). Not yet: the `slopmax-daemon` crate split, thiserror boundaries, `Home`-only paths |
-| 4 | partly | Local files are TOML (`790cebb`). Not yet: the deadline scheduler, the single-flight `/refresh`, `HistoryIndex`, `state.toml` absorbing pins, `slopmax-app` and the CLI on the API |
+| 4 | partly (`790cebb`, `cfa242c`) | Local files are TOML; one deadline scheduler (idle 0.18 wakeups/s and one thread, from 0.52 and two); the single-flight `/refresh`; notices on the event stream. Not yet: `HistoryIndex`, `state.toml` absorbing pins, `slopmax-app` and the CLI on the API |
 | 5 | done, shim kept (`2fbadbb`) | The React UI embedded and served at `/slopmax/`; `dashboard.html` deleted. The `/slopmax/*` shim stays until phase 4 moves the desktop app and the CLI |
 | 6 | written, kit verified (`f87228e`) | `apple/`: SlopmaxKit tested on Linux against the fixtures and a live daemon; the SwiftUI layer is built only by `apple.yml` on macOS |
-| 7 | not started | |
+| 7 | started (`cfa242c`) | The desktop app redraws when a countdown would read differently, not every second. Not yet: deleting GPUI's macOS code, cached entities, the Windows job, the hardware gates |
 
 **Decisions revised on measurement:**
 
