@@ -2,6 +2,38 @@
 
 The plan for the Rust slopmax after v0.3.0, carrying over what the TypeScript rewrite in `ts/` got right (see [`ts/docs/VERDICT.md`](ts/docs/VERDICT.md)). A panel wrote it on 2026-11-01. Five critics each read the code through one lens: the hot path, architecture, testing, crates and the build, and the desktop with its native bridge. Two architects then proposed designs, one lean-first and one robust-first, and two judges scored both against the code. This document starts from **lean**, which won on the mean judge score (7.75 against 7.3). It takes robust's sequencing and correctness pieces, and it fixes every error the judges found. [`ARCHITECTURE.md`](ARCHITECTURE.md) describes the code as it is; this document describes where it is going, phase by phase.
 
+## Status, 2026-11-02
+
+| Phase | State | What landed |
+|---|---|---|
+| 1 | done (`789ed0d`) | No data lost at stop, no file read per request, one thread by default, serve lock, state quarantine, DST and Retry-After fixes |
+| 2 | done (`40d9da4`, `453fd60`, `e70ab6a`) | One `Relay` body and `Settle` (`end` recorded), typed taps in `wire::sse`, `rawjson` framing instead of a parse (proptested), large translations off-thread, one task per Codex socket with a cancel-safe frame reader, an `Arc` snapshot pool, the `raw`/`swarm`/`translate`/`allocs` bench modes |
+| 3 | mostly (`bc4fa6e`) | `slopmax-api`, the `live!` registry, `/slopmax/api/*` with the event stream, `contract/` (Rust blesses, TypeScript and Swift decode strictly). Not yet: the `slopmax-daemon` crate split, thiserror boundaries, `Home`-only paths |
+| 4 | partly | Local files are TOML (`790cebb`). Not yet: the deadline scheduler, the single-flight `/refresh`, `HistoryIndex`, `state.toml` absorbing pins, `slopmax-app` and the CLI on the API |
+| 5 | done, shim kept (`2fbadbb`) | The React UI embedded and served at `/slopmax/`; `dashboard.html` deleted. The `/slopmax/*` shim stays until phase 4 moves the desktop app and the CLI |
+| 6 | written, kit verified (`f87228e`) | `apple/`: SlopmaxKit tested on Linux against the fixtures and a live daemon; the SwiftUI layer is built only by `apple.yml` on macOS |
+| 7 | not started | |
+
+**Decisions revised on measurement:**
+
+- **D1 holds, now on the case that matters.** 300 concurrent sessions, each streaming 300 KB conversations back to back at a model's pace (`scripts/compare/swarm.sh`), on one thread: 44% of one CPU, p99 event lag 2.32 ms against the mock's own 2.07 ms, worst 9.7 ms; 2 and 4 workers did no better. The one-thread risk, head-of-line blocking from a large translation (2 ms at 300 KB), is removed by translating bodies of 64 KB and more on the blocking pool.
+- **Allocations per request: ≤ 40 cannot be met on hyper.** `bench allocs` counts 293 on the proxy's thread for a small streamed request (384 before phase 2); 132 are hyper's HTTP/1 client, which sends each body chunk through a futures channel at two allocations a chunk.
+- **JSON stays serde_json.** Measured on the 300 KB conversation: framing by `rawjson` 31 µs (serde_json's validation 89, sonic-rs 71, simd-json 129); finding `model` 0.3 µs (sonic-rs 0.4); a usage event by the typed reader 0.6 µs (sonic-rs 0.5, serde_json to `Value` 2.0). sonic-rs wins where slopmax parses whole documents (translation), but into serde types only 1.27× (229 µs against 291), and it adds 17 crates, past the budget of 70; simd-json adds 9 and 123 KB and is slower here. There is no JSON parser in std.
+- **slopmax's own files are TOML**, as `config.toml` is; logs (`usage/*.jsonl`, `windows.jsonl`), the setup backup and other tools' files stay JSON (see `ARCHITECTURE.md`, Files).
+- **Size:** 7,184,000 bytes with the API and the embedded UI, inside the 7 MiB budget.
+
+### React Native for the desktop and the menu bar: no
+
+Looked at on 2026-11-02:
+- **macOS.** [react-native-macos](https://github.com/Microsoft/react-native/releases) is at 0.81.8, four releases behind React Native, with no word on the new architecture since [0.71's experimental preview](https://devblogs.microsoft.com/react-native/?p=251) and none on a status item. A menu bar app, `SMAppService`, notifications and Swift Charts would each be a native module written in Swift anyway, beside a JavaScript runtime the SwiftUI app does not carry.
+- **Windows.** [react-native-windows 0.85](https://github.com/microsoft/react-native-windows/releases/tag/react-native-windows_v0.85.0) is Fabric-only and moving well ([0.82](https://devblogs.microsoft.com/react-native/%f0%9f%9a%80react-native-windows-v0-82-is-here/)), but needs Visual Studio 2026 and .NET 10 to build.
+- **Linux.** No React Native desktop target, so GPUI or the wry shell is needed regardless.
+- **Reuse.** React Native renders its own primitives, not the DOM: the web UI's components (Tailwind, Base UI) would be written again. Only `ts/packages/domain` (the schemas and the client) would carry over.
+
+So it would be a third UI codebase that still leaves Linux to another, for a look closer to native than a web view but not to SwiftUI. The plan stands: SwiftUI on macOS, GPUI or the served React UI in a system web view on Windows and Linux.
+
+**Mobile, if ever:** SlopmaxKit is Foundation-only, so an iOS app in SwiftUI reuses all of it; Android would be its own app. Either needs the daemon reachable off the machine first (today it listens on 127.0.0.1 with plain HTTP), which is a security design of its own: TLS, and a key per device rather than the owner key.
+
 ## Summary
 
 slopmax stays one static Rust binary, and that binary is the daemon. Every other front end is a client of it: the CLI, the web UI it serves, a native SwiftUI app on macOS, and GPUI on Windows and Linux. The daemon runs on a **current-thread tokio runtime** and keeps accounts in an **in-memory snapshot**, so a request touches no files. It uses a **slot-indexed pool behind one short lock** and **one concrete relay body that records exactly one outcome**. The ledger is a **single `write(2)` to a month file held open with O_APPEND**. All background work goes through **one deadline scheduler**, and all detached work is owned by a tracker with an explicit shutdown order. The daemon is the **only writer** of state. It speaks **one typed contract** (`slopmax-api`), wire-compatible with the TS `SlopmaxApi`, and keeps it honest with golden fixtures rather than codegen. It **pushes** status over one SSE stream instead of being polled. The React UI from `ts/apps/ui` is served from the binary and `dashboard.html` is deleted. The SwiftUI app is a pure HTTP and SSE client with no FFI. The Rust core also computes the derived facts (tone, pace, attention, next change), so Swift only formats them. The migration has 7 phases, each shipped as its own version. Each has numeric gates and keeps old clients working until they have moved.
