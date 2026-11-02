@@ -17,8 +17,8 @@ use crate::import::Found;
 use crate::net::Client;
 use crate::provider::claude::oauth;
 use crate::provider::{BoxFuture, ProviderId};
-use crate::proxy::rawjson::{self, Seg};
 use crate::time::Timestamp;
+use crate::wire::rawjson::{self, Seg};
 use crate::{fsx, paths};
 
 pub struct ClaudeCode;

@@ -6,9 +6,15 @@
 //! cargo run --release --example bench -- upstream 127.0.0.1:9100
 //! cargo run --release --example bench -- proxy 127.0.0.1:9101 http://127.0.0.1:9100 /tmp/home
 //! cargo run --release --example bench -- bodies /tmp/bodies
+//! cargo run --release --example bench -- raw 127.0.0.1:9102 http://127.0.0.1:9100
+//! cargo run --release --example bench -- swarm http://127.0.0.1:9101 300 20 /tmp/bodies/claude-large.json 20
 //! ```
 //!
-//! `mise run bench` runs them and drives the proxy with `oha`.
+//! `mise run bench` runs them and drives the proxy with `oha`. `raw` is the
+//! least a proxy on the same HTTP stack can do, slopmax's floor. `swarm` is
+//! many agents at once: each streams answers back to back, the mock paced
+//! like a model, and it reports what the hop adds to the first byte and to
+//! the gap between events.
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -27,6 +33,8 @@ use slopmax_core::paths::Home;
 use slopmax_core::provider::ProviderId;
 use slopmax_core::time::{SignedDuration, Timestamp};
 use tokio::net::TcpListener;
+
+mod swarm;
 
 // As in the binary: `--features mimalloc` measures that allocator.
 #[cfg(feature = "mimalloc")]
@@ -57,8 +65,20 @@ fn main() -> Result<()> {
             slopmax_core::daemon::runtime()?.block_on(proxy(listen.parse()?, upstream, home))
         }
         ["bodies", dir] => bodies(Path::new(dir)),
+        ["translate", body] => translate(&std::fs::read(body)?),
+        ["raw", listen, upstream] => slopmax_core::daemon::runtime()?.block_on(raw(
+            listen.parse()?,
+            upstream.trim_end_matches('/').to_owned(),
+        )),
+        ["swarm", url, sessions, seconds, body, pace] => mock()?.block_on(swarm::run(
+            url,
+            sessions.parse()?,
+            seconds.parse()?,
+            std::fs::read(body)?,
+            pace.parse()?,
+        )),
         _ => bail!(
-            "usage: bench upstream <addr> | bench proxy <addr> <upstream-url> <home> | bench bodies <dir>"
+            "usage: bench upstream <addr> | bench proxy <addr> <upstream-url> <home> | bench bodies <dir>\n       bench raw <addr> <upstream-url> | bench swarm <url> <sessions> <seconds> <body> <pace-ms>"
         ),
     }
 }
@@ -130,7 +150,20 @@ async fn answer(request: Request) -> Response {
             }
         };
     let frames: Vec<Bytes> = events.into_iter().map(Bytes::from).collect();
-    let mut response = Response::new(body::boxed(body::Prefixed::new(frames, body::empty())));
+    // `x-bench-pace-ms` spaces the events as a model's tokens are.
+    let pace = parts
+        .headers
+        .get("x-bench-pace-ms")
+        .and_then(|v| v.to_str().ok()?.parse().ok())
+        .filter(|ms| *ms > 0);
+    let body = match pace {
+        Some(ms) => body::boxed(swarm::Paced::new(
+            frames,
+            std::time::Duration::from_millis(ms),
+        )),
+        None => body::boxed(body::Prefixed::new(frames, body::empty())),
+    };
+    let mut response = Response::new(body);
     let map = response.headers_mut();
     map.insert(
         "content-type",
@@ -336,6 +369,84 @@ async fn proxy(listen: SocketAddr, upstream: &str, home: &str) -> Result<()> {
         ("https://chatgpt.com/backend-api", upstream),
     ]);
     slopmax_core::daemon::serve(config, home, origins).await
+}
+
+/// How long translating a request takes: what one such request holds up
+/// every other stream for on one thread.
+fn translate(body: &[u8]) -> Result<()> {
+    use slopmax_core::wire::{Dialect, translate};
+    let body = String::from_utf8_lossy(body).replacen("claude-opus-5-5", "gpt-6-sol", 1);
+    let time = |name: &str, f: &mut dyn FnMut()| {
+        let mut best = std::time::Duration::MAX;
+        for _ in 0..30 {
+            let started = std::time::Instant::now();
+            f();
+            best = best.min(started.elapsed());
+        }
+        println!("{name:<28} {:>8.2} ms", best.as_secs_f64() * 1e3);
+    };
+    let request =
+        translate::decode(Dialect::Messages, body.as_bytes()).map_err(anyhow::Error::msg)?;
+    time("is_valid (full parse)", &mut || {
+        std::hint::black_box(slopmax_core::wire::rawjson::is_valid(body.as_bytes()));
+    });
+    time("is_object (framing)", &mut || {
+        std::hint::black_box(slopmax_core::wire::rawjson::is_object(body.as_bytes()));
+    });
+    time("decode messages", &mut || {
+        std::hint::black_box(translate::decode(Dialect::Messages, body.as_bytes()).unwrap());
+    });
+    time("encode responses + bytes", &mut || {
+        let value = translate::encode(Dialect::Responses, &request);
+        std::hint::black_box(serde_json::to_vec(&value).unwrap());
+    });
+    Ok(())
+}
+
+/// The least a proxy on slopmax's HTTP stack can do: every request to
+/// `upstream` as it came, the answer streamed back as it comes.
+async fn raw(listen: SocketAddr, upstream: String) -> Result<()> {
+    let listener = TcpListener::bind(listen).await?;
+    let client = slopmax_core::net::Client::builder().build();
+    let handler = move |request: Request| {
+        let client = client.clone();
+        let url = format!(
+            "{upstream}{}",
+            request.uri().path_and_query().map_or("/", |p| p.as_str())
+        );
+        async move {
+            let (parts, incoming) = request.into_parts();
+            let sent = body::read(incoming, usize::MAX).await.unwrap_or_default();
+            let mut headers = parts.headers;
+            headers.remove("host");
+            headers.remove("content-length");
+            match client
+                .request(parts.method, url)
+                .headers(headers)
+                .body(sent)
+                .send()
+                .await
+            {
+                Ok(answer) => {
+                    let status = answer.status();
+                    let mut headers = answer.headers().clone();
+                    headers.remove("content-length");
+                    headers.remove("transfer-encoding");
+                    let mut response = Response::new(answer.into_body());
+                    *response.status_mut() = status;
+                    *response.headers_mut() = headers;
+                    response
+                }
+                Err(_) => {
+                    let mut response = Response::new(body::empty());
+                    *response.status_mut() = StatusCode::BAD_GATEWAY;
+                    response
+                }
+            }
+        }
+    };
+    server::serve(listener, handler, std::future::pending()).await;
+    Ok(())
 }
 
 /// Writes the request bodies to send: a first turn, and a long conversation

@@ -27,9 +27,11 @@ tokio.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
-# For the load-test rig in examples/bench.rs.
+# For the load-test rig in examples/bench/.
 bytes.workspace = true
 http.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
 
 [lints]
 workspace = true

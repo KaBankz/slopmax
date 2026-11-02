@@ -11,7 +11,9 @@
 pub mod chat;
 pub mod ir;
 pub mod messages;
+pub mod rawjson;
 pub mod responses;
+pub mod sse;
 pub mod translate;
 
 use serde::{Deserialize, Serialize};

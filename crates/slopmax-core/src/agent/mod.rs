@@ -26,7 +26,7 @@ use crate::config::Config;
 use crate::import::Found;
 use crate::net::Client;
 use crate::provider::{BoxFuture, ProviderId};
-use crate::proxy::rawjson::{self, Seg};
+use crate::wire::rawjson::{self, Seg};
 use crate::{fsx, paths};
 
 pub use claude_code::ClaudeCode;

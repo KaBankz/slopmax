@@ -3,7 +3,13 @@
 //! Request bodies are forwarded byte-for-byte. Where slopmax must read or
 //! change a value, these helpers locate it in place: re-serializing through
 //! a JSON library would reorder keys and reformat numbers in the rest of the
-//! body. Input must already be valid JSON (see [`is_valid`]).
+//! body.
+//!
+//! Every function is total: on any bytes at all it returns without
+//! panicking, so a body need not be validated before it is scanned. On valid
+//! JSON the results are exact (the property tests below hold them to
+//! serde_json); on invalid JSON they are some range or `None`, and the body
+//! goes upstream as it came, for the provider to refuse.
 
 use std::ops::Range;
 
@@ -14,8 +20,20 @@ pub enum Seg<'a> {
     Index(usize),
 }
 
+/// Whether `body` is valid JSON. A full parse: kept for where a misread
+/// would matter, such as a key held to some models.
 pub fn is_valid(body: &[u8]) -> bool {
     serde_json::from_slice::<serde::de::IgnoredAny>(body).is_ok()
+}
+
+/// Whether `body` is framed as one JSON object: `{`, balanced to its `}`,
+/// with only whitespace after. A structural scan that skips strings with
+/// SIMD search, far cheaper than a parse on a large conversation; what it
+/// does not check (numbers, escapes) the provider does.
+pub fn is_object(body: &[u8]) -> bool {
+    let start = skip_ws(body, 0);
+    body.get(start) == Some(&b'{')
+        && skip_value(body, start).is_some_and(|end| skip_ws(body, end) == body.len())
 }
 
 /// Byte range of the value at `path`. Only what lies before the value is
@@ -202,5 +220,113 @@ mod tests {
         let body = br#"{"model":"a","keep":1}"#;
         let r = find(body, &[Seg::Key("model")]).unwrap();
         assert_eq!(splice(body, r, br#""bb""#), br#"{"model":"bb","keep":1}"#);
+    }
+
+    mod properties {
+        use super::super::*;
+        use proptest::prelude::*;
+        use serde_json::{Map, Value};
+
+        fn value() -> impl Strategy<Value = Value> {
+            let leaf = prop_oneof![
+                Just(Value::Null),
+                any::<bool>().prop_map(Value::Bool),
+                any::<i64>().prop_map(Value::from),
+                // Short decimals, which serde_json reads back exactly.
+                (any::<i32>(), 0..4i32).prop_map(|(m, e)| Value::from(m as f64 / 10f64.powi(e))),
+                // Quotes, backslashes, braces and control bytes inside strings.
+                "[a-z\\\"{}\\[\\],:\\\\ \n\t\u{1}é😀]{0,12}".prop_map(Value::from),
+            ];
+            leaf.prop_recursive(4, 48, 6, |inner| {
+                prop_oneof![
+                    prop::collection::vec(inner.clone(), 0..6).prop_map(Value::Array),
+                    prop::collection::vec(("[a-z\"\\\\]{0,6}", inner), 0..6).prop_map(|members| {
+                        Value::Object(members.into_iter().collect::<Map<_, _>>())
+                    }),
+                ]
+            })
+        }
+
+        fn object() -> impl Strategy<Value = (Value, bool)> {
+            (
+                prop::collection::vec(("[a-z\"\\\\]{0,6}", value()), 1..6),
+                any::<bool>(),
+            )
+                .prop_map(|(members, pretty)| {
+                    (Value::Object(members.into_iter().collect()), pretty)
+                })
+        }
+
+        fn encode(value: &Value, pretty: bool) -> Vec<u8> {
+            if pretty {
+                serde_json::to_vec_pretty(value).unwrap()
+            } else {
+                serde_json::to_vec(value).unwrap()
+            }
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(
+                std::env::var("PROPTEST_CASES").ok().and_then(|n| n.parse().ok()).unwrap_or(256)
+            ))]
+
+            /// On valid JSON every member is found where serde_json puts it.
+            #[test]
+            fn finds_what_serde_json_reads((doc, pretty) in object()) {
+                let body = encode(&doc, pretty);
+                prop_assert!(is_object(&body));
+                prop_assert!(is_valid(&body));
+                for (key, expected) in doc.as_object().unwrap() {
+                    let range = find(&body, &[Seg::Key(key)]);
+                    // Keys with escapes are compared raw, so are not found.
+                    if key.contains(['"', '\\']) {
+                        continue;
+                    }
+                    let range = range.expect("a present key is found");
+                    let found: Value = serde_json::from_slice(&body[range]).unwrap();
+                    prop_assert_eq!(&found, expected);
+                }
+                if let Some((key, Value::String(text))) = doc.as_object().unwrap().iter().next()
+                    && !key.contains(['"', '\\'])
+                {
+                    let found = find_str(&body, &[Seg::Key(key)]);
+                    prop_assert_eq!(found.as_deref(), Some(text.as_str()));
+                }
+            }
+
+            /// Cut anywhere, a document is never taken for a whole object,
+            /// and nothing panics.
+            #[test]
+            fn every_cut_is_seen_and_nothing_panics((doc, pretty) in object()) {
+                let body = encode(&doc, pretty);
+                for end in 0..body.len() {
+                    let cut = &body[..end];
+                    prop_assert!(!is_object(cut));
+                    let _ = find(cut, &[Seg::Key("model")]);
+                    let _ = find(cut, &[Seg::Key("a"), Seg::Index(1), Seg::Key("")]);
+                    let _ = find_str(cut, &[Seg::Key("model")]);
+                }
+            }
+
+            /// Any bytes at all: no panic.
+            #[test]
+            fn arbitrary_bytes_never_panic(body in prop::collection::vec(any::<u8>(), 0..256)) {
+                let _ = is_object(&body);
+                let _ = find(&body, &[Seg::Key("model")]);
+                let _ = find(&body, &[Seg::Index(2), Seg::Key("x")]);
+                let _ = find_str(&body, &[Seg::Key("model")]);
+            }
+
+            /// Bytes made mostly of JSON's own punctuation, which reach the
+            /// scanner's edge cases far more often than random bytes do.
+            #[test]
+            fn json_like_bytes_never_panic(body in "[{}\\[\\]\":,\\\\a1 ]{0,64}") {
+                let body = body.as_bytes();
+                let _ = is_object(body);
+                let _ = find(body, &[Seg::Key("a")]);
+                let _ = find(body, &[Seg::Key("a"), Seg::Index(0)]);
+                let _ = find_str(body, &[Seg::Key("a")]);
+            }
+        }
     }
 }

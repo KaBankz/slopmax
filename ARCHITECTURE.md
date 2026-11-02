@@ -294,7 +294,7 @@ The binary is about 6.5 MB, from about 65 crates besides slopmax's own. The asyn
 
 ## Performance
 
-What slopmax adds to a request is small next to a model's answer, and it should stay that way. `mise run bench` measures it: `slopmax/examples/bench.rs` runs the real server (`daemon::serve`) in front of a mock provider that streams answers with usage and rate-limit headers, and `oha` drives Claude Code- and Codex-shaped requests through it, small ones and 300 KB conversations, one at a time and 32 at once.
+What slopmax adds to a request is small next to a model's answer, and it should stay that way. `mise run bench` measures it: `slopmax/examples/bench/` runs the real server (`daemon::serve`) in front of a mock provider that streams answers with usage and rate-limit headers, and `oha` drives Claude Code- and Codex-shaped requests through it, small ones and 300 KB conversations, one at a time and 32 at once.
 
 On a 2-vCPU machine shared with the load generator and the mock (which answers a small request in 0.2 ms on its own):
 

@@ -179,6 +179,7 @@ mod tests {
             attempts: 1,
             agent: None,
             session: None,
+            end: None,
         }
     }
 

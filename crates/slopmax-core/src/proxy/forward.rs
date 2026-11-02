@@ -13,15 +13,14 @@
 
 use std::borrow::Cow;
 use std::sync::{Arc, OnceLock};
-use std::time::Instant;
 
 use bytes::Bytes;
 use http::request::Parts;
 use http::{HeaderMap, HeaderValue, StatusCode};
 use http_body_util::LengthLimitError;
+use tokio::time::Instant;
 
-use super::rawjson::{self, Seg};
-use super::sse::{Tap, Tapped};
+use super::relay::{self, Relay, Served, Settle};
 use super::start::{self, Start};
 use super::transcode::{self, Transcode, Watch};
 use super::{App, Target, error, json_reply, returnable};
@@ -30,9 +29,9 @@ use crate::agent::{self, Agent};
 use crate::auth;
 use crate::config::ClientKey;
 use crate::human;
-use crate::ledger::Entry;
+use crate::ledger::{End, Entry};
 use crate::log;
-use crate::net::body::{self, Body};
+use crate::net::body;
 use crate::net::client::{self, Response as Upstream};
 use crate::net::server::{Request, Response};
 use crate::pool::{Choice, DEFAULT_BLOCK, DEFAULT_THROTTLE, Pick, Unavailable};
@@ -41,6 +40,8 @@ use crate::provider::{ProviderId, Verdict};
 use crate::route::{self, NoRoute, Step};
 use crate::time::{SignedDuration, Timestamp};
 use crate::wire::ir::{self, Answer, Event, Part};
+use crate::wire::rawjson::{self, Seg};
+use crate::wire::sse::Tap;
 use crate::wire::{Dialect, translate};
 
 /// Largest request body accepted (images make Messages bodies big).
@@ -74,7 +75,7 @@ struct Inbound {
     model: Option<String>,
     /// The request in common form, decoded the first time a step needs
     /// translation.
-    decoded: OnceLock<Result<ir::Request, String>>,
+    decoded: OnceLock<Result<Arc<ir::Request>, String>>,
 }
 
 impl Inbound {
@@ -83,7 +84,11 @@ impl Inbound {
             .headers
             .get("content-encoding")
             .is_some_and(|v| v.as_bytes() != b"identity");
-        let json = !encoded && rawjson::is_valid(&body);
+        // Framing only: a full parse of a long conversation costs more than
+        // everything else slopmax does with it. The scans below are exact on
+        // valid JSON and harmless on anything else, which the provider
+        // refuses as it would have anyway.
+        let json = !encoded && rawjson::is_object(&body);
         let inspectable: &[u8] = if json { &body } else { b"" };
         let agent = agent::detect(&parts.headers);
         let session = agent::session(agent, &parts.headers, inspectable);
@@ -105,11 +110,24 @@ impl Inbound {
         }
     }
 
-    fn decoded(&self) -> Result<&ir::Request, &str> {
-        self.decoded
-            .get_or_init(|| translate::decode(self.target.dialect, &self.body))
-            .as_ref()
-            .map_err(String::as_str)
+    /// The request in common form, decoded once; a large one on the
+    /// blocking pool, so the streams sharing this thread do not wait on it.
+    async fn decode(&self) -> Result<Arc<ir::Request>, String> {
+        if let Some(done) = self.decoded.get() {
+            return done.clone();
+        }
+        let (dialect, body) = (self.target.dialect, self.body.clone());
+        let decoded = offload(body.len(), move || {
+            translate::decode(dialect, &body).map(Arc::new)
+        })
+        .await;
+        let _ = self.decoded.set(decoded.clone());
+        decoded
+    }
+
+    /// The request [`Inbound::decode`] decoded.
+    fn decoded(&self) -> Option<&ir::Request> {
+        self.decoded.get()?.as_deref().ok()
     }
 
     /// Whether the request lists the models, as agents do before work.
@@ -334,7 +352,9 @@ fn retold(client: Dialect, status: StatusCode, body: &[u8]) -> Response {
 }
 
 enum Attempt {
-    /// A final response for the agent.
+    /// An answer for the agent, recorded as it ends.
+    Served(Response),
+    /// A final response for the agent, not yet recorded.
     Done(Response),
     /// The account failed; try another.
     Failed(Option<Failure>),
@@ -366,7 +386,12 @@ pub(super) async fn forward(
     };
     let inbound = Inbound::new(target, parts, body);
     if let Some(key) = client.as_ref().filter(|k| !k.models.is_empty()) {
-        let refused = match &inbound.model {
+        // A key held to some models must have its model read exactly.
+        let model = inbound
+            .model
+            .as_ref()
+            .filter(|_| rawjson::is_valid(&inbound.body));
+        let refused = match model {
             Some(model) if !key.allows(model) => {
                 format!("the key {:?} may not use {model}", key.name)
             }
@@ -445,6 +470,7 @@ pub(super) async fn forward(
             };
             tried.push(choice.account.id.clone());
             match attempt(&app, &inbound, step, choice, tried.len()).await {
+                Attempt::Served(response) => return response,
                 Attempt::Done(response) => {
                     // An error passed back is no answer: the ledger counts it
                     // as a failure.
@@ -503,6 +529,7 @@ fn failed(
         attempts: attempts as u32,
         agent: inbound.agent.map(|a| a.id().to_owned()),
         session: inbound.session.clone(),
+        end: None,
     };
     app.record(&entry);
 }
@@ -548,7 +575,7 @@ async fn attempt(
     let mut refreshed = false;
     let mut retried = false;
     loop {
-        let outbound = match outbound(app, inbound, step, &account, lane, stripped, moved) {
+        let outbound = match outbound(app, inbound, step, &account, lane, stripped, moved).await {
             Ok(outbound) => outbound,
             Err(message) => {
                 return Attempt::Done(error(Some(dialect), StatusCode::BAD_REQUEST, &message));
@@ -571,10 +598,16 @@ async fn attempt(
         if response.status().is_success() {
             let status = response.status();
             let headers = response.headers().clone();
-            let mut body = response.into_body();
+            let mut opened = Opened {
+                held: Vec::new(),
+                body: response.into_incoming(),
+                broke: None,
+            };
             if wire.holds_start() {
-                match start::hold(body, wire).await {
-                    Start::Streaming(started) => body = started,
+                match start::hold(opened.body, wire).await {
+                    Start::Streaming { held, body, broke } => {
+                        opened = Opened { held, body, broke };
+                    }
                     Start::Refused { exhausted, held } => {
                         if exhausted {
                             app.pool
@@ -615,13 +648,14 @@ async fn attempt(
                 agent: inbound.agent.map(|a| a.id()),
                 session: inbound.session.clone(),
             };
+            let settle = Settle::new(Arc::clone(app), served);
             let response = match lane {
-                None => stream_back(app, dialect, served, &headers, body),
+                None => stream_back(app, dialect, settle, &headers, opened),
                 Some(upstream) => {
-                    translate_back(app, inbound, served, upstream, &headers, body).await
+                    translate_back(app, inbound, settle, upstream, &headers, opened).await
                 }
             };
-            return Attempt::Done(response);
+            return Attempt::Served(response);
         }
 
         let mut failure = Failure::read(response, step.provider).await;
@@ -714,10 +748,24 @@ struct Outbound {
     body: Bytes,
 }
 
+/// Bodies from this size are translated on the blocking pool. A 300 KB
+/// conversation takes about 2 ms to decode and encode, which every stream
+/// on the thread would wait out; a small one takes less than the handoff.
+const OFFLOAD: usize = 64 * 1024;
+
+/// Runs `work` inline for a small body, else on the blocking pool.
+async fn offload<T: Send + 'static>(size: usize, work: impl FnOnce() -> T + Send + 'static) -> T {
+    if size < OFFLOAD {
+        work()
+    } else {
+        crate::blocking::run(work).await
+    }
+}
+
 /// The request for `account`: the client's own, or translated into `lane`.
 /// `stripped` drops state bound to another account.
-fn outbound(
-    app: &App,
+async fn outbound(
+    app: &Arc<App>,
     inbound: &Inbound,
     step: &Step,
     account: &Account,
@@ -734,17 +782,25 @@ fn outbound(
             body: inbound.body(step, stripped),
         });
     };
-    let mut request = inbound.decoded()?.clone();
-    request.model.clone_from(&step.model);
-    if request.cache_key.is_none() {
-        request.cache_key.clone_from(&inbound.session);
-    }
-    if upstream == Dialect::Responses && !stripped {
-        let replay = app.replay.lock().unwrap_or_else(|p| p.into_inner());
-        restore_reasoning(&mut request, |call| replay.recall(call, &account.id));
-    }
-    let mut body = translate::encode(upstream, &request);
-    provider.shape(upstream, &mut body);
+    let decoded = inbound.decode().await?;
+    let replay = (upstream == Dialect::Responses && !stripped)
+        .then(|| (Arc::clone(app), account.id.clone()));
+    let (model, session, which) = (step.model.clone(), inbound.session.clone(), step.provider);
+    let body = offload(inbound.body.len(), move || {
+        let mut request = ir::Request::clone(&decoded);
+        request.model = model;
+        if request.cache_key.is_none() {
+            request.cache_key = session;
+        }
+        if let Some((app, id)) = replay {
+            let replay = app.replay.lock().unwrap_or_else(|p| p.into_inner());
+            restore_reasoning(&mut request, |call| replay.recall(call, &id));
+        }
+        let mut body = translate::encode(upstream, &request);
+        which.get().shape(upstream, &mut body);
+        Bytes::from(serde_json::to_vec(&body).expect("values serialize"))
+    })
+    .await;
     // A translated request carries no client headers: they describe the
     // client's format, not this one. slopmax names itself instead.
     let mut client = HeaderMap::new();
@@ -757,7 +813,7 @@ fn outbound(
     Ok(Outbound {
         url: format!("{base}{}", translate::path(upstream)),
         headers: provider.headers(&client, account, moved),
-        body: serde_json::to_vec(&body).expect("values serialize").into(),
+        body,
     })
 }
 
@@ -875,30 +931,50 @@ async fn send(app: &App, inbound: &Inbound, outbound: Outbound) -> Result<Upstre
         .await
 }
 
-/// A response being streamed back, for the usage ledger.
-struct Served {
-    id: String,
-    provider: ProviderId,
-    model: Option<String>,
-    status: StatusCode,
-    started: Instant,
-    attempts: u32,
-    agent: Option<&'static str>,
-    session: Option<String>,
+/// A successful upstream answer: the start held back while it opened, the
+/// rest still to come, and an error that broke it off early, if one did.
+struct Opened {
+    held: Vec<Bytes>,
+    body: hyper::body::Incoming,
+    broke: Option<body::BoxError>,
+}
+
+impl Opened {
+    /// The answer as the agent receives it, recorded when it ends.
+    fn relay(
+        self,
+        wire: Dialect,
+        headers: &HeaderMap,
+        settle: Settle,
+    ) -> Relay<hyper::body::Incoming> {
+        let relay = Relay::new(
+            self.body,
+            self.held,
+            wire,
+            relay::shape(headers),
+            settle,
+            relay::STALL,
+        );
+        match self.broke {
+            Some(error) => relay.broken(error),
+            None => relay,
+        }
+    }
 }
 
 /// Streams a successful response to the agent as it came.
 fn stream_back(
     app: &Arc<App>,
     dialect: Dialect,
-    served: Served,
+    settle: Settle,
     headers: &HeaderMap,
-    body: Body,
+    opened: Opened,
 ) -> Response {
-    let status = served.status;
+    let status = settle.status();
+    let provider = settle.provider();
     let mut returned = returnable(headers);
-    app.show_pool(served.provider, &mut returned);
-    let mut out = Response::new(recorded(app, dialect, served, headers, body));
+    app.show_pool(provider, &mut returned);
+    let mut out = Response::new(body::boxed(opened.relay(dialect, headers, settle)));
     *out.status_mut() = status;
     *out.headers_mut() = returned;
     out
@@ -909,10 +985,10 @@ fn stream_back(
 async fn translate_back(
     app: &Arc<App>,
     inbound: &Inbound,
-    served: Served,
+    settle: Settle,
     upstream: Dialect,
     headers: &HeaderMap,
-    body: Body,
+    opened: Opened,
 ) -> Response {
     let client = inbound.target.dialect;
     let request = inbound
@@ -927,11 +1003,10 @@ async fn translate_back(
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.contains("json"));
-    let account = served.id.clone();
-    let body = recorded(app, upstream, served, headers, body);
-    let watch = remembering(app, account, upstream);
+    let watch = remembering(app, settle.account().to_owned(), upstream);
     let decoder = translate::Decoder::new(upstream, request);
     if request.stream {
+        let body = body::boxed(opened.relay(upstream, headers, settle));
         let encoder =
             translate::Encoder::for_request(client, request, &model, inbound.wants_usage());
         let stream = Transcode::new(body, json, decoder, encoder, watch);
@@ -944,15 +1019,20 @@ async fn translate_back(
             .insert("cache-control", HeaderValue::from_static("no-cache"));
         return out;
     }
-    let bytes = match body::read_all(body, MAX_BODY).await {
+    // Read whole, then recorded once with the status the agent gets.
+    let mut tap = Tap::new(upstream, relay::shape(headers));
+    let bytes = match read_whole(opened).await {
         Ok(bytes) => bytes,
-        Err(e) => {
+        Err((end, e)) => {
+            settle.record(tap.finish(), None, end, StatusCode::BAD_GATEWAY);
             let message = format!("reading the upstream answer failed: {e}");
             return error(Some(client), StatusCode::BAD_GATEWAY, &message);
         }
     };
+    tap.feed(&bytes);
+    let first_byte = Some(Instant::now());
     let answer = Answer::collect(transcode::events(decoder, json, &bytes, watch));
-    match &answer.error {
+    let response = match &answer.error {
         Some(failure) if answer.text.is_empty() && answer.calls.is_empty() => {
             let status = StatusCode::from_u16(failure.status).unwrap_or(StatusCode::BAD_GATEWAY);
             error(Some(client), status, &failure.message)
@@ -961,7 +1041,27 @@ async fn translate_back(
             StatusCode::OK,
             &translate::whole(client, request, &answer, &model),
         ),
+    };
+    settle.record(tap.finish(), first_byte, End::Complete, response.status());
+    response
+}
+
+/// A whole answer: the held start and the rest, within the stall limit.
+async fn read_whole(opened: Opened) -> Result<Bytes, (End, body::BoxError)> {
+    if let Some(error) = opened.broke {
+        return Err((End::UpstreamError, error));
     }
+    let rest = body::read(opened.body, MAX_BODY);
+    let rest = match tokio::time::timeout(relay::STALL, rest).await {
+        Ok(read) => read.map_err(|e| (End::UpstreamError, e))?,
+        Err(_) => return Err((End::Stalled, "the upstream sent nothing in time".into())),
+    };
+    if opened.held.is_empty() {
+        return Ok(rest);
+    }
+    let mut whole = opened.held.concat();
+    whole.extend_from_slice(&rest);
+    Ok(whole.into())
 }
 
 /// Watches a translated answer for reasoning state, to restore it before
@@ -982,49 +1082,6 @@ fn remembering(app: &Arc<App>, account: String, upstream: Dialect) -> Watch {
         }
         _ => {}
     })
-}
-
-/// The upstream body, recording token usage (and any quota refusal inside
-/// the stream) when it ends. `wire` is the format it is in.
-fn recorded(
-    app: &Arc<App>,
-    wire: Dialect,
-    served: Served,
-    headers: &HeaderMap,
-    body: Body,
-) -> Body {
-    let tap = Tap::for_response(wire, headers);
-    let pool_app = Arc::clone(app);
-    let stream = Tapped::new(body, tap, move |outcome, first_byte| {
-        let id = &served.id;
-        pool_app.pool.add_usage(id, &outcome.usage);
-        if outcome.exhausted {
-            let until = Timestamp::now() + DEFAULT_BLOCK;
-            pool_app
-                .pool
-                .block(id, until, None, "usage limit reached mid-stream");
-        }
-        let millis = |at: Instant| at.duration_since(served.started).as_millis() as u64;
-        let usage = outcome.usage;
-        let entry = Entry {
-            at: Timestamp::now(),
-            account: served.id,
-            provider: served.provider,
-            model: served.model,
-            status: served.status.as_u16(),
-            input: usage.input_tokens,
-            output: usage.output_tokens,
-            cache_read: usage.cache_read_tokens,
-            cache_write: usage.cache_write_tokens,
-            ms: millis(Instant::now()),
-            first_byte_ms: first_byte.map(millis),
-            attempts: served.attempts,
-            agent: served.agent.map(str::to_owned),
-            session: served.session,
-        };
-        pool_app.record(&entry);
-    });
-    body::boxed(stream)
 }
 
 /// The response when no account can take the request.

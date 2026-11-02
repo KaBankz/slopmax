@@ -45,6 +45,28 @@ pub struct Entry {
     /// The agent's session (its conversation), when it names one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
+    /// How a streamed answer ended, when not by completing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<End>,
+}
+
+/// How a streamed answer ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum End {
+    /// The upstream finished it.
+    Complete,
+    /// The upstream broke it off.
+    UpstreamError,
+    /// The agent hung up first, as when its user interrupts it.
+    ClientGone,
+    /// The upstream went quiet for too long.
+    Stalled,
+    /// The daemon stopped while it streamed.
+    Cut,
+    /// A kind a later version records.
+    #[serde(other)]
+    Other,
 }
 
 impl Entry {
@@ -55,7 +77,7 @@ impl Entry {
 
     /// Whether it ended in an error instead of an answer.
     pub fn failed(&self) -> bool {
-        self.status >= 400
+        self.status >= 400 || matches!(self.end, Some(End::UpstreamError | End::Stalled | End::Cut))
     }
 
     /// Whether it is a request someone made: an answer that moved tokens,
@@ -229,6 +251,7 @@ mod tests {
             attempts: 1,
             agent: None,
             session: None,
+            end: None,
         }
     }
 

@@ -28,3 +28,7 @@ toml_edit.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# Paused time, for timeouts tested without waiting them out.
+tokio = { workspace = true, features = ["test-util"] }

@@ -120,6 +120,7 @@ async fn warm(app: &App, account: &Account, model: &str) -> Result<(), String> {
         attempts: 1,
         agent: Some("slopmax".to_owned()),
         session: None,
+        end: None,
     };
     app.record(&entry);
     Ok(())

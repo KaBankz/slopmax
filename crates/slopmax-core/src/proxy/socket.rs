@@ -546,6 +546,7 @@ fn record(app: &App, id: &str, event: &Value, turn: &Mutex<Turn>, origin: &Origi
         attempts: 1,
         agent: origin.agent.map(str::to_owned),
         session: origin.session.clone(),
+        end: None,
     };
     app.record(&entry);
 }

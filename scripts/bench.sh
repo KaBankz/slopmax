@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Measures what slopmax adds: latency, throughput, and memory, with the real
-# proxy in front of a local mock provider (crates/slopmax/examples/bench.rs),
+# proxy in front of a local mock provider (crates/slopmax/examples/bench/),
 # then startup time and binary size.
 #
 #   mise run bench           # installs oha, jq, and hyperfine first

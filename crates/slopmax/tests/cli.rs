@@ -534,6 +534,7 @@ fn entry(at: Timestamp, account: &str, model: &str, status: u16) -> Entry {
         attempts: 1,
         agent: Some("claude".into()),
         session: None,
+        end: None,
     }
 }
 

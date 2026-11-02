@@ -656,6 +656,12 @@ impl Response {
             .map_err(|e| Error::new(Kind::Connect, e))
     }
 
+    /// The body as hyper delivers it, with no timeout: for a caller that
+    /// watches for stalls itself.
+    pub fn into_incoming(self) -> Incoming {
+        self.inner.into_body()
+    }
+
     /// The body as a stream of chunks, failing if it stalls for longer than
     /// the client's read timeout.
     pub fn into_body(self) -> body::Body {

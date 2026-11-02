@@ -25,6 +25,9 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 - The proxy runs on one thread, which carries a desktop's agents with room to spare, adds less to each request, and holds less memory. `SLOPMAX_WORKERS` spreads it over more threads (`auto` for one per CPU, which the Docker image sets) for a proxy shared by many clients.
 - The proxy serves requests from the accounts it holds in memory, and no longer reads an account's file for each one. It learns of changes when told (`POST /slopmax/sync`, which the CLI now sends after each change to accounts or pins) and checks the files for any it was not told of every 30 seconds, instead of reading every account every 2 seconds.
 - A usage record is written to the ledger as the request ends, in one write to the month file the proxy keeps open, instead of by a background writer.
+- The ledger records how a streamed answer ended when it did not complete (`"end"`: the upstream broke it off, it stalled, the agent hung up, or the proxy stopped). A stream the upstream broke off, stalled, or cut by a stop counts as a failure; one the agent hung up on, as when you interrupt Claude Code, does not.
+- A request body is checked for its framing instead of parsed whole, which costs a third as much on a long conversation. A key held to some models still has its body parsed in full.
+- Translating a long conversation for a model of another format runs beside the proxy's thread instead of on it, so the other streams it carries do not wait on it.
 - Reset credits are now called limit resets, as claude.ai calls Claude's; on Claude, credits are money.
 - The dashboard counts an account's limit resets as listed, and offers Redeem on any account that holds one, not just ChatGPT's.
 - The source is a Cargo workspace: the `slopmax` CLI on top of `slopmax-core`, the engine it shares with the coming desktop app, and three small libraries beneath. Installing from source now names the package: `cargo install --locked --git https://github.com/KaBankz/slopmax slopmax`.
@@ -34,6 +37,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ### Fixed
 
+- An answer translated from another format and read whole could be recorded twice when it carried an error; it is recorded once, with the status the client got.
+- A Codex stream that broke off while the proxy held back its start now reaches Codex as a broken stream instead of ending as if it had completed.
 - The last usage records could be lost when the proxy stopped. Stopping now runs in order: open requests finish, background work in flight finishes, a token refresh in flight saves what it got, state is saved, and the ledger is flushed to disk.
 - A refreshed token is saved before slopmax asks the provider who the account is, so a lookup that hangs or fails can no longer lose a token whose predecessor is already spent.
 - A second `slopmax serve` on the same home refuses to start, naming the process that serves it, instead of racing the first for its files.

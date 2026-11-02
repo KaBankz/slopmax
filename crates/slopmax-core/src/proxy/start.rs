@@ -3,17 +3,18 @@
 //! A refusal can arrive inside a 200 stream, right after the response is
 //! created. Holding the first events back for a moment lets the proxy see
 //! it and move to another account before the agent has received anything.
-//! Once content starts (or the wait runs out) the held bytes are replayed
+//! Once content starts (or the wait runs out) the held bytes are sent first
 //! and the stream passes through untouched.
 
 use std::time::Duration;
 
 use bytes::Bytes;
 use http_body_util::BodyExt;
-use serde_json::Value;
+use hyper::body::Body;
 use tokio::time::Instant;
 
-use crate::net::body::{self, Body, Prefixed};
+use crate::net::body::BoxError;
+use crate::wire::sse::Opener;
 use crate::wire::{Dialect, Opening};
 
 /// Longest the start is held: refusals arrive at once, and a slow first
@@ -22,77 +23,79 @@ const WAIT: Duration = Duration::from_secs(3);
 /// Most held back before giving up and streaming.
 const LIMIT: usize = 256 * 1024;
 
-pub enum Start {
-    /// Stream this (the held start, then the rest).
-    Streaming(Body),
+pub enum Start<B> {
+    /// Stream this: the held start, then the rest of `body`, then `broke`
+    /// if the upstream broke the stream off while it was held.
+    Streaming {
+        held: Vec<Bytes>,
+        body: B,
+        broke: Option<BoxError>,
+    },
     /// The stream opened with a refusal; these are the bytes received.
     Refused { exhausted: bool, held: Bytes },
 }
 
-pub async fn hold(mut body: Body, dialect: Dialect) -> Start {
+pub async fn hold<B>(mut body: B, dialect: Dialect) -> Start<B>
+where
+    B: Body<Data = Bytes> + Unpin,
+    B::Error: Into<BoxError>,
+{
     let deadline = Instant::now() + WAIT;
     let mut held: Vec<Bytes> = Vec::new();
     let mut size = 0;
-    let mut line: Vec<u8> = Vec::new();
+    let mut opener = Opener::new(dialect);
+    let mut broke = None;
     while size < LIMIT {
         let frame = match tokio::time::timeout_at(deadline, body.frame()).await {
             Ok(Some(Ok(frame))) => frame,
-            // Waited long enough, ended, or failed: let the stream say so.
-            _ => break,
+            Ok(Some(Err(e))) => {
+                broke = Some(e.into());
+                break;
+            }
+            // Waited long enough, or the stream ended: stream what came.
+            Ok(None) | Err(_) => break,
         };
         let Ok(chunk) = frame.into_data() else {
             continue;
         };
         size += chunk.len();
-        held.push(chunk.clone());
-        for &byte in chunk.iter() {
-            if byte != b'\n' {
-                line.push(byte);
-                continue;
-            }
-            let opening = event(&line).map_or(Opening::Wait, |e| dialect.opening(&e));
-            line.clear();
-            match opening {
-                Opening::Wait => {}
-                Opening::Content => return Start::Streaming(replay(held, body)),
-                Opening::Refused { exhausted } => {
-                    return Start::Refused {
-                        exhausted,
-                        held: held.concat().into(),
-                    };
-                }
+        let told = opener.feed(&chunk);
+        held.push(chunk);
+        match told {
+            Opening::Wait => {}
+            Opening::Content => break,
+            Opening::Refused { exhausted } => {
+                return Start::Refused {
+                    exhausted,
+                    held: held.concat().into(),
+                };
             }
         }
     }
-    Start::Streaming(replay(held, body))
-}
-
-fn replay(held: Vec<Bytes>, rest: Body) -> Body {
-    body::boxed(Prefixed::new(held, rest))
-}
-
-/// The JSON of an SSE `data:` line.
-fn event(line: &[u8]) -> Option<Value> {
-    let data = line.strip_prefix(b"data:")?.trim_ascii();
-    serde_json::from_slice(data).ok()
+    Start::Streaming { held, body, broke }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::net::body::full;
+    use crate::net::body::{self, full};
 
-    async fn read(body: Body) -> String {
-        String::from_utf8(body::read(body, usize::MAX).await.unwrap().to_vec()).unwrap()
+    async fn streamed(start: Start<body::Body>) -> String {
+        let Start::Streaming { held, body, broke } = start else {
+            panic!("should stream");
+        };
+        assert!(broke.is_none());
+        let rest = body::read(body, usize::MAX).await.unwrap();
+        String::from_utf8([held.concat(), rest.to_vec()].concat()).unwrap()
     }
 
     #[tokio::test]
-    async fn content_streams_with_the_held_start_replayed() {
+    async fn content_streams_with_the_held_start_first() {
         let stream = "data: {\"type\":\"response.created\"}\n\ndata: {\"type\":\"response.output_item.added\"}\n\ndata: {\"type\":\"response.completed\"}\n\n";
-        match hold(full(stream), Dialect::Responses).await {
-            Start::Streaming(body) => assert_eq!(read(body).await, stream),
-            Start::Refused { .. } => panic!("content is not a refusal"),
-        }
+        assert_eq!(
+            streamed(hold(full(stream), Dialect::Responses).await).await,
+            stream
+        );
     }
 
     #[tokio::test]
@@ -103,16 +106,16 @@ mod tests {
                 assert!(exhausted);
                 assert_eq!(held, stream);
             }
-            Start::Streaming(_) => panic!("should be refused"),
+            Start::Streaming { .. } => panic!("should be refused"),
         }
     }
 
     #[tokio::test]
     async fn request_failures_go_to_the_agent() {
         let stream = "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"context_length_exceeded\"}}}\n\n";
-        assert!(matches!(
-            hold(full(stream), Dialect::Responses).await,
-            Start::Streaming(_)
-        ));
+        assert_eq!(
+            streamed(hold(full(stream), Dialect::Responses).await).await,
+            stream
+        );
     }
 }
