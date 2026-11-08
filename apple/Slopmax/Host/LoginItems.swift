@@ -5,7 +5,9 @@ import Foundation
 import ServiceManagement
 
 enum LoginItems {
-    static let daemon = SMAppService.agent(plistName: "dev.slopmax.agent.plist")
+    /// A handle on the agent, made where it is asked for: `SMAppService` is
+    /// not `Sendable`, so none is kept in shared state.
+    static var daemon: SMAppService { SMAppService.agent(plistName: "dev.slopmax.agent.plist") }
 
     /// Registers the daemon's agent if it is not yet; macOS may ask the user
     /// to approve it in System Settings first.

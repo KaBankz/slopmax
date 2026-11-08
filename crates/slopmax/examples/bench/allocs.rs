@@ -3,7 +3,10 @@
 //! on a thread of its own, as `slopmax serve` does; the mock and the
 //! client run on others and are not counted.
 
-#![allow(unsafe_code)] // A global allocator is unsafe to implement.
+#![allow(unsafe_code)]
+// A global allocator is unsafe to implement.
+// With mimalloc as the allocator, the counting one is not installed.
+#![cfg_attr(feature = "mimalloc", allow(dead_code))]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
