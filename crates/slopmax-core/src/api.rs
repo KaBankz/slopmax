@@ -15,25 +15,11 @@ use crate::time::Timestamp;
 use crate::wire;
 
 pub fn provider(id: ProviderId) -> api::Provider {
-    match id {
-        ProviderId::Claude => api::Provider::Claude,
-        ProviderId::Codex => api::Provider::Codex,
-        ProviderId::Anthropic => api::Provider::Anthropic,
-        ProviderId::OpenAI => api::Provider::OpenAi,
-        ProviderId::Xai => api::Provider::Xai,
-        ProviderId::Compat => api::Provider::Compat,
-    }
+    id.api()
 }
 
 pub fn provider_id(provider: api::Provider) -> ProviderId {
-    match provider {
-        api::Provider::Claude => ProviderId::Claude,
-        api::Provider::Codex => ProviderId::Codex,
-        api::Provider::Anthropic => ProviderId::Anthropic,
-        api::Provider::OpenAi => ProviderId::OpenAI,
-        api::Provider::Xai => ProviderId::Xai,
-        api::Provider::Compat => ProviderId::Compat,
-    }
+    ProviderId::of_api(provider)
 }
 
 pub fn strategy(strategy: config::Strategy) -> api::Strategy {

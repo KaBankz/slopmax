@@ -49,6 +49,10 @@ impl Agent for ClaudeCode {
         "claude"
     }
 
+    fn api(&self) -> slopmax_api::AgentId {
+        slopmax_api::AgentId::ClaudeCode
+    }
+
     fn title(&self) -> &'static str {
         "Claude Code"
     }

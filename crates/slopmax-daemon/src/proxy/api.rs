@@ -699,18 +699,14 @@ fn make_key(app: &App, asked: MakeKey) -> Answer {
 }
 
 fn agent_of(id: AgentId) -> &'static dyn crate::agent::Agent {
-    crate::agent::find(match id {
-        AgentId::ClaudeCode => "claude",
-        AgentId::Codex => "codex",
-    })
-    .expect("every API agent is known")
+    crate::agent::of_api(id)
 }
 
 fn agents(config: &Config, home: &crate::paths::Home) -> Vec<AgentWiring> {
-    [AgentId::ClaudeCode, AgentId::Codex]
+    crate::agent::AGENTS
         .into_iter()
-        .map(|id| {
-            let agent = agent_of(id);
+        .map(|agent| {
+            let id = agent.api();
             let file = agent.config_file(home);
             let wiring = crate::agent::wiring(agent, config, home);
             AgentWiring {

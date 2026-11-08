@@ -3,8 +3,8 @@
 //! Each provider implements [`Provider`]: how to sign in and refresh, how
 //! to read usage, how to send a request with an account's credentials, and
 //! how to read the answer. The proxy, background tasks, and CLI only go
-//! through this trait; [`ProviderId::get`] is the one place that lists the
-//! implementations.
+//! through this trait; the [`providers!`] rows are the one place that lists
+//! them.
 //!
 //! Subscriptions (Claude, ChatGPT) sign in with OAuth and have usage
 //! windows. Metered providers (API keys, compatible endpoints) take a key
@@ -39,46 +39,64 @@ pub use credits::ResetCredits;
 /// A boxed future, so [`Provider`] methods can be async behind `dyn`.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// Which provider an account belongs to; stored in account files.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ProviderId {
+/// The providers, each once: its variant, the implementation behind it, and
+/// its name in slopmax's API. The id, the list, the dispatch and the API's
+/// mapping all come from these rows, so a provider added without one of
+/// them does not build, and neither does an API that names one the engine
+/// lacks.
+macro_rules! providers {
+    ($( $(#[$doc:meta])* $variant:ident => $imp:expr, api: $api:ident; )*) => {
+        /// Which provider an account belongs to; stored in account files.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+        #[serde(rename_all = "lowercase")]
+        pub enum ProviderId {
+            $( $(#[$doc])* $variant, )*
+        }
+
+        impl ProviderId {
+            /// Every provider, subscriptions first: the order requests try
+            /// them in.
+            pub const ALL: [Self; [$(stringify!($variant)),*].len()] = [$(Self::$variant),*];
+
+            pub fn get(self) -> &'static dyn Provider {
+                match self {
+                    $( Self::$variant => &$imp, )*
+                }
+            }
+
+            /// As slopmax's API names it.
+            pub fn api(self) -> slopmax_api::Provider {
+                match self {
+                    $( Self::$variant => slopmax_api::Provider::$api, )*
+                }
+            }
+
+            /// The provider the API names.
+            pub fn of_api(provider: slopmax_api::Provider) -> Self {
+                match provider {
+                    $( slopmax_api::Provider::$api => Self::$variant, )*
+                }
+            }
+        }
+    };
+}
+
+providers! {
     /// Claude Pro/Max, used by Claude Code.
-    Claude,
+    Claude => claude::Claude, api: Claude;
     /// ChatGPT Plus/Pro/Team, used by Codex.
-    Codex,
+    Codex => codex::Codex, api: Codex;
     /// Anthropic API keys.
-    Anthropic,
+    Anthropic => keys::ANTHROPIC, api: Anthropic;
     /// OpenAI API keys.
-    OpenAI,
+    OpenAI => keys::OPENAI, api: OpenAi;
     /// xAI API keys.
-    Xai,
+    Xai => keys::XAI, api: Xai;
     /// Any OpenAI- or Anthropic-compatible endpoint.
-    Compat,
+    Compat => compat::Compat, api: Compat;
 }
 
 impl ProviderId {
-    /// Every provider, subscriptions first: the order requests try them in.
-    pub const ALL: [Self; 6] = [
-        Self::Claude,
-        Self::Codex,
-        Self::Anthropic,
-        Self::OpenAI,
-        Self::Xai,
-        Self::Compat,
-    ];
-
-    pub fn get(self) -> &'static dyn Provider {
-        match self {
-            Self::Claude => &claude::Claude,
-            Self::Codex => &codex::Codex,
-            Self::Anthropic => &keys::ANTHROPIC,
-            Self::OpenAI => &keys::OPENAI,
-            Self::Xai => &keys::XAI,
-            Self::Compat => &compat::Compat,
-        }
-    }
-
     pub fn spec(self) -> &'static Spec {
         self.get().spec()
     }
@@ -376,6 +394,17 @@ pub trait Provider: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_provider_is_one_name_everywhere() {
+        for id in ProviderId::ALL {
+            // In account files, on the command line, and in the API.
+            assert_eq!(serde_json::to_value(id).unwrap(), id.as_str());
+            assert_eq!(id.as_str().parse::<ProviderId>().unwrap(), id);
+            assert_eq!(ProviderId::of_api(id.api()), id);
+            assert_eq!(serde_json::to_value(id.api()).unwrap(), id.as_str());
+        }
+    }
 
     #[test]
     fn patterns_match_with_wildcards() {

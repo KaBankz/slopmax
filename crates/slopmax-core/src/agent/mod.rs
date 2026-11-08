@@ -41,6 +41,16 @@ pub fn find(id: &str) -> Option<&'static dyn Agent> {
     AGENTS.iter().copied().find(|a| a.id() == id)
 }
 
+/// The agent the API names. Every one it can name is in [`AGENTS`], which a
+/// test holds to.
+pub fn of_api(id: slopmax_api::AgentId) -> &'static dyn Agent {
+    AGENTS
+        .iter()
+        .copied()
+        .find(|a| a.api() == id)
+        .expect("every agent the API names is in AGENTS")
+}
+
 /// The agent a request comes from, judged from its headers.
 pub fn detect(headers: &HeaderMap) -> Option<&'static dyn Agent> {
     AGENTS.iter().copied().find(|a| a.detect(headers))
@@ -63,6 +73,9 @@ pub fn session(agent: Option<&dyn Agent>, headers: &HeaderMap, body: &[u8]) -> O
 pub trait Agent: Send + Sync {
     /// Its name on the command line: `claude`, `codex`.
     fn id(&self) -> &'static str;
+
+    /// As slopmax's API names it.
+    fn api(&self) -> slopmax_api::AgentId;
 
     /// For people: "Claude Code".
     fn title(&self) -> &'static str;
@@ -240,6 +253,12 @@ mod tests {
             }
         }
         assert_eq!(find("codex").map(|a| a.title()), Some("Codex"));
+        for id in [
+            slopmax_api::AgentId::ClaudeCode,
+            slopmax_api::AgentId::Codex,
+        ] {
+            assert_eq!(of_api(id).api(), id);
+        }
         assert!(find("gemini").is_none());
     }
 

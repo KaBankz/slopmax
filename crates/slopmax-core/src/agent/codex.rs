@@ -85,6 +85,10 @@ impl Agent for Codex {
         "codex"
     }
 
+    fn api(&self) -> slopmax_api::AgentId {
+        slopmax_api::AgentId::Codex
+    }
+
     fn title(&self) -> &'static str {
         "Codex"
     }
