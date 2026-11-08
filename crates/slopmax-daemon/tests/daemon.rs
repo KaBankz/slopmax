@@ -371,6 +371,15 @@ async fn keeps_a_pin_set_through_the_api_across_a_restart() {
         .await
         .unwrap();
     assert_eq!(answer.status(), StatusCode::OK);
+    // Saved at once, not at the save job's next turn.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !std::fs::read_to_string(home.join("state.toml"))
+        .unwrap_or_default()
+        .contains(&b.id)
+    {
+        assert!(Instant::now() < deadline, "the pin was not saved");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     // While it serves, the state is the daemon's: the CLI is turned away.
     let refused = slopmax_core::state::change(&Home::at(&home), |s| s.pins.clear());
     assert!(refused.is_err());

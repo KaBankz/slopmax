@@ -26,7 +26,7 @@ pub fn run(config: &Config, store: &Store, range: &str, by: &str, json: bool) ->
         .collect();
     let report = summary::build(&super::home().usage(), since, by, &config.prices, &names);
     let (rows, total) = (&report.rows, &report.total);
-    let lapsed = waste::read(&super::home().windows(), since);
+    let lapsed = waste::read_home(super::home(), since);
     let left = waste::left(&lapsed, &config.plan_prices, &names);
 
     if json {

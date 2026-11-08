@@ -181,7 +181,7 @@ pub fn load(
     let since = summary::since(range.key(), now).unwrap_or(now);
     let mut history =
         index::Index::of(&ledger::read(&home.usage(), since)).history(range, now, prices, names);
-    let lapsed = crate::waste::read(&home.windows(), since);
+    let lapsed = crate::waste::read_home(home, since);
     history.left = crate::waste::left(&lapsed, prices.plans, names);
     history
 }

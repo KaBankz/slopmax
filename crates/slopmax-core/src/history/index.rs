@@ -708,7 +708,7 @@ impl Kept {
         for entry in crate::ledger::read_upto(usage, from, &lengths) {
             index.add(&entry);
         }
-        let mut lapses = crate::waste::read(windows, from);
+        let mut lapses = crate::waste::read_both(usage, windows, from);
         let mut stage = self.stage();
         if let Stage::Building(waiting, lapsed) = std::mem::take(&mut *stage) {
             for entry in &waiting {

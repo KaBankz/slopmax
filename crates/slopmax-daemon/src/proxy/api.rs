@@ -171,10 +171,12 @@ async fn answer(app: &Arc<App>, route: Route<'_>, query: &str, body: &[u8]) -> A
         Route::Pin(id) => {
             let account = find(app, id)?;
             app.pool.pin(account.provider, &account.id);
+            crate::save_soon(app);
             ok(&app.api_report())
         }
         Route::UnpinAll => {
             app.pool.unpin_all();
+            crate::save_soon(app);
             ok(&app.api_report())
         }
         Route::Own(id) => {
@@ -188,6 +190,7 @@ async fn answer(app: &Arc<App>, route: Route<'_>, query: &str, body: &[u8]) -> A
         Route::RemoveAccount(id) => {
             let account = find(app, id)?;
             app.pool.unpin(&account.id);
+            crate::save_soon(app);
             let store = app.store.clone();
             changed(
                 app,

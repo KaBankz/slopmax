@@ -449,6 +449,15 @@ impl Watch {
     }
 }
 
+/// Saves the state now, off the runtime's thread, for a change that should
+/// outlast a crash at once, such as a pin, rather than wait for the save
+/// job's next turn.
+pub(crate) fn save_soon(app: &Arc<App>) {
+    let app = Arc::clone(app);
+    let worker = Arc::clone(&app);
+    app.spawn(async move { blocking::run(move || save_state(&worker)).await });
+}
+
 fn save_state(app: &App) {
     let now = Timestamp::now();
     record_lapses(app, now);
@@ -482,9 +491,7 @@ fn record_lapses(app: &App, now: Timestamp) {
         })
         .collect();
     app.hours.lapsed(&records);
-    if let Err(e) = crate::waste::append(&app.home.windows(), &records) {
-        log::warn!("recording reset windows: {e:#}");
-    }
+    app.ledger.record_windows(&records);
 }
 
 /// Refreshes tokens that are close to expiring, so a request never waits

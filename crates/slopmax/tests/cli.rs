@@ -1050,9 +1050,12 @@ fn the_background_proxy_starts_reports_and_stops() {
     let account = &json["accounts"][0];
     assert_eq!(account["name"], "work", "{json:#}");
     assert_eq!(account["pinned"], true, "{json:#}");
-    // The pin is the daemon's, saved when it stops, not by the CLI.
-    let state = std::fs::read_to_string(s.slopmax.join("state.toml")).unwrap_or_default();
-    assert!(!state.contains(&id), "{state}");
+    // The daemon saves the pin it was told of at once.
+    eventually("the daemon saves the pin", || {
+        std::fs::read_to_string(s.slopmax.join("state.toml"))
+            .unwrap_or_default()
+            .contains(&format!("anthropic = \"{id}\""))
+    });
 
     let out = s.run(&["dashboard", "--print"]).ok();
     assert!(

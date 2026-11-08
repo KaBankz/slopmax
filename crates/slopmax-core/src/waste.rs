@@ -2,9 +2,11 @@
 //! unused when it reset, and what that part of the plan cost. A week of a
 //! Max plan left half unused is half a week's fee paid for nothing.
 //!
-//! The daemon writes each window that resets to `~/.slopmax/windows.jsonl`
-//! with how much of it was used; this reads them back and values the
-//! unused part of the long windows (weekly, or monthly) at the plan's price.
+//! The daemon writes each window that resets into the usage ledger, beside
+//! the month's requests, with how much of it was used (earlier versions
+//! wrote them to `windows.jsonl`, which is still read); this reads them back
+//! and values the unused part of the long windows (weekly, or monthly) at
+//! the plan's price.
 //! The 5-hour windows are kept too, but valued at nothing: the weekly cap
 //! is what the fee buys.
 
@@ -50,7 +52,51 @@ impl Record {
     }
 }
 
-/// Appends `records` to the file at `path`.
+/// A reset window as the ledger holds it, among the requests.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Line {
+    pub window: Record,
+}
+
+/// The windows that reset from `since` on, each once, oldest first: from
+/// the ledger in `home`, and the `windows.jsonl` an earlier version kept.
+pub fn read_home(home: &crate::paths::Home, since: Timestamp) -> Vec<Record> {
+    read_both(&home.usage(), &home.windows(), since)
+}
+
+/// As [`read_home`], from the ledger's directory and the older file.
+pub fn read_both(usage: &Path, legacy: &Path, since: Timestamp) -> Vec<Record> {
+    let mut records = read(legacy, since);
+    let first = crate::ledger::month_name(since);
+    if let Ok(listing) = fs::read_dir(usage) {
+        let mut files: Vec<_> = listing
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
+            .filter(|p| {
+                p.file_name()
+                    .is_some_and(|n| *n.to_string_lossy() >= *first)
+            })
+            .collect();
+        files.sort();
+        for path in files {
+            let Ok(file) = fs::File::open(&path) else {
+                continue;
+            };
+            records.extend(
+                BufReader::new(file)
+                    .lines()
+                    .map_while(Result::ok)
+                    .filter(|line| line.starts_with("{\"window\""))
+                    .filter_map(|line| serde_json::from_str::<Line>(&line).ok())
+                    .map(|line| line.window)
+                    .filter(|r| r.ended_at >= since),
+            );
+        }
+    }
+    once(records)
+}
+
+/// Appends `records` to the file at `path`, as earlier versions kept them.
 pub fn append(path: &Path, records: &[Record]) -> Result<()> {
     if records.is_empty() {
         return Ok(());
@@ -226,6 +272,31 @@ mod tests {
             model: None,
             used,
         }
+    }
+
+    #[test]
+    fn windows_live_in_the_ledger_beside_the_requests() {
+        let dir = std::env::temp_dir().join(format!("slopmax-windows-{}", crate::ids::token()));
+        let (usage, legacy) = (dir.join("usage"), dir.join("windows.jsonl"));
+        let ledger = crate::ledger::Ledger::at(usage.clone());
+        let ended = Timestamp::now();
+        let week = Record {
+            ended_at: ended,
+            ..record("a", "max 20x", "7d", 40.0, 0)
+        };
+        ledger.record_windows(std::slice::from_ref(&week));
+        // A window an earlier version wrote to its own file, and one written
+        // to both after a restart, count once each.
+        let older = Record {
+            ended_at: ended - crate::time::SignedDuration::from_hours(1),
+            ..record("b", "pro", "7d", 90.0, 0)
+        };
+        append(&legacy, &[older.clone(), week.clone()]).unwrap();
+        let since = ended - crate::time::SignedDuration::from_hours(24);
+        assert_eq!(read_both(&usage, &legacy, since), [older, week]);
+        // Readers of requests skip the window lines.
+        assert!(crate::ledger::read(&usage, since).is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

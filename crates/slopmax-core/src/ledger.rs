@@ -162,6 +162,23 @@ impl Ledger {
             .collect()
     }
 
+    /// Writes each window that reset to its month's file, beside the
+    /// requests, as one `{"window": …}` line: read back by
+    /// [`crate::waste::read`], and skipped by every reader of requests.
+    pub fn record_windows(&self, records: &[crate::waste::Record]) {
+        let mut writer = self.open.lock().unwrap_or_else(|p| p.into_inner());
+        for record in records {
+            let line = crate::waste::Line {
+                window: record.clone(),
+            };
+            if let Err(e) = writer.append_line(&self.dir, record.ended_at, &line) {
+                writer.month = None;
+                writer.dropped += 1;
+                log::warn!("writing a reset window to the ledger: {e}");
+            }
+        }
+    }
+
     /// Entries a failed write lost since the daemon started.
     pub fn dropped(&self) -> u64 {
         self.open.lock().unwrap_or_else(|p| p.into_inner()).dropped
@@ -180,17 +197,27 @@ impl Ledger {
 
 impl Writer {
     fn append(&mut self, dir: &Path, entry: &Entry) -> std::io::Result<()> {
-        let (year, month, _) = entry.at.date(SignedDuration::ZERO);
+        self.append_line(dir, entry.at, entry)
+    }
+
+    /// One line of `value`'s JSON in the file of the month `at` falls in.
+    fn append_line(
+        &mut self,
+        dir: &Path,
+        at: Timestamp,
+        value: &impl Serialize,
+    ) -> std::io::Result<()> {
+        let (year, month, _) = at.date(SignedDuration::ZERO);
         let key = (year, month);
         if self.month.as_ref().is_none_or(|(open, _)| *open != key) {
             self.month = None;
-            self.month = Some((key, open_month(dir, &file_for(dir, entry.at))?));
+            self.month = Some((key, open_month(dir, &file_for(dir, at))?));
         }
         let Some((_, file)) = &mut self.month else {
             unreachable!("opened above");
         };
         self.line.clear();
-        serde_json::to_writer(&mut self.line, entry).map_err(std::io::Error::other)?;
+        serde_json::to_writer(&mut self.line, value).map_err(std::io::Error::other)?;
         self.line.push(b'\n');
         file.write_all(&self.line)
     }
@@ -222,8 +249,13 @@ fn open_month(dir: &Path, path: &Path) -> std::io::Result<File> {
 }
 
 fn file_for(dir: &Path, at: Timestamp) -> PathBuf {
+    dir.join(month_name(at))
+}
+
+/// The name of the month file `at` falls in: `2026-11.jsonl`.
+pub fn month_name(at: Timestamp) -> String {
     let (year, month, _) = at.date(SignedDuration::ZERO);
-    dir.join(format!("{year:04}-{month:02}.jsonl"))
+    format!("{year:04}-{month:02}.jsonl")
 }
 
 /// Every entry at or after `since` within the files and lengths a
