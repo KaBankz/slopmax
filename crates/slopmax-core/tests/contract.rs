@@ -1,6 +1,6 @@
 //! The API's contract: every endpoint's answers, successes and errors, as
 //! the fixtures in `contract/fixtures/` hold them. The TypeScript client
-//! (`ts/packages/domain/test/rust-contract.test.ts`) and the Swift app
+//! (`web/packages/client/test/rust-contract.test.ts`) and the Swift app
 //! decode the same fixtures strictly, so a field added, renamed or dropped
 //! here fails there.
 //!
@@ -10,8 +10,7 @@
 //! Left out, as they would reach real things: importing (reads Claude
 //! Code's and Codex's logins), starting a sign-in (opens a browser and a
 //! callback port), adding a key (checks it with the provider), doctor (the
-//! network), and wiring agents (their settings files). `contract/zero/`
-//! holds those as the TypeScript daemon answers them.
+//! network), and wiring agents (their settings files).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

@@ -20,8 +20,8 @@ run = [
 ]
 
 [tasks.ui]
-description = "Build the web UI the binary embeds, into ts/apps/ui/dist/rust"
-dir = "ts"
+description = "Build the web UI the binary embeds, into web/apps/ui/dist/rust"
+dir = "web"
 run = ["bun install --frozen-lockfile", "bun apps/ui/build.ts --rust"]
 
 [tasks.msrv]

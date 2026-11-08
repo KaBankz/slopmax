@@ -1,0 +1,24 @@
+# The web dashboard's toolchain: Bun builds and tests the React UI the
+# proxy serves at /slopmax/, and @slopmax/client, the typed client of the
+# proxy's API it is built on. The proxy embeds the build (`mise run ui` at
+# the repository root); nothing here runs slopmax itself.
+
+[tools]
+bun = "1.4.4"
+
+[tasks.deps]
+description = "Install every workspace's dependencies exactly as bun.lock pins them (run `bun install` to change them)"
+run = "bun install --frozen-lockfile"
+
+[tasks.fmt]
+description = "Format every file"
+run = "bun fmt"
+
+[tasks.test]
+description = "Run every test"
+run = "bun test"
+
+[tasks.check]
+description = "Format check, types with Effect's diagnostics, lint, and every test"
+depends = ["deps"]
+run = ["bun fmt --check", "bun check -b", "bun run effect-check", "bunx oxlint --deny-warnings", "bun test"]

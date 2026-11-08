@@ -1,0 +1,55 @@
+{
+  "name": "@slopmax/ui",
+  "private": true,
+  "type": "module",
+  "description": "One React app for the web dashboard and the desktop window, over the daemon's HttpApi",
+  "//": {
+    "@effect/atom-react": "React hooks over effect/reactivity atoms: the report, settings and history are atoms fed by the API client and the event stream.",
+    "@base-ui/react": "Accessible headless primitives (menus, dialogs, switches, tooltips, toasts) under the shadcn/ui components in src/components/ui.",
+    "@fontsource/ibm-plex-sans": "IBM Plex Sans 400/500/600, Latin subset, bundled so the app reads the same offline and in both hosts (OFL).",
+    "class-variance-authority": "Typed component variants (cva), so a misspelled variant is a type error.",
+    "clsx": "Joins conditional class names inside cn().",
+    "lucide-react": "The icon set; each icon is a tree-shaken component.",
+    "react": "The UI.",
+    "react-dom": "The UI's renderer.",
+    "tailwind-merge": "Settles conflicting Tailwind classes when a component takes a className, inside cn().",
+    "@happy-dom/global-registrator": "Puts happy-dom's window on globalThis for component tests under bun test.",
+    "@tailwindcss/node": "Tailwind's compiler, driven by build.ts's small Bun plugin (the published Bun plugin vendors an older Tailwind).",
+    "@tailwindcss/oxide": "Tailwind's class scanner, for the same plugin.",
+    "@types/react": "Types.",
+    "@types/react-dom": "Types.",
+    "happy-dom": "A light DOM for component tests.",
+    "tailwindcss": "Styling (STYLING.md).",
+    "size": "Measured 2026-10-31 (bun build.ts): app.js 836 KB minified, 232 KB brotli, 272 KB gzip (effect 254 KB, react-dom 207 KB, @base-ui/react 137 KB, the app and @slopmax/client about 60 KB of it); CSS 29 KB, 6 KB brotli; three IBM Plex Sans fonts 71 KB. About 310 KB crosses the wire with brotli."
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "bun build.ts",
+    "dev": "bun dev.ts"
+  },
+  "dependencies": {
+    "@base-ui/react": "1.9.0",
+    "@effect/atom-react": "4.1.1",
+    "@fontsource/ibm-plex-sans": "5.3.0",
+    "@slopmax/client": "workspace:*",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
+    "effect": "4.1.1",
+    "lucide-react": "1.66.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "tailwind-merge": "3.7.0"
+  },
+  "devDependencies": {
+    "@happy-dom/global-registrator": "21.0.4",
+    "@slopmax/test": "workspace:*",
+    "@tailwindcss/node": "4.3.3",
+    "@tailwindcss/oxide": "4.3.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "happy-dom": "21.0.4",
+    "tailwindcss": "4.3.3"
+  }
+}

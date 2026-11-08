@@ -1,4 +1,4 @@
-//! The web UI at `/slopmax/`: the React app from `ts/apps/ui`, built into
+//! The web UI at `/slopmax/`: the React app from `web/apps/ui`, built into
 //! the binary (see `build.rs`) and speaking the API under `/slopmax/api`.
 //!
 //! The page carries no data and needs no key to load: it reads the owner

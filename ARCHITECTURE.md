@@ -321,7 +321,7 @@ On a 2-vCPU machine shared with the load generator and the mock (which answers a
 
 `slopmax --version` and `status` take about 2 ms, and `serve` answers about 22 ms after it starts.
 
-Running on one thread (since v0.4), on an 8-vCPU machine with the proxy held to two cores (`scripts/compare/ab.sh`): a small request one at a time takes 0.80 ms at the median and 680 µs of CPU, where 4 worker threads took 1.35 ms and 1,600 µs, handing each request between threads (28 futex calls each). The daemon idles on 2 threads, waking 0.5 times a second. One thread tops out at about 1,400 small requests a second 32 at once, against 4,100 on four; `SLOPMAX_WORKERS=auto` gets those back, for a proxy shared by many clients. Each streamed chunk is still its own write, which is most of what the proxy spends in the kernel now.
+Running on one thread (since v0.4), on an 8-vCPU machine with the proxy held to two cores (`scripts/perf/ab.sh`): a small request one at a time takes 0.80 ms at the median and 680 µs of CPU, where 4 worker threads took 1.35 ms and 1,600 µs, handing each request between threads (28 futex calls each). The daemon idles on 2 threads, waking 0.5 times a second. One thread tops out at about 1,400 small requests a second 32 at once, against 4,100 on four; `SLOPMAX_WORKERS=auto` gets those back, for a proxy shared by many clients. Each streamed chunk is still its own write, which is most of what the proxy spends in the kernel now.
 
 The hot path keeps to a few rules:
 

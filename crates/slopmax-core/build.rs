@@ -1,7 +1,7 @@
-//! Embeds the web UI (`ts/apps/ui`, built with `bun build.ts --rust`) as a
+//! Embeds the web UI (`web/apps/ui`, built with `bun build.ts --rust`) as a
 //! table of files, so `slopmax serve` serves it at `/slopmax/`.
 //!
-//! `SLOPMAX_UI_DIST` names the built files (by default `ts/apps/ui/dist/rust`
+//! `SLOPMAX_UI_DIST` names the built files (by default `web/apps/ui/dist/rust`
 //! in this checkout). A file with a smaller `.gz` beside it is embedded as
 //! that, and sent with `content-encoding: gzip`. Without a build, one page
 //! says how to make one, so building slopmax never needs Bun.
@@ -15,7 +15,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SLOPMAX_UI_REQUIRED");
     let dist = match std::env::var_os("SLOPMAX_UI_DIST") {
         Some(dir) => PathBuf::from(dir),
-        None => Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ts/apps/ui/dist/rust"),
+        None => Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/apps/ui/dist/rust"),
     };
     println!("cargo:rerun-if-changed={}", dist.display());
     let mut table = String::from("&[\n");

@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "../../.tsbuild/ui",
+    "rootDir": ".",
+    "lib": ["es2024", "dom", "dom.iterable"],
+    "jsx": "react-jsx"
+  },
+  "include": ["src", "test", "build.ts", "dev.ts"],
+  "references": [{ "path": "../../tools/test" }, { "path": "../../packages/client" }]
+}

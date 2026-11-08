@@ -6,7 +6,7 @@
 //! own types, not the engine's: the engine maps its state into them, so
 //! neither the wire nor the files on disk constrain the other.
 //!
-//! The wire format is the one the TypeScript client (`ts/packages/domain`)
+//! The wire format is the one the TypeScript client (`web/packages/client`, which the web UI is built on)
 //! decodes: camelCase keys, optional keys left out rather than `null`,
 //! tagged unions as `{"_tag": …}`, instants as RFC 3339 text. The fixtures
 //! in `contract/` hold Rust, TypeScript and Swift to it; requests are read

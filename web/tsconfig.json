@@ -1,0 +1,14 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "tools/test"
+    },
+    {
+      "path": "packages/client"
+    },
+    {
+      "path": "apps/ui"
+    }
+  ]
+}

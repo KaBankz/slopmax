@@ -1,0 +1,19 @@
+{
+  "name": "@slopmax/client",
+  "private": true,
+  "type": "module",
+  "description": "A typed client of slopmax's API for TypeScript front ends, as SlopmaxKit is for Swift: the API's types held to contract/fixtures, its HTTP client and event stream, and words for people. The daemon decides everything; this only carries it.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./api": "./src/api.ts",
+    "./format": "./src/format.ts",
+    "./desktop": "./src/desktop.ts",
+    "./version": "./src/version.ts"
+  },
+  "dependencies": {
+    "effect": "4.1.1"
+  },
+  "devDependencies": {
+    "@slopmax/test": "workspace:*"
+  }
+}

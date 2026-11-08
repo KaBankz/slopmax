@@ -1,0 +1,516 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "import"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "warn"
+  },
+  "rules": {
+    "typescript/no-explicit-any": "error",
+    "typescript/no-unsafe-function-type": "error",
+    "no-eval": "error",
+    "no-new-func": "error",
+    "no-implied-eval": "error",
+    "no-extend-native": "error",
+    "import/no-dynamic-require": [
+      "error",
+      {
+        "esmodule": true
+      }
+    ],
+    "import/no-cycle": "error",
+    "no-underscore-dangle": [
+      "warn",
+      {
+        "allow": ["_tag", "_op"]
+      }
+    ],
+    "no-shadow": [
+      "warn",
+      {
+        "allow": ["it"]
+      }
+    ],
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          {
+            "name": "bun:ffi",
+            "message": "bun:ffi stops `bun compile --trim` from dropping unused APIs (AOT.md); locks use lock files instead."
+          }
+        ],
+        "patterns": [
+          {
+            "group": ["@effect/platform-bun", "@effect/platform-bun/*"],
+            "message": "Nothing here runs on Bun's platform layer: the client loads in the browser."
+          },
+          {
+            "group": ["@effect/platform-node", "@effect/platform-node/*"],
+            "message": "Nothing here runs on Node."
+          }
+        ]
+      }
+    ],
+    "typescript/consistent-type-assertions": [
+      "error",
+      {
+        "assertionStyle": "never"
+      }
+    ],
+    "typescript/no-non-null-assertion": "error",
+    "typescript/ban-ts-comment": "error"
+  },
+  "settings": {
+    "better-tailwindcss": {
+      "cwd": "apps/ui",
+      "entryPoint": "apps/ui/src/index.css"
+    }
+  },
+  "ignorePatterns": ["**/node_modules/**", "**/dist/**", "**/out/**", "**/pkg/**", ".tsbuild/**"],
+  "overrides": [
+    {
+      "files": ["packages/**"],
+      "excludeFiles": ["packages/client/src/**"],
+      "rules": {
+        "no-restricted-globals": [
+          "error",
+          {
+            "globals": [
+              {
+                "name": "setTimeout",
+                "message": "Use Effect.sleep, or a Schedule forked into a Scope."
+              },
+              {
+                "name": "setInterval",
+                "message": "Use Effect.sleep, or a Schedule forked into a Scope."
+              },
+              {
+                "name": "setImmediate",
+                "message": "Use Effect.sleep, or a Schedule forked into a Scope."
+              }
+            ],
+            "checkGlobalObject": true
+          }
+        ]
+      }
+    },
+    {
+      "files": ["packages/client/src/**"],
+      "rules": {
+        "no-restricted-globals": [
+          "error",
+          {
+            "globals": [
+              {
+                "name": "setTimeout",
+                "message": "Use Effect.sleep, or a Schedule forked into a Scope."
+              },
+              {
+                "name": "setInterval",
+                "message": "Use Effect.sleep, or a Schedule forked into a Scope."
+              },
+              {
+                "name": "setImmediate",
+                "message": "Use Effect.sleep, or a Schedule forked into a Scope."
+              },
+              {
+                "name": "Bun",
+                "message": "The client is the API's types and its HTTP client, and loads in the browser: no files and no platform layers."
+              },
+              {
+                "name": "process",
+                "message": "The client is the API's types and its HTTP client, and loads in the browser: no files and no platform layers."
+              },
+              {
+                "name": "Buffer",
+                "message": "The client is the API's types and its HTTP client, and loads in the browser: no files and no platform layers."
+              },
+              {
+                "name": "require",
+                "message": "The client is the API's types and its HTTP client, and loads in the browser: no files and no platform layers."
+              }
+            ],
+            "checkGlobalObject": true
+          }
+        ]
+      }
+    },
+    {
+      "files": ["packages/*/src/**"],
+      "rules": {
+        "no-restricted-properties": [
+          "error",
+          {
+            "object": "Bun",
+            "property": "spawn",
+            "message": "Use effect/process (CONVENTIONS.md)."
+          },
+          {
+            "object": "Bun",
+            "property": "spawnSync",
+            "message": "Use effect/process (CONVENTIONS.md)."
+          },
+          {
+            "object": "Bun",
+            "property": "$",
+            "message": "Use effect/process (CONVENTIONS.md)."
+          },
+          {
+            "object": "Bun",
+            "property": "write",
+            "message": "Use FileSystem from effect."
+          },
+          {
+            "object": "Bun",
+            "property": "file",
+            "message": "Use FileSystem from effect; nothing here reads files."
+          },
+          {
+            "object": "process",
+            "property": "env",
+            "message": "Read environment variables through Config, so tests can provide them (CONVENTIONS.md)."
+          },
+          {
+            "object": "Bun",
+            "property": "env",
+            "message": "Read environment variables through Config, so tests can provide them (CONVENTIONS.md)."
+          }
+        ]
+      }
+    },
+    {
+      "files": ["packages/client/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "bun:ffi",
+                "message": "bun:ffi stops `bun compile --trim` from dropping unused APIs (AOT.md); locks use lock files instead."
+              },
+              {
+                "name": "bun",
+                "message": "The client is the API's types and its HTTP client, and loads in the browser: no files and no platform layers."
+              },
+              {
+                "name": "effect",
+                "message": "The client is the API's types and its HTTP client, and loads in the browser: no files and no platform layers.",
+                "importNames": ["FileSystem"]
+              },
+              {
+                "name": "effect/index",
+                "message": "The client is the API's types and its HTTP client, and loads in the browser: no files and no platform layers.",
+                "importNames": ["FileSystem"]
+              },
+              {
+                "name": "effect/FileSystem",
+                "message": "The client is the API's types and its HTTP client, and loads in the browser: no files and no platform layers."
+              },
+              {
+                "name": "effect/http",
+                "message": "The client is the API's types and its HTTP client, and loads in the browser: no files and no platform layers.",
+                "importNames": [
+                  "HttpClient",
+                  "HttpClientRequest",
+                  "HttpClientResponse",
+                  "HttpClientError",
+                  "FetchHttpClient"
+                ]
+              },
+              {
+                "name": "effect/http/index",
+                "message": "The client is the API's types and its HTTP client, and loads in the browser: no files and no platform layers.",
+                "importNames": [
+                  "HttpClient",
+                  "HttpClientRequest",
+                  "HttpClientResponse",
+                  "HttpClientError",
+                  "FetchHttpClient"
+                ]
+              },
+              {
+                "name": "effect/http/HttpClient",
+                "message": "The client is the API's types and its HTTP client, and loads in the browser: no files and no platform layers."
+              },
+              {
+                "name": "effect/http/HttpClientRequest",
+                "message": "The client is the API's types and its HTTP client, and loads in the browser: no files and no platform layers."
+              },
+              {
+                "name": "effect/http/HttpClientResponse",
+                "message": "The client is the API's types and its HTTP client, and loads in the browser: no files and no platform layers."
+              },
+              {
+                "name": "effect/http/HttpClientError",
+                "message": "The client is the API's types and its HTTP client, and loads in the browser: no files and no platform layers."
+              },
+              {
+                "name": "effect/http/FetchHttpClient",
+                "message": "The client is the API's types and its HTTP client, and loads in the browser: no files and no platform layers."
+              },
+              {
+                "name": "ws",
+                "message": "Only the engine (packages/core) opens sockets."
+              },
+              {
+                "name": "@decimalturn/toml-patch",
+                "message": "Only the engine (packages/core) edits agents' TOML."
+              },
+              {
+                "name": "slopmax",
+                "message": "Packages never import apps."
+              },
+              {
+                "name": "@slopmax/ui",
+                "message": "Packages never import apps."
+              },
+              {
+                "name": "slopmax-desktop",
+                "message": "Packages never import apps."
+              },
+              {
+                "name": "@slopmax/bench",
+                "message": "Packages never import apps."
+              },
+              {
+                "name": "@slopmax/wire",
+                "message": "@slopmax/client imports effect only."
+              },
+              {
+                "name": "@slopmax/core",
+                "message": "@slopmax/client imports effect only."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["bun:*", "!bun:test"],
+                "message": "The client is the API's types and its HTTP client, and loads in the browser: no files and no platform layers."
+              },
+              {
+                "group": ["@effect/platform-*", "@effect/platform-*/*"],
+                "message": "The client is the API's types and its HTTP client, and loads in the browser: no files and no platform layers."
+              },
+              {
+                "group": ["slopmax/*", "@slopmax/ui/*", "slopmax-desktop/*", "@slopmax/bench/*"],
+                "message": "Packages never import apps."
+              },
+              {
+                "regex": "(^|/)(apps|tools/bench)/",
+                "message": "Packages never import apps."
+              },
+              {
+                "group": ["@slopmax/wire/*", "@slopmax/core/*"],
+                "message": "@slopmax/client imports effect only."
+              },
+              {
+                "group": ["*", "!effect", "!effect/**", "!./**", "!../**", "!bun:test", "!@slopmax/test"],
+                "message": "@slopmax/client imports effect only; its tests add bun:test and @slopmax/test."
+              }
+            ]
+          }
+        ],
+        "import/no-nodejs-modules": "error"
+      }
+    },
+    {
+      "files": ["apps/ui/**"],
+      "excludeFiles": ["apps/ui/build.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "bun:ffi",
+                "message": "bun:ffi stops `bun compile --trim` from dropping unused APIs (AOT.md); locks use lock files instead."
+              },
+              {
+                "name": "bun",
+                "message": "The UI runs in a browser and in Electron's renderer, never on Bun."
+              },
+              {
+                "name": "@slopmax/core",
+                "message": "The engine never loads in the UI or on Electron's Node; talk to the daemon's HttpApi."
+              },
+              {
+                "name": "@slopmax/wire",
+                "message": "The engine never loads in the UI or on Electron's Node; talk to the daemon's HttpApi."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["bun:*", "!bun:test"],
+                "message": "The UI runs in a browser and in Electron's renderer, never on Bun."
+              },
+              {
+                "group": ["@effect/platform-bun", "@effect/platform-bun/*"],
+                "message": "Nothing here runs on Bun's platform layer: the client loads in the browser."
+              },
+              {
+                "group": ["@effect/platform-node", "@effect/platform-node/*"],
+                "message": "Nothing here runs on Node."
+              },
+              {
+                "group": ["@slopmax/core/*", "@slopmax/wire/*"],
+                "message": "The engine never loads in the UI or on Electron's Node; talk to the daemon's HttpApi."
+              }
+            ]
+          }
+        ],
+        "import/no-nodejs-modules": "error"
+      }
+    },
+    {
+      "files": ["apps/ui/build.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "bun:ffi",
+                "message": "bun:ffi stops `bun compile --trim` from dropping unused APIs (AOT.md); locks use lock files instead."
+              },
+              {
+                "name": "@slopmax/core",
+                "message": "The engine never loads in the UI or on Electron's Node; talk to the daemon's HttpApi."
+              },
+              {
+                "name": "@slopmax/wire",
+                "message": "The engine never loads in the UI or on Electron's Node; talk to the daemon's HttpApi."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["@effect/platform-bun", "@effect/platform-bun/*"],
+                "message": "Nothing here runs on Bun's platform layer: the client loads in the browser."
+              },
+              {
+                "group": ["@effect/platform-node", "@effect/platform-node/*"],
+                "message": "Nothing here runs on Node."
+              },
+              {
+                "group": ["@slopmax/core/*", "@slopmax/wire/*"],
+                "message": "The engine never loads in the UI or on Electron's Node; talk to the daemon's HttpApi."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["apps/ui/src/**"],
+      "rules": {
+        "no-restricted-globals": [
+          "error",
+          {
+            "globals": [
+              {
+                "name": "Bun",
+                "message": "The UI runs in a browser and in Electron's renderer, never on Bun."
+              }
+            ],
+            "checkGlobalObject": true
+          }
+        ]
+      }
+    },
+    {
+      "files": ["apps/ui/src/**/*.tsx"],
+      "jsPlugins": ["@shadcn/lint", "eslint-plugin-better-tailwindcss"],
+      "rules": {
+        "shadcn/no-raw-colors": [
+          "error",
+          {
+            "allow": [],
+            "deny": ["*-white", "*-black"]
+          }
+        ],
+        "shadcn/no-arbitrary-values": [
+          "error",
+          {
+            "allow": ["layout"]
+          }
+        ],
+        "shadcn/no-unknown-classes": "error",
+        "shadcn/no-inline-styles": "error",
+        "shadcn/no-restyle": [
+          "error",
+          {
+            "allow": ["layout"]
+          }
+        ],
+        "shadcn/require-static-classes": "error",
+        "better-tailwindcss/no-conflicting-classes": "error",
+        "better-tailwindcss/no-duplicate-classes": "error"
+      }
+    },
+    {
+      "files": ["apps/ui/src/components/ui/**"],
+      "rules": {
+        "shadcn/no-restyle": "off",
+        "shadcn/no-arbitrary-values": "off",
+        "shadcn/require-static-classes": "off"
+      }
+    },
+    {
+      "files": ["tools/test/src/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "bun:ffi",
+                "message": "bun:ffi stops `bun compile --trim` from dropping unused APIs (AOT.md); locks use lock files instead."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["@effect/platform-bun", "@effect/platform-bun/*"],
+                "message": "Nothing here runs on Bun's platform layer: the client loads in the browser."
+              },
+              {
+                "group": ["@effect/platform-node", "@effect/platform-node/*"],
+                "message": "Nothing here runs on Node."
+              },
+              {
+                "group": ["@slopmax/*", "slopmax", "slopmax-desktop"],
+                "message": "@slopmax/test imports effect only, so every package can use it."
+              }
+            ]
+          }
+        ],
+        "import/no-nodejs-modules": "error"
+      }
+    },
+    {
+      "files": ["tools/test/test/**", "tools/test/map-check.ts"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "bun:ffi",
+                "message": "bun:ffi stops `bun compile --trim` from dropping unused APIs (AOT.md); locks use lock files instead."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["@effect/platform-node", "@effect/platform-node/*"],
+                "message": "Nothing here runs on Node."
+              },
+              {
+                "group": ["@slopmax/*", "slopmax", "slopmax-desktop"],
+                "message": "@slopmax/test imports effect only, so every package can use it."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
