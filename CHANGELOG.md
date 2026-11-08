@@ -25,8 +25,17 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 - Two notifications, on by default: `reset-expiring`, a limit reset lapsing within the day that slopmax won't redeem by itself, and `quota-unused`, a week resetting within the day with a quarter or more unused. `slopmax status`, the dashboard, and the app list them, and the app posts them.
 - Each pool says where a new session would go and why (`slopmax status`, `/slopmax/status`), and shows its model-scoped windows, such as a weekly Fable cap.
 
+### Removed
+
+- The first API under `/slopmax/` (`/slopmax/status`, `/slopmax/accounts/<id>/<action>`, `/slopmax/events` and the rest): every client of slopmax's own uses `/slopmax/api`, and the old addresses answer 404, naming it. A script that called them moves to the matching `/slopmax/api` endpoint, listed in the README.
+- The TypeScript slopmax (its engine, CLI and Electron app), which was measured against the Rust one and lost in every configuration. Rust is the one core and CLI. The web dashboard stays, moved to `web/`, on `@slopmax/client`, the TypeScript client of the API.
+
 ### Changed
 
+- The proxy keeps the windows that reset in its usage ledger, beside the month's requests, instead of in `windows.jsonl`, which is still read for what earlier versions wrote.
+- A pin set, dropped, or taken away by removing an account is saved the moment it changes. The proxy's background work runs every 30 seconds rather than 15, waking six times a minute while idle; a notice comes at most 30 seconds after its cause.
+- A client key with a name already taken is refused with 409 Conflict, and a setting the API cannot take with 400, rather than 500.
+- The proxy, its API and its background work are their own crate, `slopmax-daemon`, on the engine, `slopmax-core`; neither reads the environment behind its caller, so every path comes from the home the CLI or the daemon starts with.
 - While the proxy runs, the CLI changes what it holds through its API instead of in the files: `use`, `label`, `priority`, `enable`, `disable`, `remove`, `own`, `redeem`, `import`, `login`, `key` and `config`. A sign-in started from the CLI follows the proxy's progress events, takes an address pasted from another machine, and cancels on Ctrl-C. With no proxy running, the CLI changes the files itself, as before.
 - `slopmax status --watch` follows the proxy's event stream, redrawing the moment the report changes and once a minute for its countdowns, instead of asking every 5 seconds. `slopmax status --json` prints the API's report (camelCase, as `/slopmax/api/status` answers), from the proxy or read from disk.
 - The pins `slopmax use` sets, the nudges already told, and what was last seen of Codex live in `state.toml`, which the proxy alone writes while it runs; `pins.toml` and `nudged.toml` are read once into it and left in place. The proxy no longer reads a month of the ledger at every start to find the model Codex used last.

@@ -26,33 +26,41 @@ The workspace is a flat `crates/` directory, each folder named after its crate:
 ```
 crates/
   slopmax          the CLI: the `slopmax` binary, its parser, questions, and printing
-  slopmax-app      the desktop app apart from any UI toolkit: its state, actions, and what it draws
+  slopmax-daemon   the daemon: the proxy, /slopmax/api and its event stream, the web UI,
+                   and the background jobs, on the engine
+  slopmax-core     the engine: accounts, sign-in, providers, the pool, the ledger, the report
+  slopmax-api      the API's types, as every client sees them
+  slopmax-client   a typed client of /slopmax/api and its event stream
+  slopmax-app      the desktop app apart from any UI toolkit: a client of the API
   slopmax-desktop-gpui
                    the desktop app's window and menu bar icon, drawn with GPUI over slopmax-app
-  slopmax-core     the engine: accounts, sign-in, the pool, the proxy, and all the CLI and app share
   slopmax-wire     the API formats and translation between them; no I/O
-  slopmax-net      HTTP/1.1 client and server on hyper and rustls, and WebSocket frames
-  slopmax-common   time, ids, the logger, and short formats for people
+  slopmax-net      HTTP/1.1 client and server on hyper and rustls, WebSocket frames, and
+                   which headers cross the proxy
+  slopmax-common   time, ids, the logger, short formats for people, and slopmax's home
+apple/             the macOS app (SwiftUI) and SlopmaxKit, its client of the API
+web/               the web UI the daemon serves (React), and @slopmax/client, its client
+                   of the API
+contract/          the API's answers as the daemon gives them, which every client decodes
 ```
 
-Dependencies point one way: `slopmax-common` under `slopmax-net` and `slopmax-wire`, those under `slopmax-core`, and the core under the front ends. The core re-exports the crates beneath it (`slopmax_core::net`, `::wire`, `::time`, `::log`), so a front end depends on the core alone. The modules inside the core depend on each other freely (accounts and providers, the proxy and the daemon), which is why they share a crate.
+Dependencies point one way: `slopmax-common` under `slopmax-net`, `slopmax-wire` and `slopmax-api`; those under `slopmax-core` and `slopmax-client`; the core under the daemon; and the daemon, the core and the client under the CLI. The core re-exports the crates beneath it (`slopmax_core::net`, `::wire`, `::time`, `::log`). The apps link neither the core nor the daemon: `cargo tree -p slopmax-app -e normal` has no `slopmax-core`, so they cannot write what the daemon holds.
 
-### Front ends share the engine
+### One writer, many clients
 
-The CLI and the desktop app offer the same features, so neither implements one. A front end parses what the person asked for, calls the core, and shows the result:
+While a daemon serves a home it is the only process that writes what it holds: accounts, `state.toml` (pins included) and config.toml's live settings and keys. Every front end changes them through `/slopmax/api`:
 
-- Signing in reports progress as `auth::LoginEvent`s and takes pasted redirect addresses through an `auth::Prompt`; the front end asks for an API key and passes it in. `auth::connect` signs in and saves the account.
-- `background` talks to a running proxy and starts it, stops it, or installs it as a login service, running whichever binary the front end names.
-- `report` builds the status from a running proxy or from disk, `doctor` returns its findings, `summary` totals the ledger.
-- `account::pin`, `unpin_all`, and `forget`, `import::save`, and `agent::wiring` are the account and setup changes, which the dashboard's API calls too.
+- The CLI checks for a daemon at the address config.toml gives (`commands::daemon`) and, when one answers, sends each change through `slopmax-client`: `use`, `label`, `priority`, `enable`, `disable`, `remove`, `own`, `redeem`, `import`, `login` (a subscription's sign-in follows `Event::Login` on the event stream), `key` and `config`. With none running it calls the engine itself: `account::pin`, `state::change` under the serve lock, `auth::connect`, `import::save`.
+- `status` reads the API's `Report`, from the daemon or mapped from disk (`api::report`); `--watch` redraws as the event stream pushes it.
+- The desktop apps (SwiftUI on macOS, `slopmax-app` under GPUI elsewhere) and the web UI are API clients and nothing more. What the API cannot answer while no daemon runs (where it listens, starting it, installing the login service, the report from disk) they ask of the CLI they ship with: `daemon-info --json`, `start`, `service install`, `status --json`.
 
-Nothing in the core reads the terminal or prints. Durations and counts come from `human`, so every front end shows them alike.
+The engine's errors at these boundaries are typed (`error.rs`: `StoreError`, `ConfigError`, `LoginError`, `ProviderError`, `ListenError`), and `api.rs` turns each into the API's error once. Nothing in the engine reads the terminal, prints, or reads the environment: paths come from a `Home`, made once by the CLI or the daemon.
 
 ### The desktop app
 
-`slopmax-app` is the app without a toolkit. `App::start` loads the config, starts the bundled CLI's proxy if none runs, and keeps a `Snapshot` current on its own tokio runtime: the proxy's state, the report (live, or from disk while the proxy is down), how the agents are wired, the login service, a sign-in in progress, and how the last action went. Every action calls the core, then `POST /slopmax/sync` so the proxy applies it at once. `view` turns a snapshot into what a window draws, worded by the core, and the menu bar's line.
+`slopmax-app` is the app without a toolkit. `App::start` finds the daemon through the CLI, starts it if none runs, and follows its event stream on its own tokio runtime, keeping a `Snapshot` current: the proxy's state, the report, how the agents are wired, the login service, a sign-in in progress, and how the last action went. Every action is one API call. `view` turns a snapshot into what a window draws, and the menu bar's line; it reads the API's report, whose words come from the daemon.
 
-A UI subscribes to the snapshot through a tokio `watch` channel, which any executor can await, draws it, and calls `App`'s methods; it holds no logic of its own. The GPUI crate draws the window this way. `mise run demo` runs a throwaway proxy with fake accounts to work against.
+A UI subscribes to the snapshot through a tokio `watch` channel, which any executor can await, draws it, and calls `App`'s methods; it holds no logic of its own. The GPUI crate draws the window this way.
 
 ### Modules
 
@@ -261,14 +269,14 @@ State a format cannot carry back is kept by slopmax: the encrypted reasoning an 
 
 `daemon::run` takes the home's serve lock (`.serve.lock`, so a second daemon on the same home refuses to start), binds the listener, and starts the background tasks:
 
-- reloading accounts and pins when told (`POST /slopmax/sync`, which the CLI and the app send after each change), and otherwise when a stat every 30 seconds shows a file changed, with config.toml when it changed. Requests use the accounts the pool holds in memory and read no files; a refresh puts its new tokens back into the pool. `App::config` is swapped whole; only the listener is bound for good;
+- reloading the accounts when told (`POST /slopmax/api/sync`), and otherwise when a stat every 30 seconds shows a file changed, with config.toml when it changed. Requests use the accounts the pool holds in memory and read no files; a refresh puts its new tokens back into the pool. `App::config` is swapped whole; only the listener is bound for good;
 - saving pool state (windows, blocks, sessions) every 10 seconds, so a restart keeps sessions on their accounts;
 - refreshing tokens ahead of expiry (every 5 minutes), polling usage when due, listing limit resets, and warming idle windows (each checked every minute), and redeeming resets about to expire (every 30 minutes);
-- watching account conditions every 15 seconds: notifications and nudges, and each window that reset, written to `windows.jsonl` for quota left on the table.
+- watching account conditions every 30 seconds: notifications and nudges, told on the event stream and to the configured hooks, and remembered in `state.toml`; and each window that reset, written to the ledger for quota left on the table.
 
 Each task reads the config as it runs, so a changed setting turns it on or off without a restart. A task that panics is logged and runs again on schedule.
 
-Everything runs on one thread unless `SLOPMAX_WORKERS` asks for more (`daemon::runtime`), so nothing on it may block: file locks, the ledger reads behind `/slopmax/usage` and `/history`, and saves run through `blocking::run`. The one disk write left on the request path is the ledger's: one `write` per request to the month file it keeps open.
+Everything runs on one thread unless `SLOPMAX_WORKERS` asks for more (`daemon::runtime`), so nothing on it may block: file locks, the ledger reads behind `/slopmax/api/usage` and the history index's first build, and saves run through `blocking::run`. The one disk write left on the request path is the ledger's: one `write` per request to the month file it keeps open.
 
 Stopping (a signal or `POST /slopmax/shutdown`) cancels `App::stop`, and then runs in order: the listener drains open connections (event streams end at once), the background loops end and the work they started finishes (`App::tasks`), a token refresh in flight saves what it got (`auth::settle`), state is saved by the only writer left, and the ledger is synced to disk.
 
@@ -282,8 +290,10 @@ Stopping (a signal or `POST /slopmax/shutdown`) cancels `App::stop`, and then ru
   state.toml                windows, blocks, sessions, limit resets, the pins `slopmax use`
                             sets, the nudges already sent, what was last seen of Claude
                             Code and Codex (state.rs)
-  usage/<year>-<month>.jsonl
-  windows.jsonl             each window as it reset and how much of it was used (waste.rs)
+  usage/<year>-<month>.jsonl  each request answered, and each window that reset with how
+                            much of it was used (waste.rs)
+  windows.jsonl             each window that reset, as versions before 0.4 kept them (read,
+                            never written: the ledger holds them now)
   setup-backup.json         what `setup` replaced
   app.toml                  the desktop app's own choices (whether it posts notifications)
   slopmax.log
@@ -306,7 +316,7 @@ CLIProxyAPI's) are theirs.
 
 ## Dependencies
 
-The binary is about 6.5 MB, from about 65 crates besides slopmax's own. The async stack is tokio, hyper, and rustls (with ring). serde_json, toml_edit, memchr, base64, and anyhow round it out. Time, logging, the CLI parser, form encoding, and the HTTP client conveniences are small in-house modules, because the crates for them each pull in far more than slopmax uses. A crate earns its place by doing its job measurably better than a small module would: faster, leaner, or more correct. The CI holds the tree to 70 crates and the binary to 6.6 MB; raising either needs that reason in the commit. tokio-util is the newest: its `CancellationToken` and `TaskTracker` let the daemon stop in order, for 30 KB.
+The binary is about 8 MB, from 69 crates besides slopmax's own. The async stack is tokio, hyper, and rustls (with ring). serde_json, toml_edit, memchr, base64, thiserror and anyhow round it out. Time, logging, the CLI parser, form encoding, and the HTTP client conveniences are small in-house modules, because the crates for them each pull in far more than slopmax uses. A crate earns its place by doing its job measurably better than a small module would: faster, leaner, or more correct. The CI holds the tree to 70 crates and the binary to 8 MiB; raising either needs that reason in the commit. tokio-util is the newest: its `CancellationToken` and `TaskTracker` let the daemon stop in order, for 30 KB.
 
 ## Performance
 
@@ -321,7 +331,7 @@ On a 2-vCPU machine shared with the load generator and the mock (which answers a
 
 `slopmax --version` and `status` take about 2 ms, and `serve` answers about 22 ms after it starts.
 
-Running on one thread (since v0.4), on an 8-vCPU machine with the proxy held to two cores (`scripts/perf/ab.sh`): a small request one at a time takes 0.80 ms at the median and 680 µs of CPU, where 4 worker threads took 1.35 ms and 1,600 µs, handing each request between threads (28 futex calls each). The daemon idles on 2 threads, waking 0.5 times a second. One thread tops out at about 1,400 small requests a second 32 at once, against 4,100 on four; `SLOPMAX_WORKERS=auto` gets those back, for a proxy shared by many clients. Each streamed chunk is still its own write, which is most of what the proxy spends in the kernel now.
+Running on one thread (since v0.4), on an 8-vCPU machine with the proxy held to two cores (`scripts/perf/ab.sh`): a small request one at a time takes 0.80 ms at the median and 680 µs of CPU, where 4 worker threads took 1.35 ms and 1,600 µs, handing each request between threads (28 futex calls each). The daemon idles on one thread, waking 6 times a minute, in 4.6 MB (the static musl build). One thread tops out at about 1,400 small requests a second 32 at once, against 4,100 on four; `SLOPMAX_WORKERS=auto` gets those back, for a proxy shared by many clients. Each streamed chunk is still its own write, which is most of what the proxy spends in the kernel now.
 
 The hot path keeps to a few rules:
 
@@ -335,6 +345,6 @@ The allocator is the platform's own. mimalloc and jemalloc were 4 to 30% faster 
 ## Testing
 
 - Unit tests sit next to the code: parsers and codecs against recorded shapes, the planner over tables of accounts, the pool's placement and failover.
-- `slopmax-core/tests/proxy.rs` runs the real proxy against a mock provider on a local port. `net::Origins` rewrites the providers' base URLs to it, and the mock answers by bearer token, so each account can be made to succeed, hit its limit, or reject its token.
+- `slopmax-daemon/tests/proxy.rs` runs the real proxy against a mock provider on a local port. `net::Origins` rewrites the providers' base URLs to it, and the mock answers by bearer token, so each account can be made to succeed, hit its limit, or reject its token.
 - `mise run check` runs rustfmt, clippy with warnings denied, and every test, as CI does: every CI job is a mise task, with the toolchain mise.toml pins.
 - Unsafe code is denied across the workspace and allowed in exactly two places: reading the local time offset (`slopmax-common`) and turning off terminal echo while a secret is typed (the CLI).

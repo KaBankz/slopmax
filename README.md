@@ -160,7 +160,7 @@ Every response carries rate-limit headers (`anthropic-ratelimit-unified-*`, `x-c
 
 ## Accounts
 
-Each account is a private JSON file in `~/.slopmax/accounts/`, named after a hash of the account's identity, so signing in again or re-importing updates the account instead of adding a copy.
+Each account is a private TOML file in `~/.slopmax/accounts/`, named after a hash of the account's identity, so signing in again or re-importing updates the account instead of adding a copy.
 
 - **Subscriptions.** `slopmax login claude` and `slopmax login codex` run the same OAuth flow as the official clients: PKCE with a localhost callback, a pasted redirect URL on a machine without a browser, or a device code for Codex. The proxy refreshes tokens ahead of expiry (an hour early for Claude, a day for Codex) under a file lock, so no two processes spend the same refresh token. When a provider rejects a refresh, the account is flagged for re-login and leaves the rotation.
 - **API keys.** `slopmax login anthropic`, `openai`, or `xai` asks for the key at a hidden prompt, or reads it from stdin (`slopmax login xai < key.txt`), so it never lands in your shell history. It is checked against the provider's model list before it is saved.
@@ -183,7 +183,7 @@ total                 508    398.3k    229.7k      114.4M         2.9M    $39.98
 
 ### Left on the table
 
-A subscription's weekly quota that goes unused is lost at the reset, and with it that part of the fee. slopmax notes each window that resets with how much of it was used (in `~/.slopmax/windows.jsonl`), and values the unused part of each week at the plan's price: Claude Pro $20, Max 5x $100, Max 20x $200, ChatGPT Plus $20, Pro $200, and Team $30 a month, or what you pay, under `[plan_prices]`:
+A subscription's weekly quota that goes unused is lost at the reset, and with it that part of the fee. slopmax notes each window that resets with how much of it was used (in the usage ledger, `~/.slopmax/usage/`), and values the unused part of each week at the plan's price: Claude Pro $20, Max 5x $100, Max 20x $200, ChatGPT Plus $20, Pro $200, and Team $30 a month, or what you pay, under `[plan_prices]`:
 
 ```
 Left on the table: $39.74, 20% unused on average, across 16 weekly windows
@@ -195,27 +195,28 @@ Left on the table: $39.74, 20% unused on average, across 16 weekly windows
 
 ## Dashboard
 
-`slopmax dashboard` opens a page that shows every account's windows and reset countdowns, usage and cost by day, model, or account, and a live feed of answered requests. It can enable, disable, pin, reprioritize, and redeem. The page is one file built into the binary and loads nothing from elsewhere. It takes the slopmax key from its address's `#fragment`, which browsers never send to a server. On a remote machine, forward the port first (`ssh -L 7567:127.0.0.1:7567 host`).
+`slopmax dashboard` opens a page that shows every account's windows and reset countdowns, usage and cost by day, model, or account, and a live feed of answered requests. It can enable, disable, pin, reprioritize, and redeem. The page is built into the binary and loads nothing from elsewhere. It takes the slopmax key from its address's `#fragment`, which browsers never send to a server. On a remote machine, forward the port first (`ssh -L 7567:127.0.0.1:7567 host`).
 
-The same data is available as JSON under `/slopmax/`, with the slopmax key:
+The same data is available as JSON under `/slopmax/api`, with the slopmax key as a bearer token. It is slopmax's one API: the CLI, the dashboard and the apps all use it, and `contract/fixtures/` holds an answer from each endpoint.
 
 | Endpoint                         | Gives                                                                    |
 | -------------------------------- | ------------------------------------------------------------------------ |
-| `GET status`, `POST refresh`     | every account's windows, blocks, sessions, and limit resets, and each provider's pool (the usage the agents see) |
+| `GET status`, `POST refresh`     | every account's condition, windows, limit resets and notes, and each provider's pool (the usage the agents see) |
+| `GET events`                     | server-sent events: the report whenever it changes, each request as it is answered, notices, and sign-in progress |
 | `GET history?range=today\|7d\|30d` | tokens, cost, failovers, caching, and speed over time, by account, model, and agent |
 | `GET usage?range=…&by=…`         | totals by day, model, or account                                         |
-| `GET events`                     | each request as it is answered, as server-sent events                    |
-| `GET`, `POST settings`           | the strategy, session affinity, and redeem settings; `POST` takes form fields such as `strategy=round-robin&session_affinity=false`, writes config.toml, and applies them at once |
-| `POST accounts/<id>/<action>`    | `enable`, `disable`, `use`, `priority?value=N`, `label?value=…`, `redeem`, `own`, `remove` |
-| `POST accounts`                  | add an API key or a compatible endpoint: `provider`, `key`, and for `compat` its `url`, `dialect`, `models` |
-| `GET`, `POST keys`, `POST keys/<name>/remove` | client keys for other machines, as `slopmax key` makes them (shown once) |
+| `GET`, `PATCH settings`          | the settings; `PATCH` takes the live ones as JSON, such as `{"strategy": "round-robin"}`, writes config.toml, and applies them at once |
+| `PATCH`, `DELETE accounts/<id>`  | change an account's label, priority or whether it is on, or remove it    |
+| `POST accounts/<id>/pin`, `DELETE pins` | prefer an account for new sessions, or let slopmax choose again |
+| `POST accounts/<id>/redeem`, `…/own` | redeem a limit reset; have slopmax refresh an imported login itself |
+| `POST accounts`, `POST imports`, `POST logins` | add an API key or a compatible endpoint, import logins, or sign in to a subscription |
+| `GET`, `POST keys`, `DELETE keys/<name>` | client keys for other machines, as `slopmax key` makes them (shown once) |
+| `GET agents`, `POST agents/<id>/connect` | how Claude Code and Codex are wired, and wiring them |
 | `GET doctor`                     | the findings `slopmax doctor` prints                                     |
 
-### Desktop app
+### Desktop apps
 
-On macOS, `slopmax.app` puts the same things in a window and a menu bar panel: every account's windows and resets, where new sessions go, usage and what was left on the table, routing settings, client keys, and the doctor's findings. It is a front end to the same engine, so anything it changes the CLI can change too, and the other way round. It posts the [nudges](#notifications) as native notifications.
-
-Build it from a checkout with `crates/slopmax-desktop-gpui/macos/bundle.sh` (it leaves `target/release/slopmax.app`, with the CLI inside). macOS posts notifications only for an app with a bundle identifier, so a bare `cargo run` of the app works but stays silent.
+The desktop apps are on their way and not yet released: a SwiftUI app for macOS (`apple/`) and a GPUI app for Windows and Linux (`crates/slopmax-desktop-gpui`), each with a menu bar or tray item. Both are clients of the API above and nothing more, so anything they change the CLI can change too, and they post the proxy's [notices](#notifications) as the system's notifications. The CLI is what ships, on every platform.
 
 ### Tools built for CLIProxyAPI
 
@@ -373,7 +374,7 @@ The proxy applies a changed config.toml within two seconds, without a restart; o
 
 |                        | slopmax                                                                          | CLIProxyAPI                                                                 | opencodex                                          |
 | ---------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------- |
-| Built with             | Rust: one binary of about 6 MB, about 7 MB of memory when idle                   | Go: a 69 MB binary                                                          | TypeScript on Bun, with a desktop app              |
+| Built with             | Rust: one binary of about 8 MB, about 5 MB of memory when idle                   | Go: a 69 MB binary                                                          | TypeScript on Bun, with a desktop app              |
 | Setup                  | `slopmax setup` walks through it or runs unattended; `slopmax doctor` checks it  | A config file and login flags                                               | Desktop app and CLI                                |
 | Default account choice | The used quota that resets soonest, so less of it goes to waste; or fill-first, least-used, round-robin | Round-robin or fill-first within priority tiers                  | One active account, switching at 80% used          |
 | Usage data             | Usage endpoints and response headers; agents are shown the pool's combined usage | Response headers, kept for display                                          | Usage endpoint and response headers                |
@@ -403,7 +404,7 @@ mise run bench     # the latency, throughput, memory, and startup slopmax adds
 mise run build     # optimized release binary
 ```
 
-`crates/slopmax-core/tests/proxy.rs` runs the proxy end to end against mock providers. [ARCHITECTURE.md](ARCHITECTURE.md) maps the code, walks through adding a provider, an agent, or an API format, and lists the current numbers.
+`crates/slopmax-daemon/tests/proxy.rs` runs the proxy end to end against mock providers. [ARCHITECTURE.md](ARCHITECTURE.md) maps the code, walks through adding a provider, an agent, or an API format, and lists the current numbers.
 
 ## License
 
