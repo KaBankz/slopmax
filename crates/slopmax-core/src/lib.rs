@@ -29,6 +29,7 @@ pub mod proxy;
 pub mod report;
 pub mod route;
 pub mod service;
+pub mod state;
 pub mod summary;
 #[cfg(test)]
 mod testkit;

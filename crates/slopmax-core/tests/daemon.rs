@@ -335,3 +335,54 @@ async fn serves_requests_from_the_accounts_it_holds_without_reading_their_files(
     let (home, _) = daemon.stop().await;
     std::fs::remove_dir_all(home).unwrap();
 }
+
+#[tokio::test]
+async fn keeps_a_pin_set_through_the_api_across_a_restart() {
+    let seen = Seen::default();
+    let upstream = upstream(seen.clone()).await;
+    let (a, b) = (claude("a@x", "tok-a", 1000), claude("b@x", "tok-b", 2000));
+    let home = temp_home(&[a.clone(), b.clone()]);
+    // A pin from an older version, in a file of its own: taken in once.
+    std::fs::write(home.join("pins.toml"), format!("claude = \"{}\"\n", a.id)).unwrap();
+    let daemon = start(&home, &upstream).await;
+    let pinned = |base: String| async move {
+        let report: serde_json::Value = Client::builder()
+            .build()
+            .get(format!("{base}/slopmax/api/status"))
+            .header("authorization", format!("Bearer {KEY}"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        report["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|a| a["pinned"] == true)
+            .map(|a| a["id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(pinned(daemon.base.clone()).await, [a.id.as_str()]);
+    let answer = Client::builder()
+        .build()
+        .post(format!("{}/slopmax/api/accounts/{}/pin", daemon.base, b.id))
+        .header("authorization", format!("Bearer {KEY}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(answer.status(), StatusCode::OK);
+    // While it serves, the state is the daemon's: the CLI is turned away.
+    let refused = slopmax_core::state::change(&Home::at(&home), |s| s.pins.clear());
+    assert!(refused.is_err());
+    let (home, _) = daemon.stop().await;
+
+    let again = start(&home, &upstream).await;
+    assert_eq!(pinned(again.base.clone()).await, [b.id.as_str()]);
+    // The old file stays for a downgrade, unchanged.
+    let old = std::fs::read_to_string(home.join("pins.toml")).unwrap();
+    assert!(old.contains(&a.id), "{old}");
+    again.stop().await;
+    std::fs::remove_dir_all(home).unwrap();
+}

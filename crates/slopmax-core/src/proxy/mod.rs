@@ -33,14 +33,13 @@ use tokio_util::task::TaskTracker;
 use crate::account::{Account, Store};
 use crate::auth::{self, RefreshError};
 use crate::config::{ClientKey, Config};
-use crate::fsx;
 use crate::ledger::Ledger;
 use crate::log;
 use crate::net::body;
 use crate::net::server::{Request, Response};
 use crate::net::{Client, Origins};
 use crate::paths::Home;
-use crate::pool::{Pins, Pool, Routing, State as PoolState};
+use crate::pool::{Pool, Routing, State as PoolState};
 use crate::provider::ProviderId;
 use crate::report::{self, Report};
 use crate::time::{SignedDuration, Timestamp};
@@ -78,17 +77,13 @@ pub struct App {
     replay: Mutex<transcode::Replay>,
     /// Each account's model list, and when it was read.
     catalogs: Mutex<HashMap<String, (Instant, Vec<String>)>>,
-    /// The newest Codex release seen in requests.
-    codex_version: Mutex<Option<String>>,
     /// Each answered request, as JSON, for the dashboard's live feed.
     events: broadcast::Sender<Bytes>,
-    /// The model Codex asked for last, which window warmups use.
-    codex_model: Mutex<Option<String>>,
     /// When each account was last warmed.
     warmed: Mutex<HashMap<String, Instant>>,
     /// config.toml as last read, to tell when it changes.
     config_text: Mutex<Option<String>>,
-    /// The account files and pins as last read, to tell when they change.
+    /// The account files as last read, to tell when they change.
     seen: Mutex<Option<u64>>,
     /// The API's event stream, as server-sent event frames: each request
     /// answered and each sign-in's progress.
@@ -103,13 +98,6 @@ impl App {
     /// `origins` reroutes provider URLs; tests point them at a mock.
     pub fn new(config: Config, home: Home, state: PoolState, origins: Origins) -> Arc<Self> {
         let store = Store::at(home.accounts());
-        // The ledger remembers which model Codex used last, across restarts.
-        let month_ago = Timestamp::now() - SignedDuration::from_hours(24 * 30);
-        let codex_model = crate::ledger::read(&home.usage(), month_ago)
-            .into_iter()
-            .rev()
-            .find(|e| e.provider == ProviderId::Codex)
-            .and_then(|e| e.model);
         let ledger = Ledger::at(home.usage());
         let config_text = std::fs::read_to_string(home.config()).ok();
         let http = Client::builder()
@@ -137,9 +125,7 @@ impl App {
             ledger,
             replay: Default::default(),
             catalogs: Default::default(),
-            codex_version: Default::default(),
             events: broadcast::channel(256).0,
-            codex_model: Mutex::new(codex_model),
             warmed: Default::default(),
             config_text: Mutex::new(config_text),
             seen: Mutex::default(),
@@ -199,19 +185,17 @@ impl App {
         *seen = Some(text);
     }
 
-    /// Reloads accounts and pins from disk, picking up logins, removals,
-    /// refreshed tokens, and `slopmax use` from other processes.
+    /// Reloads the accounts from disk, picking up logins, removals and
+    /// refreshed tokens from other processes.
     pub fn sync(&self) -> Result<()> {
         let seen = self.fingerprint();
         let accounts = self.store.list()?;
-        let pins: Pins = fsx::read_toml(&self.home.pins())?.unwrap_or_default();
-        self.pool.sync(accounts, pins);
+        self.pool.sync(accounts);
         *self.seen.lock().unwrap_or_else(|p| p.into_inner()) = seen;
         Ok(())
     }
 
-    /// Reloads accounts and pins if a file changed since they were last
-    /// read, which costs a directory listing and a stat per file otherwise.
+    /// Reloads the accounts if a file changed since they were last read, which costs a directory listing and a stat per file otherwise.
     pub fn rescan(&self) -> Result<()> {
         let now = self.fingerprint();
         if now.is_some() && now == *self.seen.lock().unwrap_or_else(|p| p.into_inner()) {
@@ -220,8 +204,8 @@ impl App {
         self.sync()
     }
 
-    /// The names, sizes and modification times of the account files and
-    /// pins, hashed: what changes when another process writes one.
+    /// The names, sizes and modification times of the account files,
+    /// hashed: what changes when another process writes one.
     fn fingerprint(&self) -> Option<u64> {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::hash::DefaultHasher::new();
@@ -231,7 +215,6 @@ impl App {
                 Err(_) => 0u8.hash(hasher),
             }
         };
-        stat(&self.home.pins(), &mut hasher);
         let mut names: Vec<_> = match std::fs::read_dir(self.store.dir()) {
             Ok(listing) => listing.filter_map(|e| e.ok()).map(|e| e.path()).collect(),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
@@ -326,10 +309,7 @@ impl App {
 
     /// The model Codex asked for last.
     pub(crate) fn last_codex_model(&self) -> Option<String> {
-        self.codex_model
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clone()
+        self.pool.codex().model
     }
 
     /// Writes a finished request to the usage ledger, tells the dashboard's
@@ -339,7 +319,7 @@ impl App {
         if entry.provider == ProviderId::Codex
             && let Some(model) = &entry.model
         {
-            *self.codex_model.lock().unwrap_or_else(|p| p.into_inner()) = Some(model.clone());
+            self.pool.saw_codex_model(model);
         }
         if self.events.receiver_count() > 0
             && let Ok(line) = serde_json::to_vec(entry)
@@ -445,7 +425,7 @@ async fn proxy(app: Arc<App>, request: Request) -> Response {
         None => return unauthorized(Some(dialect)),
     };
     if let Some(version) = crate::provider::codex::wire::client_version(request.headers()) {
-        *app.codex_version.lock().unwrap_or_else(|p| p.into_inner()) = Some(version);
+        app.pool.saw_codex_version(&version);
     }
     if let Some(agent) = crate::provider::claude::wire::client_agent(request.headers()) {
         app.pool.saw_agent(ProviderId::Claude, agent);

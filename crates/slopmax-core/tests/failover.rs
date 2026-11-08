@@ -238,7 +238,7 @@ async fn harness(build: impl FnOnce(&str) -> Vec<Account>, refresh_tokens: bool)
         ("https://chatgpt.com", upstream.as_str()),
     ]);
     let app = App::new(config, Home::at(&dir), PoolState::default(), origins);
-    app.pool.sync(app.store.list().unwrap(), Default::default());
+    app.pool.sync(app.store.list().unwrap());
     let proxy = serve({
         let app = app.clone();
         move |request| proxy::handle(app.clone(), request)

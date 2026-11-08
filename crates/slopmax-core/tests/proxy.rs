@@ -535,7 +535,7 @@ async fn harness_of(
         ("https://api.openai.com", openai.as_str()),
     ]);
     let app = App::new(config, Home::at(&dir), PoolState::default(), origins);
-    app.pool.sync(app.store.list().unwrap(), Default::default());
+    app.pool.sync(app.store.list().unwrap());
     let proxy = serve({
         let app = app.clone();
         move |request| proxy::handle(app.clone(), request)
@@ -1768,8 +1768,9 @@ async fn the_dashboard_api_reports_acts_and_streams() {
         .await
         .unwrap();
     assert_eq!(account(&report, &second)["pinned"], true);
-    // Pins live in this proxy's own home, not the user's.
-    assert!(h.dir.join("pins.toml").exists());
+    // Pins are the daemon's state, saved with the rest of it, not a file
+    // of their own.
+    assert!(!h.dir.join("pins.toml").exists());
     let report: Value = admin(Method::POST, "/slopmax/use/auto")
         .send()
         .await
@@ -1813,9 +1814,22 @@ async fn the_dashboard_api_reports_acts_and_streams() {
         .map(|a| &a["id"])
         .collect();
     assert_eq!(ids, [&Value::from(first.clone())]);
-    let pins = std::fs::read_to_string(h.dir.join("pins.toml")).unwrap();
-    // No pins left: an empty TOML document.
-    assert!(pins.parse::<toml_edit::DocumentMut>().unwrap().is_empty(), "{pins}");
+    // Its pin went with it: pinning nothing else leaves nothing pinned.
+    let report: Value = admin(Method::GET, "/slopmax/status")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        report["pools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["next"]["reason"] != "pinned"),
+        "{report}"
+    );
 
     // A change the CLI or app makes on disk shows as soon as the proxy syncs.
     Store::at(h.dir.join("accounts"))

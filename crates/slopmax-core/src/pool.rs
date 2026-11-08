@@ -134,9 +134,15 @@ impl AccountState {
     }
 }
 
-/// Persisted runtime state: per-account health and live sessions.
+/// Persisted runtime state, as `state.toml` has it: per-account health,
+/// live sessions, pins, the nudges told, and what was seen of the clients
+/// (see [`crate::state`]).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct State {
+    /// Which layout wrote it: [`crate::state::FORMAT`], or 0 for one from
+    /// before pins and nudges moved in.
+    #[serde(default)]
+    pub format: u32,
     #[serde(default)]
     pub accounts: BTreeMap<String, AccountState>,
     /// Kept so a restart does not move sessions (and lose their caches).
@@ -146,6 +152,30 @@ pub struct State {
     /// request: Claude answers its limit resets to Claude Code alone.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub agents: BTreeMap<ProviderId, String>,
+    /// Each provider's preferred account, set by `slopmax use`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pins: Pins,
+    /// The nudges told already, so a restart does not tell them again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub told: Vec<String>,
+    #[serde(default, skip_serializing_if = "Codex::is_empty")]
+    pub codex: Codex,
+}
+
+/// What was last seen of Codex: its version, which the model list answers
+/// with, and the model it asked for, which window warmups use.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Codex {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+impl Codex {
+    fn is_empty(&self) -> bool {
+        self.version.is_none() && self.model.is_none()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -272,6 +302,8 @@ struct Inner {
     sessions: HashMap<(ProviderId, String), Binding>,
     pins: Pins,
     agents: BTreeMap<ProviderId, String>,
+    told: Vec<String>,
+    codex: Codex,
     /// When each account was last handed a request, as a count of picks:
     /// round-robin hands the next to the one handed one longest ago.
     picked: HashMap<String, u64>,
@@ -279,7 +311,7 @@ struct Inner {
     /// Windows that reset since they were last taken, by account, and
     /// those already taken.
     lapses: Vec<(String, crate::limits::Lapse)>,
-    told: Vec<(String, crate::limits::Lapse)>,
+    taken: Vec<(String, crate::limits::Lapse)>,
     dirty: bool,
 }
 
@@ -309,6 +341,9 @@ impl Pool {
             states: state.accounts.into_iter().collect(),
             sessions,
             agents: state.agents,
+            pins: state.pins,
+            told: state.told,
+            codex: state.codex,
             ..Inner::default()
         };
         Self {
@@ -337,20 +372,48 @@ impl Pool {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Replaces the account list (from disk) and pins. Sessions bound to a
-    /// removed account, or to a provider whose pin changed, are released.
-    pub fn sync(&self, accounts: Vec<Account>, pins: Pins) {
+    /// Replaces the account list (from disk). Sessions bound to a removed
+    /// account are released.
+    pub fn sync(&self, accounts: Vec<Account>) {
         let mut inner = self.lock();
-        let changed_pins: Vec<ProviderId> = ProviderId::ALL
-            .into_iter()
-            .filter(|p| inner.pins.get(p) != pins.get(p))
-            .collect();
         let ids: Vec<&str> = accounts.iter().map(|a| a.id.as_str()).collect();
-        inner.sessions.retain(|(provider, _), binding| {
-            ids.contains(&binding.account.as_str()) && !changed_pins.contains(provider)
-        });
+        inner
+            .sessions
+            .retain(|_, binding| ids.contains(&binding.account.as_str()));
         inner.accounts = accounts.into_iter().map(Arc::new).collect();
-        inner.pins = pins;
+    }
+
+    /// Prefers account `id` for `provider`'s new sessions, releasing the
+    /// sessions bound before so they move to it.
+    pub fn pin(&self, provider: ProviderId, id: &str) {
+        let mut inner = self.lock();
+        if inner.pins.get(&provider).map(String::as_str) != Some(id) {
+            inner.pins.insert(provider, id.to_owned());
+            inner.sessions.retain(|(p, _), _| *p != provider);
+            inner.dirty = true;
+        }
+    }
+
+    /// Drops every pin, releasing the sessions of the providers that had
+    /// one.
+    pub fn unpin_all(&self) {
+        let mut inner = self.lock();
+        if inner.pins.is_empty() {
+            return;
+        }
+        let pins = std::mem::take(&mut inner.pins);
+        inner.sessions.retain(|(p, _), _| !pins.contains_key(p));
+        inner.dirty = true;
+    }
+
+    /// Drops the pin on account `id`, as when it is removed.
+    pub fn unpin(&self, id: &str) {
+        let mut inner = self.lock();
+        let before = inner.pins.len();
+        inner.pins.retain(|_, pinned| pinned != id);
+        if inner.pins.len() != before {
+            inner.dirty = true;
+        }
     }
 
     /// The accounts as they stand: a shared snapshot, not a copy.
@@ -388,6 +451,43 @@ impl Pool {
     /// The user agent of `provider`'s own client, as last seen in a request.
     pub fn agent(&self, provider: ProviderId) -> Option<String> {
         self.lock().agents.get(&provider).cloned()
+    }
+
+    /// The nudges told so far.
+    pub fn told(&self) -> Vec<String> {
+        self.lock().told.clone()
+    }
+
+    /// Remembers the nudges told, to save with the state.
+    pub fn set_told(&self, told: Vec<String>) {
+        let mut inner = self.lock();
+        if inner.told != told {
+            inner.told = told;
+            inner.dirty = true;
+        }
+    }
+
+    /// What was last seen of Codex.
+    pub fn codex(&self) -> Codex {
+        self.lock().codex.clone()
+    }
+
+    /// Notes the Codex release a request came from.
+    pub fn saw_codex_version(&self, version: &str) {
+        let mut inner = self.lock();
+        if inner.codex.version.as_deref() != Some(version) {
+            inner.codex.version = Some(version.to_owned());
+            inner.dirty = true;
+        }
+    }
+
+    /// Notes the model a Codex request asked for.
+    pub fn saw_codex_model(&self, model: &str) {
+        let mut inner = self.lock();
+        if inner.codex.model.as_deref() != Some(model) {
+            inner.codex.model = Some(model.to_owned());
+            inner.dirty = true;
+        }
     }
 
     /// Notes the user agent of a request from `provider`'s own client.
@@ -598,14 +698,14 @@ impl Pool {
         };
         let mut taken: Vec<(String, crate::limits::Lapse)> = Vec::new();
         for lapse in found {
-            if !inner.told.iter().chain(&taken).any(|t| same(t, &lapse)) {
+            if !inner.taken.iter().chain(&taken).any(|t| same(t, &lapse)) {
                 taken.push(lapse);
             }
         }
-        inner.told.extend(taken.iter().cloned());
+        inner.taken.extend(taken.iter().cloned());
         // Only the recent ones can come round again.
         let week_ago = now - SignedDuration::from_hours(24 * 8);
-        inner.told.retain(|(_, l)| l.ended_at > week_ago);
+        inner.taken.retain(|(_, l)| l.ended_at > week_ago);
         taken
     }
 
@@ -777,12 +877,15 @@ impl Pool {
                 last_used: b.last_used,
             })
             .collect();
-        let agents = inner.agents.clone();
         (
             State {
+                format: crate::state::FORMAT,
                 accounts,
                 sessions,
-                agents,
+                agents: inner.agents.clone(),
+                pins: inner.pins.clone(),
+                told: inner.told.clone(),
+                codex: inner.codex.clone(),
             },
             dirty,
         )
@@ -908,7 +1011,7 @@ mod tests {
 
     fn pool(strategy: Strategy, accounts: &[&Account]) -> Pool {
         let pool = Pool::new(strategy, SignedDuration::from_hours(1), State::default());
-        pool.sync(accounts.iter().map(|a| (*a).clone()).collect(), Pins::new());
+        pool.sync(accounts.iter().map(|a| (*a).clone()).collect());
         pool
     }
 
@@ -996,10 +1099,7 @@ mod tests {
         assert_eq!(pick(&pool, Some("s"), 1000).unwrap(), b.id);
         pool.block(&b.id, ts(5000), None, "limit");
         assert_eq!(next(&pool).reason, Reason::OnlyReady);
-        pool.sync(
-            vec![a.clone(), b.clone()],
-            Pins::from([(ProviderId::Claude, a.id.clone())]),
-        );
+        pool.pin(ProviderId::Claude, &a.id);
         assert_eq!(next(&pool).reason, Reason::Pinned);
         pool.block(&a.id, ts(5000), None, "limit");
         assert!(pool.next(ProviderId::Claude, ts(1000)).is_none());
@@ -1234,7 +1334,7 @@ mod tests {
             SignedDuration::from_hours(1_000_000),
             serde_json::from_str(&json).unwrap(),
         );
-        restored.sync(vec![a.clone(), b.clone()], Pins::default());
+        restored.sync(vec![a.clone(), b.clone()]);
         // b is now the busier account, but the session stays on it.
         restored.observe(
             &b.id,
@@ -1285,10 +1385,7 @@ mod tests {
         b.priority = 5;
         let pool = pool(Strategy::FillFirst, &[&a, &b]);
         assert_eq!(pick(&pool, None, 1000).unwrap(), b.id);
-        pool.sync(
-            vec![a.clone(), b.clone()],
-            Pins::from([(ProviderId::Claude, a.id.clone())]),
-        );
+        pool.pin(ProviderId::Claude, &a.id);
         assert_eq!(pick(&pool, None, 1000).unwrap(), a.id);
     }
 

@@ -37,10 +37,9 @@ pub(super) fn wants_list(headers: &HeaderMap, query: &str) -> bool {
 /// The list, narrowed to what `key` may use when a client key asks.
 pub(super) async fn list(app: &Arc<App>, key: Option<&ClientKey>) -> Response {
     let version = app
-        .codex_version
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .clone()
+        .pool
+        .codex()
+        .version
         .unwrap_or_else(|| CODEX_VERSION.to_owned());
     let all = app.pool.accounts();
     let accounts = all

@@ -19,7 +19,6 @@ use serde_json::json;
 use tokio::sync::{broadcast, mpsc};
 
 use super::{App, authorized, error, json_reply};
-use crate::account::{forget, pin, unpin_all};
 use crate::config::{Config, Strategy};
 use crate::net::body;
 use crate::net::server::{Request, Response};
@@ -410,7 +409,8 @@ impl HttpBody for Feed {
 }
 
 fn unpin(app: &App) -> Response {
-    reload(app, unpin_all(&app.home))
+    app.pool.unpin_all();
+    reload(app, Ok(()))
 }
 
 /// `POST /slopmax/accounts/<id>/<action>`: enable, disable, use, redeem (a
@@ -426,7 +426,7 @@ async fn account(app: &App, id: &str, action: &str, query: &str) -> Response {
         .find_map(|(k, v)| (k == "value").then_some(v));
     // The account's lock is waited for while a refresh holds it, so the
     // change is made on a blocking thread.
-    let (store, home) = (app.store.clone(), app.home.clone());
+    let store = app.store.clone();
     let change: Box<dyn FnOnce() -> anyhow::Result<()> + Send> = match action {
         "enable" | "disable" => {
             let disabled = action == "disable";
@@ -446,10 +446,16 @@ async fn account(app: &App, id: &str, action: &str, query: &str) -> Response {
             let label = value.filter(|v| !v.trim().is_empty());
             Box::new(move || store.update(&id, |a| a.label = label).map(|_| ()))
         }
-        "use" => Box::new(move || pin(&home, &account)),
+        "use" => {
+            app.pool.pin(account.provider, &account.id);
+            Box::new(|| Ok(()))
+        }
         // Refresh here, rather than follow the tool it was imported from.
         "own" => Box::new(move || store.update(&id, |a| a.link = None).map(|_| ())),
-        "remove" => Box::new(move || forget(&store, &home, &account)),
+        "remove" => {
+            app.pool.unpin(&account.id);
+            Box::new(move || store.remove(&id))
+        }
         "redeem" => return redeem(app, &account, value).await,
         _ => return error(None, StatusCode::NOT_FOUND, "no such account action"),
     };

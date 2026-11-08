@@ -426,26 +426,28 @@ fn account_commands_change_the_store() {
     assert!(out.stdout.contains("Enabled work"), "{out:?}");
     assert!(!s.account(&a.id).disabled);
 
-    let pins = s.slopmax.join("pins.toml");
+    // With no daemon running, `use` writes the pins into state.toml itself.
+    let state = s.slopmax.join("state.toml");
+    let pins = |state: &std::path::Path| -> toml_edit::Item {
+        let doc: toml_edit::DocumentMut = std::fs::read_to_string(state).unwrap().parse().unwrap();
+        doc.get("pins").cloned().unwrap_or(toml_edit::Item::None)
+    };
     let out = s.run(&["use", "b@x.dev"]).ok();
     assert!(
         out.stdout.contains("New claude sessions will use"),
         "{out:?}"
     );
-    let pinned: toml_edit::DocumentMut = std::fs::read_to_string(&pins).unwrap().parse().unwrap();
-    assert_eq!(pinned["claude"].as_str(), Some(b.id.as_str()));
+    assert_eq!(pins(&state)["claude"].as_str(), Some(b.id.as_str()));
     let out = s.run(&["use", "auto"]).ok();
     assert!(out.stdout.contains("automatically"), "{out:?}");
-    let pinned: toml_edit::DocumentMut = std::fs::read_to_string(&pins).unwrap().parse().unwrap();
-    assert!(pinned.get("claude").is_none(), "{pinned}");
+    assert!(pins(&state).get("claude").is_none());
 
     // Removing a pinned account drops its pin too.
     s.run(&["use", "b@x.dev"]).ok();
     let out = s.run(&["remove", "b@x.dev"]).ok();
     assert!(out.stdout.contains("Removed b@x.dev"), "{out:?}");
     assert!(s.store().get(&b.id).unwrap().is_none());
-    let pinned: toml_edit::DocumentMut = std::fs::read_to_string(&pins).unwrap().parse().unwrap();
-    assert!(pinned.get("claude").is_none(), "{pinned}");
+    assert!(pins(&state).get("claude").is_none());
 
     // Ambiguous and missing references are refused.
     s.add(&claude("c@x.dev"));

@@ -42,7 +42,8 @@ impl Home {
         self.0.join("config.toml")
     }
 
-    /// Last known limits and sessions, written by the proxy.
+    /// What the daemon keeps between runs: health, readings, sessions, pins
+    /// and the nudges told ([`crate::state`]).
     pub fn state(&self) -> PathBuf {
         self.0.join("state.toml")
     }
@@ -55,16 +56,6 @@ impl Home {
     /// Log destination for a proxy started in the background.
     pub fn log(&self) -> PathBuf {
         self.0.join("slopmax.log")
-    }
-
-    /// Manual account preferences set by `slopmax use`.
-    pub fn pins(&self) -> PathBuf {
-        self.0.join("pins.toml")
-    }
-
-    /// The nudges already told, so a restart doesn't tell them again.
-    pub fn nudged(&self) -> PathBuf {
-        self.0.join("nudged.toml")
     }
 
     /// Each subscription window that reset, and how much of it was used.
@@ -96,10 +87,6 @@ pub fn usage_dir() -> PathBuf {
 
 pub fn log_file() -> PathBuf {
     Home::current().log()
-}
-
-pub fn pins_file() -> PathBuf {
-    Home::current().pins()
 }
 
 /// Claude Code's config dir: `$CLAUDE_CONFIG_DIR`, else `~/.claude`.

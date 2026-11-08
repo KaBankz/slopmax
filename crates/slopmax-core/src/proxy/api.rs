@@ -28,7 +28,6 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use super::{App, authorized};
-use crate::account::{forget, pin, unpin_all};
 use crate::config::Config;
 use crate::net::body;
 use crate::net::server::{Request, Response};
@@ -171,15 +170,12 @@ async fn answer(app: &Arc<App>, route: Route<'_>, query: &str, body: &[u8]) -> A
         Route::UpdateAccount(id) => update_account(app, id, strict(body)?).await,
         Route::Pin(id) => {
             let account = find(app, id)?;
-            let home = app.home.clone();
-            changed(
-                app,
-                crate::blocking::run(move || pin(&home, &account)).await,
-            )
+            app.pool.pin(account.provider, &account.id);
+            ok(&app.api_report())
         }
         Route::UnpinAll => {
-            let home = app.home.clone();
-            changed(app, crate::blocking::run(move || unpin_all(&home)).await)
+            app.pool.unpin_all();
+            ok(&app.api_report())
         }
         Route::Own(id) => {
             let id = find(app, id)?.id.clone();
@@ -191,10 +187,11 @@ async fn answer(app: &Arc<App>, route: Route<'_>, query: &str, body: &[u8]) -> A
         }
         Route::RemoveAccount(id) => {
             let account = find(app, id)?;
-            let (store, home) = (app.store.clone(), app.home.clone());
+            app.pool.unpin(&account.id);
+            let store = app.store.clone();
             changed(
                 app,
-                crate::blocking::run(move || forget(&store, &home, &account)).await,
+                crate::blocking::run(move || store.remove(&account.id)).await,
             )
         }
         Route::Redeem(id) => redeem(app, id, optional(body)?).await,

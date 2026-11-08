@@ -114,7 +114,7 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<Stopp
     // Each job asks the config as it runs, so a changed config.toml turns it
     // on or off without a restart. Every period is a multiple of 15 s, so the
     // jobs share their wakeups.
-    let watching = Arc::new(tokio::sync::Mutex::new(Watch::open(&app.home)));
+    let watching = Arc::new(tokio::sync::Mutex::new(Watch::open(&app)));
     let jobs: Vec<Job> = vec![
         Job::new("save state", Duration::from_secs(15), |app| async move {
             // Nothing to write: no blocking thread woken for nothing.
@@ -202,7 +202,8 @@ const RESCAN: Duration = Duration::from_secs(30);
 
 /// Takes the home's serve lock, held while the daemon runs, so a second
 /// daemon on the same home fails to start instead of racing the first for
-/// its files.
+/// its files. The CLI holds it a moment to change the state of a home no
+/// daemon serves ([`crate::state::change`]), which is waited out.
 fn serve_lock(home: &Home) -> Result<std::fs::File> {
     use std::io::{Read, Seek, Write};
     let path = home.dir().join(".serve.lock");
@@ -214,7 +215,17 @@ fn serve_lock(home: &Home) -> Result<std::fs::File> {
         .truncate(false)
         .open(&path)
         .with_context(|| format!("opening {}", path.display()))?;
-    match file.try_lock() {
+    let mut tries = 0;
+    let taken = loop {
+        match file.try_lock() {
+            Err(std::fs::TryLockError::WouldBlock) if tries < 20 => {
+                tries += 1;
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            taken => break taken,
+        }
+    };
+    match taken {
         Ok(()) => {
             file.set_len(0)?;
             write!(file, "{}", std::process::id())?;
@@ -245,7 +256,7 @@ fn serve_lock(home: &Home) -> Result<std::fs::File> {
 fn read_state(home: &Home) -> State {
     let path = home.state();
     match fsx::read_toml(&path) {
-        Ok(state) => state.unwrap_or_default(),
+        Ok(state) => crate::state::upgrade(home, state.unwrap_or_default()),
         Err(e) => {
             // The file that failed: the TOML, or the JSON an earlier
             // version left, which was being read in its place.
@@ -269,7 +280,7 @@ fn read_state(home: &Home) -> State {
                     "{name} could not be read ({e}) or moved aside ({moving}); started afresh"
                 ),
             }
-            State::default()
+            crate::state::upgrade(home, State::default())
         }
     }
 }
@@ -359,42 +370,18 @@ async fn shutdown(app: Arc<App>) {
     app.stop.cancel();
 }
 
-/// The nudges already told, as `nudged.toml` keeps them.
-#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
-struct Told {
-    #[serde(default)]
-    told: Vec<String>,
-}
-
 /// Watches the accounts' conditions, telling each change: in the log, on
 /// the API's event stream (which the apps post as notifications), and to
-/// the configured webhook or command.
+/// the configured webhook or command. The nudges told are kept with the
+/// state, so a restart does not tell them again.
 struct Watch {
     watcher: notify::Watcher,
-    /// Where the nudges already told are kept, so a restart does not tell
-    /// them again, and the JSON an earlier version kept them in.
-    file: std::path::PathBuf,
-    legacy: std::path::PathBuf,
 }
 
 impl Watch {
-    fn open(home: &Home) -> Self {
-        let file = home.nudged();
-        let legacy = file.with_extension("json");
-        let told: Vec<String> = match file.exists() {
-            true => {
-                fsx::read_toml::<Told>(&file)
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default()
-                    .told
-            }
-            false => fsx::read_json(&legacy).ok().flatten().unwrap_or_default(),
-        };
+    fn open(app: &App) -> Self {
         Self {
-            watcher: notify::Watcher::remembering(told),
-            file,
-            legacy,
+            watcher: notify::Watcher::remembering(app.pool.told()),
         }
     }
 
@@ -416,13 +403,7 @@ impl Watch {
         );
         let fresh = self.watcher.new_nudges(nudges);
         if !fresh.is_empty() {
-            let told = Told {
-                told: self.watcher.told(),
-            };
-            match fsx::write_toml(&self.file, &told) {
-                Ok(()) => drop(std::fs::remove_file(&self.legacy)),
-                Err(e) => log::warn!("saving the nudges told: {e}"),
-            }
+            app.pool.set_told(self.watcher.told());
         }
         events.extend(fresh);
         for event in events {

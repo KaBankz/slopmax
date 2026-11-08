@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::log;
 use crate::paths::Home;
-use crate::pool::Pins;
 use crate::provider::ProviderId;
 use crate::time::{SignedDuration, Timestamp};
 use crate::wire::Dialect;
@@ -329,29 +328,26 @@ impl Store {
 }
 
 /// Makes `account` the first choice for its provider's new sessions, for as
-/// long as it has quota.
+/// long as it has quota. For a home no daemon serves; a running one pins
+/// through its API.
 pub fn pin(home: &Home, account: &Account) -> Result<()> {
-    let path = home.pins();
-    let mut pins: Pins = fsx::read_toml(&path)?.unwrap_or_default();
-    pins.insert(account.provider, account.id.clone());
-    Ok(fsx::write_toml(&path, &pins)?)
+    crate::state::change(home, |state| {
+        state.pins.insert(account.provider, account.id.clone());
+    })
 }
 
-/// Lets slopmax choose every provider's accounts again.
+/// Lets slopmax choose every provider's accounts again, while no daemon
+/// serves `home`.
 pub fn unpin_all(home: &Home) -> Result<()> {
-    Ok(fsx::write_toml(&home.pins(), &Pins::new())?)
+    crate::state::change(home, |state| state.pins.clear())
 }
 
-/// Forgets `account`, and its pin with it.
+/// Forgets `account`, and its pin with it, while no daemon serves `home`.
 pub fn forget(store: &Store, home: &Home, account: &Account) -> Result<()> {
-    store.remove(&account.id)?;
-    let path = home.pins();
-    let mut pins: Pins = fsx::read_toml(&path)?.unwrap_or_default();
-    if pins.get(&account.provider) == Some(&account.id) {
-        pins.remove(&account.provider);
-        fsx::write_toml(&path, &pins)?;
-    }
-    Ok(())
+    crate::state::change(home, |state| {
+        state.pins.retain(|_, pinned| *pinned != account.id);
+    })?;
+    store.remove(&account.id)
 }
 
 #[cfg(test)]

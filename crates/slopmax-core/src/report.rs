@@ -14,7 +14,7 @@ use crate::net::Origins;
 use crate::pool::{AccountState, Pins, Pool, State};
 use crate::provider::ProviderId;
 use crate::time::{SignedDuration, Timestamp};
-use crate::{fsx, human, paths, usage};
+use crate::{fsx, human, usage};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Report {
@@ -436,10 +436,11 @@ fn pool(provider: ProviderId, accounts: &[AccountReport], now: Timestamp) -> Opt
 /// providers directly with `refresh`. Failed polls show as the account's
 /// last error.
 pub async fn offline(config: &Config, store: &Store, refresh: bool) -> Result<Report> {
-    let state: State = fsx::read_toml(&paths::state_file())?.unwrap_or_default();
-    let pins: Pins = fsx::read_toml(&paths::pins_file())?.unwrap_or_default();
+    let home = crate::paths::Home::current();
+    let state: State = crate::state::read(&home)?;
+    let pins = state.pins.clone();
     let pool = Pool::new(config.strategy, SignedDuration::from_hours(1), state);
-    pool.sync(store.list()?, pins.clone());
+    pool.sync(store.list()?);
     if refresh {
         let http = auth::http_client(Origins::default());
         let accounts = pool.accounts();
@@ -452,8 +453,11 @@ pub async fn offline(config: &Config, store: &Store, refresh: bool) -> Result<Re
                 Err(e) => pool.record_error(&account.id, &format!("usage poll: {e:#}")),
             }
         }
-        let (state, _) = pool.snapshot(Timestamp::now());
-        fsx::write_toml(&paths::state_file(), &state)?;
+        // Only while no daemon serves the home, which keeps its own.
+        if let Ok(_serving) = crate::state::offline(&home) {
+            let (state, _) = pool.snapshot(Timestamp::now());
+            fsx::write_toml(&home.state(), &state)?;
+        }
     }
     let now = Timestamp::now();
     Ok(build(
@@ -847,7 +851,7 @@ mod tests {
             SignedDuration::from_hours(1),
             State::default(),
         );
-        pool.sync(vec![a.clone()], Pins::new());
+        pool.sync(vec![a.clone()]);
         let report = build(
             vec![a],
             |id| pool.state(id),
