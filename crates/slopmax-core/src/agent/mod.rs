@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use http::HeaderMap;
 use serde_json::Value;
 
@@ -165,7 +165,7 @@ pub fn run(agent: &dyn Agent, config: &Config, args: &[String]) -> Result<i32> {
     {
         use std::os::unix::process::CommandExt;
         let err = command.exec();
-        bail!("could not start {program}: {err}");
+        anyhow::bail!("could not start {program}: {err}");
     }
     #[cfg(not(unix))]
     {

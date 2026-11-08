@@ -436,7 +436,7 @@ async fn network(http: &Client) -> Section {
     s
 }
 
-#[cfg_attr(not(unix), allow(unused_variables))]
+#[cfg_attr(not(unix), allow(unused_variables, unused_mut))]
 fn files(dir: &Path) -> Section {
     let mut s = Section::new("Files");
     #[cfg(unix)]

@@ -18,6 +18,17 @@ run = [
   # Day boundaries across a daylight saving change, in a zone that has one.
   "TZ=America/New_York cargo test --locked -p slopmax-common local_midnight",
 ]
+# Windows has no TZ database for the daylight saving check.
+run_windows = [
+  "cargo fmt --all --check",
+  "cargo clippy --all-targets --all-features --locked -- -D warnings",
+  "cargo test --locked",
+]
+
+[tasks.web]
+description = "Check the web UI and @slopmax/client: format, types, lint, tests, and the contract fixtures"
+dir = "web"
+run = "mise run check"
 
 [tasks.ui]
 description = "Build the web UI the binary embeds, into web/apps/ui/dist/rust"
@@ -30,7 +41,7 @@ tools = { rust = "1.89" }
 run = "cargo check --all-targets --all-features --locked"
 
 [tasks.budget]
-description = "Hold the binary's dependencies to 70 crates and the binary to 8 MiB"
+description = "Hold the binary's dependencies to 70 crates and the binary to 9 MiB"
 run = '''
 host=$(rustc -vV | sed -n 's/host: //p')
 # Third-party crates only: slopmax's own (path) crates are left out.
@@ -40,13 +51,16 @@ echo "$count crates for $host (budget 70)"
 [ "$count" -le 70 ] || { printf '%s\n' "$crates"; exit 1; }
 cargo build --release --locked -p slopmax
 bytes=$(wc -c < target/release/slopmax | tr -d ' ')
-# 8 MiB. v0.3.0 measured 6.52 MB and the typed API added 0.39 MB (the 7 MiB
-# of phase 3); phase 4 made the CLI a client of that API (D6), which
-# decodes the API's types and reaches the daemon through slopmax-client
-# (about 0.6 MB), and added the history index (0.13 MB): 8.13 MB. Raising
-# it needs the reason in the commit.
-echo "$bytes bytes (budget 8388608)"
-[ "$bytes" -le 8388608 ]
+# 9 MiB. v0.3.0 measured 6.52 MB and the typed API added 0.39 MB (the 7 MiB
+# of phase 3). Phase 4 made the CLI a client of that API (D6), decoding the
+# API's types through slopmax-client (about 0.6 MB), and added the history
+# index (0.13 MB): 8.13 MB. Retiring /slopmax/* saved 0.17 MB; splitting
+# slopmax-daemon from the engine cost 0.45 MB, as each crate compiles its
+# own copies of the generic code it uses (serde, tokio, hyper), which LTO
+# cannot merge on stable Rust: 8.48 MB. Raising it needs the reason in the
+# commit.
+echo "$bytes bytes (budget 9437184)"
+[ "$bytes" -le 9437184 ]
 '''
 
 [tasks.bench]
