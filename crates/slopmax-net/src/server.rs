@@ -187,6 +187,7 @@ pub fn port_holder(port: u16) -> Option<String> {
 
 #[cfg(test)]
 mod port_tests {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     use super::*;
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
