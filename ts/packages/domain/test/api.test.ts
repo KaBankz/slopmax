@@ -387,7 +387,7 @@ describe("SlopmaxApi", () => {
       expect(JSON.parse(started.body)).toEqual({ id: "login-1" })
       const key = yield* call("/slopmax/api/logins", json({ provider: "openai" }))
       expect(JSON.parse(key.body).message).toBe("provider: only claude and codex accounts sign in")
-      expect(received).toEqual([{ provider: "codex", device: true }])
+      expect(received).toEqual([{ provider: "codex", device: true, noBrowser: false }])
     }),
   )
 })
