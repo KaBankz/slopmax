@@ -121,11 +121,24 @@ impl Sandbox {
 
     fn command(&self, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_slopmax"));
+        let system: &[&str] = if cfg!(windows) {
+            &[]
+        } else {
+            &["/usr/bin", "/bin"]
+        };
+        let mut path: Vec<std::path::PathBuf> = vec![self.stubs.clone()];
+        path.extend(system.iter().map(std::path::PathBuf::from));
+        // Windows' own programs, and what its networking needs to start.
+        if let Some(root) = std::env::var_os("SystemRoot") {
+            path.push(std::path::PathBuf::from(&root).join("System32"));
+        }
         command
             .args(args)
             .env_clear()
-            .env("PATH", format!("{}:/usr/bin:/bin", self.stubs.display()))
+            .env("PATH", std::env::join_paths(path).unwrap())
             .env("HOME", &self.home)
+            // Where Windows looks for the user's home.
+            .env("USERPROFILE", &self.home)
             .env("SLOPMAX_HOME", &self.slopmax)
             .env("CLAUDE_CONFIG_DIR", &self.claude)
             .env("CODEX_HOME", &self.codex)
@@ -139,8 +152,18 @@ impl Sandbox {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        // Coverage runs write a profile per process.
-        for name in ["LLVM_PROFILE_FILE", "TMPDIR"] {
+        // Coverage runs write a profile per process; Windows needs its
+        // system directories for sockets and processes to work at all.
+        for name in [
+            "LLVM_PROFILE_FILE",
+            "TMPDIR",
+            "SystemRoot",
+            "windir",
+            "TEMP",
+            "TMP",
+            "ComSpec",
+            "PATHEXT",
+        ] {
             if let Some(value) = std::env::var_os(name) {
                 command.env(name, value);
             }
@@ -988,6 +1011,8 @@ fn redeem_needs_an_account_with_resets() {
     s.run(&["redeem", "b@x.dev", "--yes"]).fails(1, "error:");
 }
 
+// The command runs in a POSIX shell.
+#[cfg(unix)]
 #[test]
 fn notify_sends_a_test_event_through_the_command() {
     let s = Sandbox::new("notify");

@@ -22,7 +22,7 @@ run = [
 run_windows = [
   "cargo fmt --all --check",
   "cargo clippy --all-targets --all-features --locked -- -D warnings",
-  "cargo test --locked",
+  "cargo test --locked --no-fail-fast",
 ]
 
 [tasks.web]

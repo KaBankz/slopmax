@@ -195,7 +195,11 @@ async fn proxy(config: &Config, service: Option<Status>) -> Section {
 }
 
 fn port_taken(listen: SocketAddr) -> bool {
-    TcpListener::bind(listen).is_err_and(|e| e.kind() == std::io::ErrorKind::AddrInUse)
+    TcpListener::bind(listen).is_err_and(|e| {
+        // Windows refuses a port another process holds as access denied.
+        e.kind() == std::io::ErrorKind::AddrInUse
+            || cfg!(windows) && e.kind() == std::io::ErrorKind::PermissionDenied
+    })
 }
 
 fn accounts_section(accounts: &[Account]) -> Section {
