@@ -462,6 +462,7 @@ fn record_lapses(app: &App, now: Timestamp) {
             })
         })
         .collect();
+    app.hours.lapsed(&records);
     if let Err(e) = crate::waste::append(&app.home.windows(), &records) {
         log::warn!("recording reset windows: {e:#}");
     }

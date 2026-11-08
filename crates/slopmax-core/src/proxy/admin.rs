@@ -143,7 +143,7 @@ async fn usage(app: &App, query: &str) -> Response {
 
 /// `?range=today|7d|30d` → what went through slopmax over the range, as
 /// the desktop app charts it.
-async fn history(app: &App, query: &str) -> Response {
+async fn history(app: &Arc<App>, query: &str) -> Response {
     let range = crate::net::form::decode(query)
         .into_iter()
         .find_map(|(k, v)| (k == "range").then_some(v))
@@ -151,21 +151,7 @@ async fn history(app: &App, query: &str) -> Response {
     let Some(range) = history::Range::parse(&range) else {
         return error(None, StatusCode::BAD_REQUEST, "range is today, 7d, or 30d");
     };
-    let names: HashMap<String, String> = app
-        .pool
-        .accounts()
-        .iter()
-        .map(|a| (a.id.clone(), a.name()))
-        .collect();
-    let home = app.home.clone();
-    let config = app.config();
-    // Reading a month of the ledger takes a moment: off the request threads.
-    let history = crate::blocking::run(move || {
-        let prices = history::Prices::of(&config);
-        history::load(&home, range, Timestamp::now(), &prices, &names)
-    })
-    .await;
-    json_reply(StatusCode::OK, &history)
+    json_reply(StatusCode::OK, &app.history(range).await)
 }
 
 /// The form fields of a POST, from its query and its body.

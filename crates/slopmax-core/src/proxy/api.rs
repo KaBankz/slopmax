@@ -33,7 +33,7 @@ use crate::net::body;
 use crate::net::server::{Request, Response};
 use crate::provider::credits::Outcome;
 use crate::time::Timestamp;
-use crate::{api, doctor, history, log, summary};
+use crate::{api, doctor, log, summary};
 
 /// Largest request body read.
 const MAX_BODY: usize = 64 * 1024;
@@ -798,25 +798,14 @@ async fn usage(app: &App, query: &str) -> Answer {
     ok(&api::summary(&built, range, by))
 }
 
-async fn history(app: &App, query: &str) -> Answer {
+async fn history(app: &Arc<App>, query: &str) -> Answer {
     let range = param(
         query,
         "range",
         HistoryRange::Week,
         "range is today, 7d, or 30d",
     )?;
-    let (home, config, names) = (app.home.clone(), app.config(), names(app));
-    let built = crate::blocking::run(move || {
-        let prices = history::Prices::of(&config);
-        history::load(
-            &home,
-            api::history_range(range),
-            Timestamp::now(),
-            &prices,
-            &names,
-        )
-    })
-    .await;
+    let built = app.history(api::history_range(range)).await;
     ok(&api::history(&built, range))
 }
 

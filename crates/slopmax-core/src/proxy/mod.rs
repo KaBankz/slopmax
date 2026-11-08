@@ -73,6 +73,9 @@ pub struct App {
     refreshing: tokio::sync::Mutex<()>,
     /// Where answered requests are recorded for `slopmax usage`.
     pub ledger: Ledger,
+    /// The last month of the ledger by hour, for histories, once one is
+    /// asked for.
+    pub hours: crate::history::index::Kept,
     /// Reasoning state kept between turns of translated conversations.
     replay: Mutex<transcode::Replay>,
     /// Each account's model list, and when it was read.
@@ -123,6 +126,7 @@ impl App {
             redeeming: tokio::sync::Mutex::new(()),
             refreshing: tokio::sync::Mutex::new(()),
             ledger,
+            hours: Default::default(),
             replay: Default::default(),
             catalogs: Default::default(),
             events: broadcast::channel(256).0,
@@ -307,6 +311,37 @@ impl App {
         }
     }
 
+    /// What went through over `range`, by display name, from the index
+    /// kept of the ledger: read from the files once, the first time.
+    pub async fn history(
+        self: &Arc<Self>,
+        range: crate::history::Range,
+    ) -> crate::history::History {
+        let app = Arc::clone(self);
+        crate::blocking::run(move || {
+            let names: HashMap<String, String> = app
+                .pool
+                .accounts()
+                .iter()
+                .map(|a| (a.id.clone(), a.name()))
+                .collect();
+            let config = app.config();
+            let prices = crate::history::Prices::of(&config);
+            let now = Timestamp::now();
+            if let Some(history) = app.hours.history(range, now, &prices, &names) {
+                return history;
+            }
+            app.hours
+                .build(&app.home.usage(), &app.home.windows(), now, |start| {
+                    app.ledger.mark(start)
+                });
+            app.hours
+                .history(range, now, &prices, &names)
+                .unwrap_or_else(|| crate::history::load(&app.home, range, now, &prices, &names))
+        })
+        .await
+    }
+
     /// The model Codex asked for last.
     pub(crate) fn last_codex_model(&self) -> Option<String> {
         self.pool.codex().model
@@ -315,7 +350,8 @@ impl App {
     /// Writes a finished request to the usage ledger, tells the dashboard's
     /// live feed about it, and remembers the model of a Codex one.
     pub fn record(&self, entry: &crate::ledger::Entry) {
-        self.ledger.record(entry);
+        self.ledger
+            .record_then(entry, |entry| self.hours.add(entry));
         if entry.provider == ProviderId::Codex
             && let Some(model) = &entry.model
         {

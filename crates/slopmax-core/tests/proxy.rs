@@ -2626,6 +2626,27 @@ async fn the_history_api_charts_what_went_through() {
 }
 
 #[tokio::test]
+async fn history_is_kept_by_the_hour_after_the_first_read() {
+    let h = harness(ProviderId::Codex, &["tok-ok"]).await;
+    served_by(&h, codex_in(&h, "s")).await;
+    let since = Timestamp::now() - SignedDuration::from_mins(1);
+    eventually(|| ledger::read(&h.dir.join("usage"), since).len() == 1).await;
+    let (_, history) = admin(&h, Method::GET, "history?range=today", "").await;
+    assert_eq!(history["total"]["requests"], 1);
+    assert!(h.app.hours.is_ready());
+
+    // From now on the files are not read: what settles is counted as it
+    // does, so the history holds it even with the ledger gone.
+    std::fs::remove_dir_all(h.dir.join("usage")).unwrap();
+    served_by(&h, codex_in(&h, "t")).await;
+    let (_, history) = admin(&h, Method::GET, "history?range=today", "").await;
+    assert_eq!(history["total"]["requests"], 2);
+    assert_eq!(history["sessions"], 2);
+    let (_, week) = admin(&h, Method::GET, "history?range=7d", "").await;
+    assert_eq!(week["total"]["requests"], 2);
+}
+
+#[tokio::test]
 async fn history_says_what_resets_left_on_the_table() {
     let h = harness(ProviderId::Codex, &["tok-ok"]).await;
     let ended = Timestamp::now() - SignedDuration::from_hours(1);

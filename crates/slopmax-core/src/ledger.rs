@@ -128,6 +128,13 @@ impl Ledger {
     /// Appends `entry` to its month's file. A failed write is logged and
     /// counted, and the file is opened afresh for the next entry.
     pub fn record(&self, entry: &Entry) {
+        self.record_then(entry, |_| {});
+    }
+
+    /// As [`Ledger::record`], then runs `then` while no other entry can be
+    /// written, so what reads the files at a [`Ledger::mark`] and what
+    /// `then` keeps agree on which entries each has.
+    pub fn record_then(&self, entry: &Entry, then: impl FnOnce(&Entry)) {
         let mut writer = self.open.lock().unwrap_or_else(|p| p.into_inner());
         if let Err(e) = writer.append(&self.dir, entry) {
             writer.month = None;
@@ -136,6 +143,23 @@ impl Ledger {
                 log::warn!("writing the usage ledger: {e}");
             }
         }
+        then(entry);
+    }
+
+    /// Runs `start` while no entry can be written, and gives each month
+    /// file's length then: everything written before is within those
+    /// lengths, everything after is not.
+    pub fn mark(&self, start: &mut dyn FnMut()) -> Vec<(PathBuf, u64)> {
+        let _writer = self.open.lock().unwrap_or_else(|p| p.into_inner());
+        start();
+        let Ok(listing) = fs::read_dir(&self.dir) else {
+            return Vec::new();
+        };
+        listing
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|ext| ext == "jsonl"))
+            .filter_map(|p| Some((p.clone(), fs::metadata(&p).ok()?.len())))
+            .collect()
     }
 
     /// Entries a failed write lost since the daemon started.
@@ -200,6 +224,28 @@ fn open_month(dir: &Path, path: &Path) -> std::io::Result<File> {
 fn file_for(dir: &Path, at: Timestamp) -> PathBuf {
     let (year, month, _) = at.date(SignedDuration::ZERO);
     dir.join(format!("{year:04}-{month:02}.jsonl"))
+}
+
+/// Every entry at or after `since` within the files and lengths a
+/// [`Ledger::mark`] gave, oldest first.
+pub fn read_upto(dir: &Path, since: Timestamp, lengths: &[(PathBuf, u64)]) -> Vec<Entry> {
+    let first = file_for(dir, since);
+    let mut entries = Vec::new();
+    for (path, len) in lengths.iter().filter(|(p, _)| *p >= first) {
+        let Ok(file) = fs::File::open(path) else {
+            continue;
+        };
+        let lines = BufReader::new(file.take(*len))
+            .lines()
+            .map_while(Result::ok);
+        entries.extend(
+            lines
+                .filter_map(|line| serde_json::from_str::<Entry>(&line).ok())
+                .filter(|entry| entry.at >= since),
+        );
+    }
+    entries.sort_by_key(|e| e.at);
+    entries
 }
 
 /// Every entry at or after `since`, oldest first. Unreadable lines (a

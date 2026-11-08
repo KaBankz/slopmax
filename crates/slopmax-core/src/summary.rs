@@ -82,6 +82,18 @@ impl Totals {
         self.cache_write += entry.cache_write;
     }
 
+    /// Adds totals summed apart, as from another hour.
+    pub fn merge(&mut self, other: &Totals) {
+        self.requests += other.requests;
+        self.input += other.input;
+        self.output += other.output;
+        self.cache_read += other.cache_read;
+        self.cache_write += other.cache_write;
+        self.cost += other.cost;
+        self.unpriced += other.unpriced;
+        self.failed += other.failed;
+    }
+
     /// The cost as shown: `—` when nothing is priced, a trailing `+` when
     /// some requests are left out.
     pub fn cost_label(&self) -> String {

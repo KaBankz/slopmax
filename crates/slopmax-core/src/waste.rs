@@ -82,12 +82,19 @@ pub fn read(path: &Path, since: Timestamp) -> Vec<Record> {
     let Ok(file) = fs::File::open(path) else {
         return Vec::new();
     };
-    let mut records: Vec<Record> = BufReader::new(file)
-        .lines()
-        .map_while(Result::ok)
-        .filter_map(|line| serde_json::from_str::<Record>(&line).ok())
-        .filter(|r| r.ended_at >= since)
-        .collect();
+    once(
+        BufReader::new(file)
+            .lines()
+            .map_while(Result::ok)
+            .filter_map(|line| serde_json::from_str::<Record>(&line).ok())
+            .filter(|r| r.ended_at >= since)
+            .collect(),
+    )
+}
+
+/// `records` each once, oldest first: a window may be written twice, as
+/// after a restart.
+pub fn once(mut records: Vec<Record>) -> Vec<Record> {
     records.sort_by(|a, b| a.key().cmp(&b.key()));
     records.dedup_by(|a, b| a.key() == b.key());
     records.sort_by_key(|r| r.ended_at);
