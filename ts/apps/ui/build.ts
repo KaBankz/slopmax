@@ -96,7 +96,7 @@ export const build = async (options: BuildOptions): Promise<ReadonlyArray<{ path
   }
   // The fonts themselves, beside the CSS that now names them.
   const fontFiles = await Promise.all(
-    (options.fonts ?? true ? fonts : []).map(async (font) => {
+    ((options.fonts ?? true) ? fonts : []).map(async (font) => {
       const target = path.join(outdir, await fontName(font))
       await Bun.write(target, Bun.file(font.source))
       return target

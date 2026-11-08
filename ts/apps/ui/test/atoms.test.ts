@@ -220,7 +220,11 @@ describe("signing in", () => {
     const h = await started()
     h.run(signIn, { provider: "codex", device: true })
     await until(() => Option.exists(h.registry.get(signInAtom), (s) => s.step._tag === "DeviceCode"), "the code")
-    expect(h.stub.calls.find((c) => c.endpoint === "login")?.payload).toEqual({ provider: "codex", device: true, noBrowser: false })
+    expect(h.stub.calls.find((c) => c.endpoint === "login")?.payload).toEqual({
+      provider: "codex",
+      device: true,
+      noBrowser: false,
+    })
   })
 })
 

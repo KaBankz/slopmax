@@ -4,16 +4,14 @@
 // and is missing does. So the Rust daemon and every client built on this
 // package (the web UI, the desktop window) agree on every field.
 import { describe, expect, test } from "bun:test"
-import { readdirSync, readFileSync } from "node:fs"
-import { join } from "node:path"
 import { Schema } from "effect"
 import { ApiErrors, Event, History, KeyInfo, NewKey, Report, SettingsView, Summary } from "../src/index.ts"
 import { strict } from "../src/settings.ts"
 
-const dir = join(import.meta.dir, "../../../../contract/fixtures")
+const dir = `${import.meta.dir}/../../../../contract/fixtures`
 
 /** Each endpoint's success, by `group.endpoint`. */
-const successes: Readonly<Record<string, Schema.Top>> = {
+const successes: Readonly<Record<string, Schema.Decoder<unknown>>> = {
   "system.status": Report,
   "system.sync": Report,
   "accounts.update": Report,
@@ -31,9 +29,10 @@ const successes: Readonly<Record<string, Schema.Top>> = {
   "events.watch": Schema.Array(Event),
 }
 
-const decode = (schema: Schema.Top, body: unknown) => Schema.decodeUnknownSync(schema as never, strict)(body)
+/** A fixture: the status the daemon answered with, and its body. */
+const Fixture = Schema.Struct({ status: Schema.Number, body: Schema.Unknown })
 
-const fixtures = readdirSync(dir).filter((name) => name.endsWith(".json"))
+const fixtures = [...new Bun.Glob("*.json").scanSync(dir)].toSorted()
 
 describe("the Rust daemon's answers", () => {
   test("are all here", () => {
@@ -41,17 +40,17 @@ describe("the Rust daemon's answers", () => {
   })
 
   for (const name of fixtures) {
-    const [group, endpoint, outcome] = name.replace(/\.json$/, "").split(".")
-    const { status, body } = JSON.parse(readFileSync(join(dir, name), "utf8")) as { status: number; body: unknown }
-    test(`${group}.${endpoint} ${outcome} decodes strictly`, () => {
+    const [group, endpoint, outcome = ""] = name.replace(/\.json$/, "").split(".")
+    test(`${group}.${endpoint} ${outcome} decodes strictly`, async () => {
+      const { status, body } = Schema.decodeUnknownSync(Fixture)(await Bun.file(`${dir}/${name}`).json())
       if (outcome === "ok") {
         const schema = successes[`${group}.${endpoint}`]
-        expect(schema).toBeDefined()
-        decode(schema!, body)
+        if (schema === undefined) throw new Error(`no schema for ${group}.${endpoint}`)
+        Schema.decodeUnknownSync(schema, strict)(body)
         return
       }
-      const error = decode(Schema.Union(ApiErrors), body) as { readonly _tag: string }
-      expect(error._tag.toLowerCase()).toBe(outcome!.toLowerCase())
+      const error = Schema.decodeUnknownSync(Schema.Union(ApiErrors), strict)(body)
+      expect(error._tag.toLowerCase()).toBe(outcome.toLowerCase())
       expect(status).toBeGreaterThanOrEqual(400)
     })
   }
