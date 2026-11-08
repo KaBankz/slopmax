@@ -5,13 +5,32 @@ use std::fmt;
 use std::net::SocketAddr;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use toml_edit::DocumentMut;
 
+use crate::error::ConfigError;
 use crate::net::client::Proxy;
 use crate::pricing::Custom;
 use crate::{fsx, ids, notify};
+
+fn read_error(path: &Path) -> impl FnOnce(std::io::Error) -> ConfigError {
+    let path = path.to_owned();
+    move |source| ConfigError::Read { path, source }
+}
+
+fn write_error(path: &Path) -> impl FnOnce(std::io::Error) -> ConfigError {
+    let path = path.to_owned();
+    move |source| ConfigError::Write { path, source }
+}
+
+fn invalid<E: std::fmt::Display>(path: &Path) -> impl FnOnce(E) -> ConfigError {
+    let path = path.to_owned();
+    move |e| ConfigError::Invalid {
+        path,
+        message: e.to_string(),
+    }
+}
 
 /// Default proxy port: "slop" on a phone keypad.
 pub const DEFAULT_PORT: u16 = 7567;
@@ -264,28 +283,27 @@ impl Config {
 
     /// Loads the config, creating it (with a fresh API key) on first use.
     /// `SLOPMAX_LISTEN` overrides `listen`, for containers.
-    pub fn load(home: &crate::paths::Home) -> Result<Self> {
+    pub fn load(home: &crate::paths::Home) -> Result<Self, ConfigError> {
         let mut config = Self::load_from(&home.config())?;
         if let Ok(listen) = std::env::var("SLOPMAX_LISTEN")
             && !listen.is_empty()
         {
-            config.listen = listen
-                .parse()
-                .with_context(|| format!("SLOPMAX_LISTEN={listen:?} is not an address"))?;
+            config.listen = listen.parse().map_err(|_| {
+                ConfigError::Rejected(format!("SLOPMAX_LISTEN={listen:?} is not an address"))
+            })?;
         }
         Ok(config)
     }
 
-    pub fn load_from(path: &Path) -> Result<Self> {
-        let read = || -> Result<(Option<String>, Self)> {
+    pub fn load_from(path: &Path) -> Result<Self, ConfigError> {
+        let read = || -> Result<(Option<String>, Self), ConfigError> {
             let text = match std::fs::read_to_string(path) {
                 Ok(text) => Some(text),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-                Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+                Err(source) => return Err(read_error(path)(source)),
             };
             let config = match &text {
-                Some(text) => toml_edit::de::from_str::<Self>(text)
-                    .with_context(|| format!("invalid config {}", path.display()))?,
+                Some(text) => toml_edit::de::from_str::<Self>(text).map_err(invalid(path))?,
                 None => Self::default(),
             };
             Ok((text, config))
@@ -298,35 +316,33 @@ impl Config {
         // turns, and each after the first finds the key already made, so
         // all of them agree on it.
         let lock = path.with_file_name(".config.lock");
-        let _held = fsx::lock(&lock).with_context(|| format!("locking {}", lock.display()))?;
+        let _held = fsx::lock(&lock).map_err(write_error(&lock))?;
         let (text, mut config) = match read()? {
             (_, made) if !made.api_key.is_empty() => return Ok(made),
             _ => (text, config),
         };
-        let invalid = || format!("invalid config {}", path.display());
         if config.api_key.is_empty() {
             config.api_key = format!("sm-{}", ids::token());
             let text = match text {
                 // Add the key without disturbing the user's comments.
                 Some(text) => {
-                    let mut doc: DocumentMut = text.parse().with_context(invalid)?;
+                    let mut doc: DocumentMut = text.parse().map_err(invalid(path))?;
                     doc["api_key"] = toml_edit::value(&config.api_key);
                     doc.to_string()
                 }
                 None => template(&config.api_key),
             };
-            fsx::write_private(path, text.as_bytes())
-                .with_context(|| format!("writing {}", path.display()))?;
+            fsx::write_private(path, text.as_bytes()).map_err(write_error(path))?;
         }
         Ok(config)
     }
 
     /// Adds a client key named `name` to the config at `path`, keeping the
     /// file's comments, and returns the new key.
-    pub fn add_key(path: &Path, name: &str, models: &[String]) -> Result<String> {
+    pub fn add_key(path: &Path, name: &str, models: &[String]) -> Result<String, ConfigError> {
         let config = Self::load_from(path)?;
         if config.keys.iter().any(|k| k.name == name) {
-            anyhow::bail!("a key named {name:?} already exists");
+            return Err(ConfigError::KeyExists(name.to_owned()));
         }
         let key = format!("sm-{}", ids::token());
         let mut doc = Self::document(path)?;
@@ -340,15 +356,17 @@ impl Config {
         doc.entry("keys")
             .or_insert_with(|| toml_edit::Item::ArrayOfTables(Default::default()))
             .as_array_of_tables_mut()
-            .context("`keys` in config.toml is not a list of [[keys]] tables")?
+            .ok_or_else(|| ConfigError::Invalid {
+                path: path.to_owned(),
+                message: "`keys` is not a list of [[keys]] tables".into(),
+            })?
             .push(entry);
-        fsx::write_private(path, doc.to_string().as_bytes())
-            .with_context(|| format!("writing {}", path.display()))?;
+        fsx::write_private(path, doc.to_string().as_bytes()).map_err(write_error(path))?;
         Ok(key)
     }
 
     /// Removes the client key named `name`; returns whether there was one.
-    pub fn remove_key(path: &Path, name: &str) -> Result<bool> {
+    pub fn remove_key(path: &Path, name: &str) -> Result<bool, ConfigError> {
         let mut doc = Self::document(path)?;
         let Some(keys) = doc.get_mut("keys").and_then(|k| k.as_array_of_tables_mut()) else {
             return Ok(false);
@@ -361,15 +379,14 @@ impl Config {
         if keys.is_empty() {
             doc.remove("keys");
         }
-        fsx::write_private(path, doc.to_string().as_bytes())
-            .with_context(|| format!("writing {}", path.display()))?;
+        fsx::write_private(path, doc.to_string().as_bytes()).map_err(write_error(path))?;
         Ok(true)
     }
 
     /// Sets top-level settings in the config at `path`, keeping the file's
     /// comments, and returns the config they make. Nothing is written if
     /// the result is not a valid config.
-    pub fn set(path: &Path, values: &[(&str, toml_edit::Value)]) -> Result<Self> {
+    pub fn set(path: &Path, values: &[(&str, toml_edit::Value)]) -> Result<Self, ConfigError> {
         let mut doc = match std::fs::read_to_string(path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => DocumentMut::new(),
             _ => Self::document(path)?,
@@ -384,17 +401,14 @@ impl Config {
         }
         let text = doc.to_string();
         let config = toml_edit::de::from_str::<Self>(&text)
-            .with_context(|| format!("invalid setting for {}", path.display()))?;
-        fsx::write_private(path, text.as_bytes())
-            .with_context(|| format!("writing {}", path.display()))?;
+            .map_err(|e| ConfigError::Rejected(format!("invalid setting: {e}")))?;
+        fsx::write_private(path, text.as_bytes()).map_err(write_error(path))?;
         Ok(config)
     }
 
-    fn document(path: &Path) -> Result<DocumentMut> {
-        let text =
-            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        text.parse()
-            .with_context(|| format!("invalid config {}", path.display()))
+    fn document(path: &Path) -> Result<DocumentMut, ConfigError> {
+        let text = std::fs::read_to_string(path).map_err(read_error(path))?;
+        text.parse().map_err(invalid(path))
     }
 
     /// Base URL agents use to reach the proxy.

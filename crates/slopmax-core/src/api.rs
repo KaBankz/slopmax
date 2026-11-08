@@ -458,6 +458,56 @@ pub fn toml_value(value: api::settings::LiveValue) -> toml_edit::Value {
     }
 }
 
+// Each of the engine's boundary errors as the API answers it: one place,
+// so the daemon's handlers only say `?`.
+
+impl From<crate::error::StoreError> for api::ApiError {
+    fn from(error: crate::error::StoreError) -> Self {
+        use crate::error::StoreError;
+        match &error {
+            StoreError::NotFound(_) | StoreError::Gone(_) => Self::not_found("account"),
+            StoreError::Ambiguous { .. } => Self::bad_request(error.to_string()),
+            StoreError::Io { .. } => Self::internal(error.to_string()),
+        }
+    }
+}
+
+impl From<crate::error::ConfigError> for api::ApiError {
+    fn from(error: crate::error::ConfigError) -> Self {
+        use crate::error::ConfigError;
+        match &error {
+            ConfigError::Rejected(_) => Self::bad_request(error.to_string()),
+            ConfigError::KeyExists(_) | ConfigError::Invalid { .. } => {
+                Self::conflict(error.to_string())
+            }
+            ConfigError::Read { .. } | ConfigError::Write { .. } => {
+                Self::internal(error.to_string())
+            }
+        }
+    }
+}
+
+impl From<crate::error::LoginError> for api::ApiError {
+    fn from(error: crate::error::LoginError) -> Self {
+        use crate::error::LoginError;
+        match error {
+            LoginError::NotSubscription => Self::bad_request(error.to_string()),
+            LoginError::Cancelled => Self::conflict(error.to_string()),
+            LoginError::Store(store) => store.into(),
+            LoginError::Failed(e) => Self::upstream(format!("{e:#}")),
+        }
+    }
+}
+
+impl From<crate::error::ProviderError> for api::ApiError {
+    fn from(error: crate::error::ProviderError) -> Self {
+        match error {
+            crate::error::ProviderError::Refused(message) => Self::upstream(message),
+            crate::error::ProviderError::Failed(e) => Self::upstream(format!("{e:#}")),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -475,6 +525,28 @@ mod tests {
             assert_eq!(named.is_subscription(), id.spec().is_subscription());
             assert_eq!(named.grants_resets(), id.get().credits().is_some());
         }
+    }
+
+    /// Each boundary error answers with the status a client acts on.
+    #[test]
+    fn boundary_errors_answer_as_the_api_says() {
+        use crate::error::{ConfigError, LoginError, StoreError};
+        let status = |e: api::ApiError| e.status();
+        assert_eq!(status(StoreError::NotFound("x".into()).into()), 404);
+        assert_eq!(status(StoreError::Gone("x".into()).into()), 404);
+        let ambiguous = StoreError::Ambiguous {
+            query: "a".into(),
+            ids: vec!["a1".into(), "a2".into()],
+        };
+        assert_eq!(ambiguous.to_string(), "\"a\" is ambiguous: a1, a2");
+        assert_eq!(status(ambiguous.into()), 400);
+        assert_eq!(status(ConfigError::KeyExists("laptop".into()).into()), 409);
+        assert_eq!(status(ConfigError::Rejected("no".into()).into()), 400);
+        assert_eq!(status(LoginError::NotSubscription.into()), 400);
+        let failed = LoginError::Failed(anyhow::anyhow!("denied").context("signing in"));
+        // The chain, as the CLI prints it.
+        assert_eq!(failed.to_string(), "signing in: denied");
+        assert_eq!(status(failed.into()), 502);
     }
 
     /// The words `slopmax status` and the apps show agree with the engine's.

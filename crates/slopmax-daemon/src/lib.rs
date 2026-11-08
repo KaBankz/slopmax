@@ -9,8 +9,8 @@ pub mod proxy;
 
 // The engine's modules, under the names the daemon's code uses.
 pub(crate) use slopmax_core::{
-    account, agent, api, auth, blocking, config, doctor, fsx, history, import, ledger, limits,
-    notify, paths, pool, provider, report, route, state, summary, usage, waste,
+    account, agent, api, auth, blocking, config, doctor, error, fsx, history, import, ledger,
+    limits, notify, paths, pool, provider, report, route, state, summary, usage, waste,
 };
 pub(crate) use slopmax_core::{human, ids, log, net, time, wire};
 
@@ -22,6 +22,7 @@ use tokio::net::TcpListener;
 
 use crate::account::Account;
 use crate::config::Config;
+use crate::error::ListenError;
 use crate::net::{Origins, server};
 use crate::paths::Home;
 use crate::pool::State;
@@ -111,10 +112,16 @@ const SETTLE: Duration = Duration::from_secs(5);
 pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<Stopped> {
     let serving = serve_lock(&home)?;
     let listen = config.listen;
-    let listener = TcpListener::bind(listen).await.with_context(|| {
+    let listener = TcpListener::bind(listen).await.map_err(|source| {
         match server::port_holder(listen.port()) {
-            Some(holder) => format!("cannot listen on {listen}: {holder} is using that port"),
-            None => format!("cannot listen on {listen}"),
+            Some(holder) => ListenError::Held {
+                addr: listen,
+                holder,
+            },
+            None => ListenError::Unavailable {
+                addr: listen,
+                source,
+            },
         }
     })?;
     let state = read_state(&home);

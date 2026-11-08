@@ -8,9 +8,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::error::StoreError;
 use crate::log;
 use crate::paths::Home;
 use crate::provider::ProviderId;
@@ -205,15 +206,15 @@ impl Store {
     }
 
     /// All accounts, ordered by provider, then priority, then age.
-    pub fn list(&self) -> Result<Vec<Account>> {
+    pub fn list(&self) -> Result<Vec<Account>, StoreError> {
         let entries = match fs::read_dir(&self.dir) {
             Ok(entries) => entries,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(e).context("reading accounts directory"),
+            Err(e) => return Err(StoreError::io("listing", "files")(e)),
         };
         let mut accounts = Vec::new();
         for entry in entries {
-            let mut path = entry?.path();
+            let mut path = entry.map_err(StoreError::io("listing", "files"))?.path();
             // An account an earlier version wrote as JSON is read (and
             // rewritten as TOML) once, unless its TOML is already there.
             if path.extension().is_some_and(|ext| ext == "json") {
@@ -236,26 +237,30 @@ impl Store {
         Ok(accounts)
     }
 
-    pub fn get(&self, id: &str) -> Result<Option<Account>> {
-        fsx::read_toml(&self.path(id)).with_context(|| format!("reading account {id}"))
+    pub fn get(&self, id: &str) -> Result<Option<Account>, StoreError> {
+        fsx::read_toml(&self.path(id)).map_err(StoreError::io("reading", id))
     }
 
     /// Writes `account` without locking. Callers that are not refreshing a
     /// token should use [`Store::update`] instead, so they cannot overwrite a
     /// token another process just rotated.
-    pub fn save(&self, account: &Account) -> Result<()> {
+    pub fn save(&self, account: &Account) -> Result<(), StoreError> {
         fsx::write_toml(&self.path(&account.id), account)
-            .with_context(|| format!("saving account {}", account.id))
+            .map_err(StoreError::io("saving", &account.id))
     }
 
     /// Read-modify-write under the account's lock. This blocks while a
     /// refresh holds the lock, so async callers should run it on a blocking
     /// thread.
-    pub fn update(&self, id: &str, change: impl FnOnce(&mut Account)) -> Result<Account> {
+    pub fn update(
+        &self,
+        id: &str,
+        change: impl FnOnce(&mut Account),
+    ) -> Result<Account, StoreError> {
         let _lock = self.lock(id)?;
         let mut account = self
             .get(id)?
-            .with_context(|| format!("account {id} no longer exists"))?;
+            .ok_or_else(|| StoreError::Gone(id.to_owned()))?;
         change(&mut account);
         self.save(&account)?;
         Ok(account)
@@ -263,7 +268,7 @@ impl Store {
 
     /// Saves a freshly connected account, merging into an existing record of
     /// the same identity. Returns whether the account is new.
-    pub fn upsert(&self, mut account: Account) -> Result<(Account, bool)> {
+    pub fn upsert(&self, mut account: Account) -> Result<(Account, bool), StoreError> {
         account.assign_id();
         let _lock = self.lock(&account.id)?;
         let existing = self.get(&account.id)?;
@@ -274,9 +279,12 @@ impl Store {
         Ok((account, existing.is_none()))
     }
 
-    pub fn remove(&self, id: &str) -> Result<()> {
+    pub fn remove(&self, id: &str) -> Result<(), StoreError> {
         let lock = self.lock(id)?;
-        fs::remove_file(self.path(id)).with_context(|| format!("removing account {id}"))?;
+        fs::remove_file(self.path(id)).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => StoreError::Gone(id.to_owned()),
+            _ => StoreError::io("removing", id)(e),
+        })?;
         let _ = fs::remove_file(self.path(id).with_extension("json"));
         drop(lock);
         let _ = fs::remove_file(self.lock_path(id));
@@ -288,13 +296,13 @@ impl Store {
     }
 
     /// Takes the cross-process lock that serializes token refreshes for `id`.
-    pub fn lock(&self, id: &str) -> Result<fs::File> {
-        fsx::lock(&self.lock_path(id)).with_context(|| format!("locking account {id}"))
+    pub fn lock(&self, id: &str) -> Result<fs::File, StoreError> {
+        fsx::lock(&self.lock_path(id)).map_err(StoreError::io("locking", id))
     }
 
     /// Resolves a user-supplied reference: an id, id prefix, label, email,
     /// or 1-based position in [`Store::list`].
-    pub fn find(&self, query: &str) -> Result<Account> {
+    pub fn find(&self, query: &str) -> Result<Account, StoreError> {
         let accounts = self.list()?;
         if let Ok(n) = query.parse::<usize>()
             && let Some(account) = n.checked_sub(1).and_then(|i| accounts.get(i))
@@ -319,10 +327,13 @@ impl Store {
         };
         match matches.as_slice() {
             [account] => Ok((*account).clone()),
-            [] => bail!("no account matches {query:?} (see `slopmax status`)"),
+            [] => Err(StoreError::NotFound(query.to_owned())),
             many => {
                 let ids: Vec<&str> = many.iter().map(|a| a.id.as_str()).collect();
-                bail!("{query:?} is ambiguous: {}", ids.join(", "))
+                Err(StoreError::Ambiguous {
+                    query: query.to_owned(),
+                    ids: ids.into_iter().map(str::to_owned).collect(),
+                })
             }
         }
     }
@@ -348,7 +359,7 @@ pub fn forget(store: &Store, home: &Home, account: &Account) -> Result<()> {
     crate::state::change(home, |state| {
         state.pins.retain(|_, pinned| *pinned != account.id);
     })?;
-    store.remove(&account.id)
+    Ok(store.remove(&account.id)?)
 }
 
 #[cfg(test)]

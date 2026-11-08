@@ -25,6 +25,7 @@ slopmax-client.workspace = true
 slopmax-common.workspace = true
 slopmax-net.workspace = true
 slopmax-wire.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 toml_edit.workspace = true

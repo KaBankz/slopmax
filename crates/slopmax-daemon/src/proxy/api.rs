@@ -226,7 +226,7 @@ async fn answer(app: &Arc<App>, route: Route<'_>, query: &str, body: &[u8]) -> A
                 ok(&keys(&app.config()))
             }
             Ok(false) => Err(ApiError::not_found("key")),
-            Err(e) => Err(ApiError::internal(format!("{e:#}"))),
+            Err(e) => Err(e.into()),
         },
         Route::Agents => ok(&agents(&app.config(), &app.home)),
         Route::Connect(id) => connect_agent(app, id).await,
@@ -297,9 +297,9 @@ fn find(app: &App, id: &str) -> Result<crate::account::Account, ApiError> {
 }
 
 /// Applies a change made on disk at once, then reports.
-fn changed(app: &App, change: anyhow::Result<()>) -> Answer {
-    change
-        .and_then(|()| app.sync())
+fn changed(app: &App, change: Result<(), crate::error::StoreError>) -> Answer {
+    change?;
+    app.sync()
         .map_err(|e| ApiError::internal(format!("{e:#}")))?;
     ok(&app.api_report())
 }
@@ -389,9 +389,7 @@ async fn add_account(app: &App, add: AddAccount) -> Answer {
     };
     let label = label.map(|l| l.trim().to_owned()).filter(|l| !l.is_empty());
     let prompt = crate::auth::Prompt::new(|_| {});
-    let (account, _) = crate::auth::connect(&app.store, provider, label, options, prompt)
-        .await
-        .map_err(|e| ApiError::upstream(format!("{e:#}")))?;
+    let (account, _) = crate::auth::connect(&app.store, provider, label, options, prompt).await?;
     app.sync()
         .map_err(|e| ApiError::internal(format!("{e:#}")))?;
     let report = app.api_report();
@@ -445,7 +443,7 @@ async fn redeem(app: &App, id: &str, asked: RedeemRequest) -> Answer {
             let listed = credits
                 .list(&app.auth_http, &account, agent.as_deref())
                 .await
-                .map_err(|e| ApiError::upstream(format!("{e:#}")))?;
+                .map_err(crate::error::ProviderError::Failed)?;
             let soonest = listed.first().map(|c| c.id.clone());
             app.pool
                 .record_credits(&account.id, listed, Timestamp::now());
@@ -463,7 +461,7 @@ async fn redeem(app: &App, id: &str, asked: RedeemRequest) -> Answer {
     let outcome = credits
         .redeem(&app.auth_http, &account, agent.as_deref(), Some(&credit))
         .await
-        .map_err(|e| ApiError::upstream(format!("{e:#}")))?;
+        .map_err(crate::error::ProviderError::Failed)?;
     if outcome == Outcome::Reset {
         log::info!("{}: redeemed a limit reset on request", account.id);
         app.pool
@@ -664,8 +662,7 @@ fn change_settings(app: &App, body: &[u8]) -> Answer {
         .into_iter()
         .map(|(live, value)| (live.toml, api::toml_value(value)))
         .collect();
-    let mut config = Config::set(&app.home.config(), &values)
-        .map_err(|e| ApiError::internal(format!("{e:#}")))?;
+    let mut config = Config::set(&app.home.config(), &values)?;
     let current = app.config();
     config.listen = current.listen;
     config.api_key.clone_from(&current.api_key);
@@ -692,8 +689,7 @@ fn make_key(app: &App, asked: MakeKey) -> Answer {
         .map(|m| m.trim().to_owned())
         .filter(|m| !m.is_empty())
         .collect();
-    let key = Config::add_key(&app.home.config(), &name, &models)
-        .map_err(|e| ApiError::internal(format!("{e:#}")))?;
+    let key = Config::add_key(&app.home.config(), &name, &models)?;
     app.reload_config();
     ok(&NewKey { name, key, models })
 }
@@ -826,7 +822,7 @@ async fn notify_test(app: &App) -> Answer {
             &crate::notify::Event::test(Timestamp::now()),
         )
         .await
-        .map_err(|e| ApiError::upstream(format!("{e:#}")))?;
+        .map_err(crate::error::ProviderError::Failed)?;
     empty()
 }
 

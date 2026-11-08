@@ -15,6 +15,7 @@ pub mod background;
 pub mod blocking;
 pub mod config;
 pub mod doctor;
+pub mod error;
 pub mod fsx;
 pub mod history;
 pub mod import;

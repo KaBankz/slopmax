@@ -6463,6 +6463,7 @@ dependencies = [
  "slopmax-common",
  "slopmax-net",
  "slopmax-wire",
+ "thiserror 2.0.21",
  "tokio",
  "tokio-util",
  "toml_edit 0.25.15+spec-1.1.0",

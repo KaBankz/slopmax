@@ -180,13 +180,17 @@ pub async fn connect(
     label: Option<String>,
     options: LoginOptions,
     prompt: Prompt,
-) -> Result<(Account, bool)> {
+) -> Result<(Account, bool), crate::error::LoginError> {
     let http = http_client(Origins::default());
-    let mut account = provider.get().login(&http, options, prompt).await?;
+    let mut account = provider
+        .get()
+        .login(&http, options, prompt)
+        .await
+        .map_err(crate::error::LoginError::Failed)?;
     if label.is_some() {
         account.label = label;
     }
-    store.upsert(account)
+    Ok(store.upsert(account)?)
 }
 
 /// The browser half of an authorization-code login: opens `url` (unless
@@ -368,7 +372,7 @@ async fn refresh_and_save(
 /// Saves an account on a blocking thread, off the runtime's.
 async fn save(store: &Store, account: &Account) -> Result<()> {
     let (store, account) = (store.clone(), account.clone());
-    crate::blocking::run(move || store.save(&account)).await
+    Ok(crate::blocking::run(move || store.save(&account)).await?)
 }
 
 #[cfg(test)]

@@ -73,7 +73,7 @@ pub fn save(store: &Store, found: Vec<Found>, own: bool) -> Vec<Saved> {
                 if own {
                     account.link = None;
                 }
-                store.upsert(account)
+                Ok(store.upsert(account)?)
             }),
         })
         .collect()
