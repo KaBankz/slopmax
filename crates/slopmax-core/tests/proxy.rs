@@ -2851,3 +2851,91 @@ async fn callers_refreshing_at_once_share_one_poll() {
         .count();
     assert_eq!(polls, 1);
 }
+
+#[tokio::test]
+async fn the_client_crate_drives_the_daemon_and_follows_its_events() {
+    use slopmax_client::api::events::Event;
+    use slopmax_client::api::ledger::HistoryRange;
+    use slopmax_client::api::requests::{AccountPatch, MakeKey};
+    use slopmax_client::api::settings::LivePatch;
+    let h = harness(ProviderId::Claude, &["tok-a", "tok-b"]).await;
+    // As `slopmax init` leaves it; settings and keys are written into it.
+    std::fs::write(
+        h.dir.join("config.toml"),
+        format!("api_key = \"{KEY}\"\nrefresh_tokens = false\n"),
+    )
+    .unwrap();
+    let client = slopmax_client::Client::new(h.proxy.clone(), KEY);
+    assert!(client.health().await.is_some());
+
+    let mut events = client.events().await.unwrap();
+    let Some(Ok(Event::Hello { .. })) = events.next().await else {
+        panic!("the stream opens with Hello");
+    };
+    let Some(Ok(Event::Status { report })) = events.next().await else {
+        panic!("then the report");
+    };
+    assert_eq!(report.accounts.len(), 2);
+
+    let second = h.ids[1].clone();
+    let report = client.pin(&second).await.unwrap();
+    assert!(report.accounts.iter().any(|a| a.id == second && a.pinned));
+    let patch = AccountPatch {
+        label: Some(Some("work".into())),
+        priority: Some(3),
+        ..AccountPatch::default()
+    };
+    let report = client.update_account(&second, &patch).await.unwrap();
+    let account = report.accounts.iter().find(|a| a.id == second).unwrap();
+    assert_eq!((account.name.as_str(), account.priority), ("work", 3));
+    let report = client.unpin_all().await.unwrap();
+    assert!(report.accounts.iter().all(|a| !a.pinned));
+
+    // A change made through the API is pushed to whoever follows.
+    let pushed = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(event) = events.next().await {
+            if let Ok(Event::Status { report }) = event
+                && report.accounts.iter().any(|a| a.name == "work")
+            {
+                return true;
+            }
+        }
+        false
+    })
+    .await;
+    assert_eq!(pushed, Ok(true));
+
+    let patch = LivePatch {
+        session_minutes: Some(45),
+        ..LivePatch::default()
+    };
+    let view = client.change_settings(&patch).await.unwrap();
+    assert_eq!(view.settings.live.session_minutes, 45);
+    let made = client
+        .make_key(&MakeKey {
+            name: "laptop".into(),
+            models: Vec::new(),
+        })
+        .await
+        .unwrap();
+    assert!(made.key.starts_with("sm-"), "{}", made.key);
+    let keys = client.remove_key("laptop").await.unwrap();
+    assert!(keys.iter().all(|k| k.name != "laptop"));
+    let history = client.history(HistoryRange::Today).await.unwrap();
+    assert_eq!(history.total.requests, 0);
+
+    // The daemon's own refusals come back typed.
+    let missing = client.pin("claude-nope").await.unwrap_err();
+    assert!(
+        matches!(
+            missing,
+            slopmax_client::Error::Api(slopmax_client::api::ApiError::NotFound { .. })
+        ),
+        "{missing:?}"
+    );
+    let wrong = slopmax_client::Client::new(h.proxy.clone(), "sm-wrong");
+    assert!(matches!(
+        wrong.status().await.unwrap_err(),
+        slopmax_client::Error::Api(slopmax_client::api::ApiError::Unauthorized { .. })
+    ));
+}

@@ -31,5 +31,7 @@ toml_edit.workspace = true
 workspace = true
 
 [dev-dependencies]
+# The client the CLI and the desktop app reach the daemon with.
+slopmax-client.workspace = true
 # Paused time, for timeouts tested without waiting them out.
 tokio = { workspace = true, features = ["test-util"] }

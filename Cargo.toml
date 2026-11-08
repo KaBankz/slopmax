@@ -7,6 +7,7 @@ default-members = [
   "crates/slopmax",
   "crates/slopmax-api",
   "crates/slopmax-app",
+  "crates/slopmax-client",
   "crates/slopmax-common",
   "crates/slopmax-core",
   "crates/slopmax-net",
@@ -24,6 +25,7 @@ repository = "https://github.com/KaBankz/slopmax"
 [workspace.dependencies]
 slopmax-api = { path = "crates/slopmax-api" }
 slopmax-app = { path = "crates/slopmax-app" }
+slopmax-client = { path = "crates/slopmax-client" }
 slopmax-common = { path = "crates/slopmax-common" }
 slopmax-core = { path = "crates/slopmax-core" }
 slopmax-net = { path = "crates/slopmax-net" }

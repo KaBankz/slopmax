@@ -6410,6 +6410,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "slopmax-client"
+version = "0.3.0"
+dependencies = [
+ "bytes",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde",
+ "serde_json",
+ "slopmax-api",
+ "slopmax-net",
+ "tokio",
+]
+
+[[package]]
 name = "slopmax-common"
 version = "0.3.0"
 dependencies = [
@@ -6435,6 +6451,7 @@ dependencies = [
  "serde",
  "serde_json",
  "slopmax-api",
+ "slopmax-client",
  "slopmax-common",
  "slopmax-net",
  "slopmax-wire",
