@@ -480,7 +480,7 @@ export const signIn = act(
       store.set(signInAtom, Option.some(startSignIn(input.provider)))
       const started = yield* client.logins
         .start({
-          payload: new StartLogin({ provider: input.provider, device: input.device ?? false }),
+          payload: new StartLogin({ provider: input.provider, device: input.device ?? false, noBrowser: false }),
         })
         .pipe(Effect.tapCause(() => Effect.sync(() => store.set(signInAtom, Option.none()))))
       const now = store.read(signInAtom)

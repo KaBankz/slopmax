@@ -167,6 +167,12 @@ pub fn read_secret(prompt: &str) -> io::Result<String> {
 /// A sign-in at the terminal: what to do goes to stderr, and the lines typed
 /// while it waits are taken as pasted redirect addresses.
 pub fn sign_in() -> Prompt {
+    Prompt::new(show).with_pasted(pasted())
+}
+
+/// The lines typed while the receiver is held, as redirect addresses
+/// pasted during a sign-in.
+pub fn pasted() -> tokio::sync::mpsc::UnboundedReceiver<String> {
     let (pasted, lines_pasted) = tokio::sync::mpsc::unbounded_channel();
     std::thread::spawn(move || {
         // Takes lines only while the sign-in waits, checking often, so the
@@ -185,7 +191,7 @@ pub fn sign_in() -> Prompt {
             }
         }
     });
-    Prompt::new(show).with_pasted(lines_pasted)
+    lines_pasted
 }
 
 fn show(event: LoginEvent) {
@@ -195,19 +201,24 @@ fn show(event: LoginEvent) {
             url,
             opened,
             port,
-        } => {
-            let verb = if opened { "Opened" } else { "Authorize" };
-            eprintln!("\n  {verb} your {title} account in the browser:\n\n  {url}\n");
-            eprintln!(
-                "  Waiting for the redirect to localhost:{port}. If the browser runs on another\n  \
-                 machine, paste the final localhost URL from its address bar here.\n"
-            );
-        }
-        LoginEvent::DeviceCode { url, code } => {
-            eprintln!("\n  Open {url}\n  and enter the code: {code}\n");
-        }
+        } => authorize(title, &url, opened, port),
+        LoginEvent::DeviceCode { url, code } => device_code(&url, &code),
         LoginEvent::Notice(text) => eprintln!("  {text}"),
     }
+}
+
+/// What to do to authorize in the browser.
+pub fn authorize(title: &str, url: &str, opened: bool, port: u16) {
+    let verb = if opened { "Opened" } else { "Authorize" };
+    eprintln!("\n  {verb} your {title} account in the browser:\n\n  {url}\n");
+    eprintln!(
+        "  Waiting for the redirect to localhost:{port}. If the browser runs on another\n  \
+         machine, paste the final localhost URL from its address bar here.\n"
+    );
+}
+
+pub fn device_code(url: &str, code: &str) {
+    eprintln!("\n  Open {url}\n  and enter the code: {code}\n");
 }
 
 /// Turns off terminal echo until dropped.

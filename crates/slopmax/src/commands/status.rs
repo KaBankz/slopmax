@@ -1,5 +1,7 @@
 //! `slopmax status`: the accounts, their usage windows, and when limits
-//! reset, from the running proxy or from disk.
+//! reset, from the running proxy or from disk. `--watch` follows the
+//! daemon's event stream, redrawing as the report changes and as its
+//! countdowns tick.
 
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -9,37 +11,88 @@ use anyhow::Result;
 
 use super::StatusArgs;
 use crate::ui;
+use slopmax_client::api::report::{AccountView, PoolView, Report, Window};
+use slopmax_client::api::{Provider, Span};
 use slopmax_core::account::Store;
-use slopmax_core::background::Daemon;
 use slopmax_core::config::Config;
 use slopmax_core::human;
-use slopmax_core::limits::Window;
-use slopmax_core::provider::ProviderId;
-use slopmax_core::report::{self, AccountReport, PoolReport, Report};
+use slopmax_core::report;
 use slopmax_core::time::Timestamp;
 
 pub(super) async fn run(config: &Config, store: &Store, args: StatusArgs) -> Result<()> {
-    let daemon = Daemon::new(config);
-    let mut refresh = args.refresh;
+    let daemon = super::daemon(config).await;
+    if args.watch {
+        return watch(config, store, daemon, args.refresh).await;
+    }
+    let report = match &daemon {
+        Some(client) if args.refresh => client.refresh().await?,
+        Some(client) => client.status().await?,
+        None => offline(config, store, args.refresh).await?,
+    };
+    if args.json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print!("{}", render(&report, Timestamp::now()));
+    }
+    Ok(())
+}
+
+/// The report read from disk, while no daemon runs.
+async fn offline(config: &Config, store: &Store, refresh: bool) -> Result<Report> {
+    let now = Timestamp::now();
+    let report = report::offline(config, store, refresh).await?;
+    Ok(slopmax_core::api::report(&report, config, now))
+}
+
+/// Redraws the report as the daemon pushes it, and at least once a
+/// minute for the countdowns; with no daemon, from disk every few seconds,
+/// following one once it starts.
+async fn watch(
+    config: &Config,
+    store: &Store,
+    mut daemon: Option<slopmax_client::Client>,
+    mut refresh: bool,
+) -> Result<()> {
+    let draw = |report: &Report| -> Result<()> {
+        print!("\x1b[2J\x1b[H{}", render(report, Timestamp::now()));
+        Ok(std::io::stdout().flush()?)
+    };
     loop {
-        let report = match daemon.report(refresh).await {
-            Some(report) => report,
-            None => report::offline(config, store, refresh).await?,
+        let Some(client) = daemon.take() else {
+            draw(&offline(config, store, refresh).await?)?;
+            refresh = false;
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            daemon = super::daemon(config).await;
+            continue;
         };
-        if args.json {
-            println!("{}", serde_json::to_string_pretty(&report)?);
-            return Ok(());
+        if refresh {
+            client.refresh().await?;
+            refresh = false;
         }
-        let text = render(&report, Timestamp::now());
-        if args.watch {
-            print!("\x1b[2J\x1b[H{text}");
-            std::io::stdout().flush()?;
-        } else {
-            print!("{text}");
-            return Ok(());
+        let Ok(mut events) = client.events().await else {
+            continue;
+        };
+        let mut last: Option<Report> = None;
+        loop {
+            let tick = tokio::time::sleep(Duration::from_secs(60));
+            tokio::select! {
+                event = events.next() => match event {
+                    Some(Ok(slopmax_client::api::events::Event::Status { report })) => {
+                        draw(&report)?;
+                        last = Some(*report);
+                    }
+                    Some(Ok(_)) => {}
+                    // The daemon stopped, or the stream broke: from disk
+                    // until one answers again.
+                    Some(Err(_)) | None => break,
+                },
+                () = tick => {
+                    if let Some(report) = &last {
+                        draw(report)?;
+                    }
+                }
+            }
         }
-        refresh = false;
-        tokio::time::sleep(Duration::from_secs(5)).await;
     }
 }
 
@@ -66,8 +119,8 @@ fn render(report: &Report, now: Timestamp) -> String {
         .unwrap_or(0)
         .clamp(7, 36);
     let mut index = 0;
-    for provider in ProviderId::ALL {
-        let accounts: Vec<&AccountReport> = report
+    for provider in Provider::ALL {
+        let accounts: Vec<&AccountView> = report
             .accounts
             .iter()
             .filter(|a| a.provider == provider)
@@ -75,7 +128,7 @@ fn render(report: &Report, now: Timestamp) -> String {
         if accounts.is_empty() {
             continue;
         }
-        if !provider.spec().is_subscription() {
+        if !provider.is_subscription() {
             index = metered(&mut out, provider, &accounts, index, name_width, now);
             continue;
         }
@@ -97,7 +150,7 @@ fn render(report: &Report, now: Timestamp) -> String {
                 ui::dim(format!("{index:>2}")),
                 ui::pad(&name, name_width + 1),
                 ui::pad(account.plan.as_deref().unwrap_or("—"), PLAN),
-                window_cell(account.window("5h"), now),
+                window_cell(account.window(Span::FiveHours), now),
                 window_cell(account.long_window(), now),
                 status_cell(account, now),
             );
@@ -128,7 +181,7 @@ fn render(report: &Report, now: Timestamp) -> String {
         "\n{}",
         ui::dim(format!(
             "strategy {} · {}",
-            report.strategy,
+            report.strategy.as_str(),
             if report.live {
                 "proxy running"
             } else {
@@ -143,8 +196,8 @@ fn render(report: &Report, now: Timestamp) -> String {
 /// Returns the last row number used.
 fn metered(
     out: &mut String,
-    provider: ProviderId,
-    accounts: &[&AccountReport],
+    provider: Provider,
+    accounts: &[&AccountView],
     mut index: usize,
     name_width: usize,
     now: Timestamp,
@@ -189,8 +242,8 @@ fn scoped_rows<'a>(
         // Under the matching column: the row prefix is the index and name,
         // then the plan, then each usage cell.
         let five_hour_column = name_width + 4 + 2 + PLAN + 2;
-        let column = match scoped.span.as_str() {
-            "5h" => five_hour_column,
+        let column = match scoped.span {
+            Span::FiveHours => five_hour_column,
             _ => five_hour_column + CELL + 2,
         };
         let label = format!("└ {}", scoped.label());
@@ -204,7 +257,7 @@ fn scoped_rows<'a>(
 }
 
 /// The pool as the agents see it, when it has more than one account.
-fn pool_row(out: &mut String, pool: Option<&PoolReport>, name_width: usize, now: Timestamp) {
+fn pool_row(out: &mut String, pool: Option<&PoolView>, name_width: usize, now: Timestamp) {
     let Some(pool) = pool.filter(|p| p.accounts > 1) else {
         return;
     };
@@ -213,11 +266,14 @@ fn pool_row(out: &mut String, pool: Option<&PoolReport>, name_width: usize, now:
         "   {}  {}  {}  {}  {}",
         ui::pad(&ui::bold("pool"), name_width + 1),
         ui::pad(&ui::dim(format!("{} accts", pool.accounts)), PLAN),
-        window_cell(pool.window("5h"), now),
-        window_cell(pool.long_window(), now),
+        window_cell(
+            pool.window(Span::FiveHours).map(|w| w.as_window()).as_ref(),
+            now
+        ),
+        window_cell(pool.long_window().map(|w| w.as_window()).as_ref(), now),
         ui::dim("what the agents see"),
     );
-    scoped_rows(out, pool.scoped_windows(), name_width, now);
+    scoped_rows(out, pool.scoped.iter(), name_width, now);
 }
 
 fn window_cell(window: Option<&Window>, now: Timestamp) -> String {
@@ -239,12 +295,12 @@ fn window_cell(window: Option<&Window>, now: Timestamp) -> String {
     ui::pad(&cell, CELL)
 }
 
-fn status_cell(account: &AccountReport, now: Timestamp) -> String {
-    let condition = account.condition(now);
+fn status_cell(account: &AccountView, now: Timestamp) -> String {
+    let condition = account.condition.at(now);
     let parts: Vec<String> = std::iter::once(ui::toned(condition.tone(), condition.describe(now)))
         .chain(
             account
-                .notes(now)
+                .notes
                 .iter()
                 .map(|note| ui::toned(note.tone(), note.describe())),
         )
@@ -259,9 +315,23 @@ mod tests {
     use super::*;
     use slopmax_core::account::{Account, Tokens};
     use slopmax_core::config::Strategy;
-    use slopmax_core::limits::Limits;
+    use slopmax_core::limits::{Limits, Window};
     use slopmax_core::pool::{AccountState, Pins};
-    use slopmax_core::report::build;
+    use slopmax_core::provider::ProviderId;
+
+    /// The report as the API answers it.
+    fn build(
+        accounts: Vec<Account>,
+        state_of: impl Fn(&str) -> AccountState,
+        pins: &Pins,
+        sessions: &HashMap<String, usize>,
+        strategy: Strategy,
+        live: bool,
+        now: Timestamp,
+    ) -> Report {
+        let report = report::build(accounts, state_of, pins, sessions, strategy, live, now);
+        slopmax_core::api::report(&report, &Config::default(), now)
+    }
 
     fn ts(secs: i64) -> Timestamp {
         Timestamp::from_second(secs).unwrap()

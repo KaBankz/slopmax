@@ -11,7 +11,9 @@ use std::io::IsTerminal;
 
 use anyhow::{Context, Result, bail};
 
-use self::accounts::{import, login, own, redeem, remove, set_disabled, use_account};
+use self::accounts::{
+    import, login, own, redeem, remove, rename, set_disabled, set_priority, use_account,
+};
 use self::background::{ensure_running, service, start, stop};
 use crate::args::{self, App, Arg, Choice, Command, Kind, Parsed};
 use crate::ui;
@@ -538,26 +540,22 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
                 ..LoginOptions::default()
             };
             let label = m.value("label").map(str::to_owned);
-            login(&store, provider, label, options).await?;
+            login(&config, &store, provider, label, options).await?;
         }
-        "import" => import(&store, m.get("source")?, m.flag("own")).await?,
-        "own" => own(&store, &m.get::<String>("account")?)?,
-        "use" => use_account(&store, &m.get::<String>("account")?)?,
+        "import" => import(&config, &store, m.get("source")?, m.flag("own")).await?,
+        "own" => own(&config, &store, &m.get::<String>("account")?).await?,
+        "use" => use_account(&config, &store, &m.get::<String>("account")?).await?,
         "label" => {
-            let id = store.find(&m.get::<String>("account")?)?.id;
             let label: String = m.get("label")?;
-            let a = store.update(&id, |a| a.label = Some(label))?;
-            println!("Renamed {} to {}", a.id, ui::bold(a.name()));
+            rename(&config, &store, &m.get::<String>("account")?, label).await?;
         }
         "priority" => {
-            let id = store.find(&m.get::<String>("account")?)?.id;
             let priority: i32 = m.get("priority")?;
-            let a = store.update(&id, |a| a.priority = priority)?;
-            println!("{} now has priority {priority}", ui::bold(a.name()));
+            set_priority(&config, &store, &m.get::<String>("account")?, priority).await?;
         }
-        "enable" => set_disabled(&store, &m.get::<String>("account")?, false)?,
-        "disable" => set_disabled(&store, &m.get::<String>("account")?, true)?,
-        "remove" => remove(&store, &m.get::<String>("account")?)?,
+        "enable" => set_disabled(&config, &store, &m.get::<String>("account")?, false).await?,
+        "disable" => set_disabled(&config, &store, &m.get::<String>("account")?, true).await?,
+        "remove" => remove(&config, &store, &m.get::<String>("account")?).await?,
         "redeem" => redeem(&config, &store, &m.get::<String>("account")?, m.flag("yes")).await?,
         "serve" => return daemon::run(config).await.map(daemon::Stopped::code),
         "start" => start(&config).await?,
@@ -601,7 +599,7 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
             config.notify.send(&http, &event).await?;
             println!("Sent a test notification.");
         }
-        "key" => key(&config, m.get::<String>("action")?.as_str(), m)?,
+        "key" => key(&config, m.get::<String>("action")?.as_str(), m).await?,
         "logs" => {
             let lines = match m.value("lines") {
                 Some(n) => n.parse().context("--lines takes a number")?,
@@ -660,15 +658,25 @@ const CHANGES_ACCOUNTS: &[&str] = &[
 
 /// The agent named by the `agent` argument.
 /// `slopmax key list|add|remove`.
-fn key(config: &Config, action: &str, m: &args::Matches) -> Result<()> {
+async fn key(config: &Config, action: &str, m: &args::Matches) -> Result<()> {
+    use slopmax_client::api::{ApiError, requests::MakeKey, settings::KeyInfo};
     let path = paths::config_file();
     let name = m.value("name").filter(|n| !n.is_empty());
+    let client = daemon(config).await;
     match (action, name) {
         ("list", _) => {
-            if config.keys.is_empty() {
+            let keys: Vec<KeyInfo> = match &client {
+                Some(client) => client.keys().await?,
+                None => config
+                    .keys
+                    .iter()
+                    .map(slopmax_core::api::key_info)
+                    .collect(),
+            };
+            if keys.is_empty() {
                 println!("No client keys. Make one with `slopmax key add <name>`.");
             }
-            for key in &config.keys {
+            for key in &keys {
                 let models = if key.models.is_empty() {
                     "any model".to_owned()
                 } else {
@@ -686,17 +694,37 @@ fn key(config: &Config, action: &str, m: &args::Matches) -> Result<()> {
                 .filter(|s| !s.is_empty())
                 .map(str::to_owned)
                 .collect();
-            let key = Config::add_key(&path, name, &models)?;
+            let (key, applied) = match &client {
+                Some(client) => {
+                    let asked = MakeKey {
+                        name: name.to_owned(),
+                        models,
+                    };
+                    (client.make_key(&asked).await?.key, "the proxy takes it now")
+                }
+                None => (
+                    Config::add_key(&path, name, &models)?,
+                    "the proxy takes it when it starts",
+                ),
+            };
             println!("{key}");
             eprintln!(
                 "{}",
                 ui::dim(format!(
-                    "Added the key {name:?}. Clients present it as a bearer token or x-api-key; a running proxy takes it within seconds."
+                    "Added the key {name:?}. Clients present it as a bearer token or x-api-key; {applied}."
                 ))
             );
         }
         ("remove", Some(name)) => {
-            if !Config::remove_key(&path, name)? {
+            let removed = match &client {
+                Some(client) => match client.remove_key(name).await {
+                    Ok(_) => true,
+                    Err(slopmax_client::Error::Api(ApiError::NotFound { .. })) => false,
+                    Err(e) => return Err(e.into()),
+                },
+                None => Config::remove_key(&path, name)?,
+            };
+            if !removed {
                 bail!("no key named {name:?}");
             }
             println!("Revoked the key {name:?}.");
@@ -763,14 +791,20 @@ async fn settings(config: &Config, name: &str, value: &str) -> Result<()> {
         println!("{current}");
         return Ok(());
     }
-    let setting = live_value(name, value).map_err(anyhow::Error::msg)?;
-    let changed = Config::set(&paths::config_file(), &[setting])?;
-    let now = changed.live(name).unwrap_or_default();
-    let daemon = slopmax_core::background::Daemon::new(config);
-    let applied = if daemon.sync().await.is_some() {
-        "applied now"
-    } else {
-        "the proxy applies it when it starts"
+    let (now, applied) = match daemon(config).await {
+        Some(client) => {
+            let patch = slopmax_client::api::settings::LivePatch::parse(name, value)
+                .map_err(anyhow::Error::msg)?;
+            let view = client.change_settings(&patch).await?;
+            let now = view.settings.live.get(name).map(|v| v.text());
+            (now.unwrap_or_default(), "applied now")
+        }
+        None => {
+            let setting = live_value(name, value).map_err(anyhow::Error::msg)?;
+            let changed = Config::set(&paths::config_file(), &[setting])?;
+            let now = changed.live(name).unwrap_or_default();
+            (now, "the proxy applies it when it starts")
+        }
     };
     println!(
         "{name} = {} {}",
@@ -778,6 +812,14 @@ async fn settings(config: &Config, name: &str, value: &str) -> Result<()> {
         ui::dim(format!("({applied})"))
     );
     Ok(())
+}
+
+/// The daemon serving this home, if one answers at the address config.toml
+/// gives. While it runs it is the only writer of the state, so changes go
+/// through it.
+pub(super) async fn daemon(config: &Config) -> Option<slopmax_client::Client> {
+    let client = slopmax_client::Client::new(config.base_url(), &config.api_key);
+    client.health().await.map(|_| client)
 }
 
 /// `on` or `off`, as switches are given.

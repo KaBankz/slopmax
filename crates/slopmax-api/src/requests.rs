@@ -138,6 +138,13 @@ pub struct StartLogin {
     pub provider: crate::Provider,
     #[serde(default)]
     pub device: bool,
+    /// What to call the account; else its email.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Leave the browser closed: the client opens the address, or shows it
+    /// for a browser on another machine.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_browser: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

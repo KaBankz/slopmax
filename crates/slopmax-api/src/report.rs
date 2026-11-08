@@ -88,6 +88,34 @@ pub enum Condition {
 }
 
 impl Condition {
+    /// As it stands at `now`: a limit or a hold whose time has passed is
+    /// over, though the report was made before.
+    pub fn at(&self, now: Instant) -> Condition {
+        match self {
+            Self::Limited { until } if *until <= now => Self::Ready,
+            Self::Throttled { until: Some(until) } if *until <= now => Self::Ready,
+            other => other.clone(),
+        }
+    }
+
+    /// In words, as `slopmax status` says it.
+    pub fn describe(&self, now: Instant) -> String {
+        match self {
+            Self::SignInNeeded { error } => format!("sign in again ({error})"),
+            Self::Disabled => "disabled".into(),
+            Self::Limited { until } => {
+                format!(
+                    "limited · back in {}",
+                    slopmax_common::human::until(*until, now)
+                )
+            }
+            Self::Throttled { .. } => "throttled".into(),
+            Self::Active { sessions: 1 } => "● active · 1 session".into(),
+            Self::Active { sessions } => format!("● active · {sessions} sessions"),
+            Self::Ready => "ready".into(),
+        }
+    }
+
     pub fn tone(&self) -> Tone {
         match self {
             Self::SignInNeeded { .. } => Tone::Bad,
@@ -126,6 +154,24 @@ pub enum Note {
 }
 
 impl Note {
+    /// In words, as `slopmax status` says it.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Pinned => "pinned".into(),
+            Self::Priority { value } => format!("priority {value}"),
+            Self::Follows { tool } => format!("follows {tool}"),
+            Self::Resets { count: 1 } => "1 limit reset".into(),
+            Self::Resets { count } => format!("{count} limit resets"),
+            Self::Served { requests, tokens } => {
+                format!(
+                    "{requests} req · {} tok",
+                    slopmax_common::human::compact(*tokens)
+                )
+            }
+            Self::LastError { text } => format!("last error: {text}"),
+        }
+    }
+
     pub fn tone(&self) -> Tone {
         match self {
             Self::Pinned | Self::Resets { .. } => Tone::Accent,
@@ -157,6 +203,59 @@ pub struct Window {
     pub resets_at: Option<Instant>,
 }
 
+impl Window {
+    /// Its use at `now`: none once it has reset.
+    pub fn used_at(&self, now: Instant) -> f64 {
+        used_at(self.used, self.resets_at, now)
+    }
+
+    /// When it resets, if that is still ahead.
+    pub fn upcoming_reset(&self, now: Instant) -> Option<Instant> {
+        self.resets_at.filter(|at| *at > now)
+    }
+
+    /// `5h`, `7d`, or `7d Fable`.
+    pub fn label(&self) -> String {
+        match &self.model {
+            Some(model) => format!("{} {model}", self.span.as_str()),
+            None => self.span.as_str().into(),
+        }
+    }
+}
+
+fn used_at(used: f64, resets_at: Option<Instant>, now: Instant) -> f64 {
+    match resets_at {
+        Some(at) if at <= now => 0.0,
+        _ => used,
+    }
+}
+
+impl AccountView {
+    /// Its window of `span` over every request.
+    pub fn window(&self, span: Span) -> Option<&Window> {
+        self.windows
+            .iter()
+            .find(|w| w.model.is_none() && w.span == span)
+    }
+
+    /// The longer window: the week, or for plans without one, the month.
+    pub fn long_window(&self) -> Option<&Window> {
+        self.window(Span::Week).or_else(|| self.window(Span::Month))
+    }
+
+    /// Windows that cover one model only.
+    pub fn scoped_windows(&self) -> impl Iterator<Item = &Window> {
+        self.windows.iter().filter(|w| w.model.is_some())
+    }
+
+    /// Limit resets that have not expired at `now`, soonest first.
+    pub fn unexpired_resets(&self, now: Instant) -> impl Iterator<Item = &LimitReset> {
+        self.resets
+            .iter()
+            .filter(move |r| r.expires_at.is_none_or(|at| at > now))
+    }
+}
+
 /// One of a pool's windows, over every account in it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -167,6 +266,33 @@ pub struct PoolWindow {
     pub resets_at: Option<Instant>,
     /// Weighted by each plan's size, when every plan's size is known.
     pub weighted: bool,
+}
+
+impl PoolWindow {
+    pub fn used_at(&self, now: Instant) -> f64 {
+        used_at(self.used, self.resets_at, now)
+    }
+
+    /// As one account's window, for what draws either alike.
+    pub fn as_window(&self) -> Window {
+        Window {
+            span: self.span,
+            model: None,
+            used: self.used,
+            resets_at: self.resets_at,
+        }
+    }
+}
+
+impl PoolView {
+    pub fn window(&self, span: Span) -> Option<&PoolWindow> {
+        self.windows.iter().find(|w| w.span == span)
+    }
+
+    /// The week, or for plans without one, the month.
+    pub fn long_window(&self) -> Option<&PoolWindow> {
+        self.window(Span::Week).or_else(|| self.window(Span::Month))
+    }
 }
 
 /// A limit reset an account holds.

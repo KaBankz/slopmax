@@ -207,6 +207,10 @@ export class ImportResult extends Schema.Class<ImportResult>("ImportResult")({
 export class StartLogin extends Schema.Class<StartLogin>("StartLogin")({
   provider: SubscriptionId.annotate({ message: `only ${SubscriptionId.literals.join(" and ")} accounts sign in` }),
   device: Schema.Boolean.pipe(withDefault(false)),
+  /** What to call the account; else its email. */
+  label: Schema.optionalKey(Label),
+  /** Leave the browser closed: the client opens the address, or shows it for a browser elsewhere. */
+  noBrowser: Schema.Boolean.pipe(withDefault(false)),
 }) {}
 
 export class LoginStarted extends Schema.Class<LoginStarted>("LoginStarted")({ id: LoginId }) {}

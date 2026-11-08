@@ -471,3 +471,54 @@ pub fn toml_value(value: api::settings::LiveValue) -> toml_edit::Value {
         api::settings::LiveValue::Strategy(s) => s.as_str().into(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Front ends read a provider's title and kind from the API's ids, the
+    /// engine from its specs: the two say the same, in the same order.
+    #[test]
+    fn the_api_names_each_provider_as_the_engine_does() {
+        let engine: Vec<api::Provider> = ProviderId::ALL.into_iter().map(provider).collect();
+        assert_eq!(engine, api::Provider::ALL);
+        for id in ProviderId::ALL {
+            let named = provider(id);
+            assert_eq!(named.as_str(), id.as_str());
+            assert_eq!(named.title(), id.spec().title);
+            assert_eq!(named.is_subscription(), id.spec().is_subscription());
+            assert_eq!(named.grants_resets(), id.get().credits().is_some());
+        }
+    }
+
+    /// The words `slopmax status` and the apps show agree with the engine's.
+    #[test]
+    fn conditions_and_notes_read_as_the_engine_words_them() {
+        let now = Timestamp::from_second(10_000).unwrap();
+        let until = now + crate::time::SignedDuration::from_mins(90);
+        let pairs = [
+            (
+                report::Condition::Limited(until),
+                api::report::Condition::Limited { until },
+            ),
+            (
+                report::Condition::Active(3),
+                api::report::Condition::Active { sessions: 3 },
+            ),
+            (report::Condition::Ready, api::report::Condition::Ready),
+        ];
+        for (engine, wire) in pairs {
+            assert_eq!(engine.describe(now), wire.describe(now));
+        }
+        assert_eq!(
+            report::Note::ResetCredits(2).describe(),
+            api::report::Note::Resets { count: 2 }.describe()
+        );
+        // A limit whose time has passed is over.
+        let later = until + crate::time::SignedDuration::from_mins(1);
+        assert_eq!(
+            api::report::Condition::Limited { until }.at(later),
+            api::report::Condition::Ready
+        );
+    }
+}

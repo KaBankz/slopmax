@@ -1036,6 +1036,24 @@ fn the_background_proxy_starts_reports_and_stops() {
     let table = s.run(&["status", "--refresh"]).ok().stdout;
     assert!(table.contains("ANTHROPIC"), "{table}");
 
+    // With it running, changes go through it rather than into the files.
+    let id = s.store().list().unwrap()[0].id.clone();
+    let out = s.run(&["use", &id]).ok();
+    assert!(out.stdout.contains("will use"), "{out:?}");
+    let out = s.run(&["label", &id, "work"]).ok();
+    assert!(out.stdout.contains("work"), "{out:?}");
+    let out = s.run(&["config", "session_ttl_mins", "45"]).ok();
+    assert!(out.stdout.contains("applied now"), "{out:?}");
+    let key = s.run(&["key", "add", "laptop"]).ok().stdout;
+    assert!(key.trim().starts_with("sm-"), "{key}");
+    let json: Value = serde_json::from_str(&s.run(&["status", "--json"]).ok().stdout).unwrap();
+    let account = &json["accounts"][0];
+    assert_eq!(account["name"], "work", "{json:#}");
+    assert_eq!(account["pinned"], true, "{json:#}");
+    // The pin is the daemon's, saved when it stops, not by the CLI.
+    let state = std::fs::read_to_string(s.slopmax.join("state.toml")).unwrap_or_default();
+    assert!(!state.contains(&id), "{state}");
+
     let out = s.run(&["dashboard", "--print"]).ok();
     assert!(
         out.stdout.contains(&format!("127.0.0.1:{}", s.port)),
@@ -1069,6 +1087,8 @@ fn the_background_proxy_starts_reports_and_stops() {
     });
     let log = std::fs::read_to_string(s.slopmax.join("slopmax.log")).unwrap();
     assert!(!log.is_empty());
+    let state = std::fs::read_to_string(s.slopmax.join("state.toml")).unwrap();
+    assert!(state.contains(&format!("anthropic = \"{id}\"")), "{state}");
 }
 
 #[test]

@@ -122,7 +122,7 @@ pub async fn run(config: &Config, store: &Store, answers: Answers, plan: Plan) -
     );
 
     step("Accounts");
-    let missed = accounts(store, answers, &plan).await?;
+    let missed = accounts(config, store, answers, &plan).await?;
     let connected = store.list()?;
     if connected.is_empty() {
         // Unattended, finding nothing to pool is a failure the caller must
@@ -213,7 +213,12 @@ fn offer(provider: ProviderId) -> &'static str {
 
 /// Connects what the plan asks for, or what is chosen at the terminal.
 /// Returns what was asked for by flag and added nothing.
-async fn accounts(store: &Store, answers: Answers, plan: &Plan) -> Result<Vec<String>> {
+async fn accounts(
+    config: &Config,
+    store: &Store,
+    answers: Answers,
+    plan: &Plan,
+) -> Result<Vec<String>> {
     let http = auth::http_client(Origins::default());
     let mut missed = Vec::new();
     match &plan.import {
@@ -286,7 +291,7 @@ async fn accounts(store: &Store, answers: Answers, plan: &Plan) -> Result<Vec<St
     };
     let asked = plan.login.is_some();
     for provider in chosen {
-        if !add(store, provider, answers).await? && asked {
+        if !add(config, store, provider, answers).await? && asked {
             missed.push(format!("--login {provider} did not sign in"));
         }
     }
@@ -364,7 +369,12 @@ fn report_saved(saved: Vec<import::Saved>) -> usize {
 
 /// Signs in to `provider`, or takes its key or endpoint; at a terminal,
 /// offers to add another of a subscription. Returns whether any was added.
-async fn add(store: &Store, provider: ProviderId, answers: Answers) -> Result<bool> {
+async fn add(
+    config: &Config,
+    store: &Store,
+    provider: ProviderId,
+    answers: Answers,
+) -> Result<bool> {
     let title = provider.spec().title;
     let mut added = false;
     loop {
@@ -397,7 +407,7 @@ async fn add(store: &Store, provider: ProviderId, answers: Answers) -> Result<bo
                 models: Vec::new(),
             });
         }
-        match login(store, provider, None, options).await {
+        match login(config, store, provider, None, options).await {
             Ok(()) => added = true,
             Err(e) => println!("    {} {e:#}", ui::yellow("not added:")),
         }

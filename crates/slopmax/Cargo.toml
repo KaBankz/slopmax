@@ -20,6 +20,7 @@ mimalloc = ["dep:mimalloc"]
 anyhow.workspace = true
 mimalloc = { workspace = true, optional = true }
 serde_json.workspace = true
+slopmax-client.workspace = true
 slopmax-core.workspace = true
 tokio.workspace = true
 

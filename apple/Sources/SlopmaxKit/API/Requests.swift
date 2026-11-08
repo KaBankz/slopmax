@@ -67,9 +67,15 @@ public struct RedeemRequest: Encodable, Sendable {
 public struct StartLogin: Encodable, Sendable {
     public var provider: Provider
     public var device: Bool
-    public init(provider: Provider, device: Bool = false) {
+    /// What to call the account; else its email.
+    public var label: String?
+    /// Leave the browser closed: the app opens the address itself.
+    public var noBrowser: Bool
+    public init(provider: Provider, device: Bool = false, label: String? = nil, noBrowser: Bool = false) {
         self.provider = provider
         self.device = device
+        self.label = label
+        self.noBrowser = noBrowser
     }
 }
 

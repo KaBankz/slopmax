@@ -598,11 +598,16 @@ fn start_login(app: &Arc<App>, asked: StartLogin) -> Answer {
     .with_pasted(pasted);
     let options = crate::auth::LoginOptions {
         device: asked.device,
+        no_browser: asked.no_browser,
         ..crate::auth::LoginOptions::default()
     };
+    let label = asked
+        .label
+        .map(|l| l.trim().to_owned())
+        .filter(|l| !l.is_empty());
     let (worker, login_id) = (Arc::clone(app), id.clone());
     app.spawn(async move {
-        let signing = crate::auth::connect(&worker.store, provider, None, options, prompt);
+        let signing = crate::auth::connect(&worker.store, provider, label, options, prompt);
         let result = tokio::select! {
             result = signing => Some(result),
             () = cancel.cancelled() => None,
