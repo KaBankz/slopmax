@@ -18,7 +18,7 @@ use crate::config::Config;
 use crate::fsx;
 use crate::import::Found;
 use crate::net::Client;
-use crate::paths;
+use crate::paths::Home;
 use crate::provider::codex::oauth;
 use crate::provider::{BoxFuture, ProviderId};
 use crate::time::Timestamp;
@@ -135,8 +135,8 @@ impl Agent for Codex {
         format!("codex() {{ {exe} run codex \"$@\"; }}\n")
     }
 
-    fn config_file(&self) -> PathBuf {
-        paths::codex_dir().join("config.toml")
+    fn config_file(&self, home: &Home) -> PathBuf {
+        home.codex().join("config.toml")
     }
 
     fn setup(&self, config: &Config, file: &Path, saved: &mut Option<Value>) -> Result<()> {
@@ -200,16 +200,16 @@ impl Agent for Codex {
          the same config."
     }
 
-    fn has_login(&self) -> bool {
-        let file = paths::codex_dir().join("auth.json");
+    fn has_login(&self, home: &Home) -> bool {
+        let file = home.codex().join("auth.json");
         fs::read_to_string(file)
             .ok()
             .and_then(|text| serde_json::from_str::<AuthFile>(&text).ok())
             .is_some_and(|auth| auth.tokens.is_some())
     }
 
-    fn wired_to(&self) -> Option<String> {
-        let doc = read_toml(&self.config_file()).ok()?;
+    fn wired_to(&self, home: &Home) -> Option<String> {
+        let doc = read_toml(&self.config_file(home)).ok()?;
         let provider = doc.get("model_provider")?.as_str()?;
         let base = doc
             .get("model_providers")
@@ -222,8 +222,8 @@ impl Agent for Codex {
         })
     }
 
-    fn import<'a>(&'a self, _http: &'a Client) -> BoxFuture<'a, Option<Found>> {
-        let file = paths::codex_dir().join("auth.json");
+    fn import<'a>(&'a self, _http: &'a Client, home: &'a Home) -> BoxFuture<'a, Option<Found>> {
+        let file = home.codex().join("auth.json");
         let found = file.exists().then(|| Found {
             origin: file.display().to_string(),
             account: account_from(&file),

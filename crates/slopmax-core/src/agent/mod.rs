@@ -23,11 +23,12 @@ use http::HeaderMap;
 use serde_json::Value;
 
 use crate::config::Config;
+use crate::fsx;
 use crate::import::Found;
 use crate::net::Client;
+use crate::paths::Home;
 use crate::provider::{BoxFuture, ProviderId};
 use crate::wire::rawjson::{self, Seg};
-use crate::{fsx, paths};
 
 pub use claude_code::ClaudeCode;
 pub use codex::Codex;
@@ -85,7 +86,7 @@ pub trait Agent: Send + Sync {
     fn env(&self, config: &Config, exe: &Path) -> String;
 
     /// The config file `setup` edits.
-    fn config_file(&self) -> PathBuf;
+    fn config_file(&self, home: &Home) -> PathBuf;
 
     /// Points the config file at the proxy. When `saved` is empty, it first
     /// records what it replaces there, for [`Agent::undo`].
@@ -99,14 +100,14 @@ pub trait Agent: Send + Sync {
 
     /// Whether the agent has a saved login to import (checked without
     /// touching it).
-    fn has_login(&self) -> bool;
+    fn has_login(&self, home: &Home) -> bool;
 
     /// Where the agent's config sends it today, when that is somewhere
     /// other than its provider: a base URL or provider name.
-    fn wired_to(&self) -> Option<String>;
+    fn wired_to(&self, home: &Home) -> Option<String>;
 
     /// The agent's own saved login, if it has one.
-    fn import<'a>(&'a self, http: &'a Client) -> BoxFuture<'a, Option<Found>>;
+    fn import<'a>(&'a self, http: &'a Client, home: &'a Home) -> BoxFuture<'a, Option<Found>>;
 }
 
 /// Where an agent's own config sends it.
@@ -133,8 +134,8 @@ pub enum Wiring {
 }
 
 /// Where `agent`'s own config sends it, judged against this `config`.
-pub fn wiring(agent: &dyn Agent, config: &Config) -> Wiring {
-    match agent.wired_to() {
+pub fn wiring(agent: &dyn Agent, config: &Config, home: &Home) -> Wiring {
+    match agent.wired_to(home) {
         Some(target) if target.contains(&config.base_url()) || target.starts_with("slopmax") => {
             Wiring::Slopmax
         }
@@ -162,16 +163,11 @@ pub fn run(agent: &dyn Agent, config: &Config, args: &[String]) -> Result<i32> {
     }
 }
 
-/// Where `setup` keeps what it replaced, per agent.
-fn backup_file() -> PathBuf {
-    paths::home().join("setup-backup.json")
-}
-
 /// The agent's config file. A symlink (say, into a dotfiles repository) is
 /// followed, so the file it points to is edited in place rather than the
 /// link being replaced.
-fn config_file(agent: &dyn Agent) -> PathBuf {
-    resolve(agent.config_file())
+fn config_file(agent: &dyn Agent, home: &Home) -> PathBuf {
+    resolve(agent.config_file(home))
 }
 
 fn resolve(path: PathBuf) -> PathBuf {
@@ -179,9 +175,9 @@ fn resolve(path: PathBuf) -> PathBuf {
 }
 
 /// Writes the wiring into the agent's config. Returns the file changed.
-pub fn setup(agent: &dyn Agent, config: &Config) -> Result<PathBuf> {
-    let file = config_file(agent);
-    let backup = backup_file();
+pub fn setup(agent: &dyn Agent, config: &Config, home: &Home) -> Result<PathBuf> {
+    let file = config_file(agent, home);
+    let backup = home.setup_backup();
     let mut saved: BTreeMap<String, Value> = fsx::read_json(&backup)?.unwrap_or_default();
     let mut slot = saved.remove(agent.id());
     let fresh = slot.is_none();
@@ -196,16 +192,16 @@ pub fn setup(agent: &dyn Agent, config: &Config) -> Result<PathBuf> {
 /// Reverts `setup`. Returns the file changed.
 /// Whether `agent`'s settings from before slopmax wired it are kept, for
 /// [`undo`] to put back.
-pub fn backed_up(agent: &dyn Agent) -> bool {
-    fsx::read_json::<BTreeMap<String, Value>>(&backup_file())
+pub fn backed_up(agent: &dyn Agent, home: &Home) -> bool {
+    fsx::read_json::<BTreeMap<String, Value>>(&home.setup_backup())
         .ok()
         .flatten()
         .is_some_and(|saved| saved.contains_key(agent.id()))
 }
 
-pub fn undo(agent: &dyn Agent) -> Result<PathBuf> {
-    let file = config_file(agent);
-    let backup = backup_file();
+pub fn undo(agent: &dyn Agent, home: &Home) -> Result<PathBuf> {
+    let file = config_file(agent, home);
+    let backup = home.setup_backup();
     let mut saved: BTreeMap<String, Value> = fsx::read_json(&backup)?.unwrap_or_default();
     let previous = saved
         .remove(agent.id())

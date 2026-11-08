@@ -13,13 +13,14 @@ use serde_json::{Map, Value, json};
 use super::{Agent, shell_quote};
 use crate::account::{Account, Tokens};
 use crate::config::Config;
+use crate::fsx;
 use crate::import::Found;
 use crate::net::Client;
+use crate::paths::Home;
 use crate::provider::claude::oauth;
 use crate::provider::{BoxFuture, ProviderId};
 use crate::time::Timestamp;
 use crate::wire::rawjson::{self, Seg};
-use crate::{fsx, paths};
 
 pub struct ClaudeCode;
 
@@ -99,8 +100,8 @@ impl Agent for ClaudeCode {
         out
     }
 
-    fn config_file(&self) -> PathBuf {
-        paths::claude_dir().join("settings.json")
+    fn config_file(&self, home: &Home) -> PathBuf {
+        home.claude().join("settings.json")
     }
 
     fn setup(&self, config: &Config, file: &Path, saved: &mut Option<Value>) -> Result<()> {
@@ -150,19 +151,19 @@ impl Agent for ClaudeCode {
          tab and Cowork keep using the app's own login."
     }
 
-    fn has_login(&self) -> bool {
-        credentials().is_some()
+    fn has_login(&self, home: &Home) -> bool {
+        credentials(home).is_some()
     }
 
-    fn wired_to(&self) -> Option<String> {
-        let settings = read_settings(&self.config_file()).ok()?;
+    fn wired_to(&self, home: &Home) -> Option<String> {
+        let settings = read_settings(&self.config_file(home)).ok()?;
         let base = settings.get("env")?.get("ANTHROPIC_BASE_URL")?.as_str()?;
         Some(base.to_owned())
     }
 
-    fn import<'a>(&'a self, http: &'a Client) -> BoxFuture<'a, Option<Found>> {
+    fn import<'a>(&'a self, http: &'a Client, home: &'a Home) -> BoxFuture<'a, Option<Found>> {
         Box::pin(async move {
-            let oauth = credentials()?;
+            let oauth = credentials(home)?;
             Some(Found {
                 origin: "claude code".into(),
                 account: account_from(http, oauth).await,
@@ -190,8 +191,8 @@ struct SavedLogin {
 
 /// Claude Code's login: `~/.claude/.credentials.json`, or the keychain on
 /// macOS.
-fn credentials() -> Option<SavedLogin> {
-    let text = fs::read_to_string(paths::claude_dir().join(".credentials.json"))
+fn credentials(home: &Home) -> Option<SavedLogin> {
+    let text = fs::read_to_string(home.claude().join(".credentials.json"))
         .ok()
         .or_else(keychain_credentials)?;
     let value: Value = serde_json::from_str(&text).ok()?;

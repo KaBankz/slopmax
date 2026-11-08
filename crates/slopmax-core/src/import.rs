@@ -16,7 +16,7 @@ use crate::account::{Account, Link, Store, Tokens};
 use crate::agent::{Agent, ClaudeCode, Codex};
 use crate::auth::jwt;
 use crate::net::Client;
-use crate::paths;
+use crate::paths::Home;
 use crate::provider::ProviderId;
 use crate::provider::claude::oauth as claude;
 use crate::provider::codex::oauth as codex;
@@ -80,7 +80,7 @@ pub fn save(store: &Store, found: Vec<Found>, own: bool) -> Vec<Saved> {
 }
 
 /// Collects importable logins from `source`. Missing sources are skipped.
-pub async fn discover(http: &Client, source: Source) -> Vec<Found> {
+pub async fn discover(http: &Client, source: Source, home: &Home) -> Vec<Found> {
     let mut found = Vec::new();
     let wants = |s: Source| source == Source::All || source == s;
     for (agent, wanted) in [
@@ -88,13 +88,13 @@ pub async fn discover(http: &Client, source: Source) -> Vec<Found> {
         (&Codex, Source::Codex),
     ] {
         if wants(wanted)
-            && let Some(login) = agent.import(http).await
+            && let Some(login) = agent.import(http, home).await
         {
             found.push(login);
         }
     }
     if wants(Source::Cliproxyapi) {
-        found.extend(from_cliproxyapi(http, &paths::cliproxyapi_dir()).await);
+        found.extend(from_cliproxyapi(http, &home.cliproxyapi()).await);
     }
     found
 }

@@ -12,7 +12,7 @@ use slopmax_core::doctor::{self, Level};
 pub async fn run(config: &Config, store: &Store) -> Result<i32> {
     let mut worst = Level::Ok;
     let (mut problems, mut warnings) = (0, 0);
-    for section in doctor::check(config, store).await? {
+    for section in doctor::check(config, store, super::home()).await? {
         println!("\n{}", ui::bold(section.title));
         for finding in &section.findings {
             let mark = match finding.level {

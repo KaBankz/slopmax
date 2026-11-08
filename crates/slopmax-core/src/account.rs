@@ -16,7 +16,7 @@ use crate::paths::Home;
 use crate::provider::ProviderId;
 use crate::time::{SignedDuration, Timestamp};
 use crate::wire::Dialect;
-use crate::{fsx, ids, paths};
+use crate::{fsx, ids};
 
 /// OAuth tokens for one account, or its API key as a token that never
 /// expires.
@@ -187,8 +187,9 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn open() -> Self {
-        Self::at(paths::accounts_dir())
+    /// The accounts in `home`.
+    pub fn of(home: &Home) -> Self {
+        Self::at(home.accounts())
     }
 
     pub fn at(dir: impl Into<PathBuf>) -> Self {

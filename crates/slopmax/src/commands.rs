@@ -22,10 +22,10 @@ use slopmax_core::agent::{self, Agent};
 use slopmax_core::auth::{self, LoginOptions};
 use slopmax_core::config::{Config, Strategy};
 use slopmax_core::net::Origins;
+use slopmax_core::notify;
 use slopmax_core::provider::ProviderId;
 use slopmax_core::time::Timestamp;
 use slopmax_core::wire::Dialect;
-use slopmax_core::{notify, paths};
 use slopmax_daemon as daemon;
 
 const ACCOUNT: &str = "Number from `slopmax status`, or the account's id, email, or label";
@@ -472,9 +472,9 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
         }
     };
     let m = &matches;
-    let config = Config::load()?;
+    let config = Config::load(home())?;
     config.apply()?;
-    let store = Store::open();
+    let store = Store::of(home());
     // A first run at a terminal starts the guided setup instead.
     if bare && init::wanted(&store) {
         init::run(&config, &store, init::Answers::Ask, init::Plan::default()).await?;
@@ -558,7 +558,11 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
         "disable" => set_disabled(&config, &store, &m.get::<String>("account")?, true).await?,
         "remove" => remove(&config, &store, &m.get::<String>("account")?).await?,
         "redeem" => redeem(&config, &store, &m.get::<String>("account")?, m.flag("yes")).await?,
-        "serve" => return daemon::run(config).await.map(daemon::Stopped::code),
+        "serve" => {
+            return daemon::run(config, home().clone())
+                .await
+                .map(daemon::Stopped::code);
+        }
         "start" => start(&config).await?,
         "stop" => stop(&config).await?,
         "service" => service(&config, &m.get::<String>("action")?).await?,
@@ -592,7 +596,7 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
             if !config.notify.is_enabled() {
                 bail!(
                     "notifications are off; set a webhook or command under [notify] in {}",
-                    paths::config_file().display()
+                    home().config().display()
                 );
             }
             let http = auth::http_client(Origins::default());
@@ -634,7 +638,7 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
                 .map(|h| h.version);
             // The login service, for an app that offers to install it.
             let service = slopmax_core::service::Manager::detect().map(|m| {
-                let status = m.status();
+                let status = m.status(home());
                 serde_json::json!({ "installed": status.installed, "running": status.running })
             });
             let info = serde_json::json!({
@@ -642,7 +646,7 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
                 "key": config.api_key,
                 "version": env!("CARGO_PKG_VERSION"),
                 "exe": std::env::current_exe().ok().map(|p| p.display().to_string()),
-                "home": slopmax_core::paths::Home::current().dir().display().to_string(),
+                "home": home().dir().display().to_string(),
                 "running": running.is_some(),
                 "runningVersion": running,
                 "service": service,
@@ -666,7 +670,7 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
 /// `slopmax key list|add|remove`.
 async fn key(config: &Config, action: &str, m: &args::Matches) -> Result<()> {
     use slopmax_client::api::{ApiError, requests::MakeKey, settings::KeyInfo};
-    let path = paths::config_file();
+    let path = home().config();
     let name = m.value("name").filter(|n| !n.is_empty());
     let client = daemon(config).await;
     match (action, name) {
@@ -785,7 +789,7 @@ async fn settings(config: &Config, name: &str, value: &str) -> Result<()> {
             "\n{}",
             ui::dim(format!(
                 "`slopmax config <name> <value>` changes one; the rest live in {}.",
-                paths::config_file().display()
+                home().config().display()
             ))
         );
         return Ok(());
@@ -807,7 +811,7 @@ async fn settings(config: &Config, name: &str, value: &str) -> Result<()> {
         }
         None => {
             let setting = live_value(name, value).map_err(anyhow::Error::msg)?;
-            let changed = Config::set(&paths::config_file(), &[setting])?;
+            let changed = Config::set(&home().config(), &[setting])?;
             let now = changed.live(name).unwrap_or_default();
             (now, "the proxy applies it when it starts")
         }
@@ -818,6 +822,13 @@ async fn settings(config: &Config, name: &str, value: &str) -> Result<()> {
         ui::dim(format!("({applied})"))
     );
     Ok(())
+}
+
+/// The home this process works in: made once, from the environment, and
+/// handed to the engine, which reads no environment of its own.
+pub(super) fn home() -> &'static slopmax_core::paths::Home {
+    static HOME: std::sync::OnceLock<slopmax_core::paths::Home> = std::sync::OnceLock::new();
+    HOME.get_or_init(slopmax_core::paths::Home::current)
 }
 
 /// The daemon serving this home, if one answers at the address config.toml
@@ -845,7 +856,7 @@ fn agent_named(m: &args::Matches) -> Result<&'static dyn Agent> {
 async fn setup(config: &Config, store: &Store, agent: &dyn Agent, undo: bool) -> Result<()> {
     let app = agent.title();
     if undo {
-        let path = agent::undo(agent)?;
+        let path = agent::undo(agent, home())?;
         println!(
             "Restored {} {}",
             app,
@@ -853,7 +864,7 @@ async fn setup(config: &Config, store: &Store, agent: &dyn Agent, undo: bool) ->
         );
         return Ok(());
     }
-    let path = agent::setup(agent, config)?;
+    let path = agent::setup(agent, config, home())?;
     println!(
         "{app} now uses slopmax {}",
         ui::dim(format!("({})", path.display()))

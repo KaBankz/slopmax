@@ -13,10 +13,11 @@ use crate::account::{Account, Store};
 use crate::background::Daemon;
 use crate::config::Config;
 use crate::net::{Client, Origins, server};
+use crate::paths::Home;
 use crate::provider::ProviderId;
 use crate::service::{Manager, Status};
 use crate::time::{SignedDuration, Timestamp};
-use crate::{auth, human, paths};
+use crate::{auth, human};
 
 /// CLIProxyAPI's default port, for spotting it beside slopmax.
 const CLIPROXYAPI_PORT: u16 = 8317;
@@ -64,21 +65,21 @@ impl Section {
 }
 
 /// Runs every check. Sections without findings are left out.
-pub async fn check(config: &Config, store: &Store) -> Result<Vec<Section>> {
+pub async fn check(config: &Config, store: &Store, home: &Home) -> Result<Vec<Section>> {
     let accounts = store.list()?;
-    let service = Manager::detect().map(Manager::status);
+    let service = Manager::detect().map(|m| m.status(home));
     let http = auth::http_client(Origins::default());
     let sections = [
         proxy(config, service).await,
         accounts_section(&accounts),
-        claude_code(config, &paths::claude_dir()),
-        codex(config, &paths::codex_dir()),
+        claude_code(config, home.claude()),
+        codex(config, home.codex()),
         cliproxyapi(&accounts, CLIPROXYAPI_PORT),
         network(&http).await,
-        files(&paths::accounts_dir()),
+        files(&home.accounts()),
     ];
     let mut sections = sections;
-    unserved(&mut sections, config, &accounts);
+    unserved(&mut sections, config, &accounts, home);
     Ok(sections
         .into_iter()
         .filter(|s| !s.findings.is_empty())
@@ -87,12 +88,17 @@ pub async fn check(config: &Config, store: &Store) -> Result<Vec<Section>> {
 
 /// An agent wired to slopmax with no account to serve its own models gets
 /// an error for every request it sends.
-fn unserved(sections: &mut [Section], config: &Config, accounts: &[crate::account::Account]) {
+fn unserved(
+    sections: &mut [Section],
+    config: &Config,
+    accounts: &[crate::account::Account],
+    home: &Home,
+) {
     for agent in crate::agent::AGENTS {
         if crate::agent::servable(agent, accounts) {
             continue;
         }
-        let wired = crate::agent::wiring(agent, config) == crate::agent::Wiring::Slopmax;
+        let wired = crate::agent::wiring(agent, config, home) == crate::agent::Wiring::Slopmax;
         if let Some(section) = sections.iter_mut().find(|s| s.title == agent.title()) {
             let provider = agent.provider();
             // Wiring it now would only break it.

@@ -40,7 +40,7 @@ pub(super) async fn run(config: &Config, store: &Store, args: StatusArgs) -> Res
 /// The report read from disk, while no daemon runs.
 async fn offline(config: &Config, store: &Store, refresh: bool) -> Result<Report> {
     let now = Timestamp::now();
-    let report = report::offline(config, store, refresh).await?;
+    let report = report::offline(config, store, super::home(), refresh).await?;
     Ok(slopmax_core::api::report(&report, config, now))
 }
 

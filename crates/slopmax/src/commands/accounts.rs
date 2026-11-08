@@ -19,7 +19,6 @@ use slopmax_core::auth::{self, LoginOptions};
 use slopmax_core::config::Config;
 use slopmax_core::import::{self, Source};
 use slopmax_core::net::Origins;
-use slopmax_core::paths::{self, Home};
 use slopmax_core::pool::State;
 use slopmax_core::provider::credits::Outcome;
 use slopmax_core::provider::{Billing, Credential, ProviderId};
@@ -222,7 +221,7 @@ pub(super) async fn import(
         }
     } else {
         let http = auth::http_client(Origins::default());
-        let found = import::discover(&http, source).await;
+        let found = import::discover(&http, source, super::home()).await;
         if found.is_empty() {
             println!("No logins found to import.");
             return Ok(());
@@ -302,7 +301,7 @@ pub(super) async fn use_account(config: &Config, store: &Store, query: &str) -> 
     if query == "auto" {
         match &client {
             Some(client) => drop(client.unpin_all().await?),
-            None => account::unpin_all(&Home::current())?,
+            None => account::unpin_all(super::home())?,
         }
         println!("slopmax will choose accounts automatically.");
         return Ok(());
@@ -310,7 +309,7 @@ pub(super) async fn use_account(config: &Config, store: &Store, query: &str) -> 
     let account = store.find(query)?;
     match &client {
         Some(client) => drop(client.pin(&account.id).await?),
-        None => account::pin(&Home::current(), &account)?,
+        None => account::pin(super::home(), &account)?,
     }
     println!(
         "New {} sessions will use {} while it has quota.",
@@ -391,7 +390,7 @@ pub(super) async fn remove(config: &Config, store: &Store, query: &str) -> Resul
     let account = store.find(query)?;
     match daemon(config).await {
         Some(client) => drop(client.remove_account(&account.id).await?),
-        None => account::forget(store, &Home::current(), &account)?,
+        None => account::forget(store, super::home(), &account)?,
     }
     println!("Removed {}", ui::bold(account.name()));
     Ok(())
@@ -417,7 +416,7 @@ pub(super) async fn redeem(config: &Config, store: &Store, query: &str, yes: boo
     };
     // As the proxy last saw the provider's own client, which some answer
     // alone.
-    let state: State = fsx::read_toml(&paths::state_file())?.unwrap_or_default();
+    let state: State = fsx::read_toml(&super::home().state())?.unwrap_or_default();
     let agent = state.agents.get(&account.provider).map(String::as_str);
     let available = credits.list(&http, &account, agent).await?;
     let Some(next) = available.first() else {

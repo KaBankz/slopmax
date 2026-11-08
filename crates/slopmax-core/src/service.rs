@@ -6,7 +6,8 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-use crate::{fsx, paths};
+use crate::fsx;
+use crate::paths::Home;
 
 const NAME: &str = "slopmax";
 const LABEL: &str = "dev.slopmax";
@@ -45,21 +46,22 @@ impl Manager {
         }
     }
 
-    fn file(self) -> PathBuf {
+    fn file(self, home: &Home) -> PathBuf {
         match self {
-            Self::Systemd => config_home()
+            Self::Systemd => config_home(home)
                 .join("systemd/user")
                 .join(format!("{NAME}.service")),
-            Self::Launchd => paths::user_home()
+            Self::Launchd => home
+                .user()
                 .join("Library/LaunchAgents")
                 .join(format!("{LABEL}.plist")),
         }
     }
 
     /// Writes the service definition for `exe`, then enables and starts it.
-    pub fn install(self, exe: &Path) -> Result<PathBuf> {
-        let file = self.file();
-        let log = paths::log_file();
+    pub fn install(self, exe: &Path, home: &Home) -> Result<PathBuf> {
+        let file = self.file(home);
+        let log = home.log();
         let home = std::env::var_os("SLOPMAX_HOME").map(PathBuf::from);
         let text = match self {
             Self::Systemd => systemd_unit(exe, &log, home.as_deref()),
@@ -81,8 +83,8 @@ impl Manager {
         Ok(file)
     }
 
-    pub fn uninstall(self) -> Result<PathBuf> {
-        let file = self.file();
+    pub fn uninstall(self, home: &Home) -> Result<PathBuf> {
+        let file = self.file(home);
         match self {
             Self::Systemd => {
                 let _ = run("systemctl", &["--user", "disable", "--now", NAME]);
@@ -102,8 +104,8 @@ impl Manager {
         Ok(file)
     }
 
-    pub fn status(self) -> Status {
-        let installed = self.file().exists();
+    pub fn status(self, home: &Home) -> Status {
+        let installed = self.file(home).exists();
         match self {
             Self::Systemd => Status {
                 installed,
@@ -128,11 +130,11 @@ impl Manager {
 }
 
 /// Where the user's configuration lives (`$XDG_CONFIG_HOME` or `~/.config`).
-fn config_home() -> PathBuf {
+fn config_home(home: &Home) -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
-        .unwrap_or_else(|| paths::user_home().join(".config"))
+        .unwrap_or_else(|| home.user().join(".config"))
 }
 
 fn systemd_unit(exe: &Path, log: &Path, home: Option<&Path>) -> String {
@@ -329,9 +331,14 @@ mod tests {
 
     #[test]
     fn service_files_live_where_each_manager_looks() {
-        let unit = Manager::Systemd.file();
+        let home = Home::sandbox("/home/someone");
+        let unit = Manager::Systemd.file(&home);
         assert!(unit.ends_with("systemd/user/slopmax.service"));
-        let plist = Manager::Launchd.file();
+        let plist = Manager::Launchd.file(&home);
+        assert_eq!(
+            plist,
+            std::path::Path::new("/home/someone/Library/LaunchAgents/dev.slopmax.plist")
+        );
         assert!(plist.ends_with("Library/LaunchAgents/dev.slopmax.plist"));
     }
 

@@ -11,7 +11,7 @@ use toml_edit::DocumentMut;
 
 use crate::net::client::Proxy;
 use crate::pricing::Custom;
-use crate::{fsx, ids, notify, paths};
+use crate::{fsx, ids, notify};
 
 /// Default proxy port: "slop" on a phone keypad.
 pub const DEFAULT_PORT: u16 = 7567;
@@ -264,8 +264,8 @@ impl Config {
 
     /// Loads the config, creating it (with a fresh API key) on first use.
     /// `SLOPMAX_LISTEN` overrides `listen`, for containers.
-    pub fn load() -> Result<Self> {
-        let mut config = Self::load_from(&paths::config_file())?;
+    pub fn load(home: &crate::paths::Home) -> Result<Self> {
+        let mut config = Self::load_from(&home.config())?;
         if let Ok(listen) = std::env::var("SLOPMAX_LISTEN")
             && !listen.is_empty()
         {

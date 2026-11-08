@@ -8,7 +8,6 @@ use anyhow::{Context, Result};
 use crate::ui;
 use slopmax_core::background::{self, Daemon};
 use slopmax_core::config::Config;
-use slopmax_core::paths;
 use slopmax_core::service::Manager;
 
 pub(super) async fn start(config: &Config) -> Result<()> {
@@ -16,11 +15,11 @@ pub(super) async fn start(config: &Config) -> Result<()> {
         println!("slopmax is already running on {}", config.base_url());
         return Ok(());
     }
-    background::launch(config, &background::current_exe()?).await?;
+    background::launch(config, super::home(), &background::current_exe()?).await?;
     println!(
         "slopmax running on {} {}",
         config.base_url(),
-        ui::dim(format!("(log: {})", paths::log_file().display()))
+        ui::dim(format!("(log: {})", super::home().log().display()))
     );
     Ok(())
 }
@@ -36,7 +35,7 @@ pub(super) async fn stop(config: &Config) -> Result<()> {
 
 /// Starts the proxy unless it already runs.
 pub(super) async fn ensure_running(config: &Config) -> Result<()> {
-    background::ensure_running(config, &background::current_exe()?).await?;
+    background::ensure_running(config, super::home(), &background::current_exe()?).await?;
     Ok(())
 }
 
@@ -48,12 +47,12 @@ pub(super) async fn service(config: &Config, action: &str) -> Result<()> {
     match action {
         "install" => {
             let exe = background::current_exe()?;
-            let file = background::install_service(config, manager, &exe).await?;
+            let file = background::install_service(config, super::home(), manager, &exe).await?;
             println!(
                 "slopmax now starts at login {}",
                 ui::dim(format!("({})", file.display()))
             );
-            if manager.status().lingering == Some(false) {
+            if manager.status(super::home()).lingering == Some(false) {
                 println!(
                     "{}",
                     ui::dim(
@@ -64,14 +63,14 @@ pub(super) async fn service(config: &Config, action: &str) -> Result<()> {
             }
         }
         "uninstall" => {
-            let file = manager.uninstall()?;
+            let file = manager.uninstall(super::home())?;
             println!(
                 "Removed the service {}",
                 ui::dim(format!("({})", file.display()))
             );
         }
         _ => {
-            let status = manager.status();
+            let status = manager.status(super::home());
             let state = match (status.installed, status.running) {
                 (false, _) => "not installed".to_owned(),
                 (true, true) => ui::green("installed and running"),
@@ -97,7 +96,7 @@ const LOG_TAIL: u64 = 1024 * 1024;
 pub(super) async fn logs(lines: usize, follow: bool) -> Result<()> {
     use std::io::{Read, Seek, SeekFrom, Write};
 
-    let path = paths::log_file();
+    let path = super::home().log();
     let mut file = loop {
         match std::fs::File::open(&path) {
             Ok(file) => break file,

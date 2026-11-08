@@ -9,8 +9,9 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 
 use crate::config::Config;
+use crate::fsx;
+use crate::paths::Home;
 use crate::service::Manager;
-use crate::{fsx, paths};
 
 /// A running proxy, reached through its API.
 #[derive(Clone)]
@@ -47,22 +48,22 @@ pub fn current_exe() -> Result<PathBuf> {
 
 /// Starts the proxy unless one already answers. Returns whether it started
 /// one.
-pub async fn ensure_running(config: &Config, exe: &Path) -> Result<bool> {
+pub async fn ensure_running(config: &Config, home: &Home, exe: &Path) -> Result<bool> {
     if Daemon::new(config).is_running().await {
         return Ok(false);
     }
-    launch(config, exe).await?;
+    launch(config, home, exe).await?;
     Ok(true)
 }
 
 /// Starts the proxy: through the service when one is installed, so it stays
-/// supervised, else as a detached process logging to [`paths::log_file`].
-pub async fn launch(config: &Config, exe: &Path) -> Result<()> {
-    match Manager::detect().filter(|m| m.status().installed) {
+/// supervised, else as a detached process logging to the home's log.
+pub async fn launch(config: &Config, home: &Home, exe: &Path) -> Result<()> {
+    match Manager::detect().filter(|m| m.status(home).installed) {
         Some(manager) => manager.start()?,
-        None => spawn(exe)?,
+        None => spawn(exe, home)?,
     }
-    wait_until_running(config).await
+    wait_until_running(config, home).await
 }
 
 /// Stops a running proxy. Returns whether one was running.
@@ -78,23 +79,28 @@ pub async fn stop(config: &Config) -> Result<bool> {
 /// Installs the login service that runs `exe`, taking over from a proxy
 /// started another way, and waits until it answers. Returns the service
 /// definition's file.
-pub async fn install_service(config: &Config, manager: Manager, exe: &Path) -> Result<PathBuf> {
+pub async fn install_service(
+    config: &Config,
+    home: &Home,
+    manager: Manager,
+    exe: &Path,
+) -> Result<PathBuf> {
     if stop(config).await? {
         // Give the port back before the service takes it.
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
-    let file = manager.install(exe)?;
-    wait_until_running(config).await?;
+    let file = manager.install(exe, home)?;
+    wait_until_running(config, home).await?;
     Ok(file)
 }
 
 /// Starts `exe serve` detached from this process, logging to a file.
-fn spawn(exe: &Path) -> Result<()> {
-    fsx::private_dir(&paths::home())?;
+fn spawn(exe: &Path, home: &Home) -> Result<()> {
+    fsx::private_dir(home.dir())?;
     let log = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(paths::log_file())?;
+        .open(home.log())?;
     let mut command = std::process::Command::new(exe);
     command
         .arg("serve")
@@ -110,7 +116,7 @@ fn spawn(exe: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn wait_until_running(config: &Config) -> Result<()> {
+async fn wait_until_running(config: &Config, home: &Home) -> Result<()> {
     let daemon = Daemon::new(config);
     for _ in 0..50 {
         if daemon.is_running().await {
@@ -118,10 +124,7 @@ async fn wait_until_running(config: &Config) -> Result<()> {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    bail!(
-        "the proxy did not start; see {}",
-        paths::log_file().display()
-    )
+    bail!("the proxy did not start; see {}", home.log().display())
 }
 
 #[cfg(test)]

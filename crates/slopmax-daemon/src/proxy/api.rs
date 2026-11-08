@@ -228,9 +228,9 @@ async fn answer(app: &Arc<App>, route: Route<'_>, query: &str, body: &[u8]) -> A
             Ok(false) => Err(ApiError::not_found("key")),
             Err(e) => Err(ApiError::internal(format!("{e:#}"))),
         },
-        Route::Agents => ok(&agents(&app.config())),
+        Route::Agents => ok(&agents(&app.config(), &app.home)),
         Route::Connect(id) => connect_agent(app, id).await,
-        Route::Disconnect(id) => disconnect_agent(id).await,
+        Route::Disconnect(id) => disconnect_agent(app, id).await,
         Route::Usage => usage(app, query).await,
         Route::History => history(app, query).await,
         Route::Events => Ok(events(app)),
@@ -305,7 +305,7 @@ fn changed(app: &App, change: anyhow::Result<()>) -> Answer {
 }
 
 async fn doctor(app: &App) -> Answer {
-    let sections = doctor::check(&app.config(), &app.store)
+    let sections = doctor::check(&app.config(), &app.store, &app.home)
         .await
         .map_err(|e| ApiError::internal(format!("{e:#}")))?;
     let sections: Vec<Section> = sections
@@ -498,7 +498,7 @@ async fn import(app: &App, asked: ImportRequest) -> Answer {
             ImportSource::Codex => Source::Codex,
             ImportSource::CliProxyApi => Source::Cliproxyapi,
         };
-        let found = import::discover(&app.auth_http, from).await;
+        let found = import::discover(&app.auth_http, from, &app.home).await;
         let (store, own) = (app.store.clone(), asked.own);
         let saved = crate::blocking::run(move || import::save(&store, found, own)).await;
         app.sync()
@@ -706,13 +706,13 @@ fn agent_of(id: AgentId) -> &'static dyn crate::agent::Agent {
     .expect("every API agent is known")
 }
 
-fn agents(config: &Config) -> Vec<AgentWiring> {
+fn agents(config: &Config, home: &crate::paths::Home) -> Vec<AgentWiring> {
     [AgentId::ClaudeCode, AgentId::Codex]
         .into_iter()
         .map(|id| {
             let agent = agent_of(id);
-            let file = agent.config_file();
-            let wiring = crate::agent::wiring(agent, config);
+            let file = agent.config_file(home);
+            let wiring = crate::agent::wiring(agent, config, home);
             AgentWiring {
                 id,
                 title: agent.title().into(),
@@ -723,7 +723,7 @@ fn agents(config: &Config) -> Vec<AgentWiring> {
                     _ => None,
                 },
                 wired: wiring == crate::agent::Wiring::Slopmax,
-                backed_up: crate::agent::backed_up(agent),
+                backed_up: crate::agent::backed_up(agent, home),
             }
         })
         .collect()
@@ -731,7 +731,8 @@ fn agents(config: &Config) -> Vec<AgentWiring> {
 
 async fn connect_agent(app: &App, id: AgentId) -> Answer {
     let (agent, config) = (agent_of(id), app.config());
-    let path = crate::blocking::run(move || crate::agent::setup(agent, &config))
+    let home = app.home.clone();
+    let path = crate::blocking::run(move || crate::agent::setup(agent, &config, &home))
         .await
         .map_err(|e| ApiError::internal(format!("{e:#}")))?;
     ok(&AgentConnected {
@@ -740,9 +741,10 @@ async fn connect_agent(app: &App, id: AgentId) -> Answer {
     })
 }
 
-async fn disconnect_agent(id: AgentId) -> Answer {
+async fn disconnect_agent(app: &App, id: AgentId) -> Answer {
     let agent = agent_of(id);
-    let path = crate::blocking::run(move || crate::agent::undo(agent))
+    let home = app.home.clone();
+    let path = crate::blocking::run(move || crate::agent::undo(agent, &home))
         .await
         .map_err(|e| ApiError::conflict(format!("{e:#}")))?;
     ok(&AgentDisconnected {

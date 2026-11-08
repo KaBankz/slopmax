@@ -71,8 +71,9 @@ pub fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
     builder.enable_all().build()
 }
 
-pub async fn run(config: Config) -> Result<Stopped> {
-    serve(config, Home::current(), Origins::default()).await
+/// Serves `home` with `config` until stopped: `slopmax serve`.
+pub async fn run(config: Config, home: Home) -> Result<Stopped> {
+    serve(config, home, Origins::default()).await
 }
 
 /// How the daemon stopped.

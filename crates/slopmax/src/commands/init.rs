@@ -16,6 +16,7 @@ use crate::term;
 use crate::ui;
 use slopmax_core::account::{Endpoint, Store};
 use slopmax_core::agent::{self, AGENTS, Agent, Wiring};
+use slopmax_core::auth;
 use slopmax_core::auth::{LoginOptions, callback};
 use slopmax_core::background::{self, Daemon};
 use slopmax_core::config::{Config, Strategy};
@@ -24,7 +25,6 @@ use slopmax_core::net::Origins;
 use slopmax_core::provider::{Credential, ProviderId};
 use slopmax_core::service::Manager;
 use slopmax_core::wire::Dialect;
-use slopmax_core::{auth, paths};
 
 /// How the setup answers its questions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -224,7 +224,7 @@ async fn accounts(
     match &plan.import {
         Some(sources) => {
             for source in sources {
-                let found = import::discover(&http, *source).await;
+                let found = import::discover(&http, *source, super::home()).await;
                 if report_saved(import::save(store, found, false)) == 0 {
                     let name = match source {
                         Source::All => "all",
@@ -316,7 +316,7 @@ async fn offer_imports(
     answers: Answers,
     http: &slopmax_core::net::Client,
 ) -> Result<()> {
-    let cliproxy = import::discover(http, Source::Cliproxyapi).await;
+    let cliproxy = import::discover(http, Source::Cliproxyapi, super::home()).await;
     let found = cliproxy.iter().filter(|f| f.account.is_ok()).count();
     if found > 0 {
         println!(
@@ -330,7 +330,7 @@ async fn offer_imports(
     }
     for agent in AGENTS {
         let has_accounts = store.list()?.iter().any(|a| a.provider == agent.provider());
-        if has_accounts || !agent.has_login() {
+        if has_accounts || !agent.has_login(super::home()) {
             continue;
         }
         let question = format!(
@@ -338,7 +338,7 @@ async fn offer_imports(
             agent.title()
         );
         if answers.confirm(&question, false)?
-            && let Some(item) = agent.import(http).await
+            && let Some(item) = agent.import(http, super::home()).await
         {
             match item.account {
                 Ok(account) => {
@@ -464,7 +464,7 @@ fn routing(config: &Config, answers: Answers, plan: &Plan) -> Result<Config> {
         return Ok(config.clone());
     }
     let mut changed = Config::set(
-        &paths::config_file(),
+        &super::home().config(),
         &[
             ("strategy", strategy.to_string().into()),
             ("session_affinity", affinity.into()),
@@ -476,7 +476,7 @@ fn routing(config: &Config, answers: Answers, plan: &Plan) -> Result<Config> {
 }
 
 fn wire(config: &Config, agent: &dyn Agent, answers: Answers) -> Result<()> {
-    let replacing = match agent::wiring(agent, config) {
+    let replacing = match agent::wiring(agent, config, super::home()) {
         Wiring::Slopmax => {
             println!("  {} already uses slopmax.", agent.title());
             return Ok(());
@@ -489,7 +489,7 @@ fn wire(config: &Config, agent: &dyn Agent, answers: Answers) -> Result<()> {
     };
     let question = format!("Point {} at slopmax?{replacing}", agent.title());
     if answers.confirm(&question, true)? {
-        let file = agent::setup(agent, config)?;
+        let file = agent::setup(agent, config, super::home())?;
         println!("    {} {}", ui::green("wired"), ui::dim(file.display()));
         println!("    {}", ui::dim(agent.setup_note()));
     }
@@ -501,12 +501,13 @@ async fn background(config: &Config, answers: Answers, plan: &Plan) -> Result<()
         println!("  The proxy is running on {}.", config.base_url());
     }
     let manager = Manager::detect();
-    let installed = manager.is_some_and(|m| m.status().installed);
+    let installed = manager.is_some_and(|m| m.status(super::home()).installed);
     let exe = background::current_exe()?;
     match manager {
         Some(manager) if !installed && !plan.no_service => {
             if answers.confirm("Start slopmax at login?", true)? {
-                let file = background::install_service(config, manager, &exe).await?;
+                let file =
+                    background::install_service(config, super::home(), manager, &exe).await?;
                 println!("    {} {}", ui::green("installed"), ui::dim(file.display()));
             }
         }
@@ -519,11 +520,11 @@ async fn background(config: &Config, answers: Answers, plan: &Plan) -> Result<()
             )
         ),
     }
-    if background::ensure_running(config, &exe).await? {
+    if background::ensure_running(config, super::home(), &exe).await? {
         println!(
             "  The proxy is running on {} {}",
             config.base_url(),
-            ui::dim(format!("(log: {})", paths::log_file().display()))
+            ui::dim(format!("(log: {})", super::home().log().display()))
         );
     }
     Ok(())

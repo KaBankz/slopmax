@@ -435,9 +435,13 @@ fn pool(provider: ProviderId, accounts: &[AccountReport], now: Timestamp) -> Opt
 /// The report from disk when no proxy is running, after polling the
 /// providers directly with `refresh`. Failed polls show as the account's
 /// last error.
-pub async fn offline(config: &Config, store: &Store, refresh: bool) -> Result<Report> {
-    let home = crate::paths::Home::current();
-    let state: State = crate::state::read(&home)?;
+pub async fn offline(
+    config: &Config,
+    store: &Store,
+    home: &crate::paths::Home,
+    refresh: bool,
+) -> Result<Report> {
+    let state: State = crate::state::read(home)?;
     let pins = state.pins.clone();
     let pool = Pool::new(config.strategy, SignedDuration::from_hours(1), state);
     pool.sync(store.list()?);
@@ -454,7 +458,7 @@ pub async fn offline(config: &Config, store: &Store, refresh: bool) -> Result<Re
             }
         }
         // Only while no daemon serves the home, which keeps its own.
-        if let Ok(_serving) = crate::state::offline(&home) {
+        if let Ok(_serving) = crate::state::offline(home) {
             let (state, _) = pool.snapshot(Timestamp::now());
             fsx::write_toml(&home.state(), &state)?;
         }

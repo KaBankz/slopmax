@@ -8,10 +8,9 @@ use anyhow::{Result, bail};
 use crate::ui;
 use slopmax_core::account::Store;
 use slopmax_core::config::Config;
-use slopmax_core::paths::Home;
 use slopmax_core::summary::{self, Totals};
 use slopmax_core::time::Timestamp;
-use slopmax_core::{human, paths, waste};
+use slopmax_core::{human, waste};
 
 /// Prints usage since the start of `range` (`today`, `7d`, `30d`, `all`),
 /// grouped `by` day, model, or account.
@@ -25,9 +24,9 @@ pub fn run(config: &Config, store: &Store, range: &str, by: &str, json: bool) ->
         .into_iter()
         .map(|a| (a.id.clone(), a.name()))
         .collect();
-    let report = summary::build(&paths::usage_dir(), since, by, &config.prices, &names);
+    let report = summary::build(&super::home().usage(), since, by, &config.prices, &names);
     let (rows, total) = (&report.rows, &report.total);
-    let lapsed = waste::read(&Home::current().windows(), since);
+    let lapsed = waste::read(&super::home().windows(), since);
     let left = waste::left(&lapsed, &config.plan_prices, &names);
 
     if json {
@@ -88,7 +87,7 @@ pub fn run(config: &Config, store: &Store, range: &str, by: &str, json: bool) ->
             "\n+ leaves out {n} request{} to models without a price; set one under \
              [prices] in {}.",
             if n == 1 { "" } else { "s" },
-            paths::config_file().display()
+            super::home().config().display()
         ));
     }
     if total.failed > 0 {
