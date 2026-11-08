@@ -23,7 +23,7 @@ fn main() -> ExitCode {
     } else {
         Level::Warn
     });
-    let runtime = match slopmax_core::daemon::runtime() {
+    let runtime = match slopmax_daemon::runtime() {
         Ok(runtime) => runtime,
         Err(e) => {
             eprintln!("{} starting: {e}", ui::red("error:"));

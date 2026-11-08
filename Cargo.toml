@@ -10,6 +10,7 @@ default-members = [
   "crates/slopmax-client",
   "crates/slopmax-common",
   "crates/slopmax-core",
+  "crates/slopmax-daemon",
   "crates/slopmax-net",
   "crates/slopmax-wire",
 ]
@@ -28,6 +29,7 @@ slopmax-app = { path = "crates/slopmax-app" }
 slopmax-client = { path = "crates/slopmax-client" }
 slopmax-common = { path = "crates/slopmax-common" }
 slopmax-core = { path = "crates/slopmax-core" }
+slopmax-daemon = { path = "crates/slopmax-daemon" }
 slopmax-net = { path = "crates/slopmax-net" }
 slopmax-wire = { path = "crates/slopmax-wire" }
 

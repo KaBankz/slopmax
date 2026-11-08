@@ -289,7 +289,12 @@ mod tests {
     use crate::net::Origins;
     use crate::paths::Home;
     use crate::pool::State as PoolState;
-    use crate::testkit::temp_dir;
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("slopmax-{name}-{}", crate::ids::token()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
     /// An upstream body the test feeds chunk by chunk.
     struct Fed(mpsc::UnboundedReceiver<Result<Bytes, BoxError>>);

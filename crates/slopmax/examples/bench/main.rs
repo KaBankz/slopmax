@@ -68,12 +68,12 @@ fn main() -> Result<()> {
     {
         ["upstream", listen] => mock()?.block_on(upstream(listen.parse()?)),
         ["proxy", listen, upstream, home] => {
-            slopmax_core::daemon::runtime()?.block_on(proxy(listen.parse()?, upstream, home))
+            slopmax_daemon::runtime()?.block_on(proxy(listen.parse()?, upstream, home))
         }
         ["bodies", dir] => bodies(Path::new(dir)),
         ["translate", body] => translate(&std::fs::read(body)?),
         ["allocs", n] => allocs::run(n.parse()?),
-        ["raw", listen, upstream] => slopmax_core::daemon::runtime()?.block_on(raw(
+        ["raw", listen, upstream] => slopmax_daemon::runtime()?.block_on(raw(
             listen.parse()?,
             upstream.trim_end_matches('/').to_owned(),
         )),
@@ -375,9 +375,7 @@ async fn proxy(listen: SocketAddr, upstream: &str, home: &str) -> Result<()> {
         ("https://api.anthropic.com", upstream),
         ("https://chatgpt.com/backend-api", upstream),
     ]);
-    slopmax_core::daemon::serve(config, home, origins)
-        .await
-        .map(drop)
+    slopmax_daemon::serve(config, home, origins).await.map(drop)
 }
 
 /// How long translating a request takes: what one such request holds up

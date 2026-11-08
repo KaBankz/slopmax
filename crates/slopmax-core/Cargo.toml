@@ -1,6 +1,6 @@
 [package]
 name = "slopmax-core"
-description = "slopmax's engine: accounts, sign-in, the pool, the proxy, and what the CLI and app share"
+description = "slopmax's engine: accounts, sign-in, the providers, the pool, the ledger and the report"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

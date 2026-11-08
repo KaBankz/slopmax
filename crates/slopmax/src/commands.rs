@@ -25,7 +25,8 @@ use slopmax_core::net::Origins;
 use slopmax_core::provider::ProviderId;
 use slopmax_core::time::Timestamp;
 use slopmax_core::wire::Dialect;
-use slopmax_core::{daemon, notify, paths};
+use slopmax_core::{notify, paths};
+use slopmax_daemon as daemon;
 
 const ACCOUNT: &str = "Number from `slopmax status`, or the account's id, email, or label";
 

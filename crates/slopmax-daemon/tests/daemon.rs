@@ -10,13 +10,14 @@ use std::time::{Duration, Instant};
 use http::StatusCode;
 use slopmax_core::account::{Account, Store, Tokens};
 use slopmax_core::config::{Config, Strategy};
+use slopmax_core::ledger;
 use slopmax_core::net::body;
 use slopmax_core::net::server::{self, Request, Response};
 use slopmax_core::net::{Client, Origins};
 use slopmax_core::paths::Home;
 use slopmax_core::provider::ProviderId;
 use slopmax_core::time::{SignedDuration, Timestamp};
-use slopmax_core::{daemon, ledger};
+use slopmax_daemon as daemon;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 

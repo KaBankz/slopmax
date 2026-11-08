@@ -22,9 +22,9 @@ use slopmax_core::paths::Home;
 use slopmax_core::pool::State as PoolState;
 use slopmax_core::provider::ProviderId;
 use slopmax_core::provider::credits::Credit;
-use slopmax_core::proxy::{self, App};
 use slopmax_core::time::{SignedDuration, Timestamp};
 use slopmax_core::wire::Dialect;
+use slopmax_daemon::proxy::{self, App};
 use tokio::net::TcpListener;
 
 const KEY: &str = "sm-test-key";
@@ -892,7 +892,7 @@ async fn credits_about_to_expire_are_redeemed_on_used_accounts() {
     for (id, used) in h.ids.iter().zip([30.0, 30.0, 0.0]) {
         observe_usage(&h, id, used);
     }
-    slopmax_core::daemon::redeem_expiring(&h.app).await;
+    slopmax_daemon::redeem_expiring(&h.app).await;
 
     let seen = h.log.lock().unwrap().clone();
     let token = |s: &Seen| s.headers["authorization"].to_str().unwrap().to_owned();
@@ -948,7 +948,7 @@ async fn claude_limit_resets_are_listed_and_spent_as_claude_code() {
 
     // Claude answers Claude Code alone, so nothing is asked before slopmax
     // has seen it.
-    slopmax_core::daemon::list_credits(&h.app, false).await;
+    slopmax_daemon::list_credits(&h.app, false).await;
     assert!(listings(&h).is_empty());
     let response = claude_request(&h).send().await.unwrap();
     assert_eq!(response.status(), 200);
@@ -957,7 +957,7 @@ async fn claude_limit_resets_are_listed_and_spent_as_claude_code() {
     assert_eq!(saved.agents[&ProviderId::Claude], AGENT);
 
     // Listed with the usage, as Claude Code lists them: the next grant first.
-    slopmax_core::daemon::list_credits(&h.app, false).await;
+    slopmax_daemon::list_credits(&h.app, false).await;
     let listed = listings(&h);
     assert_eq!(listed.len(), 1);
     assert_eq!(
@@ -976,7 +976,7 @@ async fn claude_limit_resets_are_listed_and_spent_as_claude_code() {
         Some("Model launch: one usage-limit reset")
     );
     // Not again within the hour.
-    slopmax_core::daemon::list_credits(&h.app, false).await;
+    slopmax_daemon::list_credits(&h.app, false).await;
     assert_eq!(listings(&h).len(), 1);
 
     // Redeeming without naming one spends the grant Claude names next.
@@ -1027,7 +1027,7 @@ async fn credits_are_listed_kept_and_redeemed_soonest_first() {
 
     // Each credit with its dates, soonest to expire first; an account
     // whose usage counts none is not asked.
-    slopmax_core::daemon::list_credits(&h.app, false).await;
+    slopmax_daemon::list_credits(&h.app, false).await;
     assert_eq!(listings(&h), 1);
     let now = Timestamp::now();
     let state = h.app.pool.state(&h.ids[0]);
@@ -1036,7 +1036,7 @@ async fn credits_are_listed_kept_and_redeemed_soonest_first() {
     assert_eq!(listed[1].id, "credit-later");
     assert!(listed[0].granted_at.is_some_and(|at| at < now));
     // Not again until the list is due.
-    slopmax_core::daemon::list_credits(&h.app, false).await;
+    slopmax_daemon::list_credits(&h.app, false).await;
     assert_eq!(listings(&h), 1);
 
     // Redeeming without naming a credit spends the soonest to expire.
@@ -1927,7 +1927,7 @@ async fn client_keys_are_held_to_their_models() {
 async fn idle_chatgpt_windows_are_warmed_once() {
     let h = harness(ProviderId::Codex, &["tok-ok"]).await;
     // Warmups use the model Codex last asked for; there is none yet.
-    slopmax_core::proxy::warm::idle_accounts(&h.app).await;
+    slopmax_daemon::proxy::warm::idle_accounts(&h.app).await;
     assert!(paths(&h).is_empty());
 
     let response = codex_request(&h).send().await.unwrap();
@@ -1946,7 +1946,7 @@ async fn idle_chatgpt_windows_are_warmed_once() {
     };
     h.app.pool.observe(&h.ids[0], limits, now);
 
-    slopmax_core::proxy::warm::idle_accounts(&h.app).await;
+    slopmax_daemon::proxy::warm::idle_accounts(&h.app).await;
     let warmups: Vec<Value> = h
         .log
         .lock()
@@ -1959,7 +1959,7 @@ async fn idle_chatgpt_windows_are_warmed_once() {
     assert_eq!(warmups[0]["model"], "gpt-6-sol");
     assert_eq!(warmups[0]["instructions"], "Reply with OK.");
     // Once per window.
-    slopmax_core::proxy::warm::idle_accounts(&h.app).await;
+    slopmax_daemon::proxy::warm::idle_accounts(&h.app).await;
     assert_eq!(paths(&h).len(), 2);
 }
 

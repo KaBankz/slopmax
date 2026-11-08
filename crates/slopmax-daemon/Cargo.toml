@@ -1,0 +1,33 @@
+[package]
+name = "slopmax-daemon"
+description = "slopmax's daemon: the proxy, the API beside it, and the background work that keeps the pool current"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+bytes.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+slopmax-api.workspace = true
+slopmax-core.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+toml_edit.workspace = true
+
+[dev-dependencies]
+# Paused time, for timeouts tested without waiting them out.
+tokio = { workspace = true, features = ["test-util"] }
+# The client the CLI and the desktop app reach the daemon with.
+slopmax-client.workspace = true
+
+[lints]
+workspace = true

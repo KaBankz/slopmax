@@ -26,7 +26,7 @@ fn with_oauth_beta(existing: Option<&str>) -> String {
 /// Headers for the upstream request: the agent's own headers, with the
 /// account's token in place of the slopmax key.
 pub fn upstream_headers(client: &HeaderMap, access_token: &str) -> HeaderMap {
-    let mut headers = crate::proxy::forwardable(client);
+    let mut headers = crate::net::headers::forwardable(client);
     let beta = with_oauth_beta(client.get("anthropic-beta").and_then(|v| v.to_str().ok()));
     insert(&mut headers, "anthropic-beta", &beta);
     insert(

@@ -3,6 +3,7 @@
 pub mod body;
 pub mod client;
 pub mod form;
+pub mod headers;
 pub mod server;
 pub mod ws;
 

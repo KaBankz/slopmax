@@ -163,7 +163,7 @@ impl Provider for KeyProvider {
 
 /// The agent's headers with `key` as the credential (none when empty).
 pub fn with_key(client: &HeaderMap, header: KeyHeader, key: &str) -> HeaderMap {
-    let mut headers = crate::proxy::forwardable(client);
+    let mut headers = crate::net::headers::forwardable(client);
     if key.is_empty() {
         return headers;
     }

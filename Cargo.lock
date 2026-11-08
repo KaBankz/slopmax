@@ -6388,6 +6388,7 @@ dependencies = [
  "serde_json",
  "slopmax-client",
  "slopmax-core",
+ "slopmax-daemon",
  "tokio",
  "toml_edit 0.25.15+spec-1.1.0",
 ]
@@ -6462,6 +6463,26 @@ dependencies = [
  "slopmax-common",
  "slopmax-net",
  "slopmax-wire",
+ "tokio",
+ "tokio-util",
+ "toml_edit 0.25.15+spec-1.1.0",
+]
+
+[[package]]
+name = "slopmax-daemon"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde",
+ "serde_json",
+ "slopmax-api",
+ "slopmax-client",
+ "slopmax-core",
  "tokio",
  "tokio-util",
  "toml_edit 0.25.15+spec-1.1.0",

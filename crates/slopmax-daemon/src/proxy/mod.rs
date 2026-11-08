@@ -367,8 +367,8 @@ impl App {
     pub async fn refresh(self: &Arc<Self>) {
         match self.refreshing.try_lock() {
             Ok(_polling) => {
-                crate::daemon::poll_all(self, true).await;
-                crate::daemon::list_credits(self, true).await;
+                crate::poll_all(self, true).await;
+                crate::list_credits(self, true).await;
             }
             Err(_) => drop(self.refreshing.lock().await),
         }
@@ -628,38 +628,6 @@ fn error(dialect: Option<Dialect>, status: StatusCode, message: &str) -> Respons
     json_reply(status, &body)
 }
 
-const HOP_BY_HOP: [&str; 9] = [
-    "connection",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "proxy-connection",
-    "te",
-    "trailer",
-    "transfer-encoding",
-    "upgrade",
-];
-
-/// Client headers safe to forward upstream: everything but hop-by-hop
-/// headers and the agent's local credentials and cookies.
-pub(crate) fn forwardable(client: &HeaderMap) -> HeaderMap {
-    let mut headers = HeaderMap::with_capacity(client.len());
-    for (name, value) in client {
-        let name_str = name.as_str();
-        // slopmax's own headers are for slopmax alone.
-        let skip = HOP_BY_HOP.contains(&name_str)
-            || name_str.starts_with("x-slopmax-")
-            || matches!(
-                name_str,
-                "host" | "content-length" | "authorization" | "x-api-key" | "cookie"
-            );
-        if !skip {
-            headers.append(name.clone(), value.clone());
-        }
-    }
-    headers
-}
-
 /// A request's own say on session affinity: `x-slopmax-affinity: off`
 /// places it by the strategy alone, `on` keeps it on its session's
 /// account even when the config turns affinity off.
@@ -670,18 +638,6 @@ pub(crate) fn affinity(headers: &HeaderMap) -> Option<bool> {
         "off" | "false" | "0" | "no" => Some(false),
         _ => None,
     }
-}
-
-/// Upstream response headers safe to return to the agent.
-pub(crate) fn returnable(upstream: &HeaderMap) -> HeaderMap {
-    let mut headers = HeaderMap::with_capacity(upstream.len());
-    for (name, value) in upstream {
-        let name_str = name.as_str();
-        if !HOP_BY_HOP.contains(&name_str) && !matches!(name_str, "content-length" | "set-cookie") {
-            headers.append(name.clone(), value.clone());
-        }
-    }
-    headers
 }
 
 #[cfg(test)]
@@ -810,19 +766,5 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-api-key", HeaderValue::from_static("sm-key"));
         assert!(authorized(&config, &headers));
-    }
-
-    #[test]
-    fn forwardable_drops_only_credentials_and_hop_by_hop() {
-        let mut client = HeaderMap::new();
-        client.insert("authorization", HeaderValue::from_static("Bearer sm-key"));
-        client.insert("connection", HeaderValue::from_static("keep-alive"));
-        client.insert("accept-encoding", HeaderValue::from_static("gzip, br"));
-        client.insert("x-app", HeaderValue::from_static("cli"));
-        let out = forwardable(&client);
-        assert!(!out.contains_key("authorization"));
-        assert!(!out.contains_key("connection"));
-        assert_eq!(out["accept-encoding"], "gzip, br");
-        assert_eq!(out["x-app"], "cli");
     }
 }

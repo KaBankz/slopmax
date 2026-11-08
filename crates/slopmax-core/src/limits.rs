@@ -27,7 +27,7 @@ pub struct Window {
 }
 
 impl Window {
-    pub(crate) fn new(span: &str, used: f64, resets_at: Option<Timestamp>) -> Self {
+    pub fn new(span: &str, used: f64, resets_at: Option<Timestamp>) -> Self {
         Self {
             span: span.into(),
             model: None,

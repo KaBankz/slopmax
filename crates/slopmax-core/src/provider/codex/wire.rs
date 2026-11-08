@@ -16,7 +16,7 @@ pub fn upstream_headers(
     account_id: Option<&str>,
     moved: bool,
 ) -> HeaderMap {
-    let mut headers = crate::proxy::forwardable(client);
+    let mut headers = crate::net::headers::forwardable(client);
     insert(
         &mut headers,
         "authorization",

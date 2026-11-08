@@ -134,7 +134,7 @@ pub fn run(n: u64) -> Result<()> {
     let home_text = home.to_string_lossy().into_owned();
     std::thread::spawn(move || {
         count_this_thread();
-        let runtime = slopmax_core::daemon::runtime().unwrap();
+        let runtime = slopmax_daemon::runtime().unwrap();
         let _ = runtime.block_on(super::proxy(
             proxy_addr,
             "http://127.0.0.1:9250",

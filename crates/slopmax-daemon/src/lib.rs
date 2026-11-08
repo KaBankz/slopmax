@@ -1,5 +1,18 @@
-//! The long-running proxy and its background work: picking up account
-//! changes, keeping tokens fresh, polling usage, and saving state.
+//! The daemon: the proxy agents talk to, slopmax's API beside it, and the
+//! background work that keeps the pool current (picking up account
+//! changes, keeping tokens fresh, polling usage, redeeming limit resets,
+//! telling notices) and saves its state. It is built on the engine,
+//! [`slopmax_core`], and is the only process that writes what it holds while
+//! it runs; the CLI and the apps reach it through `/slopmax/api`.
+
+pub mod proxy;
+
+// The engine's modules, under the names the daemon's code uses.
+pub(crate) use slopmax_core::{
+    account, agent, api, auth, blocking, config, doctor, fsx, history, import, ledger, limits,
+    notify, paths, pool, provider, report, route, state, summary, usage, waste,
+};
+pub(crate) use slopmax_core::{human, ids, log, net, time, wire};
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,16 +21,13 @@ use anyhow::{Context, Result, bail};
 use tokio::net::TcpListener;
 
 use crate::account::Account;
-use crate::auth;
 use crate::config::Config;
-use crate::log;
 use crate::net::{Origins, server};
 use crate::paths::Home;
 use crate::pool::State;
 use crate::provider::credits::Outcome;
-use crate::proxy::{self, App};
+use crate::proxy::App;
 use crate::time::{SignedDuration, Timestamp};
-use crate::{blocking, fsx, notify, usage};
 
 /// How often blocked accounts are re-checked, in case quota frees up early.
 const RECHECK_BLOCKED: SignedDuration = SignedDuration::from_mins(10);

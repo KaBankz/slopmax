@@ -19,9 +19,9 @@ use slopmax_core::net::{Client, Origins};
 use slopmax_core::paths::Home;
 use slopmax_core::pool::State as PoolState;
 use slopmax_core::provider::ProviderId;
-use slopmax_core::proxy::{self, App};
 use slopmax_core::time::{SignedDuration, Timestamp};
 use slopmax_core::wire::Dialect;
+use slopmax_daemon::proxy::{self, App};
 use tokio::net::TcpListener;
 
 const KEY: &str = "sm-test-key";
