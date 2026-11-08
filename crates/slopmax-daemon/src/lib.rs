@@ -47,7 +47,7 @@ const LIST_UNCOUNTED_EVERY: SignedDuration = SignedDuration::from_hours(1);
 /// earliest.
 const LIST_CREDITS_GAP: SignedDuration = SignedDuration::from_mins(10);
 /// How often account conditions are compared for notifications.
-const WATCH_EVERY: Duration = Duration::from_secs(15);
+const WATCH_EVERY: Duration = Duration::from_secs(30);
 
 /// The runtime every command runs on: one thread unless `SLOPMAX_WORKERS`
 /// asks for more. One thread carries a desktop's agents with room to spare,
@@ -129,13 +129,14 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<Stopp
     app.sync()?;
 
     // Logins, removals and `slopmax use` from the CLI and the apps are told
-    // to the daemon at once (`/slopmax/sync`); the rescan catches the rest.
+    // to the daemon at once (`/slopmax/api/sync`); the rescan catches the rest.
     // Each job asks the config as it runs, so a changed config.toml turns it
-    // on or off without a restart. Every period is a multiple of 15 s, so the
-    // jobs share their wakeups.
+    // on or off without a restart. Every period is a multiple of 30 s, so the
+    // jobs share their wakeups: each costs tokio's timer wheel about three,
+    // as it moves a long timer down its levels.
     let watching = Arc::new(tokio::sync::Mutex::new(Watch::open(&app)));
     let jobs: Vec<Job> = vec![
-        Job::new("save state", Duration::from_secs(15), |app| async move {
+        Job::new("save state", Duration::from_secs(30), |app| async move {
             // Nothing to write: no blocking thread woken for nothing.
             if app.pool.needs_save() {
                 blocking::run(move || save_state(&app)).await;
