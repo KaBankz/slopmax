@@ -160,15 +160,12 @@ fn temp_home(accounts: &[Account]) -> PathBuf {
 }
 
 impl Daemon {
-    async fn ask(&self, path: &str) -> StatusCode {
+    /// A call to slopmax's API, with no body.
+    async fn call(&self, path: &str) -> StatusCode {
         Client::builder()
             .build()
             .post(format!("{}{path}", self.base))
             .header("authorization", format!("Bearer {KEY}"))
-            .header("user-agent", "claude-cli/2.1.287 (external, cli)")
-            .header("x-slopmax-affinity", "off")
-            .header("content-type", "application/json")
-            .body(CLAUDE_BODY)
             .send()
             .await
             .unwrap()
@@ -195,7 +192,7 @@ impl Daemon {
     /// Stops the daemon as `slopmax stop` does, and waits for it to finish.
     async fn stop(self) -> (PathBuf, Duration) {
         let asked = Instant::now();
-        assert_eq!(self.ask("/slopmax/shutdown").await, StatusCode::OK);
+        assert_eq!(self.call("/slopmax/api/shutdown").await, StatusCode::OK);
         tokio::time::timeout(Duration::from_secs(20), self.run)
             .await
             .expect("the daemon stopped")
@@ -280,7 +277,7 @@ async fn stops_at_once_while_a_dashboard_follows_the_events() {
     let daemon = start(&home, &upstream).await;
     let events = Client::builder()
         .build()
-        .get(format!("{}/slopmax/events", daemon.base))
+        .get(format!("{}/slopmax/api/events", daemon.base))
         .header("authorization", format!("Bearer {KEY}"))
         .send()
         .await
@@ -305,7 +302,7 @@ async fn a_change_the_daemon_is_told_of_applies_to_the_next_request() {
     Store::at(home.join("accounts"))
         .update(&first.id, |a| a.auth_error = Some("signed out".into()))
         .unwrap();
-    assert_eq!(daemon.ask("/slopmax/sync").await, StatusCode::OK);
+    assert_eq!(daemon.call("/slopmax/api/sync").await, StatusCode::OK);
     daemon.request().await;
     assert_eq!(*seen.lock().unwrap(), ["Bearer tok-a", "Bearer tok-b"]);
     let (home, _) = daemon.stop().await;
@@ -329,7 +326,7 @@ async fn serves_requests_from_the_accounts_it_holds_without_reading_their_files(
     }
     assert_eq!(*seen.lock().unwrap(), ["Bearer tok-a"; 3]);
     // Told, it reads them.
-    assert_eq!(daemon.ask("/slopmax/sync").await, StatusCode::OK);
+    assert_eq!(daemon.call("/slopmax/api/sync").await, StatusCode::OK);
     daemon.request().await;
     assert_eq!(seen.lock().unwrap().last().unwrap(), "Bearer tok-on-disk");
     let (home, _) = daemon.stop().await;

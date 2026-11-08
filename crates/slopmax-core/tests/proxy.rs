@@ -981,7 +981,10 @@ async fn claude_limit_resets_are_listed_and_spent_as_claude_code() {
 
     // Redeeming without naming one spends the grant Claude names next.
     let reply: Value = client()
-        .post(format!("{}/slopmax/accounts/{}/redeem", h.proxy, h.ids[0]))
+        .post(format!(
+            "{}/slopmax/api/accounts/{}/redeem",
+            h.proxy, h.ids[0]
+        ))
         .header("authorization", format!("Bearer {KEY}"))
         .send()
         .await
@@ -1038,7 +1041,10 @@ async fn credits_are_listed_kept_and_redeemed_soonest_first() {
 
     // Redeeming without naming a credit spends the soonest to expire.
     let reply: Value = client()
-        .post(format!("{}/slopmax/accounts/{}/redeem", h.proxy, h.ids[0]))
+        .post(format!(
+            "{}/slopmax/api/accounts/{}/redeem",
+            h.proxy, h.ids[0]
+        ))
         .header("authorization", format!("Bearer {KEY}"))
         .send()
         .await
@@ -1057,7 +1063,7 @@ async fn credits_are_listed_kept_and_redeemed_soonest_first() {
         .find(|a| a["id"] == h.ids[0].as_str())
         .unwrap()
         .clone();
-    let left = account["state"]["credits"]["credits"].as_array().unwrap();
+    let left = account["resets"].as_array().unwrap();
     assert_eq!(left.len(), 1);
     assert_eq!(left[0]["id"], "credit-later");
 }
@@ -1693,15 +1699,14 @@ async fn openai_clients_list_every_model_they_can_use() {
 }
 
 #[tokio::test]
-async fn the_dashboard_api_reports_acts_and_streams() {
-    use http_body_util::BodyExt;
+async fn the_api_reports_acts_and_streams() {
+    use slopmax_client::api::ApiError;
+    use slopmax_client::api::events::Event;
+    use slopmax_client::api::ledger::{SummaryBy, SummaryRange};
+    use slopmax_client::api::requests::AccountPatch;
 
     let h = harness(ProviderId::Codex, &["tok-ok", "tok-ok"]).await;
-    let admin = |method: Method, path: &str| {
-        client()
-            .request(method, format!("{}{path}", h.proxy))
-            .header("authorization", format!("Bearer {KEY}"))
-    };
+    let api = slopmax_client::Client::new(h.proxy.clone(), KEY);
 
     // The page itself is public and inert; the data behind it is not.
     let page = client()
@@ -1717,165 +1722,106 @@ async fn the_dashboard_api_reports_acts_and_streams() {
             .unwrap()
             .starts_with("default-src 'none'")
     );
-    let anonymous = client()
-        .get(format!("{}/slopmax/status", h.proxy))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+    let anonymous = slopmax_client::Client::new(h.proxy.clone(), "");
+    assert!(matches!(
+        anonymous.status().await,
+        Err(slopmax_client::Error::Api(ApiError::Unauthorized { .. }))
+    ));
 
-    let account = |report: &Value, id: &str| {
-        report["accounts"]
-            .as_array()
-            .unwrap()
+    let (first, second) = (h.ids[0].clone(), h.ids[1].clone());
+    let held = |report: &slopmax_client::api::report::Report, id: &str| {
+        report
+            .accounts
             .iter()
-            .find(|a| a["id"] == id)
+            .find(|a| a.id == id)
             .cloned()
             .unwrap()
     };
-    let (first, second) = (h.ids[0].clone(), h.ids[1].clone());
-    let act =
-        |id: &str, action: &str| admin(Method::POST, &format!("/slopmax/accounts/{id}/{action}"));
-    let report: Value = act(&first, "disable")
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(account(&report, &first)["disabled"], true);
-    let report: Value = act(&first, "enable")
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(account(&report, &first)["disabled"], false);
-    let report: Value = act(&first, "priority?value=3")
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(account(&report, &first)["priority"], 3);
-    let report: Value = act(&second, "use")
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(account(&report, &second)["pinned"], true);
-    // Pins are the daemon's state, saved with the rest of it, not a file
-    // of their own.
-    assert!(!h.dir.join("pins.toml").exists());
-    let report: Value = admin(Method::POST, "/slopmax/use/auto")
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(account(&report, &second)["pinned"], false);
-    let missing = act("codex-nope", "disable").send().await.unwrap();
-    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
-    let report: Value = act(&first, "label?value=work%20laptop")
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(account(&report, &first)["name"], "work laptop");
-    let report: Value = act(&first, "label?value=")
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_ne!(account(&report, &first)["name"], "work laptop");
+    let patch = |patch: AccountPatch| {
+        let (api, id) = (api.clone(), first.clone());
+        async move { api.update_account(&id, &patch).await.unwrap() }
+    };
+    let report = patch(AccountPatch {
+        disabled: Some(true),
+        ..AccountPatch::default()
+    })
+    .await;
+    assert!(held(&report, &first).disabled);
+    let report = patch(AccountPatch {
+        disabled: Some(false),
+        priority: Some(3),
+        label: Some(Some("work laptop".into())),
+    })
+    .await;
+    let account = held(&report, &first);
+    assert!(!account.disabled);
+    assert_eq!(
+        (account.priority, account.name.as_str()),
+        (3, "work laptop")
+    );
+    // A blank label clears it, so the email shows again.
+    let report = patch(AccountPatch {
+        label: Some(Some("  ".into())),
+        ..AccountPatch::default()
+    })
+    .await;
+    assert_ne!(held(&report, &first).name, "work laptop");
+    assert!(matches!(
+        api.pin("codex-nope").await,
+        Err(slopmax_client::Error::Api(ApiError::NotFound { .. }))
+    ));
 
-    // Removing an account takes its pin with it, as `slopmax remove` does.
-    act(&second, "use").send().await.unwrap();
-    let report: Value = act(&second, "remove")
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let ids: Vec<&Value> = report["accounts"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|a| &a["id"])
-        .collect();
-    assert_eq!(ids, [&Value::from(first.clone())]);
-    // Its pin went with it: pinning nothing else leaves nothing pinned.
-    let report: Value = admin(Method::GET, "/slopmax/status")
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
+    // Pins are the daemon's state, saved with the rest of it.
+    assert!(held(&api.pin(&second).await.unwrap(), &second).pinned);
+    assert!(!h.dir.join("pins.toml").exists());
+    assert!(!held(&api.unpin_all().await.unwrap(), &second).pinned);
+    // Removing an account takes its pin with it.
+    api.pin(&second).await.unwrap();
+    let report = api.remove_account(&second).await.unwrap();
+    let ids: Vec<&str> = report.accounts.iter().map(|a| a.id.as_str()).collect();
+    assert_eq!(ids, [first.as_str()]);
+    let status = api.status().await.unwrap();
     assert!(
-        report["pools"]
-            .as_array()
-            .unwrap()
+        status
+            .pools
             .iter()
-            .all(|p| p["next"]["reason"] != "pinned"),
-        "{report}"
+            .all(|p| p.next.as_ref().is_none_or(|n| n.account != second)),
+        "{status:?}"
     );
 
-    // A change the CLI or app makes on disk shows as soon as the proxy syncs.
+    // A change another process makes on disk shows as soon as the proxy
+    // syncs.
     Store::at(h.dir.join("accounts"))
         .update(&first, |a| a.priority = 7)
         .unwrap();
-    let report: Value = admin(Method::POST, "/slopmax/sync")
-        .send()
-        .await
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(account(&report, &first)["priority"], 7);
+    assert_eq!(held(&api.sync().await.unwrap(), &first).priority, 7);
 
-    // The live feed sees each answered request.
-    let feed = admin(Method::GET, "/slopmax/events").send().await.unwrap();
-    assert_eq!(feed.headers()["content-type"], "text/event-stream");
-    let mut feed = feed.into_body();
-    let first_frame = feed.frame().await.unwrap().unwrap().into_data().unwrap();
-    assert!(first_frame.starts_with(b": connected"));
+    // The event stream sees each answered request.
+    let mut events = api.events().await.unwrap();
     let response = codex_request(&h).send().await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     response.bytes().await.unwrap();
-    let event = tokio::time::timeout(Duration::from_secs(5), async {
+    let record = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let chunk = feed.frame().await.unwrap().unwrap().into_data().unwrap();
-            if let Some(data) = chunk.strip_prefix(b"data: ") {
-                break serde_json::from_slice::<Value>(data.trim_ascii()).unwrap();
+            if let Some(Ok(Event::Request { record })) = events.next().await {
+                break record;
             }
         }
     })
     .await
     .unwrap();
-    assert_eq!(event["model"], "gpt-6-sol");
-    assert_eq!(event["input"], 40);
+    let slopmax_client::api::ledger::LedgerRecord::Request(record) = record;
+    assert_eq!(record.model.as_deref(), Some("gpt-6-sol"));
+    assert_eq!(record.usage.input, 40);
 
     eventually(|| ledger::read(&h.dir.join("usage"), Timestamp::UNIX_EPOCH).len() == 1).await;
-    let usage: Value = admin(Method::GET, "/slopmax/usage?range=today&by=model")
-        .send()
-        .await
-        .unwrap()
-        .json()
+    let usage = api
+        .usage(SummaryRange::Today, SummaryBy::Model)
         .await
         .unwrap();
-    assert_eq!(usage["rows"]["gpt-6-sol"]["requests"], 1);
-    assert_eq!(usage["total"]["output"], 7);
+    let row = usage.rows.iter().find(|r| r.key == "gpt-6-sol").unwrap();
+    assert_eq!(row.totals.requests, 1);
+    assert_eq!(usage.total.output, 7);
 }
 
 #[tokio::test]
@@ -1969,7 +1915,7 @@ async fn client_keys_are_held_to_their_models() {
     assert!(!paths(&h).iter().any(|p| p.starts_with("ws ")));
     // Client keys never reach slopmax's own API.
     let status = client()
-        .get(format!("{}/slopmax/status", h.proxy))
+        .get(format!("{}/slopmax/api/status", h.proxy))
         .header("authorization", "Bearer sm-laptop")
         .send()
         .await
@@ -2283,7 +2229,7 @@ async fn hub_clients_read_usage_and_redeem_credits_without_a_relay() {
 
     // slopmax's own status carries the same pool view in one call.
     let report: Value = client()
-        .get(format!("{}/slopmax/status", h.proxy))
+        .get(format!("{}/slopmax/api/status", h.proxy))
         .header("authorization", format!("Bearer {KEY}"))
         .send()
         .await
@@ -2482,20 +2428,15 @@ async fn passing_server_errors_are_retried_once_on_the_same_account() {
     assert_eq!(responses(&h).len(), 4);
 }
 
-async fn admin(h: &Harness, method: Method, path: &str, form: &str) -> (StatusCode, Value) {
-    let url = format!("{}/slopmax/{path}", h.proxy);
-    let request = match method {
-        Method::GET => client().get(url),
-        _ => client()
-            .post(url)
-            .header("content-type", "application/x-www-form-urlencoded")
-            .body(form.to_owned()),
-    };
-    let response = request
-        .header("authorization", format!("Bearer {KEY}"))
-        .send()
-        .await
-        .unwrap();
+/// A call to slopmax's API, `/slopmax/api/<path>`, with a JSON body if any.
+async fn api(h: &Harness, method: Method, path: &str, body: Option<Value>) -> (StatusCode, Value) {
+    let mut request = client()
+        .request(method, format!("{}/slopmax/api/{path}", h.proxy))
+        .header("authorization", format!("Bearer {KEY}"));
+    if let Some(body) = body {
+        request = request.json(&body);
+    }
+    let response = request.send().await.unwrap();
     let status = response.status();
     let text = response.text().await.unwrap();
     (status, serde_json::from_str(&text).unwrap_or(Value::Null))
@@ -2511,11 +2452,12 @@ async fn settings_change_through_the_api_and_apply_at_once() {
     )
     .unwrap();
 
-    let (status, settings) = admin(&h, Method::GET, "settings", "").await;
+    let (status, view) = api(&h, Method::GET, "settings", None).await;
     assert_eq!(status, 200);
+    let settings = &view["settings"];
     assert_eq!(settings["strategy"], "fill-first");
-    assert_eq!(settings["session_affinity"], true);
-    let ids: Vec<&str> = settings["strategies"]
+    assert_eq!(settings["sessionAffinity"], true);
+    let ids: Vec<&str> = view["strategies"]
         .as_array()
         .unwrap()
         .iter()
@@ -2526,16 +2468,15 @@ async fn settings_change_through_the_api_and_apply_at_once() {
         ["reset-first", "fill-first", "least-used", "round-robin"]
     );
 
-    let (status, settings) = admin(
-        &h,
-        Method::POST,
-        "settings",
-        "strategy=round-robin&session_affinity=false&redeem_when_exhausted=true",
-    )
-    .await;
-    assert_eq!(status, 200, "{settings}");
-    assert_eq!(settings["strategy"], "round-robin");
-    assert_eq!(settings["session_affinity"], false);
+    let change = json!({
+        "strategy": "round-robin",
+        "sessionAffinity": false,
+        "redeemWhenExhausted": true,
+    });
+    let (status, view) = api(&h, Method::PATCH, "settings", Some(change)).await;
+    assert_eq!(status, 200, "{view}");
+    assert_eq!(view["settings"]["strategy"], "round-robin");
+    assert_eq!(view["settings"]["sessionAffinity"], false);
     // Applied to the next request, without a restart.
     let routing = h.app.pool.routing();
     assert_eq!(routing.strategy, Strategy::RoundRobin);
@@ -2551,21 +2492,27 @@ async fn settings_change_through_the_api_and_apply_at_once() {
 
     // Nonsense is refused and changes nothing.
     for bad in [
-        "strategy=fastest",
-        "session_affinity=maybe",
-        "listen=0.0.0.0:1",
-        "session_ttl_mins=-5",
-        "",
+        json!({ "strategy": "fastest" }),
+        json!({ "sessionAffinity": "maybe" }),
+        json!({ "listen": "0.0.0.0:1" }),
+        json!({ "sessionMinutes": -5 }),
+        json!({}),
     ] {
-        let (status, _) = admin(&h, Method::POST, "settings", bad).await;
+        let (status, _) = api(&h, Method::PATCH, "settings", Some(bad.clone())).await;
         assert_eq!(status, 400, "{bad}");
     }
     assert_eq!(std::fs::read_to_string(&file).unwrap(), text);
     assert_eq!(h.app.pool.routing().strategy, Strategy::RoundRobin);
 
-    let (status, settings) = admin(&h, Method::POST, "settings?session_ttl_mins=15", "").await;
+    let (status, view) = api(
+        &h,
+        Method::PATCH,
+        "settings",
+        Some(json!({ "sessionMinutes": 15 })),
+    )
+    .await;
     assert_eq!(
-        (status, settings["session_ttl_mins"].as_u64()),
+        (status, view["settings"]["sessionMinutes"].as_u64()),
         (StatusCode::OK, Some(15))
     );
     assert_eq!(
@@ -2605,7 +2552,7 @@ async fn the_history_api_charts_what_went_through() {
     let since = Timestamp::now() - SignedDuration::from_mins(1);
     eventually(|| ledger::read(&h.dir.join("usage"), since).len() == 2).await;
 
-    let (status, history) = admin(&h, Method::GET, "history?range=today", "").await;
+    let (status, history) = api(&h, Method::GET, "history?range=today", None).await;
     assert_eq!(status, 200);
     assert_eq!(history["range"], "today");
     assert_eq!(history["total"]["requests"], 2);
@@ -2621,7 +2568,7 @@ async fn the_history_api_charts_what_went_through() {
     let expected = 2.0 * (40.0 * 2.0 + 60.0 * 0.2 + 7.0 * 10.0) / 1e6;
     assert!((cost - expected).abs() < 1e-9, "{cost} vs {expected}");
 
-    let (status, _) = admin(&h, Method::GET, "history?range=forever", "").await;
+    let (status, _) = api(&h, Method::GET, "history?range=forever", None).await;
     assert_eq!(status, 400);
 }
 
@@ -2631,7 +2578,7 @@ async fn history_is_kept_by_the_hour_after_the_first_read() {
     served_by(&h, codex_in(&h, "s")).await;
     let since = Timestamp::now() - SignedDuration::from_mins(1);
     eventually(|| ledger::read(&h.dir.join("usage"), since).len() == 1).await;
-    let (_, history) = admin(&h, Method::GET, "history?range=today", "").await;
+    let (_, history) = api(&h, Method::GET, "history?range=today", None).await;
     assert_eq!(history["total"]["requests"], 1);
     assert!(h.app.hours.is_ready());
 
@@ -2639,10 +2586,10 @@ async fn history_is_kept_by_the_hour_after_the_first_read() {
     // does, so the history holds it even with the ledger gone.
     std::fs::remove_dir_all(h.dir.join("usage")).unwrap();
     served_by(&h, codex_in(&h, "t")).await;
-    let (_, history) = admin(&h, Method::GET, "history?range=today", "").await;
+    let (_, history) = api(&h, Method::GET, "history?range=today", None).await;
     assert_eq!(history["total"]["requests"], 2);
     assert_eq!(history["sessions"], 2);
-    let (_, week) = admin(&h, Method::GET, "history?range=7d", "").await;
+    let (_, week) = api(&h, Method::GET, "history?range=7d", None).await;
     assert_eq!(week["total"]["requests"], 2);
 }
 
@@ -2662,7 +2609,7 @@ async fn history_says_what_resets_left_on_the_table() {
     let file = h.dir.join("windows.jsonl");
     slopmax_core::waste::append(&file, &[record("7d", 25.0), record("5h", 0.0)]).unwrap();
 
-    let (status, history) = admin(&h, Method::GET, "history?range=7d", "").await;
+    let (status, history) = api(&h, Method::GET, "history?range=7d", None).await;
     assert_eq!(status, 200);
     let left = &history["left"];
     assert_eq!(left["windows"], 1, "the weeks alone");
@@ -2695,14 +2642,15 @@ async fn the_api_does_what_the_cli_does_for_keys_endpoints_and_the_doctor() {
 
     // A key for another machine, held to some models: shown once, then
     // listed by name, and it works at once.
-    let (status, made) = admin(&h, Method::POST, "keys", "name=laptop&models=gpt-6-*").await;
+    let laptop = json!({ "name": "laptop", "models": ["gpt-6-*"] });
+    let (status, made) = api(&h, Method::POST, "keys", Some(laptop)).await;
     assert_eq!(status, 200, "{made}");
     let key = made["key"].as_str().unwrap().to_owned();
     assert!(key.starts_with("sm-"));
-    let (_, listed) = admin(&h, Method::GET, "keys", "").await;
-    assert_eq!(listed["keys"][0]["name"], "laptop");
-    assert_eq!(listed["keys"][0]["models"][0], "gpt-6-*");
-    assert!(listed.get("key").is_none() && listed["keys"][0].get("key").is_none());
+    let (_, listed) = api(&h, Method::GET, "keys", None).await;
+    assert_eq!(listed[0]["name"], "laptop");
+    assert_eq!(listed[0]["models"][0], "gpt-6-*");
+    assert!(listed[0].get("key").is_none());
     let used = client()
         .post(format!("{}/codex/responses", h.proxy))
         .header("authorization", format!("Bearer {key}"))
@@ -2711,24 +2659,31 @@ async fn the_api_does_what_the_cli_does_for_keys_endpoints_and_the_doctor() {
         .await
         .unwrap();
     assert_eq!(used.status(), StatusCode::OK);
-    let (status, _) = admin(&h, Method::POST, "keys", "name=laptop").await;
-    assert_eq!(status, 400, "names are unique");
-    let (status, listed) = admin(&h, Method::POST, "keys/laptop/remove", "").await;
+    let again = json!({ "name": "laptop" });
+    let (status, _) = api(&h, Method::POST, "keys", Some(again)).await;
+    assert!(status.is_client_error(), "names are unique: {status}");
+    let (status, listed) = api(&h, Method::DELETE, "keys/laptop", None).await;
     assert_eq!(status, 200);
-    assert!(listed["keys"].as_array().unwrap().is_empty());
-    let (status, _) = admin(&h, Method::POST, "keys/laptop/remove", "").await;
+    assert!(listed.as_array().unwrap().is_empty());
+    let (status, _) = api(&h, Method::DELETE, "keys/laptop", None).await;
     assert_eq!(status, 404);
     // A name with spaces or slashes is revoked by its encoded name.
-    let (status, _) = admin(&h, Method::POST, "keys", "name=work%20laptop%2F2").await;
+    let odd = json!({ "name": "work laptop/2" });
+    let (status, _) = api(&h, Method::POST, "keys", Some(odd)).await;
     assert_eq!(status, 200);
-    let (status, _) = admin(&h, Method::POST, "keys/work%20laptop%2F2/remove", "").await;
+    let (status, _) = api(&h, Method::DELETE, "keys/work%20laptop%2F2", None).await;
     assert_eq!(status, 200);
 
     // A compatible endpoint, as `slopmax login compat --url` adds it.
-    let form = format!("provider=compat&url={base}/local/v1&models=qwen3-*&label=box");
-    let (status, report) = admin(&h, Method::POST, "accounts", &form).await;
-    assert_eq!(status, 200, "{report}");
-    let added = report["accounts"]
+    let endpoint = json!({
+        "_tag": "Endpoint",
+        "url": format!("{base}/local/v1"),
+        "models": ["qwen3-*"],
+        "label": "box",
+    });
+    let (status, added) = api(&h, Method::POST, "accounts", Some(endpoint)).await;
+    assert_eq!(status, 200, "{added}");
+    let added = added["report"]["accounts"]
         .as_array()
         .unwrap()
         .iter()
@@ -2737,16 +2692,12 @@ async fn the_api_does_what_the_cli_does_for_keys_endpoints_and_the_doctor() {
     assert_eq!(added["name"], "box");
     let answered = chat_request(&h, "qwen3-coder").send().await.unwrap();
     assert_eq!(answered.status(), StatusCode::OK);
-    // Subscriptions sign in with a browser, not through the API.
-    let (status, refused) = admin(&h, Method::POST, "accounts", "provider=claude").await;
+    // Subscriptions sign in through /logins, not with a key.
+    let claude = json!({ "_tag": "Key", "provider": "claude", "key": "sk" });
+    let (status, _) = api(&h, Method::POST, "accounts", Some(claude)).await;
     assert_eq!(status, 400);
-    assert!(
-        refused["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("browser")
-    );
-    let (status, _) = admin(&h, Method::POST, "accounts", "provider=compat").await;
+    let no_url = json!({ "_tag": "Endpoint" });
+    let (status, _) = api(&h, Method::POST, "accounts", Some(no_url)).await;
     assert_eq!(status, 400, "an endpoint needs its url");
 
     // An imported account can be made to refresh here.
@@ -2760,12 +2711,12 @@ async fn the_api_does_what_the_cli_does_for_keys_endpoints_and_the_doctor() {
         })
         .unwrap();
     let path = format!("accounts/{}/own", h.ids[0]);
-    let (status, _) = admin(&h, Method::POST, &path, "").await;
+    let (status, _) = api(&h, Method::POST, &path, None).await;
     assert_eq!(status, 200);
     assert!(h.app.store.get(&h.ids[0]).unwrap().unwrap().link.is_none());
 
     // The doctor's findings, as `slopmax doctor` prints them.
-    let (status, sections) = admin(&h, Method::GET, "doctor", "").await;
+    let (status, sections) = api(&h, Method::GET, "doctor", None).await;
     assert_eq!(status, 200);
     let titles: Vec<&str> = sections
         .as_array()
@@ -2822,10 +2773,14 @@ async fn the_web_ui_is_served_compressed_cached_and_locked_down() {
         assert_eq!(moved.status(), StatusCode::PERMANENT_REDIRECT, "{old}");
         assert_eq!(moved.headers()["location"], "/slopmax/");
     }
-    // The endpoints beside it still need the key.
+    // The API beside it needs the key; the first API's addresses are gone.
+    assert_eq!(
+        get("/slopmax/api/status", None).await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
     assert_eq!(
         get("/slopmax/status", None).await.unwrap().status(),
-        StatusCode::UNAUTHORIZED
+        StatusCode::NOT_FOUND
     );
 }
 

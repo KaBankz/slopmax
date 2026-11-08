@@ -878,7 +878,7 @@ fn events(app: &Arc<App>) -> Response {
             }
         }
     });
-    let mut response = Response::new(body::boxed(super::admin::Feed(rx)));
+    let mut response = Response::new(body::boxed(Feed(rx)));
     let headers = response.headers_mut();
     headers.insert(
         header::CONTENT_TYPE,
@@ -900,6 +900,24 @@ fn status(app: &App) -> (Vec<u8>, Bytes) {
         report: Box::new(report),
     };
     (seen, frame.frame().into())
+}
+
+/// The event stream's body: frames as they come, ending when the sender
+/// does.
+struct Feed(tokio::sync::mpsc::Receiver<Bytes>);
+
+impl hyper::body::Body for Feed {
+    type Data = Bytes;
+    type Error = std::convert::Infallible;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, Self::Error>>> {
+        self.0
+            .poll_recv(cx)
+            .map(|chunk| chunk.map(|c| Ok(hyper::body::Frame::data(c))))
+    }
 }
 
 #[cfg(test)]

@@ -5,7 +5,6 @@
 //! key, assigned an account by the [`Pool`], and forwarded upstream with
 //! that account's credentials.
 
-mod admin;
 mod api;
 mod forward;
 mod hub;
@@ -80,8 +79,6 @@ pub struct App {
     replay: Mutex<transcode::Replay>,
     /// Each account's model list, and when it was read.
     catalogs: Mutex<HashMap<String, (Instant, Vec<String>)>>,
-    /// Each answered request, as JSON, for the dashboard's live feed.
-    events: broadcast::Sender<Bytes>,
     /// When each account was last warmed.
     warmed: Mutex<HashMap<String, Instant>>,
     /// config.toml as last read, to tell when it changes.
@@ -129,7 +126,6 @@ impl App {
             hours: Default::default(),
             replay: Default::default(),
             catalogs: Default::default(),
-            events: broadcast::channel(256).0,
             warmed: Default::default(),
             config_text: Mutex::new(config_text),
             seen: Mutex::default(),
@@ -357,11 +353,6 @@ impl App {
         {
             self.pool.saw_codex_model(model);
         }
-        if self.events.receiver_count() > 0
-            && let Ok(line) = serde_json::to_vec(entry)
-        {
-            let _ = self.events.send(line.into());
-        }
         if self.api_events.receiver_count() > 0 {
             let event = slopmax_api::events::Event::Request {
                 record: slopmax_api::ledger::LedgerRecord::Request(crate::api::record(entry)),
@@ -423,7 +414,11 @@ pub async fn handle(app: Arc<App>, request: Request) -> Response {
         (&Method::GET, path) if path.strip_prefix("/slopmax/").is_some_and(ui::serves) => {
             ui::answer(&path["/slopmax/".len()..], request.headers())
         }
-        (_, path) if path.starts_with("/slopmax/") => admin::handle(app, request).await,
+        (_, path) if path.starts_with("/slopmax/") => error(
+            None,
+            StatusCode::NOT_FOUND,
+            "no such slopmax endpoint; slopmax's API is under /slopmax/api",
+        ),
         (_, path) if path.starts_with("/v0/management/") => hub::handle(app, request).await,
         (&Method::GET, "/v1/models")
             if models::wants_list(request.headers(), request.uri().query().unwrap_or("")) =>
