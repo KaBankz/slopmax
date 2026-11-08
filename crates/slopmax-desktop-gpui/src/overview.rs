@@ -7,11 +7,11 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use slopmax_app::Tone;
 use slopmax_app::history::History;
+use slopmax_app::human;
+use slopmax_app::time::Timestamp;
 use slopmax_app::view::{self, Attention, Group, Label, Remedy, Status};
-use slopmax_core::human;
-use slopmax_core::report::Tone;
-use slopmax_core::time::Timestamp;
 
 use crate::theme::{Colors, tabular};
 use crate::ui::{self, caption, dot, icon, panel, push, resets, segments, stat, stats};

@@ -1,6 +1,6 @@
 [package]
 name = "slopmax-app"
-description = "The desktop app's state and actions, apart from any UI toolkit"
+description = "The desktop app's state and actions, apart from any UI toolkit: a client of slopmax's API"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,10 +8,23 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+# A client of the daemon and nothing more: the engine is not a dependency,
+# so the app cannot write what the daemon holds (`cargo tree -p slopmax-app
+# -e normal` has no slopmax-core).
 [dependencies]
 anyhow.workspace = true
-slopmax-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+slopmax-api.workspace = true
+slopmax-client.workspace = true
+slopmax-common.workspace = true
 tokio.workspace = true
+toml_edit.workspace = true
+
+[dev-dependencies]
+# The views are tested on reports the engine builds and maps, as the daemon
+# answers them.
+slopmax-core.workspace = true
 
 [lints]
 workspace = true

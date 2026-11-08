@@ -248,6 +248,26 @@ impl AccountView {
         self.windows.iter().filter(|w| w.model.is_some())
     }
 
+    /// How many limit resets it holds at `now`: those listed that have not
+    /// expired, or before they are listed, as many as the provider counts.
+    pub fn resets_left(&self, now: Instant) -> u64 {
+        if !self.resets.is_empty() {
+            return self.unexpired_resets(now).count() as u64;
+        }
+        self.notes
+            .iter()
+            .find_map(|n| match n {
+                Note::Resets { count } => Some(*count),
+                _ => None,
+            })
+            .unwrap_or(0)
+    }
+
+    /// Its sign-in stopped working.
+    pub fn signed_out(&self) -> bool {
+        matches!(self.condition, Condition::SignInNeeded { .. })
+    }
+
     /// Limit resets that have not expired at `now`, soonest first.
     pub fn unexpired_resets(&self, now: Instant) -> impl Iterator<Item = &LimitReset> {
         self.resets

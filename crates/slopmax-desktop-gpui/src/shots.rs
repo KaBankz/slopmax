@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gpui_kit::*;
+use slopmax_app::Provider;
+use slopmax_app::time::Timestamp;
 use slopmax_app::view;
-use slopmax_core::provider::ProviderId;
-use slopmax_core::time::Timestamp;
 
 use crate::prefs::{Appearance, Prefs};
 use crate::{Main, Section, Shared, native, panel, theme};
@@ -129,7 +129,7 @@ async fn wait(
 }
 
 /// Opens the first account's reset credits on `provider`'s page.
-fn open_credits(main: &mut Main, provider: ProviderId) {
+fn open_credits(main: &mut Main, provider: Provider) {
     let Some(report) = &main.snapshot.report else {
         return;
     };

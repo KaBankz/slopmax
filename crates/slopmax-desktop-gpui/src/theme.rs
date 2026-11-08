@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use gpui_kit::component::{ActiveTheme, Theme, ThemeMode, ThemeRegistry};
 use gpui_kit::*;
-use slopmax_core::report::Tone;
+use slopmax_app::Tone;
 
 use crate::prefs::{Appearance, Prefs};
 

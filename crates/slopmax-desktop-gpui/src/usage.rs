@@ -13,10 +13,10 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use slopmax_app::history::Totals;
 use slopmax_app::history::{self, Bucket, History, Range};
+use slopmax_app::human;
 use slopmax_app::view;
-use slopmax_core::human;
-use slopmax_core::summary::Totals;
 
 use crate::Main;
 use crate::theme::{Colors, tabular};
@@ -95,7 +95,7 @@ fn page(history: &History, c: &Colors) -> Div {
             .providers
             .iter()
             .enumerate()
-            .map(|(i, p)| (c.stack(i), p.spec().title)),
+            .map(|(i, p)| (c.stack(i), p.title())),
         c,
     );
     v_flex()
@@ -198,10 +198,9 @@ fn performance(history: &History, c: &Colors) -> Div {
                     ),
                     stat(
                         "First byte",
-                        history.first_byte.map_or_else(
-                            || "—".to_owned(),
-                            |ms| format!("{:.2} s", ms as f64 / 1e3),
-                        ),
+                        history
+                            .first_byte
+                            .map_or_else(|| "—".to_owned(), |ms| format!("{:.2} s", ms / 1e3)),
                         "the median wait",
                         c,
                     ),
@@ -240,7 +239,7 @@ fn tokens(history: &History, margin: usize, c: &Colors) -> Div {
             b.tokens
                 .iter()
                 .zip(&tones)
-                .map(|(n, tone)| (*n as f64, *tone))
+                .map(|(n, tone)| ((*n), *tone))
                 .collect()
         },
         move |b| {
@@ -248,8 +247,8 @@ fn tokens(history: &History, margin: usize, c: &Colors) -> Div {
             for (provider, tokens) in providers.iter().zip(&b.tokens) {
                 tip.push(format!(
                     "{}: {}",
-                    provider.spec().title,
-                    human::compact(*tokens)
+                    provider.title(),
+                    human::compact(*tokens as u64)
                 ));
             }
             tip.join("\n")
@@ -629,7 +628,7 @@ fn cache(history: &History, margin: usize, c: &Colors) -> Div {
     let rates: Vec<Option<f64>> = history
         .buckets
         .iter()
-        .map(|b| b.cached.map(|r| f64::from(r) * 100.))
+        .map(|b| b.cached.map(|r| r * 100.))
         .collect();
     let least = rates.iter().flatten().copied().fold(100., f64::min);
     let span = [10., 20., 50., 100.]
@@ -660,11 +659,11 @@ fn cache(history: &History, margin: usize, c: &Colors) -> Div {
 /// How soon answers began, in seconds, over the hours or days that had
 /// any: the median, and the slowest twentieth in a fainter line.
 fn first_byte(history: &History, margin: usize, c: &Colors) -> Div {
-    let seconds = |pick: fn((u64, u64)) -> u64| -> Vec<Option<f64>> {
+    let seconds = |pick: fn((f64, f64)) -> f64| -> Vec<Option<f64>> {
         history
             .buckets
             .iter()
-            .map(|b| b.first_byte.map(|w| pick(w) as f64 / 1e3))
+            .map(|b| b.first_byte.map(|w| pick(w) / 1e3))
             .collect()
     };
     let (median, slow) = (seconds(|w| w.0), seconds(|w| w.1));
@@ -679,8 +678,8 @@ fn first_byte(history: &History, margin: usize, c: &Colors) -> Div {
             Some((median, slow)) => format!(
                 "{}\nMedian {:.2} s\nSlowest 5% {:.2} s",
                 b.label,
-                median as f64 / 1e3,
-                slow as f64 / 1e3
+                median / 1e3,
+                slow / 1e3
             ),
             None => format!("{}\nNo answers", b.label),
         },
@@ -760,7 +759,7 @@ fn models(history: &History, c: &Colors) -> Div {
         .models
         .iter()
         .take(MODELS)
-        .map(|share| (share.name.clone(), share.totals.clone()))
+        .map(|share| (share.name.clone(), share.totals))
         .collect();
     let rest = history
         .models
@@ -894,12 +893,7 @@ fn speed(history: &History, c: &Colors) -> Div {
                 h_flex()
                     .gap(px(12.))
                     .child(model(s.model.clone()))
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_color(c.muted)
-                            .child(s.provider.spec().title),
-                    )
+                    .child(div().flex_1().text_color(c.muted).child(s.provider.title()))
                     .child(cell(format!("{:.0} tok/s", s.tokens_per_second), 80.))
             })),
     )
@@ -919,7 +913,7 @@ fn agents(history: &History, c: &Colors) -> Div {
             let tokens = history::tokens(&part.totals);
             h_flex()
                 .gap(px(12.))
-                .child(name(part.name))
+                .child(name(part.name.clone()))
                 .child(
                     div()
                         .flex_1()
@@ -1071,7 +1065,7 @@ fn accounts(history: &History, c: &Colors) -> Div {
                             div()
                                 .flex_shrink_0()
                                 .text_color(c.muted)
-                                .child(share.provider.spec().title),
+                                .child(share.provider.title()),
                         ),
                 )
                 .child(
@@ -1213,7 +1207,7 @@ fn left(history: &History, c: &Colors) -> Div {
                         div()
                             .flex_shrink_0()
                             .text_color(c.muted)
-                            .child(account.provider.spec().title),
+                            .child(account.provider.title()),
                     ),
             )
             .child(

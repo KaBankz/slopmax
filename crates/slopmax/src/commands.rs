@@ -627,8 +627,15 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
         "daemon-info" => {
             // What an app needs to reach the proxy, and to tell a daemon it
             // started (this binary) from one another install runs.
-            let daemon = slopmax_core::background::Daemon::new(&config);
-            let running = daemon.version().await;
+            let running = slopmax_client::Client::new(config.base_url(), &config.api_key)
+                .health()
+                .await
+                .map(|h| h.version);
+            // The login service, for an app that offers to install it.
+            let service = slopmax_core::service::Manager::detect().map(|m| {
+                let status = m.status();
+                serde_json::json!({ "installed": status.installed, "running": status.running })
+            });
             let info = serde_json::json!({
                 "base": config.base_url(),
                 "key": config.api_key,
@@ -637,24 +644,22 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
                 "home": slopmax_core::paths::Home::current().dir().display().to_string(),
                 "running": running.is_some(),
                 "runningVersion": running,
+                "service": service,
             });
             println!("{info}");
         }
         "completions" => print!("{}", args::completions(&APP, m.get("shell")?)),
         name => unreachable!("`{name}` is in the command table but not dispatched"),
     }
-    // A running daemon picks up the change now, rather than at its next
-    // check of the files.
-    if CHANGES_ACCOUNTS.contains(&m.command.name) {
-        let _ = slopmax_core::background::Daemon::new(&config).sync().await;
+    // Setup imports the logins it finds on disk itself: a daemon already
+    // running takes them in now, rather than at its next look at the files.
+    if m.command.name == "setup"
+        && let Some(client) = daemon(&config).await
+    {
+        let _ = client.sync().await;
     }
     Ok(0)
 }
-
-/// The commands that change accounts or pins on disk.
-const CHANGES_ACCOUNTS: &[&str] = &[
-    "setup", "login", "import", "own", "use", "label", "priority", "enable", "disable", "remove",
-];
 
 /// The agent named by the `agent` argument.
 /// `slopmax key list|add|remove`.

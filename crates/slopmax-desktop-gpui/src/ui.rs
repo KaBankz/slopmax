@@ -11,8 +11,8 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use slopmax_app::Tone;
 use slopmax_app::view::{Gauge, Label, Share};
-use slopmax_core::report::Tone;
 
 use crate::theme::{Colors, tabular};
 

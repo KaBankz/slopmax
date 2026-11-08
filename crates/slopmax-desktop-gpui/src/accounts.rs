@@ -9,11 +9,11 @@ use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_kit::component::{Disableable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use slopmax_app::Provider;
 use slopmax_app::Proxy;
+use slopmax_app::Tone;
+use slopmax_app::time::Timestamp;
 use slopmax_app::view::{self, Credits, Gauge, Group, Row};
-use slopmax_core::provider::ProviderId;
-use slopmax_core::report::Tone;
-use slopmax_core::time::Timestamp;
 
 use crate::theme::{Colors, tabular};
 use crate::ui::{
@@ -30,7 +30,7 @@ const WINDOW: Pixels = px(120.);
 impl Main {
     pub(crate) fn provider(
         &self,
-        provider: ProviderId,
+        provider: Provider,
         c: &Colors,
         now: Timestamp,
         cx: &mut Context<Self>,
@@ -43,7 +43,7 @@ impl Main {
             .unwrap_or_default();
         let Some(group) = groups.into_iter().find(|g| g.provider == provider) else {
             return v_flex().child(ui::empty(
-                &format!("No {} accounts", provider.spec().title),
+                &format!("No {} accounts", provider.title()),
                 "Add one with Add account, above.",
                 c,
             ));

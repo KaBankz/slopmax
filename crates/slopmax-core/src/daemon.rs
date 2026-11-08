@@ -22,7 +22,8 @@ use crate::{blocking, fsx, notify, usage};
 /// How often blocked accounts are re-checked, in case quota frees up early.
 const RECHECK_BLOCKED: SignedDuration = SignedDuration::from_mins(10);
 /// How close to expiry a reset credit is redeemed rather than lost.
-pub const CREDIT_EXPIRY_LEAD: SignedDuration = SignedDuration::from_hours(3);
+pub const CREDIT_EXPIRY_LEAD: SignedDuration =
+    SignedDuration::from_hours(slopmax_api::settings::REDEEM_LEAD_HOURS as i64);
 /// How often an account's reset credits are listed again. They change only
 /// when one is granted, spent, or expires, which the usage count and the
 /// expiry dates already tell.

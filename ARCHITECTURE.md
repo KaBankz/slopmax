@@ -279,14 +279,21 @@ Stopping (a signal or `POST /slopmax/shutdown`) cancels `App::stop`, and then ru
   config.toml, .config.lock (held while the first run writes the proxy's key)
   .serve.lock               held by the running daemon, naming its pid
   accounts/<provider>-<hash>.toml, .<id>.lock
-  state.toml                windows, blocks, sessions, limit resets, Claude Code's user agent
-  pins.toml                 `slopmax use`
+  state.toml                windows, blocks, sessions, limit resets, the pins `slopmax use`
+                            sets, the nudges already sent, what was last seen of Claude
+                            Code and Codex (state.rs)
   usage/<year>-<month>.jsonl
   windows.jsonl             each window as it reset and how much of it was used (waste.rs)
-  nudged.toml               the nudges already sent, so a restart does not repeat them
   setup-backup.json         what `setup` replaced
+  app.toml                  the desktop app's own choices (whether it posts notifications)
   slopmax.log
 ```
+
+While a daemon serves the home, it is the only writer of what it holds: the CLI and the apps
+change accounts, pins, settings and keys through `/slopmax/api` (`slopmax-client`), and the
+CLI writes the files itself only while none runs, under the same serve lock
+(`state::change`). `pins.toml` and `nudged.toml`, which an earlier layout kept beside the
+state, are read once into it and left in place, so a downgrade still finds them.
 
 slopmax's own files are TOML, the format of `config.toml`. A file an earlier version wrote as JSON
 (`state.json`, an account's `.json`) is read once, written again as TOML, and removed

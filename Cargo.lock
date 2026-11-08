@@ -6406,8 +6406,14 @@ name = "slopmax-app"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "serde",
+ "serde_json",
+ "slopmax-api",
+ "slopmax-client",
+ "slopmax-common",
  "slopmax-core",
  "tokio",
+ "toml_edit 0.25.15+spec-1.1.0",
 ]
 
 [[package]]
@@ -6477,7 +6483,6 @@ dependencies = [
  "serde",
  "serde_json",
  "slopmax-app",
- "slopmax-core",
 ]
 
 [[package]]

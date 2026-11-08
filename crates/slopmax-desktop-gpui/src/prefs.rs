@@ -52,7 +52,7 @@ impl Default for Prefs {
 }
 
 fn path() -> PathBuf {
-    slopmax_core::paths::home().join("desktop.json")
+    slopmax_app::home().join("desktop.json")
 }
 
 impl Prefs {

@@ -1,47 +1,40 @@
 //! The desktop app apart from any UI toolkit: what it shows and what it can
-//! do. Like the CLI, it asks [`slopmax_core`] and shows the answer, so the
-//! app, the CLI, and the dashboard behave alike. This crate adds what a
-//! window needs on top: a live [`Snapshot`] to draw, and actions that run
-//! in the background and report back through it.
+//! do. It is a client of the daemon's API and of nothing else: every change
+//! goes through [`slopmax_client`], and the report, notices and sign-in
+//! progress come pushed on the event stream, so the app writes no file of
+//! slopmax's and polls nothing. What the API cannot do, because no daemon
+//! runs to answer, it asks of the slopmax CLI it ships with: where the
+//! daemon listens, starting it, and installing it as a login service.
 //!
-//! A UI draws the latest snapshot ([`view`] works out the rows, gauges, and
-//! menu bar line, [`history`] the charts of past use) and calls [`App`]'s
-//! methods, none of which block.
+//! A UI draws the latest [`Snapshot`] ([`view`] works out the rows, gauges,
+//! and menu bar line, [`history`] the charts of past use) and calls
+//! [`App`]'s methods, none of which block.
 
 pub mod alerts;
-pub use slopmax_core::history;
+pub mod history;
 pub mod view;
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
-use slopmax_core::account::Endpoint;
-use slopmax_core::account::{self, Account, Store};
-use slopmax_core::agent::{self, AGENTS, Wiring};
-use slopmax_core::auth::{self, LoginEvent, LoginOptions, Prompt, callback};
-use slopmax_core::background::{self, Daemon};
-use slopmax_core::config::{Config, Strategy};
-use slopmax_core::doctor;
-use slopmax_core::import::{self, Source};
-use slopmax_core::net::Origins;
-use slopmax_core::paths::Home;
-use slopmax_core::provider::ProviderId;
-use slopmax_core::provider::credits::Outcome;
-use slopmax_core::report::{self, Report};
-use slopmax_core::service::{self, Manager};
-use slopmax_core::wire::Dialect;
+use anyhow::{Context, Result, bail};
+use slopmax_api::events::{Event, LoginEvent};
+use slopmax_api::report::{AgentWiring, RedeemOutcome, Report, Section};
+use slopmax_api::requests::{AccountPatch, AddAccount, ImportOutcome, MakeKey, StartLogin};
+use slopmax_api::settings::{KeyInfo, LivePatch, SettingsView};
+use slopmax_client::Client;
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::{Notify, mpsc, watch};
-use tokio::task::JoinHandle;
 
-/// How often the app asks how things stand.
-const POLL: Duration = Duration::from_secs(2);
-/// How often it rereads what changes rarely: the agents' configs and the
-/// login service.
+pub use slopmax_api::{AgentId, Dialect, Provider, Strategy, Tone};
+pub use slopmax_common::{home, human, time};
+
+/// How often it rereads what changes rarely and is not pushed: the agents'
+/// configs, the login service, and settings edited in config.toml.
 const SLOW_POLL: Duration = Duration::from_secs(15);
+/// How long it waits before looking for the daemon again once it is gone.
+const RETRY: Duration = Duration::from_secs(2);
 /// How long a notice that something worked stays; errors stay until
 /// dismissed.
 const NOTICE_FOR: Duration = Duration::from_secs(6);
@@ -52,12 +45,11 @@ pub struct Snapshot {
     pub proxy: Proxy,
     /// Where agents reach the proxy.
     pub address: String,
-    /// The accounts and pools: from the running proxy, or from disk while
-    /// none runs.
+    /// The accounts and pools, as the daemon last pushed them.
     pub report: Option<Report>,
-    pub agents: Vec<AgentStatus>,
+    pub agents: Vec<AgentWiring>,
     /// The login service, where this system has one.
-    pub service: Option<service::Status>,
+    pub service: Option<ServiceStatus>,
     /// The sign-in in progress.
     pub sign_in: Option<SignIn>,
     /// How the last action went.
@@ -70,15 +62,64 @@ pub struct Snapshot {
     pub today: Option<history::History>,
     /// The account a reset credit is being redeemed on.
     pub redeeming: Option<String>,
-    /// The configuration as config.toml has it now, which the Settings
-    /// page changes with [`App::set`].
-    pub config: Config,
-    /// Whether nudges are posted as notifications.
+    /// The settings as the daemon has them, which the Settings page
+    /// changes with [`App::set`].
+    pub config: Settings,
+    /// Whether notices are posted as notifications.
     pub notifications: bool,
     /// A client key just made, shown once.
     pub new_key: Option<NewKey>,
     /// What the doctor found, once asked with [`App::check_setup`].
     pub doctor: Doctor,
+}
+
+/// The settings the app shows and changes, as the daemon answers them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Settings {
+    pub strategy: Strategy,
+    pub session_affinity: bool,
+    pub redeem_expiring_credits: bool,
+    pub redeem_when_exhausted: bool,
+    pub session_ttl_mins: u64,
+    pub poll_mins: u64,
+    pub warm_windows: bool,
+    pub paid_overflow: bool,
+    /// The client keys, by name.
+    pub keys: Vec<KeyInfo>,
+}
+
+impl Default for Settings {
+    /// As a fresh config.toml has them, until the daemon answers.
+    fn default() -> Self {
+        Self {
+            strategy: Strategy::ResetFirst,
+            session_affinity: true,
+            redeem_expiring_credits: true,
+            redeem_when_exhausted: false,
+            session_ttl_mins: 60,
+            poll_mins: 5,
+            warm_windows: false,
+            paid_overflow: false,
+            keys: Vec::new(),
+        }
+    }
+}
+
+impl Settings {
+    pub fn of(view: &SettingsView) -> Self {
+        let live = &view.settings.live;
+        Self {
+            strategy: live.strategy,
+            session_affinity: live.session_affinity,
+            redeem_expiring_credits: live.redeem_expiring,
+            redeem_when_exhausted: live.redeem_when_exhausted,
+            session_ttl_mins: live.session_minutes,
+            poll_mins: live.poll_minutes,
+            warm_windows: live.warm_windows,
+            paid_overflow: live.paid_overflow,
+            keys: view.settings.keys.clone(),
+        }
+    }
 }
 
 /// A client key just made: its name and the key, which is not shown again.
@@ -89,12 +130,12 @@ pub struct NewKey {
 }
 
 /// The setup checks, as far as they have gone.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum Doctor {
     #[default]
     NotRun,
     Running,
-    Done(Vec<doctor::Section>),
+    Done(Vec<Section>),
     Failed(String),
 }
 
@@ -148,26 +189,20 @@ impl Setting {
         }
     }
 
-    /// Its value as `slopmax config` takes it.
-    fn value(self) -> String {
+    /// The change as the API takes it.
+    pub fn patch(self) -> LivePatch {
+        let mut patch = LivePatch::default();
         match self {
-            Self::Strategy(strategy) => strategy.to_string(),
-            Self::SessionAffinity(on)
-            | Self::RedeemExpiringCredits(on)
-            | Self::RedeemWhenExhausted(on)
-            | Self::WarmWindows(on)
-            | Self::PaidOverflow(on) => on.to_string(),
-            Self::SessionTtlMins(mins) | Self::PollMins(mins) => mins.to_string(),
+            Self::Strategy(strategy) => patch.strategy = Some(strategy),
+            Self::SessionAffinity(on) => patch.session_affinity = Some(on),
+            Self::RedeemExpiringCredits(on) => patch.redeem_expiring = Some(on),
+            Self::RedeemWhenExhausted(on) => patch.redeem_when_exhausted = Some(on),
+            Self::SessionTtlMins(mins) => patch.session_minutes = Some(mins),
+            Self::WarmWindows(on) => patch.warm_windows = Some(on),
+            Self::PaidOverflow(on) => patch.paid_overflow = Some(on),
+            Self::PollMins(mins) => patch.poll_minutes = Some(mins),
         }
-    }
-
-    /// Writes it into the config at `path`, keeping the file's comments,
-    /// and returns the config that makes. It is checked as `slopmax
-    /// config` checks it.
-    pub fn write(self, path: &Path) -> Result<Config> {
-        let (key, value) = slopmax_core::config::live_value(self.key(), &self.value())
-            .map_err(anyhow::Error::msg)?;
-        Config::set(path, &[(key, value)])
+        patch
     }
 }
 
@@ -180,20 +215,22 @@ pub enum Proxy {
     Stopped,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentStatus {
-    pub id: &'static str,
-    pub title: &'static str,
-    pub wiring: Wiring,
+/// The login service that runs the proxy, as the CLI reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+pub struct ServiceStatus {
+    pub installed: bool,
+    pub running: bool,
 }
 
 /// A sign-in in progress.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignIn {
-    pub provider: ProviderId,
+    pub provider: Provider,
     pub step: Step,
     /// Notes while waiting, such as a rejected paste.
     pub notes: Vec<String>,
+    /// The daemon's id for it, once it has started.
+    id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -222,54 +259,62 @@ pub struct Notice {
 pub struct App {
     shared: Arc<Shared>,
     runtime: Runtime,
-    /// New nudges to post, until a UI takes them.
+    /// New notices to post, until a UI takes them.
     heard: Mutex<Option<mpsc::UnboundedReceiver<alerts::Alert>>>,
 }
 
 struct Shared {
-    config: Config,
-    /// The nudges told, and whether to tell them; none while the app
-    /// posts nothing.
-    told: Option<Mutex<alerts::Told>>,
+    /// Whether notices are handed to the UI at all: not while drawing the
+    /// pages to images.
+    notify: bool,
     alerts: mpsc::UnboundedSender<alerts::Alert>,
-    home: Home,
-    store: Store,
     /// The slopmax CLI that runs the proxy, normally the one the app ships.
     cli: Option<PathBuf>,
+    /// Where the daemon is, as the CLI last said.
+    found: Mutex<Option<Found>>,
     snapshot: watch::Sender<Snapshot>,
-    /// Hands redirect addresses pasted by hand to the sign-in in progress.
-    paste: Mutex<Option<mpsc::UnboundedSender<String>>>,
-    sign_in: Mutex<Option<JoinHandle<()>>>,
     /// Wakes the watcher for a fresh look; `full` rereads the slow parts.
     look: Notify,
     full: Mutex<bool>,
 }
 
+/// What `slopmax daemon-info` says.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct Found {
+    base: String,
+    key: String,
+    home: PathBuf,
+    running: bool,
+    #[serde(default)]
+    service: Option<ServiceStatus>,
+}
+
+impl Found {
+    fn client(&self) -> Client {
+        Client::new(&self.base, &self.key)
+    }
+}
+
 impl App {
-    /// Loads the configuration, starts the proxy if none is running, and
-    /// begins watching it, handing nudges to the UI to post (see
-    /// [`App::alerts`]).
+    /// Finds the daemon, starts it if none is running, and follows it,
+    /// handing notices to the UI to post (see [`App::alerts`]).
     pub fn start() -> Result<Self> {
         Self::start_with(true)
     }
 
-    /// As [`App::start`]; without `notify`, no nudge is handed to the UI
-    /// or marked as told, as while drawing the pages to images.
+    /// As [`App::start`]; without `notify`, no notice is handed to the UI,
+    /// as while drawing the pages to images.
     pub fn start_with(notify: bool) -> Result<Self> {
-        let config = Config::load()?;
-        config.apply()?;
         let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
+            .worker_threads(1)
             .thread_name("slopmax-app")
             .enable_all()
             .build()
             .context("starting the app's runtime")?;
-        let home = Home::current();
         let (alerts, heard) = mpsc::unbounded_channel();
-        let told = alerts::Told::load(&alerts::Told::path(&home));
         let (snapshot, _) = watch::channel(Snapshot {
             proxy: Proxy::Checking,
-            address: config.base_url(),
+            address: String::new(),
             report: None,
             agents: Vec::new(),
             service: None,
@@ -278,26 +323,21 @@ impl App {
             history: None,
             today: None,
             redeeming: None,
-            config: config.clone(),
-            notifications: told.enabled,
+            config: Settings::default(),
+            notifications: true,
             new_key: None,
             doctor: Doctor::NotRun,
         });
         let shared = Arc::new(Shared {
-            home,
-            told: notify.then(|| Mutex::new(told)),
+            notify,
             alerts,
-            store: Store::open(),
             cli: bundled_cli(),
-            config,
+            found: Mutex::new(None),
             snapshot,
-            paste: Mutex::new(None),
-            sign_in: Mutex::new(None),
             look: Notify::new(),
             full: Mutex::new(true),
         });
-        runtime.spawn(watch_over(shared.clone()));
-        runtime.spawn(start_proxy(shared.clone()));
+        runtime.spawn(follow(shared.clone()));
         Ok(Self {
             shared,
             runtime,
@@ -320,55 +360,92 @@ impl App {
         self.runtime.handle().clone()
     }
 
-    /// The configuration the app started with, which says where the proxy
-    /// listens. The snapshot's `config` follows changes to config.toml.
-    pub fn config(&self) -> &Config {
-        &self.shared.config
-    }
-
-    /// Signs in to a subscription in the browser.
-    pub fn sign_in(&self, provider: ProviderId) {
-        self.connect(provider, None, LoginOptions::default());
+    /// Signs in to a subscription in the browser, which the app opens.
+    pub fn sign_in(&self, provider: Provider) {
+        self.cancel_sign_in();
+        self.shared.update(|s| {
+            s.notice = None;
+            s.sign_in = Some(SignIn {
+                provider,
+                step: Step::Starting,
+                notes: Vec::new(),
+                id: None,
+            });
+        });
+        self.call(move |client, shared| async move {
+            let asked = StartLogin {
+                provider,
+                device: false,
+                label: None,
+                // The app opens it, in the session the person sits at,
+                // which a daemon run by the service manager may not reach.
+                no_browser: true,
+            };
+            match client.start_login(&asked).await {
+                Ok(started) => {
+                    shared.update(|s| {
+                        if let Some(sign_in) = &mut s.sign_in {
+                            sign_in.id = Some(started.id);
+                        }
+                    });
+                    Ok(None)
+                }
+                Err(e) => {
+                    shared.update(|s| s.sign_in = None);
+                    Err(anyhow::anyhow!("Sign-in failed: {e}"))
+                }
+            }
+        });
     }
 
     /// Connects an API key.
-    pub fn add_key(&self, provider: ProviderId, key: String) {
-        let options = LoginOptions {
-            key: Some(key),
-            ..LoginOptions::default()
+    pub fn add_key(&self, provider: Provider, key: String) {
+        let asked = AddAccount::Key {
+            provider,
+            key,
+            label: None,
         };
-        self.connect(provider, None, options);
+        self.add(asked);
     }
 
     /// Connects a compatible endpoint; its key is checked before it is
     /// saved.
     pub fn add_endpoint(&self, endpoint: NewEndpoint) {
-        let options = LoginOptions {
-            key: Some(endpoint.key),
-            endpoint: Some(Endpoint {
-                base_url: endpoint.url.trim().trim_end_matches('/').to_owned(),
-                dialect: endpoint.dialect,
-                models: endpoint.models,
-            }),
-            ..LoginOptions::default()
+        let asked = AddAccount::Endpoint {
+            url: endpoint.url.trim().trim_end_matches('/').to_owned(),
+            dialect: endpoint.dialect,
+            models: endpoint.models,
+            key: Some(endpoint.key).filter(|k| !k.is_empty()),
+            label: endpoint.label,
         };
-        self.connect(ProviderId::Compat, endpoint.label, options);
+        self.add(asked);
+    }
+
+    fn add(&self, asked: AddAccount) {
+        self.call(move |client, shared| async move {
+            let added = client.add_account(&asked).await?;
+            shared.update(|s| s.report = Some(added.report));
+            Ok(Some(format!("Connected {}.", added.account.name)))
+        });
     }
 
     /// Makes a client key named `name`, held to `models` (patterns) if any
     /// are given, and shows it once.
     pub fn add_client_key(&self, name: String, models: Vec<String>) {
-        self.act(move |shared| {
-            let key = Config::add_key(&shared.home.config(), name.trim(), &models)?;
-            let config = adopt(&shared.config, Config::load_from(&shared.home.config())?);
+        self.call(move |client, shared| async move {
+            let asked = MakeKey {
+                name: name.trim().to_owned(),
+                models,
+            };
+            let made = client.make_key(&asked).await?;
             shared.update(|s| {
-                s.config = config;
                 s.new_key = Some(NewKey {
-                    name: name.trim().to_owned(),
-                    key,
+                    name: made.name.clone(),
+                    key: made.key,
                 });
             });
-            Ok(format!("Made the key {}.", name.trim()))
+            shared.reread_settings(&client).await;
+            Ok(Some(format!("Made the key {}.", made.name)))
         });
     }
 
@@ -376,18 +453,15 @@ impl App {
     /// from now on.
     pub fn revoke_key(&self, name: &str) {
         let name = name.to_owned();
-        self.act(move |shared| {
-            if !Config::remove_key(&shared.home.config(), &name)? {
-                anyhow::bail!("there is no key named {name}");
-            }
-            let config = adopt(&shared.config, Config::load_from(&shared.home.config())?);
+        self.call(move |client, shared| async move {
+            client.remove_key(&name).await?;
             shared.update(|s| {
-                s.config = config;
                 if s.new_key.as_ref().is_some_and(|k| k.name == name) {
                     s.new_key = None;
                 }
             });
-            Ok(format!("Revoked the key {name}."))
+            shared.reread_settings(&client).await;
+            Ok(Some(format!("Revoked the key {name}.")))
         });
     }
 
@@ -398,152 +472,200 @@ impl App {
 
     /// Runs the setup checks `slopmax doctor` runs.
     pub fn check_setup(&self) {
-        let shared = self.shared.clone();
-        shared.update(|s| s.doctor = Doctor::Running);
-        self.runtime.spawn(async move {
-            let config = shared.snapshot.borrow().config.clone();
-            let found = match doctor::check(&config, &shared.store).await {
+        self.shared.update(|s| s.doctor = Doctor::Running);
+        self.call(move |client, shared| async move {
+            let found = match client.doctor().await {
                 Ok(sections) => Doctor::Done(sections),
-                Err(e) => Doctor::Failed(format!("{e:#}")),
+                Err(e) => Doctor::Failed(e.to_string()),
             };
             shared.update(|s| s.doctor = found);
+            Ok(None)
         });
     }
 
     /// Has slopmax refresh an imported login itself, rather than follow the
     /// tool it came from.
     pub fn own(&self, id: &str) {
-        self.change(id, |shared, account| {
-            let account = shared.store.update(&account.id, |a| a.link = None)?;
-            Ok(format!("slopmax now refreshes {} itself.", account.name()))
+        let id = id.to_owned();
+        self.change(move |client| async move {
+            let report = client.own(&id).await?;
+            let name = name_in(&report, &id);
+            Ok((report, format!("slopmax now refreshes {name} itself.")))
         });
     }
 
     /// Hands a redirect address pasted by hand to the sign-in in progress,
     /// for a browser on another machine.
     pub fn paste(&self, address: String) {
-        if let Some(paste) = lock(&self.shared.paste).as_ref() {
-            let _ = paste.send(address);
-        }
+        let Some(id) = self.sign_in_id() else { return };
+        self.call(move |client, _| async move {
+            client.paste_login(&id, address.trim()).await?;
+            Ok(None)
+        });
     }
 
     pub fn cancel_sign_in(&self) {
-        if let Some(task) = lock(&self.shared.sign_in).take() {
-            task.abort();
-        }
-        *lock(&self.shared.paste) = None;
+        let id = self.sign_in_id();
         self.shared.update(|s| s.sign_in = None);
+        if let Some(id) = id {
+            self.call(move |client, _| async move {
+                let _ = client.cancel_login(&id).await;
+                Ok(None)
+            });
+        }
+    }
+
+    fn sign_in_id(&self) -> Option<String> {
+        self.shared
+            .snapshot
+            .borrow()
+            .sign_in
+            .as_ref()
+            .and_then(|s| s.id.clone())
     }
 
     /// Imports the logins Claude Code, Codex, and CLIProxyAPI already have.
     pub fn import(&self) {
-        let shared = self.shared.clone();
-        self.runtime.spawn(async move {
-            let http = auth::http_client(Origins::default());
-            let found = import::discover(&http, Source::All).await;
-            let store = shared.store.clone();
-            let saved = tokio::task::spawn_blocking(move || import::save(&store, found, false))
-                .await
-                .unwrap_or_default();
-            let imported = saved.iter().filter(|s| s.account.is_ok()).count();
-            let text = match (imported, saved.len()) {
+        self.call(move |client, shared| async move {
+            let result = client.import(&Default::default()).await?;
+            let found = result.outcomes.len();
+            let imported = result
+                .outcomes
+                .iter()
+                .filter(|o| matches!(o, ImportOutcome::Saved { .. }))
+                .count();
+            shared.update(|s| s.report = Some(result.report));
+            Ok(Some(match (imported, found) {
                 (0, 0) => "No logins found to import.".to_owned(),
                 (n, found) if n == found => format!("Imported {}.", accounts(n)),
                 (n, found) => format!("Imported {} of {found} logins found.", accounts(n)),
-            };
-            shared.tell(text, false);
-            shared.sync().await;
+            }))
         });
     }
 
     /// Prefers an account for its provider's new sessions.
     pub fn pin(&self, id: &str) {
-        self.change(id, |shared, account| {
-            account::pin(&shared.home, account)?;
-            Ok(format!(
-                "New {} sessions will use {} while it has quota.",
-                account.provider,
-                account.name()
-            ))
+        let id = id.to_owned();
+        self.change(move |client| async move {
+            let report = client.pin(&id).await?;
+            let account = report.accounts.iter().find(|a| a.id == id);
+            let text = match account {
+                Some(a) => format!(
+                    "New {} sessions will use {} while it has quota.",
+                    a.provider, a.name
+                ),
+                None => "Pinned it.".to_owned(),
+            };
+            Ok((report, text))
         });
     }
 
     /// Lets slopmax choose every provider's accounts again.
     pub fn unpin_all(&self) {
-        self.act(|shared| {
-            account::unpin_all(&shared.home)?;
-            Ok("slopmax will choose accounts automatically.".to_owned())
+        self.change(|client| async move {
+            let report = client.unpin_all().await?;
+            Ok((
+                report,
+                "slopmax will choose accounts automatically.".to_owned(),
+            ))
         });
     }
 
     pub fn set_disabled(&self, id: &str, disabled: bool) {
-        self.change(id, move |shared, account| {
-            let account = shared
-                .store
-                .update(&account.id, |a| a.disabled = disabled)?;
-            let verb = if disabled { "Disabled" } else { "Enabled" };
-            Ok(format!("{verb} {}.", account.name()))
-        });
+        let patch = AccountPatch {
+            disabled: Some(disabled),
+            ..AccountPatch::default()
+        };
+        let verb = if disabled { "Disabled" } else { "Enabled" };
+        self.patch(id, patch, move |name| format!("{verb} {name}."));
     }
 
     pub fn set_priority(&self, id: &str, priority: i32) {
-        self.change(id, move |shared, account| {
-            let account = shared
-                .store
-                .update(&account.id, |a| a.priority = priority)?;
-            Ok(format!("{} now has priority {priority}.", account.name()))
+        let patch = AccountPatch {
+            priority: Some(priority),
+            ..AccountPatch::default()
+        };
+        self.patch(id, patch, move |name| {
+            format!("{name} now has priority {priority}.")
         });
     }
 
     /// Renames an account; `None` goes back to its email or key.
     pub fn rename(&self, id: &str, label: Option<String>) {
-        self.change(id, move |shared, account| {
-            let account = shared.store.update(&account.id, |a| a.label = label)?;
-            Ok(format!("Renamed it {}.", account.name()))
+        let patch = AccountPatch {
+            label: Some(label),
+            ..AccountPatch::default()
+        };
+        self.patch(id, patch, |name| format!("Renamed it {name}."));
+    }
+
+    fn patch(
+        &self,
+        id: &str,
+        patch: AccountPatch,
+        said: impl FnOnce(&str) -> String + Send + 'static,
+    ) {
+        let id = id.to_owned();
+        self.change(move |client| async move {
+            let report = client.update_account(&id, &patch).await?;
+            let text = said(&name_in(&report, &id));
+            Ok((report, text))
         });
     }
 
     pub fn remove(&self, id: &str) {
-        self.change(id, |shared, account| {
-            account::forget(&shared.store, &shared.home, account)?;
-            Ok(format!("Removed {}.", account.name()))
+        let id = id.to_owned();
+        let name = self.name_of(&id);
+        self.change(move |client| async move {
+            let report = client.remove_account(&id).await?;
+            Ok((report, format!("Removed {name}.")))
         });
     }
 
+    fn name_of(&self, id: &str) -> String {
+        self.shared
+            .snapshot
+            .borrow()
+            .report
+            .as_ref()
+            .map_or_else(|| id.to_owned(), |r| name_in(r, id))
+    }
+
     /// Points an agent's own config at slopmax.
-    pub fn connect_agent(&self, id: &str) {
-        let Some(agent) = agent::find(id) else { return };
-        self.act(move |shared| {
-            agent::setup(agent, &shared.config)?;
-            Ok(format!(
+    pub fn connect_agent(&self, id: AgentId) {
+        self.call(move |client, shared| async move {
+            let connected = client.connect_agent(id).await?;
+            shared.reread_agents(&client).await;
+            Ok(Some(format!(
                 "{} now uses slopmax. {}",
-                agent.title(),
-                agent.setup_note()
-            ))
+                agent_title(id),
+                connected.note
+            )))
         });
     }
 
     /// Restores what connecting an agent replaced.
-    pub fn disconnect_agent(&self, id: &str) {
-        let Some(agent) = agent::find(id) else { return };
-        self.act(move |_| {
-            agent::undo(agent)?;
-            Ok(format!("{} is back to its own setup.", agent.title()))
+    pub fn disconnect_agent(&self, id: AgentId) {
+        self.call(move |client, shared| async move {
+            client.disconnect_agent(id).await?;
+            shared.reread_agents(&client).await;
+            Ok(Some(format!(
+                "{} is back to its own setup.",
+                agent_title(id)
+            )))
         });
     }
 
     pub fn start_proxy(&self) {
-        self.runtime.spawn(start_proxy(self.shared.clone()));
+        let shared = self.shared.clone();
+        self.runtime
+            .spawn(async move { shared.start_proxy().await });
     }
 
     pub fn stop_proxy(&self) {
-        let shared = self.shared.clone();
-        self.runtime.spawn(async move {
-            match background::stop(&shared.config).await {
-                Ok(_) => shared.tell("Stopped the proxy.".to_owned(), false),
-                Err(e) => shared.tell(format!("Could not stop the proxy: {e:#}"), true),
-            }
-            shared.look_again(true);
+        self.call(|client, _| async move {
+            client.shutdown(false).await?;
+            Ok(Some("Stopped the proxy.".to_owned()))
         });
     }
 
@@ -551,13 +673,7 @@ impl App {
     pub fn install_service(&self) {
         let shared = self.shared.clone();
         self.runtime.spawn(async move {
-            let result = async {
-                let manager = Manager::detect().context("this system has no service manager")?;
-                let cli = shared.cli()?;
-                background::install_service(&shared.config, manager, &cli).await
-            }
-            .await;
-            match result {
+            match shared.run_cli(&["service", "install"]).await {
                 Ok(_) => shared.tell("slopmax now starts at login.".to_owned(), false),
                 Err(e) => shared.tell(format!("Could not install the service: {e:#}"), true),
             }
@@ -570,76 +686,63 @@ impl App {
     pub fn uninstall_service(&self) {
         let shared = self.shared.clone();
         self.runtime.spawn(async move {
-            let removed = tokio::task::spawn_blocking(|| {
-                Manager::detect()
-                    .context("this system has no service manager")?
-                    .uninstall()
-            })
-            .await
-            .context("the action stopped")
-            .and_then(|result| result);
-            match removed {
+            match shared.run_cli(&["service", "uninstall"]).await {
                 Ok(_) => shared.tell("slopmax no longer starts at login.".to_owned(), false),
                 Err(e) => shared.tell(format!("Could not remove the service: {e:#}"), true),
             }
-            start_proxy(shared).await;
+            shared.start_proxy().await;
         });
     }
 
     /// Redeems a reset credit on account `id`, the soonest to expire, which
-    /// clears its usage windows at once. The running proxy redeems it, so
-    /// it knows at once.
+    /// clears its usage windows at once.
     pub fn redeem(&self, id: &str) {
-        let shared = self.shared.clone();
         let id = id.to_owned();
-        shared.update(|s| s.redeeming = Some(id.clone()));
-        self.runtime.spawn(async move {
-            let (name, provider) = {
-                let snapshot = shared.snapshot.borrow();
-                let account = snapshot
-                    .report
-                    .iter()
-                    .flat_map(|r| &r.accounts)
-                    .find(|a| a.id == id);
-                (
-                    account.map_or_else(|| id.clone(), |a| a.name.clone()),
-                    account.map_or("Its provider", |a| a.provider.spec().title),
-                )
-            };
-            let result = Daemon::new(&shared.config).redeem(&id).await;
+        let (name, provider) = {
+            let snapshot = self.shared.snapshot.borrow();
+            let account = snapshot
+                .report
+                .iter()
+                .flat_map(|r| &r.accounts)
+                .find(|a| a.id == id);
+            (
+                account.map_or_else(|| id.clone(), |a| a.name.clone()),
+                account.map_or("Its provider", |a| a.provider.title()),
+            )
+        };
+        self.shared.update(|s| s.redeeming = Some(id.clone()));
+        self.call(move |client, shared| async move {
+            let result = client.redeem(&id, &Default::default()).await;
             shared.update(|s| s.redeeming = None);
-            match result {
-                Ok((outcome, report)) => {
-                    shared.update(|s| s.report = Some(report));
-                    let text = match outcome {
-                        Outcome::Reset => format!("Reset the usage windows on {name}."),
-                        Outcome::NothingToReset => {
-                            format!("{name} had nothing to reset yet, so the limit reset was kept.")
-                        }
-                        Outcome::NoCredit => format!("{name} has no limit reset left."),
-                        Outcome::AlreadyRedeemed => "That limit reset was already used.".to_owned(),
-                        Outcome::Declined => format!(
-                            "{provider} would not use a limit reset on {name} right now, so it was kept."
-                        ),
-                    };
-                    shared.tell(text, outcome == Outcome::NoCredit);
+            let redeemed =
+                result.map_err(|e| anyhow::anyhow!("Could not redeem a limit reset: {e}"))?;
+            shared.update(|s| s.report = Some(redeemed.report));
+            let text = match redeemed.outcome {
+                RedeemOutcome::Reset => format!("Reset the usage windows on {name}."),
+                RedeemOutcome::NothingToReset => {
+                    format!("{name} had nothing to reset yet, so the limit reset was kept.")
                 }
-                Err(e) => shared.tell(format!("Could not redeem a limit reset: {e:#}"), true),
-            }
+                RedeemOutcome::NoCredit => bail!("{name} has no limit reset left."),
+                RedeemOutcome::AlreadyRedeemed => "That limit reset was already used.".to_owned(),
+                RedeemOutcome::Declined => format!(
+                    "{provider} would not use a limit reset on {name} right now, so it was kept."
+                ),
+            };
+            Ok(Some(text))
         });
     }
 
-    /// Changes a setting in config.toml and has the proxy apply it at once.
+    /// Changes a setting, which the daemon applies at once and writes to
+    /// config.toml.
     pub fn set(&self, setting: Setting) {
-        self.act(move |shared| {
-            let written = setting.write(&shared.home.config())?;
-            let config = adopt(&shared.config, written);
-            shared.update(|s| s.config = config);
-            Ok(view::setting_changed(setting))
+        self.call(move |client, shared| async move {
+            let view = client.change_settings(&setting.patch()).await?;
+            shared.update(|s| s.config = Settings::of(&view));
+            Ok(Some(view::setting_changed(setting)))
         });
     }
 
-    /// The nudges to post as notifications, as they come, while they are
+    /// The notices to post as notifications, as they come, while they are
     /// on; once, for the UI that posts them. Works under any executor.
     pub fn alerts(&self) -> Option<mpsc::UnboundedReceiver<alerts::Alert>> {
         lock(&self.heard).take()
@@ -647,72 +750,49 @@ impl App {
 
     /// Turns notifications on or off, for this and later runs.
     pub fn set_notifications(&self, on: bool) {
-        if let Some(told) = &self.shared.told {
-            let mut told = lock(told);
-            told.enabled = on;
-            told.save(&alerts::Told::path(&self.shared.home));
-        }
         self.shared.update(|s| s.notifications = on);
+        if let Some(home) = lock(&self.shared.found).as_ref().map(|f| f.home.clone()) {
+            prefs::save(&home, &prefs::Prefs { notifications: on });
+        }
     }
 
     /// Polls every account's usage now.
     pub fn refresh(&self) {
-        let shared = self.shared.clone();
-        self.runtime.spawn(async move {
-            if let Some(report) = Daemon::new(&shared.config).report(true).await {
-                shared.update(|s| s.report = Some(report));
-            }
+        self.call(|client, shared| async move {
+            let report = client.refresh().await?;
+            shared.update(|s| s.report = Some(report));
+            Ok(None)
         });
     }
 
-    /// Reads the ledger over `range` into the snapshot's `history`, off the
-    /// UI's thread. Accounts take the names the last report gave them.
+    /// Reads what went through over `range` into the snapshot's `history`.
     pub fn load_history(&self, range: history::Range) {
-        self.load(range, |s, history| s.history = Some(history));
+        self.call(move |client, shared| async move {
+            let history = client.history(range).await?;
+            shared.update(|s| s.history = Some(history));
+            Ok(None)
+        });
     }
 
-    /// Reads today's ledger into the snapshot's `today`.
+    /// Reads today's into the snapshot's `today`.
     pub fn load_today(&self) {
-        self.load(history::Range::Today, |s, history| s.today = Some(history));
-    }
-
-    fn load(
-        &self,
-        range: history::Range,
-        keep: impl FnOnce(&mut Snapshot, history::History) + Send + 'static,
-    ) {
-        let shared = self.shared.clone();
-        self.runtime.spawn(async move {
-            let names: HashMap<String, String> = shared
-                .snapshot
-                .borrow()
-                .report
-                .iter()
-                .flat_map(|r| &r.accounts)
-                .map(|a| (a.id.clone(), a.name.clone()))
-                .collect();
-            let worker = shared.clone();
-            // The plans' prices as config.toml has them now.
-            let prices = shared.snapshot.borrow().config.clone();
-            let loaded = tokio::task::spawn_blocking(move || {
-                history::load(
-                    &worker.home,
-                    range,
-                    slopmax_core::time::Timestamp::now(),
-                    &history::Prices::of(&prices),
-                    &names,
-                )
-            })
-            .await;
-            if let Ok(loaded) = loaded {
-                shared.update(|s| keep(s, loaded));
-            }
+        self.call(|client, shared| async move {
+            let today = client.history(history::Range::Today).await?;
+            shared.update(|s| s.today = Some(today));
+            Ok(None)
         });
     }
 
     /// Opens the web dashboard in the browser.
     pub fn open_dashboard(&self) {
-        if !callback::open_browser(&self.shared.config.dashboard_url()) {
+        let found = lock(&self.shared.found).clone();
+        let Some(found) = found else {
+            self.shared
+                .tell("The proxy has not been found yet.".to_owned(), true);
+            return;
+        };
+        let url = format!("{}/slopmax/#key={}", found.base, found.key);
+        if !open_browser(&url) {
             self.shared
                 .tell("Could not open a browser.".to_owned(), true);
         }
@@ -722,71 +802,37 @@ impl App {
         self.shared.update(|s| s.notice = None);
     }
 
-    fn connect(&self, provider: ProviderId, label: Option<String>, options: LoginOptions) {
-        self.cancel_sign_in();
-        let shared = self.shared.clone();
-        let (paste, pasted) = mpsc::unbounded_channel();
-        *lock(&shared.paste) = Some(paste);
-        let prompt = {
-            let shared = shared.clone();
-            Prompt::new(move |event| shared.update(|s| progress(s, event))).with_pasted(pasted)
-        };
-        shared.update(|s| {
-            s.notice = None;
-            s.sign_in = Some(SignIn {
-                provider,
-                step: Step::Starting,
-                notes: Vec::new(),
-            });
-        });
-        let task = self.runtime.spawn(async move {
-            let result = auth::connect(&shared.store, provider, label, options, prompt).await;
-            *lock(&shared.paste) = None;
-            shared.update(|s| s.sign_in = None);
-            match result {
-                Ok((account, created)) => {
-                    let verb = if created { "Connected" } else { "Updated" };
-                    shared.tell(format!("{verb} {}.", account.name()), false);
-                }
-                Err(e) => shared.tell(format!("Sign-in failed: {e:#}"), true),
-            }
-            shared.sync().await;
-        });
-        *lock(&self.shared.sign_in) = Some(task);
-    }
-
-    /// Runs a change to account `id` on a blocking thread, as file locks
-    /// may wait, then shows its outcome.
-    fn change(
-        &self,
-        id: &str,
-        change: impl FnOnce(&Shared, &Account) -> Result<String> + Send + 'static,
-    ) {
-        let id = id.to_owned();
-        self.act(move |shared| {
-            let account = shared
-                .store
-                .get(&id)?
-                .with_context(|| format!("account {id} is gone"))?;
-            change(shared, &account)
-        });
-    }
-
-    /// Runs `action` on a blocking thread, shows its outcome, and has the
-    /// proxy pick up what it changed.
-    fn act(&self, action: impl FnOnce(&Shared) -> Result<String> + Send + 'static) {
+    /// Runs `call` with a client of the daemon, and shows its outcome: the
+    /// words it answers with, or the error.
+    fn call<F, Fut>(&self, call: F)
+    where
+        F: FnOnce(Client, Arc<Shared>) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<Option<String>>> + Send,
+    {
         let shared = self.shared.clone();
         self.runtime.spawn(async move {
-            let worker = shared.clone();
-            let outcome = tokio::task::spawn_blocking(move || action(&worker))
-                .await
-                .context("the action stopped")
-                .and_then(|result| result);
-            match outcome {
-                Ok(text) => shared.tell(text, false),
+            let Some(client) = shared.client() else {
+                shared.tell("The proxy is not running.".to_owned(), true);
+                return;
+            };
+            match call(client, shared.clone()).await {
+                Ok(Some(text)) => shared.tell(text, false),
+                Ok(None) => {}
                 Err(e) => shared.tell(format!("{e:#}"), true),
             }
-            shared.sync().await;
+        });
+    }
+
+    /// A change that answers with the report, shown at once.
+    fn change<F, Fut>(&self, change: F)
+    where
+        F: FnOnce(Client) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<(Report, String)>> + Send,
+    {
+        self.call(move |client, shared| async move {
+            let (report, text) = change(client).await?;
+            shared.update(|s| s.report = Some(report));
+            Ok(Some(text))
         });
     }
 }
@@ -809,155 +855,306 @@ impl Shared {
         self.look.notify_one();
     }
 
-    /// Has the proxy apply changes made on disk, and shows the result.
-    async fn sync(&self) {
-        match Daemon::new(&self.config).sync().await {
-            Some(report) => self.update(|s| s.report = Some(report)),
-            None => self.look_again(false),
-        }
-        self.look_again(true);
+    fn client(&self) -> Option<Client> {
+        lock(&self.found).as_ref().map(Found::client)
     }
 
-    fn cli(&self) -> Result<PathBuf> {
-        self.cli.clone().context(
+    fn cli(&self) -> Result<&Path> {
+        self.cli.as_deref().context(
             "cannot find the slopmax command line, which the app runs the proxy with; \
              reinstall the app",
         )
     }
-}
 
-/// Starts the proxy unless it is running.
-async fn start_proxy(shared: Arc<Shared>) {
-    let daemon = Daemon::new(&shared.config);
-    if daemon.is_running().await {
-        return;
+    /// Runs the CLI with `args`, giving what it printed, or what it said
+    /// went wrong.
+    async fn run_cli(&self, args: &[&str]) -> Result<String> {
+        let out = tokio::process::Command::new(self.cli()?)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .await
+            .context("running the slopmax command line")?;
+        let printed = String::from_utf8_lossy(&out.stdout).into_owned();
+        if out.status.success() {
+            return Ok(printed);
+        }
+        let said = String::from_utf8_lossy(&out.stderr);
+        let said = said.trim().trim_start_matches("error: ");
+        bail!(
+            "{}",
+            if said.is_empty() {
+                printed.trim()
+            } else {
+                said
+            }
+        )
     }
-    shared.update(|s| s.proxy = Proxy::Starting);
-    let result = async {
-        let cli = shared.cli()?;
-        background::ensure_running(&shared.config, &cli).await
-    }
-    .await;
-    if let Err(e) = result {
-        shared.update(|s| s.proxy = Proxy::Stopped);
-        shared.tell(format!("Could not start the proxy: {e:#}"), true);
-    }
-    shared.look_again(true);
-}
 
-/// Keeps the snapshot current: the report every [`POLL`], and the agents
-/// and login service every [`SLOW_POLL`] or when an action changed them.
-async fn watch_over(shared: Arc<Shared>) {
-    let daemon = Daemon::new(&shared.config);
-    let mut last_full = Instant::now();
-    loop {
-        let live = daemon.report(false).await;
-        let running = live.as_ref().map(|r| r.version.clone());
-        let report = match live {
-            Some(report) => Some(report),
-            None => report::offline(&shared.config, &shared.store, false)
-                .await
-                .ok(),
+    /// Where the daemon listens, and whether one is running, as the CLI
+    /// says.
+    async fn locate(&self) -> Result<Found> {
+        let printed = self.run_cli(&["daemon-info", "--json"]).await?;
+        let found: Found =
+            serde_json::from_str(&printed).context("reading what the slopmax CLI said")?;
+        if lock(&self.found).is_none() {
+            let prefs = prefs::load(&found.home);
+            self.update(|s| s.notifications = prefs.notifications);
+        }
+        self.update(|s| {
+            s.address.clone_from(&found.base);
+            s.service = found.service;
+        });
+        *lock(&self.found) = Some(found.clone());
+        Ok(found)
+    }
+
+    /// Starts the proxy unless it is running.
+    async fn start_proxy(&self) {
+        self.update(|s| s.proxy = Proxy::Starting);
+        let started = match self.locate().await {
+            Ok(found) if found.running => Ok(()),
+            Ok(_) => self.run_cli(&["start"]).await.map(drop),
+            Err(e) => Err(e),
         };
-        if let Some(report) = &report {
-            tell(&shared, report);
+        if let Err(e) = started {
+            self.update(|s| s.proxy = Proxy::Stopped);
+            self.tell(format!("Could not start the proxy: {e:#}"), true);
+        }
+        self.look_again(true);
+    }
+
+    async fn reread_settings(&self, client: &Client) {
+        if let Ok(view) = client.settings().await {
+            self.update(|s| s.config = Settings::of(&view));
+        }
+    }
+
+    async fn reread_agents(&self, client: &Client) {
+        if let Ok(agents) = client.agents().await {
+            self.update(|s| s.agents = agents);
+        }
+    }
+
+    /// What changes rarely and is not pushed: the agents' wiring, the
+    /// settings (config.toml may be edited by hand), and the login service.
+    async fn reread_slow(&self, client: &Client) {
+        self.reread_agents(client).await;
+        self.reread_settings(client).await;
+        let _ = self.locate().await;
+    }
+
+    /// Takes in one event from the daemon.
+    fn heard(&self, event: Event) {
+        match event {
+            Event::Hello { version, .. } => self.update(|s| s.proxy = Proxy::Running { version }),
+            Event::Status { report } => self.update(|s| s.report = Some(*report)),
+            Event::Notice { notice } => {
+                if self.notify && self.snapshot.borrow().notifications {
+                    let _ = self.alerts.send(alerts::Alert::of(&notice));
+                }
+            }
+            Event::Login { id, event } => self.signing_in(&id, event),
+            Event::Request { .. } | Event::Ping {} => {}
+        }
+    }
+
+    /// Moves the sign-in `id` along, if it is the one in progress.
+    fn signing_in(&self, id: &str, event: LoginEvent) {
+        let ours = self
+            .snapshot
+            .borrow()
+            .sign_in
+            .as_ref()
+            .is_some_and(|s| s.id.as_deref() == Some(id));
+        if !ours {
+            return;
+        }
+        match event {
+            LoginEvent::Authorize { url, .. } => {
+                let opened = open_browser(&url);
+                self.update(|s| progress(s, Step::Authorize { url, opened }));
+            }
+            LoginEvent::DeviceCode { url, code } => {
+                self.update(|s| progress(s, Step::DeviceCode { url, code }));
+            }
+            LoginEvent::Note { text } => self.update(|s| {
+                if let Some(sign_in) = &mut s.sign_in {
+                    sign_in.notes.push(text);
+                }
+            }),
+            LoginEvent::Done { account, is_new } => {
+                self.update(|s| s.sign_in = None);
+                let verb = if is_new { "Connected" } else { "Updated" };
+                self.tell(format!("{verb} {}.", account.name), false);
+            }
+            LoginEvent::Failed { message } => {
+                self.update(|s| s.sign_in = None);
+                self.tell(format!("Sign-in failed: {message}"), true);
+            }
+        }
+    }
+
+    /// Clears a notice of success once it has shown long enough, and says
+    /// when the next one will be due.
+    fn expire_notice(&self) -> Option<Instant> {
+        let mut due = None;
+        self.update(|s| match &s.notice {
+            Some(n) if !n.error && n.shown.elapsed() >= NOTICE_FOR => s.notice = None,
+            Some(n) if !n.error => due = Some(n.shown + NOTICE_FOR),
+            _ => {}
+        });
+        due
+    }
+}
+
+/// Keeps the snapshot current: finds the daemon (starting it once, at
+/// first), then follows its event stream, rereading the slow parts every
+/// [`SLOW_POLL`] or when an action changed them. When the stream ends, the
+/// proxy shows as stopped, with the report the files hold, until it answers
+/// again.
+async fn follow(shared: Arc<Shared>) {
+    shared.start_proxy().await;
+    let mut offline: Option<Instant> = None;
+    loop {
+        // Asked of the CLI again only now and then: its config.toml may have
+        // moved the daemon to another port.
+        let found = match shared.client() {
+            Some(client) if !std::mem::take(&mut *lock(&shared.full)) => Ok(client),
+            _ => shared.locate().await.map(|found| found.client()),
+        };
+        let client = match found {
+            Ok(client) => client,
+            Err(e) => {
+                shared.update(|s| s.proxy = Proxy::Stopped);
+                shared.tell(format!("{e:#}"), true);
+                wait(&shared, SLOW_POLL).await;
+                continue;
+            }
+        };
+        if let Ok(mut events) = client.events().await {
+            let mut slow = tokio::time::Instant::now();
+            *lock(&shared.full) = true;
+            loop {
+                if std::mem::take(&mut *lock(&shared.full)) || slow <= tokio::time::Instant::now() {
+                    shared.reread_slow(&client).await;
+                    slow = tokio::time::Instant::now() + SLOW_POLL;
+                }
+                let notice = shared.expire_notice().map(tokio::time::Instant::from_std);
+                let wake = notice.map_or(slow, |at| at.min(slow));
+                tokio::select! {
+                    event = events.next() => match event {
+                        Some(Ok(event)) => shared.heard(event),
+                        // Another version's event: skipped.
+                        Some(Err(slopmax_client::Error::Unexpected(_))) => {}
+                        Some(Err(_)) | None => break,
+                    },
+                    () = tokio::time::sleep_until(wake) => {}
+                    () = shared.look.notified() => {}
+                }
+            }
         }
         shared.update(|s| {
-            s.report = report;
-            if s.notice
-                .as_ref()
-                .is_some_and(|n| !n.error && n.shown.elapsed() >= NOTICE_FOR)
-            {
-                s.notice = None;
-            }
-            s.proxy = match (running, &s.proxy) {
-                (Some(version), _) => Proxy::Running { version },
-                (None, Proxy::Starting) => Proxy::Starting,
-                (None, _) => Proxy::Stopped,
+            s.proxy = match s.proxy {
+                Proxy::Starting => Proxy::Starting,
+                _ => Proxy::Stopped,
             };
         });
-
-        let full = std::mem::take(&mut *lock(&shared.full)) || last_full.elapsed() >= SLOW_POLL;
-        if full {
-            last_full = Instant::now();
-            let (config, path) = (shared.config.clone(), shared.home.config());
-            if let Ok((agents, service, current)) = tokio::task::spawn_blocking(move || {
-                let (agents, service) = look_around(&config);
-                // As config.toml has it, should someone have edited it.
-                let current = Config::load_from(&path).ok().map(|c| adopt(&config, c));
-                (agents, service, current)
-            })
-            .await
+        // With no daemon to push it, the report as the files have it, now
+        // and then: read-only until one runs again.
+        if offline.is_none_or(|at: Instant| at.elapsed() >= SLOW_POLL)
+            && !matches!(shared.snapshot.borrow().proxy, Proxy::Starting)
+        {
+            offline = Some(Instant::now());
+            if let Ok(printed) = shared.run_cli(&["status", "--json"]).await
+                && let Ok(report) = serde_json::from_str::<Report>(&printed)
             {
-                shared.update(|s| {
-                    s.agents = agents;
-                    s.service = service;
-                    if let Some(current) = current {
-                        s.config = current;
-                    }
-                });
+                shared.update(|s| s.report = Some(report));
             }
         }
+        wait(&shared, RETRY).await;
+    }
+}
 
-        tokio::select! {
-            () = tokio::time::sleep(POLL) => {}
-            () = shared.look.notified() => {}
+/// Waits `for_`, or until an action asks for a fresh look.
+async fn wait(shared: &Shared, for_: Duration) {
+    tokio::select! {
+        () = tokio::time::sleep(for_) => {}
+        () = shared.look.notified() => {}
+    }
+}
+
+fn progress(snapshot: &mut Snapshot, step: Step) {
+    if let Some(sign_in) = &mut snapshot.sign_in {
+        sign_in.step = step;
+    }
+}
+
+/// An account's name in `report`, or its id.
+fn name_in(report: &Report, id: &str) -> String {
+    report
+        .accounts
+        .iter()
+        .find(|a| a.id == id)
+        .map_or_else(|| id.to_owned(), |a| a.name.clone())
+}
+
+fn agent_title(id: AgentId) -> &'static str {
+    match id {
+        AgentId::ClaudeCode => "Claude Code",
+        AgentId::Codex => "Codex",
+    }
+}
+
+/// What the app keeps of its own, beside slopmax's files: `app.toml`.
+mod prefs {
+    use std::path::Path;
+
+    #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    pub struct Prefs {
+        /// Whether notices are posted as notifications.
+        pub notifications: bool,
+    }
+
+    impl Default for Prefs {
+        fn default() -> Self {
+            Self {
+                notifications: true,
+            }
+        }
+    }
+
+    pub fn load(home: &Path) -> Prefs {
+        std::fs::read_to_string(home.join("app.toml"))
+            .ok()
+            .and_then(|text| toml_edit::de::from_str(&text).ok())
+            .unwrap_or_default()
+    }
+
+    /// A failure only means the choice is asked again next time.
+    pub fn save(home: &Path, prefs: &Prefs) {
+        if let Ok(text) = toml_edit::ser::to_string(prefs) {
+            let _ = std::fs::write(home.join("app.toml"), text);
         }
     }
 }
 
-/// Hands the UI the nudges `report` calls for that were not told before,
-/// if notifications are on, and remembers them as told.
-fn tell(shared: &Shared, report: &Report) {
-    let Some(told) = &shared.told else { return };
-    let config = shared.snapshot.borrow().config.clone();
-    let now = slopmax_core::time::Timestamp::now();
-    let found = alerts::nudges(report, &config, now);
-    let mut told = lock(told);
-    let (changed, new) = told.fresh(found, now);
-    if changed {
-        told.save(&alerts::Told::path(&shared.home));
-    }
-    if !told.enabled {
-        return;
-    }
-    for (key, event) in new {
-        let _ = shared.alerts.send(alerts::Alert::of(key, &event));
-    }
-}
-
-/// How the agents are wired, and the login service's status: file reads
-/// and, for the service, a call to systemd or launchd.
-fn look_around(config: &Config) -> (Vec<AgentStatus>, Option<service::Status>) {
-    let agents = AGENTS
-        .iter()
-        .map(|agent| AgentStatus {
-            id: agent.id(),
-            title: agent.title(),
-            wiring: agent::wiring(*agent, config),
-        })
-        .collect();
-    (agents, Manager::detect().map(Manager::status))
-}
-
-/// A config read from config.toml, as the app runs with it: on the address
-/// and with the key it started with, which `SLOPMAX_LISTEN` may have set
-/// and only a restart changes.
-fn adopt(running: &Config, mut read: Config) -> Config {
-    read.listen = running.listen;
-    read.api_key.clone_from(&running.api_key);
-    read
-}
-
-fn progress(snapshot: &mut Snapshot, event: LoginEvent) {
-    let Some(sign_in) = &mut snapshot.sign_in else {
-        return;
+/// Opens `url` in the person's browser; whether it could.
+fn open_browser(url: &str) -> bool {
+    let program = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(windows) {
+        "explorer"
+    } else {
+        "xdg-open"
     };
-    match event {
-        LoginEvent::Authorize { url, opened, .. } => sign_in.step = Step::Authorize { url, opened },
-        LoginEvent::DeviceCode { url, code } => sign_in.step = Step::DeviceCode { url, code },
-        LoginEvent::Notice(text) => sign_in.notes.push(text),
-    }
+    std::process::Command::new(program)
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .is_ok()
 }
 
 /// The slopmax CLI shipped beside the app: in the same directory (a macOS
@@ -995,163 +1192,107 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
     use super::*;
 
-    /// A config.toml of its own in the system's temporary directory, with
-    /// a comment to keep.
-    fn config_file(text: &str) -> PathBuf {
-        static NEXT: AtomicUsize = AtomicUsize::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "slopmax-app-{}-{}",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("config.toml");
-        std::fs::write(&path, text).unwrap();
-        path
-    }
-
-    const CONFIG: &str =
-        "# Mine.\napi_key = \"sm-test\"\nstrategy = \"fill-first\" # chosen by hand\n";
-
     #[test]
-    fn settings_are_written_into_config_toml() {
-        let path = config_file(CONFIG);
-        let config = Setting::Strategy(Strategy::RoundRobin)
-            .write(&path)
-            .unwrap();
-        assert_eq!(config.strategy, Strategy::RoundRobin);
-        let text = std::fs::read_to_string(&path).unwrap();
-        // The comments stay, the one beside the value too.
-        assert!(text.starts_with("# Mine.\n"), "{text}");
-        assert!(
-            text.contains("strategy = \"round-robin\" # chosen by hand"),
-            "{text}"
-        );
-
-        let config = Setting::SessionAffinity(false).write(&path).unwrap();
-        assert!(!config.session_affinity);
-        // What was set before stays set.
-        assert_eq!(config.strategy, Strategy::RoundRobin);
-        let config = Setting::RedeemExpiringCredits(false).write(&path).unwrap();
-        assert!(!config.redeem_expiring_credits);
-        let config = Setting::RedeemWhenExhausted(true).write(&path).unwrap();
-        assert!(config.redeem_when_exhausted);
-
-        let reread = Config::load_from(&path).unwrap();
-        assert_eq!(reread, config);
-        assert!(!reread.session_affinity && !reread.redeem_expiring_credits);
-        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
-    }
-
-    #[test]
-    fn a_config_that_will_not_load_is_left_alone() {
-        let broken = "api_key = \"sm-test\"\nstrategy = 3\n";
-        let path = config_file(broken);
-        assert!(Setting::SessionAffinity(false).write(&path).is_err());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), broken);
-        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
-    }
-
-    #[test]
-    fn advanced_settings_are_checked_as_the_cli_checks_them() {
-        let path = config_file(CONFIG);
-        let config = Setting::SessionTtlMins(120).write(&path).unwrap();
-        assert_eq!(config.session_ttl_mins, 120);
-        let config = Setting::PollMins(0).write(&path).unwrap();
-        assert_eq!(config.poll_mins, 0);
-        let config = Setting::WarmWindows(true).write(&path).unwrap();
-        assert!(config.warm_windows);
-        let config = Setting::PaidOverflow(true).write(&path).unwrap();
-        assert!(config.paid_overflow);
-        // A session must keep its account for some time.
-        let error = Setting::SessionTtlMins(0).write(&path).unwrap_err();
-        assert!(error.to_string().contains("minutes"), "{error}");
-        assert_eq!(Config::load_from(&path).unwrap().session_ttl_mins, 120);
-        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
-    }
-
-    #[test]
-    fn each_setting_has_its_key() {
+    fn each_setting_is_one_live_change() {
         let keys = [
             Setting::Strategy(Strategy::ResetFirst),
             Setting::SessionAffinity(true),
             Setting::RedeemExpiringCredits(true),
             Setting::RedeemWhenExhausted(true),
-        ]
-        .map(Setting::key);
-        assert_eq!(
-            keys,
-            [
-                "strategy",
-                "session_affinity",
-                "redeem_expiring_credits",
-                "redeem_when_exhausted"
-            ]
-        );
+            Setting::SessionTtlMins(30),
+            Setting::WarmWindows(true),
+            Setting::PaidOverflow(true),
+            Setting::PollMins(0),
+        ];
+        for setting in keys {
+            let changes = setting.patch().changes();
+            assert_eq!(changes.len(), 1, "{setting:?}");
+            // The API's row for it is the config.toml key the app names.
+            assert_eq!(changes[0].0.toml, setting.key(), "{setting:?}");
+        }
     }
 
     #[test]
-    fn a_reread_config_keeps_the_address_and_key_the_app_runs_with() {
-        let running = Config {
-            listen: "127.0.0.1:9401".parse().unwrap(),
-            api_key: "sm-running".to_owned(),
-            ..Config::default()
-        };
-        let read = Config {
-            api_key: "sm-on-disk".to_owned(),
-            strategy: Strategy::LeastUsed,
-            ..Config::default()
-        };
-        let adopted = adopt(&running, read);
-        assert_eq!(adopted.listen, running.listen);
-        assert_eq!(adopted.api_key, "sm-running");
-        assert_eq!(adopted.strategy, Strategy::LeastUsed);
+    fn notifications_are_kept_beside_slopmax_files() {
+        let dir = std::env::temp_dir().join(format!("slopmax-app-prefs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(prefs::load(&dir).notifications, "on until turned off");
+        prefs::save(
+            &dir,
+            &prefs::Prefs {
+                notifications: false,
+            },
+        );
+        assert!(!prefs::load(&dir).notifications);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
-    fn snapshot() -> Snapshot {
-        Snapshot {
+    #[test]
+    fn sign_in_progress_moves_the_step_along() {
+        let (alerts, _heard) = mpsc::unbounded_channel();
+        let (snapshot, _) = watch::channel(Snapshot {
             proxy: Proxy::Checking,
             address: String::new(),
             report: None,
             agents: Vec::new(),
             service: None,
-            sign_in: None,
+            sign_in: Some(SignIn {
+                provider: Provider::Codex,
+                step: Step::Starting,
+                notes: Vec::new(),
+                id: Some("login-1".to_owned()),
+            }),
             notice: None,
             history: None,
             today: None,
             redeeming: None,
-            config: Config::default(),
+            config: Settings::default(),
             notifications: true,
             new_key: None,
             doctor: Doctor::NotRun,
-        }
-    }
-
-    #[test]
-    fn sign_in_progress_moves_the_step_along() {
-        let mut s = snapshot();
-        // Nothing to move along.
-        progress(&mut s, LoginEvent::Notice("ignored".to_owned()));
-        assert_eq!(s.sign_in, None);
-
-        s.sign_in = Some(SignIn {
-            provider: ProviderId::Codex,
-            step: Step::Starting,
-            notes: Vec::new(),
         });
-        progress(
-            &mut s,
-            LoginEvent::DeviceCode {
-                url: "https://example.invalid/device".to_owned(),
-                code: "ABCD".to_owned(),
+        let shared = Shared {
+            notify: true,
+            alerts,
+            cli: None,
+            found: Mutex::new(None),
+            snapshot,
+            look: Notify::new(),
+            full: Mutex::new(false),
+        };
+        // Another sign-in's progress is not this one's.
+        shared.signing_in(
+            "login-2",
+            LoginEvent::Note {
+                text: "ignored".into(),
             },
         );
-        progress(&mut s, LoginEvent::Notice("Still waiting.".to_owned()));
-        let sign_in = s.sign_in.clone().unwrap();
+        assert!(
+            shared
+                .snapshot
+                .borrow()
+                .sign_in
+                .as_ref()
+                .unwrap()
+                .notes
+                .is_empty()
+        );
+        shared.signing_in(
+            "login-1",
+            LoginEvent::DeviceCode {
+                url: "https://example.invalid/device".into(),
+                code: "ABCD".into(),
+            },
+        );
+        shared.signing_in(
+            "login-1",
+            LoginEvent::Note {
+                text: "Still waiting.".into(),
+            },
+        );
+        let sign_in = shared.snapshot.borrow().sign_in.clone().unwrap();
         assert_eq!(
             sign_in.step,
             Step::DeviceCode {
@@ -1160,22 +1301,17 @@ mod tests {
             }
         );
         assert_eq!(sign_in.notes, ["Still waiting."]);
-
-        progress(
-            &mut s,
-            LoginEvent::Authorize {
-                title: "ChatGPT",
-                url: "https://example.invalid/authorize".to_owned(),
-                opened: false,
-                port: 1455,
+        shared.signing_in(
+            "login-1",
+            LoginEvent::Failed {
+                message: "denied".into(),
             },
         );
+        let snapshot = shared.snapshot.borrow();
+        assert!(snapshot.sign_in.is_none());
         assert_eq!(
-            s.sign_in.unwrap().step,
-            Step::Authorize {
-                url: "https://example.invalid/authorize".to_owned(),
-                opened: false
-            }
+            snapshot.notice.as_ref().unwrap().text,
+            "Sign-in failed: denied"
         );
     }
 

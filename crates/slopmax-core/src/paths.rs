@@ -26,7 +26,7 @@ impl Home {
 
     /// `$SLOPMAX_HOME`, else `~/.slopmax`.
     pub fn current() -> Self {
-        Self(env_dir("SLOPMAX_HOME").unwrap_or_else(|| user_home().join(".slopmax")))
+        Self(slopmax_common::home())
     }
 
     pub fn dir(&self) -> &Path {

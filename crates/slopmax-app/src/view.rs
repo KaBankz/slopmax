@@ -1,28 +1,30 @@
 //! What a window draws, worked out once for every UI: the accounts grouped
 //! by provider with their gauges and status, the lines about the proxy,
 //! agents, and service, a sign-in's instructions, and the menu bar's line.
-//! Account words come from the core, so they read as `slopmax status` does.
+//! Account words come from the daemon's report, so they read as `slopmax
+//! status` does.
 
-use slopmax_core::agent::Wiring;
-use slopmax_core::config::{Config, Strategy};
-use slopmax_core::daemon::CREDIT_EXPIRY_LEAD;
-use slopmax_core::human;
-use slopmax_core::limits::Window;
-use slopmax_core::notify::Kind;
-use slopmax_core::provider::ProviderId;
-use slopmax_core::provider::credits::Credit;
-use slopmax_core::report::{AccountReport, Condition, NextReport, Note, Report, Tone};
-use slopmax_core::service;
-use slopmax_core::time::{SignedDuration, Timestamp};
+use slopmax_api::report::{
+    AccountView, AgentWiring, Condition, LimitReset, NextView, Note, Report, Window,
+};
+use slopmax_api::settings::REDEEM_LEAD_HOURS;
+use slopmax_api::{NoticeKind, Provider, Span, Strategy, Tone};
+use slopmax_common::human;
+use slopmax_common::time::{SignedDuration, Timestamp};
 
 #[cfg(test)]
 use crate::Doctor;
-use crate::{AgentStatus, Proxy, Setting, SignIn, Snapshot, Step};
+use crate::{Proxy, ServiceStatus, Setting, Settings, SignIn, Snapshot, Step};
+
+/// A window's use as a tone: a warning from 70%, bad from 90%.
+fn of_use(used: f64) -> Tone {
+    slopmax_api::report::tone_of_use(used)
+}
 
 /// One provider's accounts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Group {
-    pub provider: ProviderId,
+    pub provider: Provider,
     pub title: &'static str,
     /// Whether its accounts have usage windows; keys bill per token.
     pub subscription: bool,
@@ -180,15 +182,15 @@ pub fn status(report: &Report, now: Timestamp) -> Status {
         .accounts
         .iter()
         .filter(|a| !a.disabled)
-        .map(|a| a.condition(now))
+        .map(|a| a.condition.at(now))
         .collect();
     let ready = enabled
         .iter()
-        .filter(|c| matches!(c, Condition::Ready | Condition::Active(_)))
+        .filter(|c| matches!(c, Condition::Ready | Condition::Active { .. }))
         .count();
     let count = |want: fn(&Condition) -> bool| enabled.iter().filter(|c| want(c)).count();
-    let limited = count(|c| matches!(c, Condition::Limited(_) | Condition::Throttled));
-    let signed_out = count(|c| matches!(c, Condition::SignInNeeded(_)));
+    let limited = count(|c| matches!(c, Condition::Limited { .. } | Condition::Throttled { .. }));
+    let signed_out = count(|c| matches!(c, Condition::SignInNeeded { .. }));
     let off = report.accounts.len() - enabled.len();
     let headline = match (enabled.len(), ready) {
         (0, _) if off == 0 => "No accounts yet".to_owned(),
@@ -236,7 +238,7 @@ pub enum Remedy {
 /// Something about an account that wants a look.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attention {
-    pub provider: ProviderId,
+    pub provider: Provider,
     /// The account's id.
     pub account: String,
     pub text: String,
@@ -269,9 +271,9 @@ pub fn attention(report: &Report, now: Timestamp) -> Vec<Attention> {
             tone,
             remedy,
         };
-        let credits = account.state.credits_left(now);
-        match account.condition(now) {
-            Condition::SignInNeeded(_) => {
+        let credits = account.resets_left(now);
+        match account.condition.at(now) {
+            Condition::SignInNeeded { .. } => {
                 found.push(note(
                     format!("{} needs signing in again", account.name),
                     "sign in again".to_owned(),
@@ -280,7 +282,7 @@ pub fn attention(report: &Report, now: Timestamp) -> Vec<Attention> {
                 ));
                 continue;
             }
-            Condition::Limited(until) if credits > 0 => found.push(note(
+            Condition::Limited { until } if credits > 0 => found.push(note(
                 format!(
                     "{} is limited until {}, and holds {}",
                     account.name,
@@ -295,16 +297,10 @@ pub fn attention(report: &Report, now: Timestamp) -> Vec<Attention> {
                 Tone::Warn,
                 Remedy::Redeem,
             )),
-            Condition::Limited(_) => continue,
+            Condition::Limited { .. } => continue,
             _ => {}
         }
-        for window in account
-            .state
-            .limits
-            .windows
-            .iter()
-            .filter(|w| w.model.is_none())
-        {
+        for window in account.windows.iter().filter(|w| w.model.is_none()) {
             let used = window.used_at(now);
             if let Some(pace) = pace(window, used, now).filter(|p| p.label.tone == Tone::Warn) {
                 let title = lowercase_first(&Slot::of_window(window).title());
@@ -321,14 +317,13 @@ pub fn attention(report: &Report, now: Timestamp) -> Vec<Attention> {
             }
         }
         if let Some(at) = account
-            .state
-            .unexpired_credits(now)
+            .unexpired_resets(now)
             .find_map(|c| c.expires_at)
             .filter(|at| at.duration_since(now) < EXPIRING)
         {
             // slopmax would redeem it by itself unless a nudge says it won't.
             let held = report.nudges.iter().any(|n| {
-                n.event == Kind::ResetExpiring && n.account.as_deref() == Some(&account.name)
+                n.kind == NoticeKind::ResetExpiring && n.account.as_deref() == Some(&account.name)
             });
             found.push(note(
                 format!(
@@ -370,22 +365,22 @@ fn add_nudges(found: &mut Vec<Attention>, report: &Report, now: Timestamp) {
             tone: Tone::Warn,
             remedy,
         };
-        let item = match nudge.event {
+        let item = match nudge.kind {
             // The list may already offer to redeem it, above.
-            Kind::ResetExpiring
+            NoticeKind::ResetExpiring
                 if found
                     .iter()
                     .any(|f| f.account == account.id && f.remedy == Remedy::Redeem) =>
             {
                 continue;
             }
-            Kind::ResetExpiring => item(
+            NoticeKind::ResetExpiring => item(
                 first_sentence(&nudge.message),
                 format!("reset expires in {}", human::until(until, now)),
                 Remedy::Redeem,
             ),
             // Quota about to go to waste: amber, as on the dashboard.
-            Kind::QuotaUnused => {
+            NoticeKind::QuotaUnused => {
                 let (period, unused) = unused_at_reset(account, now);
                 let worth = nudge
                     .worth
@@ -414,17 +409,15 @@ fn add_nudges(found: &mut Vec<Attention>, report: &Report, now: Timestamp) {
 
 /// An account's long window, `week` or `month`, and how much of it is
 /// unused, in percent.
-fn unused_at_reset(account: &AccountReport, now: Timestamp) -> (&'static str, f64) {
+fn unused_at_reset(account: &AccountView, now: Timestamp) -> (&'static str, f64) {
     let long = account
-        .state
-        .limits
         .windows
         .iter()
         .filter(|w| w.model.is_none())
-        .find(|w| matches!(w.span.as_str(), "7d" | "30d"));
+        .find(|w| matches!(w.span, Span::Week | Span::Month));
     match long {
         Some(window) => (
-            if window.span == "30d" {
+            if window.span == Span::Month {
                 "month"
             } else {
                 "week"
@@ -452,10 +445,10 @@ fn first_sentence(message: &str) -> String {
 
 /// The accounts grouped by provider, in the order requests try them.
 pub fn groups(report: &Report, now: Timestamp) -> Vec<Group> {
-    ProviderId::ALL
+    Provider::ALL
         .into_iter()
         .filter_map(|provider| {
-            let accounts: Vec<&AccountReport> = report
+            let accounts: Vec<&AccountView> = report
                 .accounts
                 .iter()
                 .filter(|a| a.provider == provider)
@@ -466,7 +459,7 @@ pub fn groups(report: &Report, now: Timestamp) -> Vec<Group> {
             let slots = slots(&accounts);
             let pool = report.pools.iter().find(|p| p.provider == provider);
             let shares = pool.map(|p| &p.shares).filter(|s| !s.is_empty());
-            let weight = |account: &AccountReport| {
+            let weight = |account: &AccountView| {
                 shares.map_or(1.0, |s| s.get(&account.id).copied().unwrap_or(0.0) as f32)
             };
             let overview = slots
@@ -474,8 +467,8 @@ pub fn groups(report: &Report, now: Timestamp) -> Vec<Group> {
                 .filter_map(|slot| {
                     // The pool's window, or a lone account's own.
                     let window = match pool {
-                        Some(pool) => pool.windows.iter().find(|w| slot.holds(w)),
-                        None if accounts.len() == 1 => slot.of(accounts[0]),
+                        Some(pool) => slot.of_pool(pool),
+                        None if accounts.len() == 1 => slot.of(accounts[0]).cloned(),
                         None => None,
                     }?;
                     Some(Overview {
@@ -484,7 +477,7 @@ pub fn groups(report: &Report, now: Timestamp) -> Vec<Group> {
                         // even spend of the pool means nothing.
                         gauge: Gauge {
                             pace: None,
-                            ..gauge(window, now)
+                            ..gauge(&window, now)
                         },
                         shares: accounts
                             .iter()
@@ -500,14 +493,14 @@ pub fn groups(report: &Report, now: Timestamp) -> Vec<Group> {
             }
             Some(Group {
                 provider,
-                title: provider.spec().title,
-                subscription: provider.spec().is_subscription(),
+                title: provider.title(),
+                subscription: provider.is_subscription(),
                 limits: slots.iter().map(Slot::title).collect(),
                 accounts: rows,
                 overview,
                 working: pool.map_or_else(
                     || accounts.iter().filter(|a| serving(a)).count(),
-                    |pool| pool.accounts,
+                    |pool| pool.accounts as usize,
                 ),
                 credits: pool_credits(&accounts, now),
                 next: next_line(next, &accounts, now, false),
@@ -522,8 +515,8 @@ pub fn groups(report: &Report, now: Timestamp) -> Vec<Group> {
 /// can take one, when the soonest is back.
 /// With `short`, an account goes by its address's local part.
 fn next_line(
-    next: Option<&NextReport>,
-    accounts: &[&AccountReport],
+    next: Option<&NextView>,
+    accounts: &[&AccountView],
     now: Timestamp,
     short: bool,
 ) -> Label {
@@ -549,8 +542,8 @@ fn next_line(
     let back = accounts
         .iter()
         .filter(|a| !a.disabled)
-        .filter_map(|a| match a.condition(now) {
-            Condition::Limited(until) => Some((until, a.name.as_str())),
+        .filter_map(|a| match a.condition.at(now) {
+            Condition::Limited { until } => Some((until, a.name.as_str())),
             _ => None,
         })
         .min_by_key(|(until, _)| *until);
@@ -573,7 +566,7 @@ fn next_line(
 struct Slot {
     scoped: bool,
     order: u8,
-    span: String,
+    span: Span,
     model: Option<String>,
 }
 
@@ -581,13 +574,12 @@ impl Slot {
     fn of_window(window: &Window) -> Self {
         Self {
             scoped: window.model.is_some(),
-            order: match window.span.as_str() {
-                "5h" => 0,
-                "7d" => 1,
-                "30d" => 2,
-                _ => 3,
+            order: match window.span {
+                Span::FiveHours => 0,
+                Span::Week => 1,
+                Span::Month => 2,
             },
-            span: window.span.clone(),
+            span: window.span,
             model: window.model.clone(),
         }
     }
@@ -596,16 +588,23 @@ impl Slot {
         window.span == self.span && window.model == self.model
     }
 
-    fn of<'a>(&self, account: &'a AccountReport) -> Option<&'a Window> {
-        account.state.limits.windows.iter().find(|w| self.holds(w))
+    fn of<'a>(&self, account: &'a AccountView) -> Option<&'a Window> {
+        account.windows.iter().find(|w| self.holds(w))
+    }
+
+    /// The pool's window of this kind: over every request, or on one model.
+    fn of_pool(&self, pool: &slopmax_api::report::PoolView) -> Option<Window> {
+        match &self.model {
+            None => pool.window(self.span).map(|w| w.as_window()),
+            Some(_) => pool.scoped.iter().find(|w| self.holds(w)).cloned(),
+        }
     }
 
     fn title(&self) -> String {
-        let span = match self.span.as_str() {
-            "5h" => "5-hour",
-            "7d" => "Weekly",
-            "30d" => "Monthly",
-            other => other,
+        let span = match self.span {
+            Span::FiveHours => "5-hour",
+            Span::Week => "Weekly",
+            Span::Month => "Monthly",
         };
         match &self.model {
             Some(model) => format!("{span} · {model}"),
@@ -615,10 +614,10 @@ impl Slot {
 }
 
 /// Every kind of window the accounts report, in column order.
-fn slots(accounts: &[&AccountReport]) -> Vec<Slot> {
+fn slots(accounts: &[&AccountView]) -> Vec<Slot> {
     let mut slots: Vec<Slot> = accounts
         .iter()
-        .flat_map(|a| a.state.limits.windows.iter().map(Slot::of_window))
+        .flat_map(|a| a.windows.iter().map(Slot::of_window))
         .collect();
     slots.sort();
     slots.dedup();
@@ -626,14 +625,14 @@ fn slots(accounts: &[&AccountReport]) -> Vec<Slot> {
 }
 
 /// A provider's reset credits across its accounts, and the next to expire.
-fn pool_credits(accounts: &[&AccountReport], now: Timestamp) -> Option<String> {
-    let total: u32 = accounts.iter().map(|a| a.state.credits_left(now)).sum();
+fn pool_credits(accounts: &[&AccountView], now: Timestamp) -> Option<String> {
+    let total: u64 = accounts.iter().map(|a| a.resets_left(now)).sum();
     if total == 0 {
         return None;
     }
     let next = accounts
         .iter()
-        .flat_map(|a| a.state.unexpired_credits(now))
+        .flat_map(|a| a.unexpired_resets(now))
         .filter_map(|c| c.expires_at)
         .min();
     let count = credit_count(total);
@@ -643,7 +642,7 @@ fn pool_credits(accounts: &[&AccountReport], now: Timestamp) -> Option<String> {
     })
 }
 
-fn credit_count(n: u32) -> String {
+fn credit_count(n: u64) -> String {
     match n {
         1 => "1 limit reset".to_owned(),
         n => format!("{n} limit resets"),
@@ -651,14 +650,12 @@ fn credit_count(n: u32) -> String {
 }
 
 /// The account's reset credits, for a provider that grants them.
-fn credits(account: &AccountReport, now: Timestamp) -> Option<Credits> {
-    let state = &account.state;
-    let left = state.credits_left(now);
-    if left == 0 || account.provider.get().credits().is_none() {
+fn credits(account: &AccountView, now: Timestamp) -> Option<Credits> {
+    let left = account.resets_left(now);
+    if left == 0 || !account.provider.grants_resets() {
         return None;
     }
-    let windows: Vec<&Window> = state
-        .limits
+    let windows: Vec<&Window> = account
         .windows
         .iter()
         .filter(|w| w.model.is_none())
@@ -667,7 +664,7 @@ fn credits(account: &AccountReport, now: Timestamp) -> Option<Credits> {
         .iter()
         .map(|w| lowercase_first(&Slot::of_window(w).title()))
         .collect();
-    let held = if account.auth_error.is_some() {
+    let held = if account.signed_out() {
         Some("Sign in again to redeem one")
     } else if account.disabled {
         Some("Turn it on to redeem one")
@@ -678,8 +675,8 @@ fn credits(account: &AccountReport, now: Timestamp) -> Option<Credits> {
     };
     Some(Credits {
         title: credit_count(left),
-        credits: state
-            .unexpired_credits(now)
+        credits: account
+            .unexpired_resets(now)
             .map(|c| credit_line(c, now))
             .collect(),
         clears: listed(&clears),
@@ -687,7 +684,7 @@ fn credits(account: &AccountReport, now: Timestamp) -> Option<Credits> {
     })
 }
 
-fn credit_line(credit: &Credit, now: Timestamp) -> CreditLine {
+fn credit_line(credit: &LimitReset, now: Timestamp) -> CreditLine {
     let expires = credit.expires_at;
     CreditLine {
         expires: match expires {
@@ -715,8 +712,8 @@ fn credit_line(credit: &Credit, now: Timestamp) -> CreditLine {
 
 /// When slopmax redeems `provider`'s reset credits by itself, as `config`
 /// has it, if it does.
-pub fn auto_redeem(config: &Config, provider: &str) -> Option<String> {
-    let lead = CREDIT_EXPIRY_LEAD.as_secs() / 3_600;
+pub fn auto_redeem(config: &Settings, provider: &str) -> Option<String> {
+    let lead = REDEEM_LEAD_HOURS;
     match (config.redeem_when_exhausted, config.redeem_expiring_credits) {
         (true, true) => Some(format!(
             "slopmax redeems one by itself when every {provider} account is spent, \
@@ -750,7 +747,7 @@ pub fn strategy_detail(strategy: Strategy) -> String {
 
 /// How requests find their account, in a line: `Reset first · sessions
 /// keep their account`.
-pub fn routing(config: &Config) -> String {
+pub fn routing(config: &Settings) -> String {
     let sessions = if config.session_affinity {
         "sessions keep their account"
     } else {
@@ -769,7 +766,7 @@ pub const AFFINITY_HEADER: &str =
 
 /// What `redeem_expiring_credits` does.
 pub fn redeem_expiring_detail() -> String {
-    let lead = CREDIT_EXPIRY_LEAD.as_secs() / 3_600;
+    let lead = REDEEM_LEAD_HOURS;
     format!("Redeem it {lead} hours before, if the account has quota to reset.")
 }
 
@@ -816,10 +813,7 @@ pub fn setting_changed(setting: Setting) -> String {
 /// A live setting's description, as `slopmax config` lists it, as a
 /// sentence.
 pub fn live_detail(name: &str) -> String {
-    let phrase = slopmax_core::config::LIVE
-        .iter()
-        .find(|(n, _)| *n == name)
-        .map_or("", |(_, phrase)| phrase);
+    let phrase = slopmax_api::settings::live(name).map_or("", |l| l.summary);
     let mut chars = phrase.chars();
     match chars.next() {
         Some(first) => format!("{}{}.", first.to_uppercase(), chars.as_str()),
@@ -881,16 +875,16 @@ fn lowercase_first(text: &str) -> String {
     }
 }
 
-fn serving(account: &AccountReport) -> bool {
-    !account.disabled && account.auth_error.is_none()
+fn serving(account: &AccountView) -> bool {
+    !account.disabled && !account.signed_out()
 }
 
-fn share(account: &AccountReport, slot: &Slot, weight: f32, now: Timestamp) -> Share {
+fn share(account: &AccountView, slot: &Slot, weight: f32, now: Timestamp) -> Share {
     let used = slot.of(account).map_or(0.0, |w| w.used_at(now));
     Share {
         weight,
         fraction: (used / 100.0).clamp(0.0, 1.0) as f32,
-        tone: Tone::of_use(used),
+        tone: of_use(used),
         idle: !serving(account),
     }
 }
@@ -901,14 +895,14 @@ fn share(account: &AccountReport, slot: &Slot, weight: f32, now: Timestamp) -> S
 /// when nothing counts down.
 pub fn next_change(report: &Report, now: Timestamp) -> Option<SignedDuration> {
     let accounts = report.accounts.iter().flat_map(|a| {
-        let state = &a.state;
-        let windows = state.limits.windows.iter().filter_map(|w| w.resets_at);
-        let credits = state.unexpired_credits(now).filter_map(|c| c.expires_at);
-        windows
-            .chain(credits)
-            .chain(state.blocked_until)
-            .chain(state.throttled_until)
-            .chain(state.limited_until(now))
+        let windows = a.windows.iter().filter_map(|w| w.resets_at);
+        let credits = a.unexpired_resets(now).filter_map(|c| c.expires_at);
+        let until = match &a.condition {
+            Condition::Limited { until } => Some(*until),
+            Condition::Throttled { until } => *until,
+            _ => None,
+        };
+        windows.chain(credits).chain(until)
     });
     let pools = report
         .pools
@@ -929,8 +923,8 @@ pub fn menu_bar(report: &Report, now: Timestamp) -> String {
         .pools
         .iter()
         .map(|pool| {
-            let title = pool.provider.spec().title;
-            match pool.window("5h") {
+            let title = pool.provider.title();
+            match pool.window(Span::FiveHours) {
                 Some(window) => format!("{title} {:.0}%", window.used_at(now)),
                 None => format!("{title} —"),
             }
@@ -954,11 +948,11 @@ pub fn proxy_line(snapshot: &Snapshot) -> String {
 }
 
 /// How an agent is wired, and whether that is through slopmax.
-pub fn agent_line(agent: &AgentStatus) -> (String, bool) {
-    match &agent.wiring {
-        Wiring::Slopmax => ("Goes through slopmax".to_owned(), true),
-        Wiring::Elsewhere(target) => (format!("Goes to {target}"), false),
-        Wiring::Direct => ("Goes straight to its provider".to_owned(), false),
+pub fn agent_line(agent: &AgentWiring) -> (String, bool) {
+    match (&agent.wired_to, agent.wired) {
+        (_, true) => ("Goes through slopmax".to_owned(), true),
+        (Some(target), false) => (format!("Goes to {target}"), false),
+        (None, false) => ("Goes straight to its provider".to_owned(), false),
     }
 }
 
@@ -971,7 +965,7 @@ pub struct Login {
     pub detail: String,
 }
 
-pub fn login(service: Option<&service::Status>) -> Login {
+pub fn login(service: Option<&ServiceStatus>) -> Login {
     match service {
         None => Login {
             on: false,
@@ -1006,7 +1000,7 @@ pub struct SignInView {
 }
 
 pub fn sign_in(sign_in: &SignIn) -> SignInView {
-    let title = sign_in.provider.spec().title;
+    let title = sign_in.provider.title();
     let (detail, link, code) = match &sign_in.step {
         Step::Starting => ("Starting…".to_owned(), None, None),
         Step::Authorize { url, opened: true } => (
@@ -1042,7 +1036,7 @@ pub fn gauge(window: &Window, now: Timestamp) -> Gauge {
         percent: format!("{used:.0}%"),
         resets_in: reset.map(|at| human::until(at, now)),
         resets_at: reset.map(|at| clock(at, now, at.local_offset())),
-        tone: Tone::of_use(used),
+        tone: of_use(used),
         pace: pace(window, used, now),
     }
 }
@@ -1053,11 +1047,10 @@ const ON_PACE: f64 = 5.;
 /// The window's use against spending it evenly until it resets: nothing
 /// before 3% of it has passed, too soon to say, nor once it is spent.
 fn pace(window: &Window, used: f64, now: Timestamp) -> Option<Pace> {
-    let length = match window.span.as_str() {
-        "5h" => 5 * 3_600,
-        "7d" => 7 * 86_400,
-        "30d" => 30 * 86_400,
-        _ => return None,
+    let length = match window.span {
+        Span::FiveHours => 5 * 3_600,
+        Span::Week => 7 * 86_400,
+        Span::Month => 30 * 86_400,
     };
     let resets = window.upcoming_reset(now)?;
     let passed = length - resets.duration_since(now).as_secs();
@@ -1140,11 +1133,11 @@ fn clock(at: Timestamp, now: Timestamp, offset: SignedDuration) -> String {
     }
 }
 
-fn row(account: &AccountReport, slots: &[Slot], now: Timestamp) -> Row {
-    let condition = account.condition(now);
+fn row(account: &AccountView, slots: &[Slot], now: Timestamp) -> Row {
+    let condition = account.condition.at(now);
     let plan = match &account.plan {
         Some(plan) => title_case(plan),
-        None if !account.provider.spec().is_subscription() => "per token".to_owned(),
+        None if !account.provider.is_subscription() => "per token".to_owned(),
         None => String::new(),
     };
     Row {
@@ -1167,15 +1160,15 @@ fn row(account: &AccountReport, slots: &[Slot], now: Timestamp) -> Row {
         // Reset credits show apart, where they can be redeemed, and a pin
         // in the status.
         notes: account
-            .notes(now)
+            .notes
             .iter()
-            .filter(|note| !matches!(note, Note::ResetCredits(_) | Note::Pinned))
+            .filter(|note| !matches!(note, Note::Resets { .. } | Note::Pinned))
             .map(note)
             .collect(),
         pinned: account.pinned,
         disabled: account.disabled,
         priority: account.priority,
-        last_used: account.state.last_used.map(|at| ago(at, now)),
+        last_used: account.last_used.map(|at| ago(at, now)),
         credits: credits(account, now),
         next: false,
         follows: account.follows.clone(),
@@ -1245,11 +1238,11 @@ pub fn segments_tip(group: &Group) -> &'static str {
 }
 
 /// How bad a finding of the doctor's is.
-pub fn level_tone(level: slopmax_core::doctor::Level) -> Tone {
-    use slopmax_core::doctor::Level;
+pub fn level_tone(level: slopmax_api::report::Level) -> Tone {
+    use slopmax_api::report::Level;
     match level {
         Level::Ok => Tone::Good,
-        Level::Note => Tone::Muted,
+        Level::Info => Tone::Muted,
         Level::Warn => Tone::Warn,
         Level::Fail => Tone::Bad,
     }
@@ -1281,10 +1274,15 @@ fn note(note: &Note) -> Label {
 mod tests {
     use std::collections::HashMap;
 
+    use slopmax_api::report::{NextReason, Notice};
+    use slopmax_api::{AgentId, NoticeKind};
     use slopmax_core::account::{Account, Tokens};
-    use slopmax_core::limits::Limits;
+    use slopmax_core::config::{Config, Strategy as Routing};
+    use slopmax_core::limits::{Limits, Window as Reading};
     use slopmax_core::pool::{AccountState, CreditList, Pins};
-    use slopmax_core::report::build;
+    use slopmax_core::provider::ProviderId;
+    use slopmax_core::provider::credits::Credit;
+    use slopmax_core::report::{self as engine, build};
 
     use super::*;
 
@@ -1292,8 +1290,14 @@ mod tests {
         Timestamp::from_second(secs).unwrap()
     }
 
-    fn window(span: &str, used: f64, resets_at: i64) -> Window {
-        Window {
+    /// A report the engine built, as the daemon answers it.
+    fn answer(report: &engine::Report, now: Timestamp) -> Report {
+        slopmax_core::api::report(report, &Config::default(), now)
+    }
+
+    /// A window as a provider reads it to the engine.
+    fn window(span: &str, used: f64, resets_at: i64) -> Reading {
+        Reading {
             span: span.into(),
             model: None,
             used,
@@ -1301,9 +1305,23 @@ mod tests {
         }
     }
 
+    /// The same as the API answers it.
+    fn api_window(span: Span, used: f64, resets_at: i64) -> Window {
+        Window {
+            span,
+            model: None,
+            used,
+            resets_at: Some(ts(resets_at)),
+        }
+    }
+
+    fn report_of(now: Timestamp, accounts: Vec<(&str, Vec<Reading>)>) -> Report {
+        answer(&engine_of(now, accounts), now)
+    }
+
     /// Claude accounts with these windows each.
-    fn report_of(now: Timestamp, accounts: Vec<(&str, Vec<Window>)>) -> Report {
-        let accounts: Vec<(Account, Vec<Window>)> = accounts
+    fn engine_of(now: Timestamp, accounts: Vec<(&str, Vec<Reading>)>) -> engine::Report {
+        let accounts: Vec<(Account, Vec<Reading>)> = accounts
             .into_iter()
             .map(|(email, windows)| {
                 let mut account = Account::new(ProviderId::Claude, Tokens::default());
@@ -1313,7 +1331,7 @@ mod tests {
                 (account, windows)
             })
             .collect();
-        let windows: HashMap<String, Vec<Window>> = accounts
+        let windows: HashMap<String, Vec<Reading>> = accounts
             .iter()
             .map(|(a, windows)| (a.id.clone(), windows.clone()))
             .collect();
@@ -1329,14 +1347,18 @@ mod tests {
             },
             &Pins::new(),
             &HashMap::new(),
-            Strategy::FillFirst,
+            Routing::FillFirst,
             true,
             now,
         )
     }
 
     fn report(now: Timestamp) -> Report {
-        report_of(
+        answer(&engine(now), now)
+    }
+
+    fn engine(now: Timestamp) -> engine::Report {
+        engine_of(
             now,
             [("a@x.dev", 80.0), ("b@x.dev", 20.0)]
                 .into_iter()
@@ -1376,7 +1398,7 @@ mod tests {
     #[test]
     fn a_window_for_one_model_gets_a_column_after_the_shared_ones() {
         let now = ts(1_000);
-        let fable = Window {
+        let fable = Reading {
             model: Some("Fable".into()),
             ..window("7d", 30.0, 90_000)
         };
@@ -1423,7 +1445,7 @@ mod tests {
     fn pace_compares_use_with_an_even_spend() {
         let now = ts(100_000);
         // Halfway through a 5-hour window.
-        let half = |used: f64| window("5h", used, 100_000 + 9_000);
+        let half = |used: f64| api_window(Span::FiveHours, used, 100_000 + 9_000);
         let label = |used| pace(&half(used), used, now).unwrap().label;
         assert_eq!(pace(&half(50.), 50., now).unwrap().elapsed, 0.5);
         assert_eq!(label(52.).text, "On pace");
@@ -1432,7 +1454,8 @@ mod tests {
         assert!(ahead.text.starts_with("Runs out ~"), "{}", ahead.text);
         assert_eq!(ahead.tone, Tone::Warn);
         // Too soon to say, and nothing left to pace.
-        assert_eq!(pace(&window("5h", 10., 100_000 + 17_900), 10., now), None);
+        let early = api_window(Span::FiveHours, 10., 100_000 + 17_900);
+        assert_eq!(pace(&early, 10., now), None);
         assert_eq!(pace(&half(100.), 100., now), None);
     }
 
@@ -1485,11 +1508,11 @@ mod tests {
             |_| state.clone(),
             &Pins::new(),
             &HashMap::new(),
-            Strategy::FillFirst,
+            Routing::FillFirst,
             true,
             now,
         );
-        let chatgpt = &groups(&report, now)[0];
+        let chatgpt = &groups(&answer(&report, now), now)[0];
         assert_eq!(
             chatgpt.credits.as_deref(),
             Some("2 limit resets · the next expires in 2d0h")
@@ -1514,7 +1537,7 @@ mod tests {
     #[test]
     fn status_and_attention_say_what_wants_a_look() {
         let now = ts(10_000);
-        let mut report = report_of(
+        let mut built = engine_of(
             now,
             vec![
                 ("out@x.dev", vec![window("5h", 10.0, 10_000 + 9_000)]),
@@ -1523,8 +1546,9 @@ mod tests {
                 ("calm@x.dev", vec![window("5h", 10.0, 10_000 + 9_000)]),
             ],
         );
-        report.accounts[0].auth_error = Some("revoked".into());
-        report.accounts[2].disabled = true;
+        built.accounts[0].auth_error = Some("revoked".into());
+        built.accounts[2].disabled = true;
+        let mut report = answer(&built, now);
         let status = status(&report, now);
         assert_eq!(status.headline, "1 of 2 accounts are ready");
         assert_eq!(
@@ -1574,9 +1598,9 @@ mod tests {
         let now = ts(1_000);
         let mut report = report(now);
         let b = report.accounts[1].id.clone();
-        report.pools[0].next = Some(NextReport {
+        report.pools[0].next = Some(NextView {
             account: b.clone(),
-            reason: slopmax_core::pool::Reason::ResetsSoonest,
+            reason: NextReason::ResetsFirst,
             why: "its quota resets soonest".to_owned(),
         });
         let group = &groups(&report, now)[0];
@@ -1625,7 +1649,7 @@ mod tests {
     #[test]
     fn a_pin_reads_in_the_status_and_use_says_its_period() {
         let now = ts(1_000);
-        let mut report = report(now);
+        let mut report = engine(now);
         report.accounts[0].pinned = true;
         report.accounts[0].state.usage = slopmax_core::wire::Usage {
             requests: 120,
@@ -1635,7 +1659,7 @@ mod tests {
             cache_write_tokens: 50_000,
         };
         report.accounts[1].disabled = true;
-        let rows = &groups(&report, now)[0].accounts;
+        let rows = &groups(&answer(&report, now), now)[0].accounts;
         assert_eq!(rows[0].status.text, "ready · pinned");
         let notes: Vec<&str> = rows[0].notes.iter().map(|n| n.text.as_str()).collect();
         assert_eq!(notes, ["120 requests, 5.2M tokens all time"]);
@@ -1647,12 +1671,12 @@ mod tests {
 
     #[test]
     fn nudges_join_what_wants_a_look_once() {
-        use slopmax_core::notify::Event;
         let now = ts(1_000);
         let mut report = report(now);
-        let nudge = |kind, account: &str, message: &str| Event {
-            event: kind,
-            provider: Some(ProviderId::Claude),
+        let nudge = |kind, account: &str, message: &str| Notice {
+            kind,
+            key: format!("{account}:{kind:?}"),
+            provider: Some(Provider::Claude),
             account: Some(account.to_owned()),
             until: Some(ts(60_000)),
             message: message.to_owned(),
@@ -1661,18 +1685,18 @@ mod tests {
         };
         report.nudges = vec![
             nudge(
-                Kind::QuotaUnused,
+                NoticeKind::QuotaUnused,
                 "b@x.dev",
                 "b@x.dev's week resets in 19h59m (19:12) with 79% of it unused, about $4 of its \
                  plan. Work sent there before then costs nothing extra.",
             ),
             nudge(
-                Kind::ResetExpiring,
+                NoticeKind::ResetExpiring,
                 "a@x.dev",
                 "A limit reset on a@x.dev expires in 18h (18:10); redeem it with `slopmax redeem \
                  a@x.dev` before it is lost.",
             ),
-            nudge(Kind::QuotaUnused, "nobody@x.dev", "Gone."),
+            nudge(NoticeKind::QuotaUnused, "nobody@x.dev", "Gone."),
         ];
         let items = attention(&report, now);
         let unused = items.iter().find(|a| a.remedy == Remedy::Look).unwrap();
@@ -1699,12 +1723,12 @@ mod tests {
 
     #[test]
     fn a_reset_already_offered_is_not_offered_twice() {
-        use slopmax_core::notify::Event;
         let now = ts(1_000);
         let mut report = report(now);
-        report.nudges = vec![Event {
-            event: Kind::ResetExpiring,
-            provider: Some(ProviderId::Claude),
+        report.nudges = vec![Notice {
+            kind: NoticeKind::ResetExpiring,
+            key: "reset:a".to_owned(),
+            provider: Some(Provider::Claude),
             account: Some("a@x.dev".to_owned()),
             until: Some(ts(60_000)),
             message: "A limit reset on a@x.dev expires soon.".to_owned(),
@@ -1712,7 +1736,7 @@ mod tests {
             worth: None,
         }];
         let already = Attention {
-            provider: ProviderId::Claude,
+            provider: Provider::Claude,
             account: report.accounts[0].id.clone(),
             text: "already offered".to_owned(),
             who: "a".to_owned(),
@@ -1799,10 +1823,10 @@ mod tests {
     #[test]
     fn plans_read_in_title_case_and_a_followed_login_names_its_tool() {
         let now = ts(1_000);
-        let mut report = report(now);
+        let mut report = engine(now);
         report.accounts[0].plan = Some("max 20x".to_owned());
         report.accounts[0].follows = Some("Claude Code".to_owned());
-        let rows = &groups(&report, now)[0].accounts;
+        let rows = &groups(&answer(&report, now), now)[0].accounts;
         assert_eq!(rows[0].plan, "Max 20x");
         assert_eq!(rows[0].follows.as_deref(), Some("Claude Code"));
         assert_eq!(rows[1].follows, None);
@@ -1817,9 +1841,9 @@ mod tests {
         assert!(patterns("  ").is_empty());
         assert_eq!(range_title(crate::history::Range::Week), "7 days");
         assert_eq!(range_title(crate::history::Range::Month), "30 days");
-        use slopmax_core::doctor::Level;
+        use slopmax_api::report::Level;
         assert_eq!(level_tone(Level::Ok), Tone::Good);
-        assert_eq!(level_tone(Level::Note), Tone::Muted);
+        assert_eq!(level_tone(Level::Info), Tone::Muted);
         assert_eq!(level_tone(Level::Warn), Tone::Warn);
         assert_eq!(level_tone(Level::Fail), Tone::Bad);
     }
@@ -1846,7 +1870,7 @@ mod tests {
 
     #[test]
     fn routing_reads_as_a_line() {
-        let mut config = Config::default();
+        let mut config = Settings::default();
         assert_eq!(
             routing(&config),
             "Reset first · sessions keep their account"
@@ -1882,14 +1906,13 @@ mod tests {
         }
         assert!(AFFINITY.contains("prompt cache"));
         assert!(AFFINITY_HEADER.contains("x-slopmax-affinity"));
-        let lead = CREDIT_EXPIRY_LEAD.as_secs() / 3_600;
-        assert!(redeem_expiring_detail().contains(&format!("{lead} hours")));
+        assert!(redeem_expiring_detail().contains(&format!("{REDEEM_LEAD_HOURS} hours")));
     }
 
     #[test]
     fn auto_redeem_follows_the_config() {
-        let mut config = Config::default();
-        let say = |config: &Config| auto_redeem(config, "ChatGPT");
+        let mut config = Settings::default();
+        let say = |config: &Settings| auto_redeem(config, "ChatGPT");
         config.redeem_expiring_credits = false;
         config.redeem_when_exhausted = false;
         assert_eq!(say(&config), None);
@@ -1928,7 +1951,7 @@ mod tests {
             history: None,
             today: None,
             redeeming: None,
-            config: Config::default(),
+            config: Settings::default(),
             notifications: true,
             new_key: None,
             doctor: Doctor::NotRun,
@@ -1959,26 +1982,26 @@ mod tests {
 
     #[test]
     fn agents_and_the_service_read_plainly() {
-        let agent = |wiring| AgentStatus {
-            id: "codex",
-            title: "Codex",
-            wiring,
+        let agent = |wired_to: Option<&str>, wired| AgentWiring {
+            id: AgentId::Codex,
+            title: "Codex".to_owned(),
+            installed: true,
+            config_path: "~/.codex/config.toml".to_owned(),
+            wired_to: wired_to.map(str::to_owned),
+            wired,
+            backed_up: false,
         };
         assert_eq!(
-            agent_line(&agent(Wiring::Slopmax)),
+            agent_line(&agent(Some("http://127.0.0.1:7567"), true)),
             ("Goes through slopmax".to_owned(), true)
         );
         assert_eq!(
-            agent_line(&agent(Wiring::Elsewhere("http://elsewhere".to_owned()))),
+            agent_line(&agent(Some("http://elsewhere"), false)),
             ("Goes to http://elsewhere".to_owned(), false)
         );
-        assert!(!agent_line(&agent(Wiring::Direct)).1);
+        assert!(!agent_line(&agent(None, false)).1);
 
-        let status = |installed, running| service::Status {
-            installed,
-            running,
-            lingering: None,
-        };
+        let status = |installed, running| ServiceStatus { installed, running };
         // With no service manager, the switch is off and cannot change.
         let none = login(None);
         assert!(!none.on && !none.available);
@@ -1998,9 +2021,10 @@ mod tests {
     #[test]
     fn a_sign_in_says_what_to_do_next() {
         let at = |step| SignIn {
-            provider: ProviderId::Claude,
+            provider: Provider::Claude,
             step,
             notes: vec!["That address was not it.".to_owned()],
+            id: None,
         };
         let starting = sign_in(&at(Step::Starting));
         assert_eq!(starting.title, "Signing in to Claude");

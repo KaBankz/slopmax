@@ -2,15 +2,15 @@
 
 The plan for the Rust slopmax after v0.3.0, carrying over what the TypeScript rewrite in `ts/` got right (see [`ts/docs/VERDICT.md`](ts/docs/VERDICT.md)). A panel wrote it on 2026-11-01. Five critics each read the code through one lens: the hot path, architecture, testing, crates and the build, and the desktop with its native bridge. Two architects then proposed designs, one lean-first and one robust-first, and two judges scored both against the code. This document starts from **lean**, which won on the mean judge score (7.75 against 7.3). It takes robust's sequencing and correctness pieces, and it fixes every error the judges found. [`ARCHITECTURE.md`](ARCHITECTURE.md) describes the code as it is; this document describes where it is going, phase by phase.
 
-## Status, 2026-11-02
+## Status, 2026-11-08
 
 | Phase | State | What landed |
 |---|---|---|
 | 1 | done (`789ed0d`) | No data lost at stop, no file read per request, one thread by default, serve lock, state quarantine, DST and Retry-After fixes |
 | 2 | done (`40d9da4`, `453fd60`, `e70ab6a`) | One `Relay` body and `Settle` (`end` recorded), typed taps in `wire::sse`, `rawjson` framing instead of a parse (proptested), large translations off-thread, one task per Codex socket with a cancel-safe frame reader, an `Arc` snapshot pool, the `raw`/`swarm`/`translate`/`allocs` bench modes |
 | 3 | mostly (`bc4fa6e`) | `slopmax-api`, the `live!` registry, `/slopmax/api/*` with the event stream, `contract/` (Rust blesses, TypeScript and Swift decode strictly). Not yet: the `slopmax-daemon` crate split, thiserror boundaries, `Home`-only paths |
-| 4 | partly (`790cebb`, `cfa242c`) | Local files are TOML; one deadline scheduler (idle 0.18 wakeups/s and one thread, from 0.52 and two); the single-flight `/refresh`; notices on the event stream. Not yet: `HistoryIndex`, `state.toml` absorbing pins, `slopmax-app` and the CLI on the API |
-| 5 | done, shim kept (`2fbadbb`) | The React UI embedded and served at `/slopmax/`; `dashboard.html` deleted. The `/slopmax/*` shim stays until phase 4 moves the desktop app and the CLI |
+| 4 | done (`790cebb`, `cfa242c`, `bb0c7d0`, `4c2e289`, `ac13883`, `0fa7b66` and the app's) | Local files are TOML; one deadline scheduler (idle 0.18 wakeups/s and one thread, from 0.52 and two); the single-flight `/refresh`; notices on the event stream; `state.toml` holds pins, the nudges told and Codex (`pins.toml`, `nudged.toml` read once, left in place); `HistoryIndex`; `slopmax-client`; the CLI's changes through the API while a daemon runs, `status --watch` on the event stream; `slopmax-app` an API client with no `slopmax-core` (`cargo tree -e normal`), posting the daemon's notices |
+| 5 | done, shim kept (`2fbadbb`) | The React UI embedded and served at `/slopmax/`; `dashboard.html` deleted. No client of slopmax's own calls the `/slopmax/*` shim since phase 4 (`background::Daemon`, behind `start` and `stop`, is on `slopmax-client` too); it is kept for one release, for an older app or CLI talking to a newer daemon |
 | 6 | written, kit verified (`f87228e`) | `apple/`: SlopmaxKit tested on Linux against the fixtures and a live daemon; the SwiftUI layer is built only by `apple.yml` on macOS |
 | 7 | started (`cfa242c`) | The desktop app redraws when a countdown would read differently, not every second. Not yet: deleting GPUI's macOS code, cached entities, the Windows job, the hardware gates |
 
@@ -21,6 +21,8 @@ The plan for the Rust slopmax after v0.3.0, carrying over what the TypeScript re
 - **JSON stays serde_json.** Measured on the 300 KB conversation: framing by `rawjson` 31 µs (serde_json's validation 89, sonic-rs 71, simd-json 129); finding `model` 0.3 µs (sonic-rs 0.4); a usage event by the typed reader 0.6 µs (sonic-rs 0.5, serde_json to `Value` 2.0). sonic-rs wins where slopmax parses whole documents (translation), but into serde types only 1.27× (229 µs against 291), and it adds 17 crates, past the budget of 70; simd-json adds 9 and 123 KB and is slower here. There is no JSON parser in std.
 - **slopmax's own files are TOML**, as `config.toml` is; logs (`usage/*.jsonl`, `windows.jsonl`), the setup backup and other tools' files stay JSON (see `ARCHITECTURE.md`, Files).
 - **Size:** 7,184,000 bytes with the API and the embedded UI, inside the 7 MiB budget.
+- **`HistoryIndex` keeps the last month by hour, rolling the days before today up as they are first read**, rather than daily aggregates for older months: `/history` ranges reach 30 days, and `usage --range all` reads the ledger as it always did. Waits and speeds are binned (exact below 1,024, within 0.1% above), so an hour holds a few hundred numbers. On a month of 1.3 million answers (10 agents' worth), warm reads take 0.25 ms for today, 0.7 ms for 7 days and 2.8 ms for 30, most of it counting each session once; a desktop's ledger reads in well under the 1 ms gate.
+- **The app reaches what the API cannot through the CLI it ships with**, as the macOS app does: `daemon-info --json` (where the daemon is, and the login service), `start`, `service install`/`uninstall`, and `status --json` for the report while no daemon runs.
 
 ### React Native for the desktop and the menu bar: no
 

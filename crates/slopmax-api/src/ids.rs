@@ -68,6 +68,12 @@ impl std::fmt::Display for Provider {
     }
 }
 
+impl std::fmt::Display for Strategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// A coding agent slopmax serves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -104,8 +110,8 @@ pub enum Dialect {
     Chat,
 }
 
-/// The length of a usage window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// The length of a usage window, shortest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Span {
     #[serde(rename = "5h")]
     FiveHours,
@@ -150,4 +156,20 @@ pub enum Tone {
     Accent,
     Warn,
     Bad,
+}
+
+impl AgentId {
+    /// As the API's paths name it: `claude-code`, `codex`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "claude-code",
+            Self::Codex => "codex",
+        }
+    }
+}
+
+impl std::fmt::Display for AgentId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }

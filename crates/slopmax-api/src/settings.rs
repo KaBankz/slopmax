@@ -22,6 +22,10 @@ use serde_json::Value;
 
 use crate::{NoticeKind, Strategy};
 
+/// How long before a limit reset would expire unused that slopmax redeems
+/// it, with `redeemExpiring` on.
+pub const REDEEM_LEAD_HOURS: u64 = 3;
+
 /// What a live setting takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -286,7 +290,7 @@ pub struct NotifySettings {
 }
 
 /// A client key, without the key.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyInfo {
     pub name: String,

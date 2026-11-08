@@ -35,12 +35,12 @@ use gpui_kit::component::{ActiveTheme as _, Disableable, TitleBar, h_flex, v_fle
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use gpui_tray::{Icon, Tray};
+use slopmax_app::Provider;
+use slopmax_app::Tone;
 use slopmax_app::history::Range;
+use slopmax_app::time::Timestamp;
 use slopmax_app::view;
 use slopmax_app::{App as Slopmax, Proxy, Snapshot};
-use slopmax_core::provider::ProviderId;
-use slopmax_core::report::Tone;
-use slopmax_core::time::Timestamp;
 
 use crate::prefs::Prefs;
 use crate::theme::Colors;
@@ -71,7 +71,7 @@ actions!(sidebar, [SelectPrevious, SelectNext]);
 const TRAY_ICON: &[u8] = include_bytes!("../../../assets/tray.svg");
 
 /// The API-key providers, in the order the key row offers them.
-const KEYS: [ProviderId; 3] = [ProviderId::Anthropic, ProviderId::OpenAI, ProviderId::Xai];
+const KEYS: [Provider; 3] = [Provider::Anthropic, Provider::OpenAi, Provider::Xai];
 
 /// The height of the strip across the window's top: the sidebar's mark and
 /// the page's title and tools.
@@ -98,7 +98,7 @@ enum Section {
     /// How everything stands, where the window opens.
     Overview,
     /// A provider's accounts.
-    Provider(ProviderId),
+    Provider(Provider),
     /// What went through slopmax.
     Usage,
     /// How well it went: failover, caching, and speed.
@@ -115,7 +115,7 @@ impl Section {
     fn title(self) -> &'static str {
         match self {
             Self::Overview => "Overview",
-            Self::Provider(provider) => provider.spec().title,
+            Self::Provider(provider) => provider.title(),
             Self::Usage => "Usage",
             Self::Performance => "Performance",
             Self::Agents => "Agents",
@@ -179,10 +179,10 @@ fn main() -> anyhow::Result<()> {
         cx.on_action(|_: &Minimize, cx| front_window(cx, |window| window.minimize_window()));
         cx.on_action(|_: &Zoom, cx| front_window(cx, |window| window.zoom_window()));
         cx.on_action(|_: &SignInClaude, cx| {
-            cx.global::<Shared>().app.sign_in(ProviderId::Claude);
+            cx.global::<Shared>().app.sign_in(Provider::Claude);
         });
         cx.on_action(|_: &SignInChatGpt, cx| {
-            cx.global::<Shared>().app.sign_in(ProviderId::Codex);
+            cx.global::<Shared>().app.sign_in(Provider::Codex);
         });
         cx.on_action(|_: &ImportLogins, cx| cx.global::<Shared>().app.import());
         keys(cx);
@@ -374,7 +374,7 @@ struct Main {
     snapshot: Snapshot,
     section: Section,
     key: Entity<InputState>,
-    key_provider: ProviderId,
+    key_provider: Provider,
     paste: Entity<InputState>,
     /// The Access page's fields: a client key's name and models, and a
     /// compatible endpoint's address, API, models, key, and name.
@@ -545,10 +545,10 @@ impl Main {
             app,
             section: Section::Overview,
             key,
-            key_provider: ProviderId::Anthropic,
+            key_provider: Provider::Anthropic,
             paste,
             access: access::Fields::new(window, cx),
-            range: Range::default(),
+            range: Range::Week,
             asked: None,
             asked_today: None,
             credits_open: HashSet::new(),
@@ -943,7 +943,7 @@ impl Main {
             }
             Section::Usage | Section::Performance => tools.child(segmented(
                 "range",
-                Range::ALL.map(|range| (range, view::range_title(range))),
+                slopmax_app::history::RANGES.map(|range| (range, view::range_title(range))),
                 self.range,
                 |main: &mut Self, range, cx| {
                     main.range = range;

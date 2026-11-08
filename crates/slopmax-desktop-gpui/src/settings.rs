@@ -12,10 +12,10 @@ use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use slopmax_app::Tone;
 use slopmax_app::view::{self, Label};
 use slopmax_app::{App as Slopmax, Proxy, Setting};
-use slopmax_core::config::{Config, Strategy};
-use slopmax_core::report::Tone;
+use slopmax_app::{Settings, Strategy};
 
 use crate::Main;
 use crate::prefs::{Appearance, Prefs};
@@ -49,7 +49,7 @@ impl Main {
             };
             list = list.child(setting(
                 i == 0,
-                agent.title,
+                &agent.title,
                 state,
                 h_flex()
                     .gap(px(16.))
@@ -192,7 +192,7 @@ fn appearance(c: &Colors, cx: &mut Context<Main>) -> impl IntoElement {
 
 /// How a request finds its account: the strategy that places a new
 /// session, and whether a session keeps the account it started on.
-fn routing(app: &Arc<Slopmax>, config: &Config, c: &Colors) -> impl IntoElement {
+fn routing(app: &Arc<Slopmax>, config: &Settings, c: &Colors) -> impl IntoElement {
     let mut strategies = panel(c);
     for (i, strategy) in Strategy::ALL.into_iter().enumerate() {
         strategies = strategies.child(choice(
@@ -284,7 +284,7 @@ fn toggle(
 }
 
 /// When slopmax redeems a reset credit by itself.
-fn redeeming(app: &Arc<Slopmax>, config: &Config, c: &Colors) -> impl IntoElement {
+fn redeeming(app: &Arc<Slopmax>, config: &Settings, c: &Colors) -> impl IntoElement {
     let (expiring, exhausted) = (
         "When one would expire unused",
         "When every account is spent",
@@ -346,7 +346,7 @@ fn notifications(app: &Arc<Slopmax>, on: bool, c: &Colors) -> impl IntoElement {
 
 /// The rest of what can change while the proxy runs, as `slopmax config`
 /// changes it.
-fn advanced(app: &Arc<Slopmax>, config: &Config, c: &Colors) -> impl IntoElement {
+fn advanced(app: &Arc<Slopmax>, config: &Settings, c: &Colors) -> impl IntoElement {
     let minutes = |name: &'static str,
                    title: &'static str,
                    steps: &'static [u64],

@@ -9,11 +9,11 @@ use gpui_kit::component::input::InputState;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use slopmax_app::Dialect;
 use slopmax_app::view;
 use slopmax_app::{Doctor, NewEndpoint};
-use slopmax_core::wire::Dialect;
 
-use slopmax_core::provider::ProviderId;
+use slopmax_app::Provider;
 
 use crate::settings::{name, setting};
 use crate::theme::{Colors, MONO};
@@ -96,11 +96,11 @@ impl Main {
                         .gap(px(8.))
                         .child(
                             push("sign-in-claude", "Claude")
-                                .on_click(move |_, _, _| claude.sign_in(ProviderId::Claude)),
+                                .on_click(move |_, _, _| claude.sign_in(Provider::Claude)),
                         )
                         .child(
                             push("sign-in-chatgpt", "ChatGPT")
-                                .on_click(move |_, _, _| chatgpt.sign_in(ProviderId::Codex)),
+                                .on_click(move |_, _, _| chatgpt.sign_in(Provider::Codex)),
                         ),
                     c,
                 ))
@@ -126,7 +126,7 @@ impl Main {
                                 .gap(px(8.))
                                 .child(segmented(
                                     "key",
-                                    KEYS.map(|provider| (provider, provider.spec().title)),
+                                    KEYS.map(|provider| (provider, provider.title())),
                                     self.key_provider,
                                     |main: &mut Main, provider, cx| {
                                         main.key_provider = provider;
@@ -457,7 +457,7 @@ impl Main {
                                 .flex()
                                 .items_center()
                                 .text_color(c.muted)
-                                .when(i == 0, |label| label.child(part.title)),
+                                .when(i == 0, |label| label.child(part.title.clone())),
                         )
                         .child(div().h(line).flex().items_center().child(dot(c.tone(tone))))
                         .child(

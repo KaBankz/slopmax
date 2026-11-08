@@ -24,7 +24,6 @@ gpui-tray = { version = "0.1.4", default-features = false, features = ["gpui-kit
 serde.workspace = true
 serde_json.workspace = true
 slopmax-app.workspace = true
-slopmax-core.workspace = true
 
 # What GPUI does not reach of AppKit: where the menu bar item sits, its
 # template image, which gpui-tray cannot set, and clicks in other apps.

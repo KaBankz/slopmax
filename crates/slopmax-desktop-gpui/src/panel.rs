@@ -17,12 +17,12 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::{Disableable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use slopmax_app::Tone;
 use slopmax_app::history::History;
+use slopmax_app::human;
+use slopmax_app::time::Timestamp;
 use slopmax_app::view::{self, Group, Status};
 use slopmax_app::{App as Slopmax, Proxy, Snapshot};
-use slopmax_core::human;
-use slopmax_core::report::Tone;
-use slopmax_core::time::Timestamp;
 
 use crate::native;
 use crate::theme::{Colors, tabular};
