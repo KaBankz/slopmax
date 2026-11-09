@@ -29,6 +29,7 @@ use slopmax_core::paths::Home;
 use slopmax_core::pool::State as PoolState;
 use slopmax_core::provider::ProviderId;
 use slopmax_core::provider::credits::Credit;
+use slopmax_core::summary;
 use slopmax_core::time::{SignedDuration, Timestamp};
 use slopmax_core::wire::Dialect;
 use slopmax_daemon::proxy::{self, App};
@@ -180,8 +181,11 @@ async fn start() -> (Arc<App>, String, Vec<String>, TempHome) {
     .into_iter()
     .enumerate()
     {
+        // Half an hour apart, but all today: in the day's first hour the
+        // last would fall on yesterday, and the week's buckets would differ.
+        let today = summary::since("today", now).unwrap();
         app.record(&Entry {
-            at: now - SignedDuration::from_mins(30 * i as i64),
+            at: (now - SignedDuration::from_mins(30 * i as i64)).max(today),
             account: account.clone(),
             provider: if model.starts_with("gpt") {
                 ProviderId::Codex
