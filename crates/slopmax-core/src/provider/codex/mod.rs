@@ -35,8 +35,10 @@ static SPEC: Spec = Spec {
     billing: Billing::Subscription,
     // OpenAI allows ChatGPT plans in third-party apps.
     agent_only: None,
-    // Access tokens live about ten days.
-    refresh_lead: SignedDuration::from_hours(24),
+    // Access tokens claim ten days, but ChatGPT invalidates them about a
+    // week after issue ("Encountered invalidated oauth token"), so they are
+    // renewed once six days old.
+    refresh_lead: SignedDuration::from_hours(96),
     credential: Credential::OAuth { device: true },
 };
 

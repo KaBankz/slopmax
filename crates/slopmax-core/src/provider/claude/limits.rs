@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::limits::{
     Limits, PoolWindow, Refusal, Window, header, header_f64, header_time, parse_time, retry_after,
 };
-use crate::time::Timestamp;
+use crate::time::{SignedDuration, Timestamp};
 
 const UNIFIED: &str = "anthropic-ratelimit-unified-";
 
@@ -198,38 +198,53 @@ pub fn fast_mode_refused(headers: &HeaderMap, body: &[u8]) -> bool {
             && (message.contains("usage credits") || message.contains("credits are required")))
 }
 
+/// Claude's longest window, a week, and an hour for clock skew. A reset
+/// further off is a billing boundary, not a window coming back.
+const LONGEST_WINDOW: SignedDuration = SignedDuration::from_hours(7 * 24 + 1);
+
 /// Classifies a Claude 429 from its unified rate-limit headers.
 ///
 /// A rejected 5h or 7d window blocks the whole account until the latest of
 /// the rejected resets. A rejection that only involves the overage-included
 /// window (`7d_oi`) or extra usage caps one model, not the account.
+///
+/// A reset that is not a window's is ignored: when extra usage is the
+/// representative claim, the unified reset can be the monthly billing
+/// boundary (the same time as the overage reset), which would set the
+/// account or model aside for weeks.
 pub fn refusal(headers: &HeaderMap, model: Option<&str>, now: Timestamp) -> Refusal {
     let status = |key: &str| header(headers, &format!("anthropic-ratelimit-unified-{key}status"));
     let rejected = |key: &str| status(key) == Some("rejected");
     let reset =
         |key: &str| header_time(headers, &format!("anthropic-ratelimit-unified-{key}reset"));
+    let overage_claim = header(headers, "anthropic-ratelimit-unified-representative-claim")
+        .is_some_and(|claim| claim.contains("overage"));
+    let unified_reset = reset("").filter(|at| !(overage_claim && Some(*at) == reset("overage-")));
+    let latest = |candidates: &mut dyn Iterator<Item = Timestamp>| {
+        candidates
+            .filter(|at| *at > now && *at <= now + LONGEST_WINDOW)
+            .max()
+    };
 
     let shared: Vec<&str> = ["5h-", "7d-"].into_iter().filter(|k| rejected(k)).collect();
     if !shared.is_empty() {
-        let until = shared
-            .iter()
-            .filter_map(|k| reset(k))
-            .chain(retry_after(headers, now))
-            .chain(reset(""))
-            .filter(|at| *at > now)
-            .max();
+        let until = latest(
+            &mut shared
+                .iter()
+                .filter_map(|k| reset(k))
+                .chain(retry_after(headers, now))
+                .chain(unified_reset),
+        );
         return Refusal::Exhausted { until, model: None };
     }
     if rejected("") {
-        let overage_only = rejected("7d_oi-")
-            || status("overage-") == Some("rejected")
-            || header(headers, "anthropic-ratelimit-unified-representative-claim")
-                .is_some_and(|claim| claim.contains("overage"));
-        let until = [reset("7d_oi-"), reset(""), retry_after(headers, now)]
-            .into_iter()
-            .flatten()
-            .filter(|at| *at > now)
-            .max();
+        let overage_only =
+            rejected("7d_oi-") || status("overage-") == Some("rejected") || overage_claim;
+        let until = latest(
+            &mut [reset("7d_oi-"), unified_reset, retry_after(headers, now)]
+                .into_iter()
+                .flatten(),
+        );
         let model = overage_only.then(|| model.map(str::to_owned)).flatten();
         return Refusal::Exhausted { until, model };
     }
@@ -424,6 +439,67 @@ mod tests {
             Refusal::Throttled {
                 until: Some(ts(1005))
             }
+        );
+    }
+
+    #[test]
+    fn claude_billing_boundaries_are_not_resets() {
+        let month = 1000 + 20 * 86_400;
+        let h = headers(&[
+            ("anthropic-ratelimit-unified-status", "rejected"),
+            (
+                "anthropic-ratelimit-unified-representative-claim",
+                "overage",
+            ),
+            ("anthropic-ratelimit-unified-reset", &month.to_string()),
+            (
+                "anthropic-ratelimit-unified-overage-reset",
+                &month.to_string(),
+            ),
+            ("anthropic-ratelimit-unified-overage-status", "rejected"),
+            ("retry-after", "120"),
+        ]);
+        assert_eq!(
+            refusal(&h, Some("claude-fable-5"), ts(1000)),
+            Refusal::Exhausted {
+                until: Some(ts(1120)),
+                model: Some("claude-fable-5".into())
+            },
+            "the billing boundary is not when the model comes back"
+        );
+    }
+
+    #[test]
+    fn claude_resets_past_a_week_are_ignored() {
+        let h = headers(&[
+            ("anthropic-ratelimit-unified-status", "rejected"),
+            ("anthropic-ratelimit-unified-5h-status", "rejected"),
+            ("anthropic-ratelimit-unified-5h-reset", "3000"),
+            (
+                "anthropic-ratelimit-unified-reset",
+                &(1000 + 30 * 86_400).to_string(),
+            ),
+        ]);
+        assert_eq!(
+            refusal(&h, None, ts(1000)),
+            Refusal::Exhausted {
+                until: Some(ts(3000)),
+                model: None
+            }
+        );
+        let week = 1000 + 7 * 86_400;
+        let h = headers(&[
+            ("anthropic-ratelimit-unified-status", "rejected"),
+            ("anthropic-ratelimit-unified-7d-status", "rejected"),
+            ("anthropic-ratelimit-unified-7d-reset", &week.to_string()),
+        ]);
+        assert_eq!(
+            refusal(&h, None, ts(1000)),
+            Refusal::Exhausted {
+                until: Some(ts(week)),
+                model: None
+            },
+            "a full week is still a window"
         );
     }
 }

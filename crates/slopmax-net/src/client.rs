@@ -2,6 +2,8 @@
 //! HTTP CONNECT or SOCKS5 proxies, and timeouts.
 
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -259,6 +261,41 @@ impl Service<Uri> for Connector {
     }
 }
 
+/// Bounds a whole connection setup, the TLS handshake included, to twice
+/// the connect timeout. The dial's own timeout ends with the TCP connection, so a server that accepts it
+/// and then says nothing would otherwise hold a request until the read
+/// timeout, minutes later.
+#[derive(Clone)]
+struct Bounded<C> {
+    inner: C,
+    limit: Duration,
+}
+
+impl<C> Service<Uri> for Bounded<C>
+where
+    C: Service<Uri>,
+    C::Future: Send + 'static,
+    C::Error: Into<BoxError>,
+{
+    type Response = C::Response;
+    type Error = BoxError;
+    type Future = Pin<Box<dyn Future<Output = Result<C::Response, BoxError>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), BoxError>> {
+        self.inner.poll_ready(cx).map_err(Into::into)
+    }
+
+    fn call(&mut self, dst: Uri) -> Self::Future {
+        let (connecting, limit) = (self.inner.call(dst), self.limit);
+        Box::pin(async move {
+            match tokio::time::timeout(limit, connecting).await {
+                Ok(connected) => connected.map_err(Into::into),
+                Err(_) => Err(format!("no TLS handshake within {}s", limit.as_secs()).into()),
+            }
+        })
+    }
+}
+
 /// The system's trusted roots, loaded once.
 fn system_roots() -> Result<Arc<rustls::RootCertStore>, &'static str> {
     static ROOTS: OnceLock<Option<Arc<rustls::RootCertStore>>> = OnceLock::new();
@@ -309,7 +346,7 @@ impl Origins {
 /// An HTTP client. Cloning is cheap and shares the connection pool.
 #[derive(Clone)]
 pub struct Client {
-    pool: Pool<HttpsConnector<Connector>, Full<Bytes>>,
+    pool: Pool<Bounded<HttpsConnector<Connector>>, Full<Bytes>>,
     /// Why HTTPS cannot work, when the system has no trusted roots.
     no_tls: Option<&'static str>,
     user_agent: Option<HeaderValue>,
@@ -373,7 +410,8 @@ impl Builder {
     }
 
     pub fn build(self) -> Client {
-        let direct = Dial::new(self.connect_timeout.unwrap_or(Duration::from_secs(10)));
+        let connect_timeout = self.connect_timeout.unwrap_or(Duration::from_secs(10));
+        let direct = Dial::new(connect_timeout);
 
         let through = self
             .proxy
@@ -414,10 +452,14 @@ impl Builder {
             .https_or_http()
             .enable_http1()
             .wrap_connector(connector);
+        let bounded = Bounded {
+            inner: https,
+            limit: connect_timeout * 2,
+        };
         let pool = legacy::Client::builder(TokioExecutor::new())
             .pool_idle_timeout(Duration::from_secs(60))
             .pool_timer(TokioTimer::new())
-            .build(https);
+            .build(bounded);
         Client {
             pool,
             no_tls: roots.err(),
@@ -662,6 +704,33 @@ impl Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_silent_tls_handshake_times_out() {
+        // Accepts the TCP connection, then never answers the ClientHello.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let held = tokio::spawn(async move {
+            let mut accepted = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                accepted.push(stream);
+            }
+        });
+        let client = Client::builder()
+            .connect_timeout(Duration::from_millis(200))
+            .build();
+        let started = std::time::Instant::now();
+        let Err(err) = client
+            .get(format!("https://127.0.0.1:{port}/"))
+            .send()
+            .await
+        else {
+            panic!("nothing answers");
+        };
+        assert!(started.elapsed() < Duration::from_secs(5), "{err}");
+        assert!(format!("{err:#}").contains("TLS handshake"), "{err:#}");
+        held.abort();
+    }
 
     #[tokio::test]
     async fn plain_clients_refuse_https() {

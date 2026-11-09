@@ -314,4 +314,18 @@ mod tests {
             Refusal::Throttled { .. }
         ));
     }
+
+    #[test]
+    fn codex_capacity_waits_for_retry_after() {
+        // A turn refused while the account's allowance is untouched.
+        let body = br#"{"error":{"type":"rate_limit_error","code":"turn_rate_limit_exceeded","message":"Codex is at capacity, please try again later"}}"#;
+        let mut headers = HeaderMap::new();
+        headers.insert("retry-after", HeaderValue::from_static("256"));
+        assert_eq!(
+            refusal(429, &headers, body, ts(1000)),
+            Refusal::Throttled {
+                until: Some(ts(1256))
+            }
+        );
+    }
 }

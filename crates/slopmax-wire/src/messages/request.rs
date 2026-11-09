@@ -58,24 +58,32 @@ pub fn decode(body: &Value) -> Result<Request, String> {
     }
     // Client tools carry a schema; Anthropic's server tools (web search,
     // code execution) only work on Anthropic and are left out.
-    for tool in body
+    request.tools = body
         .get("tools")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-    {
-        let (Some(name), Some(schema)) = (
-            tool.get("name").and_then(Value::as_str),
-            tool.get("input_schema"),
-        ) else {
-            continue;
-        };
-        request.tools.push(Tool {
-            name: name.to_owned(),
-            description: str_of(tool, "description"),
-            schema: schema.clone(),
-            kind: ToolKind::Function,
-        });
+        .filter_map(tool)
+        .collect();
+    // Claude Code adds tools mid-conversation with `tool_addition` blocks,
+    // which other APIs have no place for: they join the tools up front. A
+    // `tool_reference` names one already there (a deferred tool, which is
+    // sent anyway), and removed tools stay, as earlier turns call them.
+    let added = body
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|m| m.get("content")?.as_array())
+        .flatten()
+        .filter(|b| b.get("type").and_then(Value::as_str) == Some("tool_addition"))
+        .filter_map(|b| b.get("tool"))
+        .filter(|t| t.get("type").and_then(Value::as_str) == Some("tool_definition"))
+        .filter_map(|t| tool(t.get("definition")?));
+    for added in added {
+        if !request.tools.iter().any(|t| t.name == added.name) {
+            request.tools.push(added);
+        }
     }
     if let Some(choice) = body.get("tool_choice") {
         request.tool_choice = match choice.get("type").and_then(Value::as_str) {
@@ -121,6 +129,16 @@ fn effort(body: &Value) -> Option<Effort> {
         "disabled" => Some(Effort::Low),
         _ => None,
     }
+}
+
+/// A client tool: a name and an input schema.
+fn tool(definition: &Value) -> Option<Tool> {
+    Some(Tool {
+        name: definition.get("name")?.as_str()?.to_owned(),
+        description: str_of(definition, "description"),
+        schema: definition.get("input_schema")?.clone(),
+        kind: ToolKind::Function,
+    })
 }
 
 fn part(block: &Value) -> Option<Part> {
@@ -260,6 +278,38 @@ mod tests {
         assert!(
             matches!(&request.messages[2].parts[1], Part::Image(m) if m.url() == "data:image/png;base64,iVBOR")
         );
+    }
+
+    #[test]
+    fn tools_added_mid_conversation_join_the_tools() {
+        let body = json!({
+            "model": "gpt-6-sol",
+            "messages": [
+                {"role": "user", "content": "go"},
+                {"role": "system", "content": [
+                    {"type": "text", "text": "<system-reminder>SubagentHandback is now available.</system-reminder>"},
+                    {"type": "tool_addition", "tool": {"type": "tool_definition", "definition": {
+                        "name": "SubagentHandback", "description": "Hand back",
+                        "input_schema": {"type": "object", "properties": {"report": {"type": "string"}}}}}},
+                    {"type": "tool_addition", "tool": {"type": "tool_reference", "name": "Bash"}}
+                ]},
+                {"role": "system", "content": [
+                    {"type": "tool_addition", "tool": {"type": "tool_definition", "definition": {
+                        "name": "Bash", "input_schema": {"type": "object"}}}},
+                    {"type": "tool_removal", "tool": {"type": "tool_reference", "name": "Bash"}}
+                ]}
+            ],
+            "tools": [{"name": "Bash", "description": "Run a command", "input_schema": {"type": "object"}, "defer_loading": true}]
+        });
+        let request = decode(&body).unwrap();
+        let names: Vec<&str> = request.tools.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["Bash", "SubagentHandback"]);
+        assert_eq!(request.tools[0].description, "Run a command");
+        assert_eq!(
+            request.tools[1].schema["properties"]["report"]["type"],
+            "string"
+        );
+        assert_eq!(request.messages.len(), 2, "the reminder text is kept");
     }
 
     #[test]

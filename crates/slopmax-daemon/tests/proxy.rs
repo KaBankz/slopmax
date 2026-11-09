@@ -212,6 +212,11 @@ fn mock_socket(log: Log, request: &mut Request) -> Response {
                     json!({"type": "error", "status": 429,
                         "error": {"type": "usage_limit_reached", "message": "limit", "resets_at": reset_in(5400)}}),
                 ],
+                // ChatGPT turning a turn away for capacity, not quota.
+                "Bearer tok-busy" => vec![json!({"type": "error", "status": 429,
+                    "error": {"type": "rate_limit_error", "code": "turn_rate_limit_exceeded",
+                        "message": "Codex is at capacity, please try again later"},
+                    "headers": {"retry-after": "256"}})],
                 _ => vec![
                     json!({"type": "response.created", "response": {"id": "r"}}),
                     json!({"type": "codex.rate_limits", "rate_limits": {"primary":
@@ -307,6 +312,28 @@ fn mock_claude(headers: &HeaderMap) -> Response {
                 "\n\n",
             ),
         ),
+        // Extra usage spent: the unified reset is the billing month's end.
+        "Bearer tok-billing" => {
+            let month_end = reset_in(20 * 86_400).to_string();
+            reply(
+                StatusCode::TOO_MANY_REQUESTS,
+                &[
+                    ("anthropic-ratelimit-unified-status", "rejected".to_owned()),
+                    (
+                        "anthropic-ratelimit-unified-representative-claim",
+                        "overage".to_owned(),
+                    ),
+                    (
+                        "anthropic-ratelimit-unified-overage-status",
+                        "rejected".to_owned(),
+                    ),
+                    ("anthropic-ratelimit-unified-reset", month_end.clone()),
+                    ("anthropic-ratelimit-unified-overage-reset", month_end),
+                    ("retry-after", "60".to_owned()),
+                ],
+                r#"{"type":"error","error":{"type":"rate_limit_error","message":"limit"}}"#,
+            )
+        }
         "Bearer tok-fast" => reply(
             StatusCode::TOO_MANY_REQUESTS,
             &[("anthropic-ratelimit-unified-status", "allowed".to_owned())],
@@ -1277,6 +1304,66 @@ async fn spent_accounts_close_the_socket_so_codex_reconnects_elsewhere() {
         .map(|s| s.headers["authorization"].to_str().unwrap().to_owned())
         .collect();
     assert_eq!(tokens, ["Bearer tok-limited", "Bearer tok-ok"]);
+}
+
+#[tokio::test]
+async fn codex_capacity_refusals_move_sockets_for_as_long_as_asked() {
+    let h = harness(ProviderId::Codex, &["tok-busy", "tok-ok"]).await;
+    let create =
+        json!({"type": "response.create", "model": "gpt-6-sol", "input": [], "stream": true})
+            .to_string();
+    let (_, socket) = open_socket(&h, "gpt-6-sol").await;
+    let (mut reader, mut writer) = socket.unwrap();
+    writer
+        .send(&ws::Message::Text(create.clone()))
+        .await
+        .unwrap();
+    let mut closed = None;
+    while let Some(message) = reader.message().await.unwrap() {
+        if let ws::Message::Close(close) = message {
+            closed = close;
+            break;
+        }
+    }
+    assert_eq!(closed.map(|(code, _)| code), Some(1012));
+    let state = h.app.pool.state(&h.ids[0]);
+    assert_eq!(state.blocked_until, None, "its allowance is untouched");
+    let throttled = state
+        .throttled_until
+        .unwrap()
+        .duration_since(Timestamp::now());
+    assert!(
+        throttled > SignedDuration::from_secs(200) && throttled <= SignedDuration::from_secs(256),
+        "{throttled:?}"
+    );
+
+    let (_, socket) = open_socket(&h, "gpt-6-sol").await;
+    let (mut reader, mut writer) = socket.unwrap();
+    writer.send(&ws::Message::Text(create)).await.unwrap();
+    let mut completed = false;
+    while let Some(ws::Message::Text(text)) = reader.message().await.unwrap() {
+        if text.contains("response.completed") {
+            completed = true;
+            break;
+        }
+    }
+    assert!(completed, "the retry lands on the other account");
+}
+
+#[tokio::test]
+async fn billing_boundaries_do_not_bench_claude_models_for_weeks() {
+    let h = harness(ProviderId::Claude, &["tok-billing", "tok-ok"]).await;
+    let response = claude_request(&h).send().await.unwrap();
+    assert_eq!(response.status(), 200, "served by the other account");
+    let state = h.app.pool.state(&h.ids[0]);
+    assert_eq!(state.blocked_until, None);
+    let block = &state.model_blocks[0];
+    assert_eq!(block.model, "claude-opus-5-5");
+    let left = block.until.duration_since(Timestamp::now());
+    assert!(
+        left <= SignedDuration::from_secs(60),
+        "blocked for {left:?}"
+    );
 }
 
 #[tokio::test]

@@ -4,6 +4,16 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Fixed
+
+- Signing in to Claude works again. Since early November claude.ai refuses a sign-in that does not ask for the Console scope, as Claude Code's does, and shows "Invalid request format". Accounts already signed in were not affected.
+- A Claude account or model refused at its limit is no longer set aside until the next billing month. When extra usage is the limit in question, Claude can report the month's end as the reset; slopmax now ignores any reset more than a week away, and waits the time Claude asks instead.
+- ChatGPT accounts renew their sign-in once it is six days old rather than nine. ChatGPT now cancels sign-ins about a week after they are issued, although they claim ten days, which cost a refused request and a refresh each time.
+- When ChatGPT answers Codex over its WebSocket with "Codex is at capacity" (`turn_rate_limit_exceeded`), Codex moves to another account, as it already did over HTTP, and the account is set aside only for as long as ChatGPT asks.
+- A tool Claude Code adds partway through a conversation, such as a subagent's `SubagentHandback`, now reaches GPT models too. Before, the model was told the tool was available but could not call it.
+- When a GPT model answers in two messages, saying what it is about to do and then answering, the two no longer run together in Claude Code and Chat clients.
+- A provider that accepts a connection but never completes the TLS handshake now fails the request after 20 seconds, and slopmax moves on, where it used to wait 10 minutes.
+
 ## [0.4.3] - 2026-11-09
 
 ### Changed

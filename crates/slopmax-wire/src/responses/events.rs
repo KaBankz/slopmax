@@ -12,6 +12,8 @@ use crate::ir::{Call, Event, Failure, Stop, ToolKind};
 pub struct Events {
     /// Message items whose text already streamed as deltas.
     streamed: HashSet<String>,
+    /// The message item text last came from, to set the next one apart.
+    texting: Option<String>,
     /// Reasoning summary parts seen, to separate them.
     summaries: usize,
     done: bool,
@@ -37,7 +39,9 @@ impl Events {
             .unwrap_or_default()
         {
             "response.output_text.delta" => {
-                self.streamed.insert(text("item_id"));
+                let id = text("item_id");
+                self.text_from(&id, out);
+                self.streamed.insert(id);
                 out.push(Event::Text(text("delta")));
             }
             "response.reasoning_summary_part.added" => {
@@ -72,7 +76,12 @@ impl Events {
                 .unwrap_or_default()
                 .to_owned()
         };
-        match item.get("type").and_then(Value::as_str).unwrap_or_default() {
+        let kind = item.get("type").and_then(Value::as_str).unwrap_or_default();
+        // A call ends the text before it; text after starts afresh.
+        if matches!(kind, "function_call" | "custom_tool_call") {
+            self.texting = None;
+        }
+        match kind {
             "function_call" => out.push(Event::Call(Call {
                 id: field("call_id"),
                 name: field("name"),
@@ -94,11 +103,26 @@ impl Events {
             "message" if !self.streamed.contains(&field("id")) => {
                 let text = message_text(item);
                 if !text.is_empty() {
+                    self.text_from(&field("id"), out);
                     out.push(Event::Text(text));
                 }
             }
             _ => {}
         }
+    }
+
+    /// Notes that text comes from message item `id`. GPT models can answer
+    /// in two messages, a `commentary` one saying what they are about to do
+    /// and the `final_answer`: a paragraph break keeps them from running
+    /// together.
+    fn text_from(&mut self, id: &str, out: &mut Vec<Event>) {
+        if self.texting.as_deref() == Some(id) {
+            return;
+        }
+        if self.texting.is_some() {
+            out.push(Event::Text("\n\n".into()));
+        }
+        self.texting = Some(id.to_owned());
     }
 
     /// Called when the stream ends: a stream cut short is a failure.
@@ -210,6 +234,29 @@ mod tests {
         }
         decoder.finish(&mut out);
         out
+    }
+
+    #[test]
+    fn separate_messages_stay_apart() {
+        let events = read(&[
+            json!({"type": "response.output_item.added", "item": {"type": "message", "id": "m1", "phase": "commentary"}}),
+            json!({"type": "response.output_text.delta", "item_id": "m1", "delta": "Checking"}),
+            json!({"type": "response.output_text.delta", "item_id": "m1", "delta": " first."}),
+            json!({"type": "response.output_item.done", "item": {"type": "message", "id": "m1", "phase": "commentary", "content": [{"type": "output_text", "text": "Checking first."}]}}),
+            json!({"type": "response.output_text.delta", "item_id": "m2", "delta": "Done."}),
+            json!({"type": "response.output_item.done", "item": {"type": "function_call", "call_id": "c1", "name": "Bash", "arguments": "{}"}}),
+            json!({"type": "response.output_text.delta", "item_id": "m4", "delta": "After."}),
+            json!({"type": "response.output_item.done", "item": {"type": "message", "id": "m3", "content": [{"type": "output_text", "text": "Whole."}]}}),
+            json!({"type": "response.completed", "response": {}}),
+        ]);
+        let text: String = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "Checking first.\n\nDone.After.\n\nWhole.");
     }
 
     #[test]

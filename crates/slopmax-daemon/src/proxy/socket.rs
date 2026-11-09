@@ -576,19 +576,45 @@ fn refusal(event: &Value, now: Timestamp) -> Option<Refusal> {
         .iter()
         .find_map(|k| error.get(*k).and_then(Value::as_str))
         .unwrap_or_default();
+    let headers = event_headers(event);
     match code {
         "usage_limit_reached"
         | "usage_limit_exceeded"
         | "usage_not_included"
         | "insufficient_quota" => {
             let body = serde_json::to_vec(&serde_json::json!({ "error": error })).ok()?;
-            Some(limits::refusal(429, &HeaderMap::new(), &body, now))
+            Some(limits::refusal(429, &headers, &body, now))
         }
-        "server_is_overloaded" | "slow_down" | "rate_limit_exceeded" => {
-            Some(Refusal::Throttled { until: None })
-        }
+        // "Codex is at capacity": a turn refused for a few minutes, with
+        // the account's allowance untouched.
+        "turn_rate_limit_exceeded"
+        | "server_is_overloaded"
+        | "slow_down"
+        | "rate_limit_exceeded" => Some(Refusal::Throttled {
+            until: crate::limits::retry_after(&headers, now),
+        }),
         _ => None,
     }
+}
+
+/// The response headers an `error` event carries, as Codex reads them.
+fn event_headers(event: &Value) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    let fields = event.get("headers").and_then(Value::as_object).into_iter();
+    for (name, value) in fields.flatten() {
+        let value = match value {
+            Value::String(text) => text.clone(),
+            Value::Number(number) => number.to_string(),
+            _ => continue,
+        };
+        if let (Ok(name), Ok(value)) = (
+            http::HeaderName::try_from(name.as_str()),
+            HeaderValue::try_from(value),
+        ) {
+            headers.insert(name, value);
+        }
+    }
+    headers
 }
 
 /// Records a turn in the ledger and the account's counters: finished
@@ -664,6 +690,16 @@ mod tests {
         assert_eq!(
             refusal(&busy, now),
             Some(Refusal::Throttled { until: None })
+        );
+        let capacity = json!({"type": "error", "status": 429,
+            "error": {"type": "rate_limit_error", "code": "turn_rate_limit_exceeded",
+                "message": "Codex is at capacity, please try again later"},
+            "headers": {"retry-after": "256"}});
+        assert_eq!(
+            refusal(&capacity, now),
+            Some(Refusal::Throttled {
+                until: Timestamp::from_second(1_256)
+            })
         );
         let request = json!({"type": "response.failed", "response": {"error": {"code": "context_length_exceeded"}}});
         assert_eq!(refusal(&request, now), None);

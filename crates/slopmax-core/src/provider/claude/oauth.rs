@@ -16,8 +16,14 @@ pub const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const AUTHORIZE_URL: &str = "https://claude.ai/oauth/authorize";
 const TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
 const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
+/// The scopes a refresh asks to keep.
 const SCOPES: &str =
     "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
+/// The scopes a sign-in asks for: Claude Code's, which add the Console
+/// scope. Since November 2026 claude.ai refuses a sign-in without it
+/// ("Invalid request format"); refreshes still ask for [`SCOPES`].
+const AUTHORIZE_SCOPES: &str = "org:create_api_key user:profile user:inference \
+     user:sessions:claude_code user:mcp_servers user:file_upload";
 
 /// Registered loopback redirect for this client.
 pub const CALLBACK_PORT: u16 = 54545;
@@ -40,7 +46,7 @@ pub fn authorize_url(pkce: &Pkce, state: &str, redirect_uri: &str) -> String {
         ("client_id", CLIENT_ID),
         ("response_type", "code"),
         ("redirect_uri", redirect_uri),
-        ("scope", SCOPES),
+        ("scope", AUTHORIZE_SCOPES),
         ("code_challenge", &pkce.challenge),
         ("code_challenge_method", "S256"),
         ("state", state),
@@ -287,7 +293,9 @@ mod tests {
         assert!(url.starts_with("https://claude.ai/oauth/authorize?code=true&client_id="));
         assert!(url.contains(&format!("code_challenge={}", pkce.challenge)));
         assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A54545%2Fcallback"));
-        assert!(url.contains("scope=user%3Aprofile+user%3Ainference"));
+        assert!(url.contains(
+            "scope=org%3Acreate_api_key+user%3Aprofile+user%3Ainference+user%3Asessions%3Aclaude_code+user%3Amcp_servers+user%3Afile_upload&"
+        ));
         assert!(url.contains("state=st"));
     }
 
