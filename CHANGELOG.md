@@ -24,6 +24,7 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 - Left on the table: slopmax notes each window that resets with how much of it was used, and values the unused part of each week at the plan's price (list prices, or `[plan_prices]`). `slopmax usage`, the dashboard, and the app show it by account.
 - Two notifications, on by default: `reset-expiring`, a limit reset lapsing within the day that slopmax won't redeem by itself, and `quota-unused`, a week resetting within the day with a quarter or more unused. `slopmax status`, the dashboard, and the app list them, and the app posts them.
 - Each pool says where a new session would go and why (`slopmax status`, `/slopmax/status`), and shows its model-scoped windows, such as a weekly Fable cap.
+- slopmax's icon, a glass Option key (⌥) on a cobalt tile, everywhere slopmax shows one: the README, the dashboard's logo and favicon, the macOS app's icon and menu bar glyph, the desktop app's logo, tray and bundle, and `slopmax.exe` on Windows. Its Blender source and the script that derives every size are in `assets/icon`. The cobalt replaces the pink as the accent.
 
 ### Removed
 
@@ -60,6 +61,9 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ### Fixed
 
+- Windows: a proxy `slopmax start` left running held the CLI's output open, so a script or agent that read it waited until the proxy stopped.
+- Windows: `slopmax doctor` said Claude Code and Codex were not installed, looking on PATH for `claude` and `codex` rather than `claude.exe` or `codex.cmd`; the desktop app finds the CLI the same way.
+- Windows: a second `slopmax serve` on the same home now names the process that serves it, as it does elsewhere.
 - The desktop app redrew its whole window every second for its countdowns, which kept a CPU busy where the GPU is drawn in software. It now redraws when a countdown it shows would read differently: each second only while one shows seconds, otherwise each minute or hour.
 - Several clients refreshing at once (the dashboard, the app, `slopmax status --refresh`) each polled every account; a refresh asked for while one runs now waits for it and shares what it found.
 - An answer translated from another format and read whole could be recorded twice when it carried an error; it is recorded once, with the status the client got.
