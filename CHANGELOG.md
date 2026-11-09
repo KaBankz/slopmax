@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-09
+
 ### Added
 
 - A native macOS app (`apple/`): a menu bar item showing the fullest pool window, and a window with the overview, accounts, usage charts, recent requests, settings and sign-in, in SwiftUI. It is a client of the daemon's API and its event stream, with no logic of its own: the daemon is the bundled CLI, run at login as a launch agent, and an update restarts it (`/shutdown {"restart": true}`, exit 75). Its core (`SlopmaxKit`) decodes the same contract fixtures as Rust and TypeScript, and is tested on macOS and Linux.
@@ -154,7 +156,8 @@ The first version.
 - `slopmax run`, `env`, and `setup` (with `--undo`) connect Claude Code and Codex.
 - Adapted Claude requests to the serving account (`metadata.user_id` and the billing-header checksum). 0.2.0 removed this.
 
-[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/KaBankz/slopmax/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/KaBankz/slopmax/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/KaBankz/slopmax/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/KaBankz/slopmax/releases/tag/v0.1.0
