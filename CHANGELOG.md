@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-11-09
+
 ### Fixed
 
 - Signing in to Claude works again. Since early November claude.ai refuses a sign-in that does not ask for the Console scope, as Claude Code's does, and shows "Invalid request format". Accounts already signed in were not affected.
@@ -193,7 +195,8 @@ The first version.
 - `slopmax run`, `env`, and `setup` (with `--undo`) connect Claude Code and Codex.
 - Adapted Claude requests to the serving account (`metadata.user_id` and the billing-header checksum). 0.2.0 removed this.
 
-[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/KaBankz/slopmax/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/KaBankz/slopmax/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/KaBankz/slopmax/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/KaBankz/slopmax/compare/v0.4.0...v0.4.1
