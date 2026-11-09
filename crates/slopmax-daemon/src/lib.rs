@@ -224,11 +224,14 @@ const RESCAN: Duration = Duration::from_secs(30);
 /// daemon on the same home fails to start instead of racing the first for
 /// its files. The CLI holds it a moment to change the state of a home no
 /// daemon serves ([`crate::state::change`]), which is waited out.
+///
+/// The holder's pid goes in a file beside it, `.serve.pid`, for the error
+/// a second daemon gives: Windows locks a file against reading too.
 fn serve_lock(home: &Home) -> Result<std::fs::File> {
-    use std::io::{Read, Seek, Write};
     let path = home.dir().join(".serve.lock");
+    let pid = home.dir().join(".serve.pid");
     fsx::private_dir(home.dir())?;
-    let mut file = std::fs::OpenOptions::new()
+    let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
@@ -247,13 +250,12 @@ fn serve_lock(home: &Home) -> Result<std::fs::File> {
     };
     match taken {
         Ok(()) => {
-            file.set_len(0)?;
-            write!(file, "{}", std::process::id())?;
+            std::fs::write(&pid, std::process::id().to_string())
+                .with_context(|| format!("writing {}", pid.display()))?;
             Ok(file)
         }
         Err(std::fs::TryLockError::WouldBlock) => {
-            let mut pid = String::new();
-            let _ = file.rewind().and_then(|()| file.read_to_string(&mut pid));
+            let pid = std::fs::read_to_string(&pid).unwrap_or_default();
             let holder = match pid.trim() {
                 "" => String::new(),
                 pid => format!(" (pid {pid})"),

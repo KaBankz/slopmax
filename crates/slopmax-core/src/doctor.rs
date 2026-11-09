@@ -474,8 +474,7 @@ fn files(dir: &Path) -> Section {
 }
 
 fn on_path(program: &str) -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
+    slopmax_common::which(program).is_some()
 }
 
 #[cfg(test)]
@@ -934,7 +933,7 @@ mod tests {
 
     #[test]
     fn programs_are_looked_up_on_path() {
-        assert!(on_path("sh"));
+        assert!(on_path(if cfg!(windows) { "cmd" } else { "sh" }));
         assert!(!on_path("slopmax-no-such-program"));
     }
 

@@ -1172,14 +1172,7 @@ fn bundled_cli() -> Option<PathBuf> {
             .into_iter()
             .find(|path| path.is_file())
     });
-    beside.or_else(|| on_path(name))
-}
-
-fn on_path(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(name))
-        .find(|candidate| Path::is_file(candidate))
+    beside.or_else(|| slopmax_common::which(name))
 }
 
 fn accounts(n: usize) -> String {
@@ -1320,13 +1313,5 @@ mod tests {
         assert_eq!(accounts(0), "0 accounts");
         assert_eq!(accounts(1), "1 account");
         assert_eq!(accounts(3), "3 accounts");
-    }
-
-    #[test]
-    fn commands_are_looked_up_on_path() {
-        assert_eq!(on_path("slopmax-surely-not-a-command"), None);
-        if cfg!(unix) {
-            assert!(on_path("sh").is_some_and(|sh| sh.is_file()));
-        }
     }
 }
