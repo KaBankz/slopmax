@@ -28,6 +28,11 @@ tokio.workspace = true
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
+# Keeping the CLI's own standard handles out of the proxy `start` leaves
+# running (main.rs).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation"] }
+
 [dev-dependencies]
 # For the load-test rig in examples/bench/, and reading files in tests.
 bytes.workspace = true

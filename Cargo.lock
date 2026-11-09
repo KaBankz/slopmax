@@ -6391,6 +6391,7 @@ dependencies = [
  "slopmax-daemon",
  "tokio",
  "toml_edit 0.25.15+spec-1.1.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
