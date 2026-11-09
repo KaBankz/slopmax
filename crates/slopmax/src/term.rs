@@ -211,6 +211,10 @@ fn show(event: LoginEvent) {
 pub fn authorize(title: &str, url: &str, opened: bool, port: u16) {
     let verb = if opened { "Opened" } else { "Authorize" };
     eprintln!("\n  {verb} your {title} account in the browser:\n\n  {url}\n");
+    if port == 0 {
+        eprintln!("  Open it in any browser, then paste the code the page shows here.\n");
+        return;
+    }
     eprintln!(
         "  Waiting for the redirect to localhost:{port}. If the browser runs on another\n  \
          machine, paste the final localhost URL from its address bar here.\n"

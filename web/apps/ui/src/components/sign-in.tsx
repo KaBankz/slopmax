@@ -1,6 +1,6 @@
 // The card above every page while a sign-in is under way: what to do next,
-// the address or code, and a field for the address a browser on another
-// machine ended on.
+// the address or code, and a field for what a browser on another machine
+// ended on: the address, or the code the provider's page shows.
 import { useAtomSet, useAtomValue } from "@effect/atom-react"
 import { Option } from "effect"
 import { Copy, ExternalLink } from "lucide-react"
@@ -70,17 +70,19 @@ export function SignInCard() {
               Copy link
             </Button>
           </div>
-          <form onSubmit={submit} className="flex items-center gap-2">
-            <Input
-              aria-label="Browser on another machine? Paste the address it ended on"
-              placeholder="Browser on another machine? Paste the address it ended on"
-              value={address}
-              onChange={(event) => setAddress(event.currentTarget.value)}
-            />
-            <Button type="submit" disabled={address.trim() === ""}>
-              Use address
-            </Button>
-          </form>
+          {view.paste !== undefined && (
+            <form onSubmit={submit} className="flex items-center gap-2">
+              <Input
+                aria-label={view.paste.hint}
+                placeholder={view.paste.hint}
+                value={address}
+                onChange={(event) => setAddress(event.currentTarget.value)}
+              />
+              <Button type="submit" disabled={address.trim() === ""}>
+                {view.paste.action}
+              </Button>
+            </form>
+          )}
         </>
       )}
       {view.notes !== "" && (

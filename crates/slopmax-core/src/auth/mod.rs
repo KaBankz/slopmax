@@ -155,6 +155,11 @@ impl Prompt {
         (self.events)(event);
     }
 
+    /// Whether addresses or codes can be pasted into this sign-in.
+    pub(crate) fn can_paste(&self) -> bool {
+        self.pasted.is_some()
+    }
+
     /// The next pasted line, or `None` when nothing more can be pasted.
     pub(crate) async fn pasted(&mut self) -> Option<String> {
         match &mut self.pasted {
@@ -212,6 +217,24 @@ pub async fn browser_login(
         port,
     });
     callback::receive(port, path, state, &mut prompt).await
+}
+
+/// The sign-in for a browser on another machine: the provider's own page
+/// shows the code, which is pasted here. Nothing listens on this machine, so
+/// the [`LoginEvent::Authorize`] it sends has port 0.
+pub async fn code_login(
+    title: &'static str,
+    url: &str,
+    state: &str,
+    mut prompt: Prompt,
+) -> Result<callback::Callback> {
+    prompt.tell(LoginEvent::Authorize {
+        title,
+        url: url.to_owned(),
+        opened: false,
+        port: 0,
+    });
+    callback::receive_pasted(state, &mut prompt).await
 }
 
 /// Returns `account` with a usable access token, refreshing it when it is

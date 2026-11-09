@@ -91,7 +91,7 @@ export const feedRow = (
 
 export type SignInStep =
   | { readonly _tag: "Starting" }
-  | { readonly _tag: "Authorize"; readonly url: string; readonly opened: boolean }
+  | { readonly _tag: "Authorize"; readonly url: string; readonly opened: boolean; readonly port: number }
   | { readonly _tag: "DeviceCode"; readonly url: string; readonly code: string }
 
 /** A sign-in in progress. */
@@ -109,7 +109,7 @@ export const startSignIn = (provider: ProviderId): SignIn => ({ provider, step: 
 export const stepSignIn = (signIn: SignIn, event: LoginEvent): SignIn => {
   switch (event._tag) {
     case "Authorize":
-      return { ...signIn, step: { _tag: "Authorize", url: event.url, opened: event.opened } }
+      return { ...signIn, step: { _tag: "Authorize", url: event.url, opened: event.opened, port: event.port } }
     case "DeviceCode":
       return { ...signIn, step: { _tag: "DeviceCode", url: event.url, code: event.code } }
     case "Note":
@@ -126,6 +126,8 @@ export interface SignInView {
   readonly detail: string
   /** The address to open, to show in full and copy. */
   readonly link?: string
+  /** What to paste back from a browser elsewhere, and its button. */
+  readonly paste?: { readonly hint: string; readonly action: string }
   /** A code to enter, and the page it is entered on. */
   readonly code?: string
   readonly codePage?: string
@@ -140,14 +142,25 @@ export const signInView = (signIn: SignIn): SignInView => {
     case "Starting":
       return { title: `Signing in to ${title}`, detail: "Starting…", notes }
     case "Authorize":
-      return {
-        title: `Signing in to ${title}`,
-        detail: step.opened
-          ? `Finish signing in to ${title} in your browser, which opened this address:`
-          : `Open this address in a browser and sign in to ${title}:`,
-        link: step.url,
-        notes,
-      }
+      // Port 0: nothing listens for a redirect, and the provider's page shows
+      // a code to paste instead.
+      return step.port === 0
+        ? {
+            title: `Signing in to ${title}`,
+            detail: `Open this address in any browser, sign in to ${title}, and paste the code it shows:`,
+            link: step.url,
+            paste: { hint: "Paste the code the page shows", action: "Use code" },
+            notes,
+          }
+        : {
+            title: `Signing in to ${title}`,
+            detail: step.opened
+              ? `Finish signing in to ${title} in your browser, which opened this address:`
+              : `Open this address in a browser and sign in to ${title}:`,
+            link: step.url,
+            paste: { hint: "Browser on another machine? Paste the address it ended on", action: "Use address" },
+            notes,
+          }
     case "DeviceCode":
       return {
         title: `Signing in to ${title}`,

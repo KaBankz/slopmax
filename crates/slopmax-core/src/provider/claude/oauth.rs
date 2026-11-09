@@ -6,7 +6,7 @@ use serde_json::json;
 
 use crate::account::Account;
 use crate::auth::pkce::Pkce;
-use crate::auth::{self, Grant, LoginOptions, Prompt, RefreshError};
+use crate::auth::{self, Grant, LoginOptions, Prompt, RefreshError, callback};
 use crate::net::{Client, form};
 use crate::provider::ProviderId;
 use crate::time::{SignedDuration, Timestamp};
@@ -26,16 +26,20 @@ pub const CALLBACK_PATH: &str = "/callback";
 /// Beta flag that lets OAuth access tokens call the Messages API.
 pub const OAUTH_BETA: &str = "oauth-2025-04-20";
 
+/// Registered redirect to Anthropic's page that shows the code to paste, for
+/// a browser on another machine (Claude Code uses it over SSH).
+pub const MANUAL_REDIRECT_URI: &str = "https://platform.claude.com/oauth/code/callback";
+
 pub fn redirect_uri() -> String {
     format!("http://localhost:{CALLBACK_PORT}{CALLBACK_PATH}")
 }
 
-pub fn authorize_url(pkce: &Pkce, state: &str) -> String {
+pub fn authorize_url(pkce: &Pkce, state: &str, redirect_uri: &str) -> String {
     let params = [
         ("code", "true"),
         ("client_id", CLIENT_ID),
         ("response_type", "code"),
-        ("redirect_uri", &redirect_uri()),
+        ("redirect_uri", redirect_uri),
         ("scope", SCOPES),
         ("code_challenge", &pkce.challenge),
         ("code_challenge_method", "S256"),
@@ -125,23 +129,53 @@ impl Profile {
     }
 }
 
-/// Signs in through claude.ai.
+/// Signs in through claude.ai. With no browser on this machine, the person
+/// authorizes on another one, where a redirect to this machine's localhost
+/// cannot arrive: Anthropic's page shows the code to paste instead.
 pub async fn login(http: &Client, options: LoginOptions, prompt: Prompt) -> Result<Account> {
-    let pkce = Pkce::generate();
-    let state = ids::token();
-    let url = authorize_url(&pkce, &state);
-    let redirect = (CALLBACK_PORT, CALLBACK_PATH);
-    let callback = auth::browser_login("Claude", &url, redirect, &state, options, prompt).await?;
-    let state = callback.state.as_deref().unwrap_or(&state);
-    exchange(http, &callback.code, state, &pkce).await
+    let shows_code = prompt.can_paste() && !callback::has_browser();
+    login_via(http, shows_code, options, prompt).await
 }
 
-/// Exchanges an authorization code for tokens and builds the account.
-pub async fn exchange(http: &Client, code: &str, state: &str, pkce: &Pkce) -> Result<Account> {
+async fn login_via(
+    http: &Client,
+    shows_code: bool,
+    options: LoginOptions,
+    prompt: Prompt,
+) -> Result<Account> {
+    let pkce = Pkce::generate();
+    let state = ids::token();
+    let (callback, redirect) = if shows_code {
+        let redirect = MANUAL_REDIRECT_URI.to_owned();
+        let url = authorize_url(&pkce, &state, &redirect);
+        (
+            auth::code_login("Claude", &url, &state, prompt).await?,
+            redirect,
+        )
+    } else {
+        let redirect = redirect_uri();
+        let url = authorize_url(&pkce, &state, &redirect);
+        let listen = (CALLBACK_PORT, CALLBACK_PATH);
+        let callback = auth::browser_login("Claude", &url, listen, &state, options, prompt).await?;
+        (callback, redirect)
+    };
+    let state = callback.state.as_deref().unwrap_or(&state);
+    exchange(http, &callback.code, state, &pkce, &redirect).await
+}
+
+/// Exchanges an authorization code, issued for `redirect_uri`, for tokens and
+/// builds the account.
+pub async fn exchange(
+    http: &Client,
+    code: &str,
+    state: &str,
+    pkce: &Pkce,
+    redirect_uri: &str,
+) -> Result<Account> {
     let body = json!({
         "grant_type": "authorization_code",
         "code": code,
-        "redirect_uri": redirect_uri(),
+        "redirect_uri": redirect_uri,
         "client_id": CLIENT_ID,
         "code_verifier": pkce.verifier,
         "state": state,
@@ -235,7 +269,7 @@ mod tests {
     #[test]
     fn authorize_url_carries_pkce_and_scopes() {
         let pkce = Pkce::generate();
-        let url = authorize_url(&pkce, "st");
+        let url = authorize_url(&pkce, "st", &redirect_uri());
         assert!(url.starts_with("https://claude.ai/oauth/authorize?code=true&client_id="));
         assert!(url.contains(&format!("code_challenge={}", pkce.challenge)));
         assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A54545%2Fcallback"));
@@ -350,9 +384,15 @@ mod tests {
     async fn exchanges_codes_for_an_identified_account() {
         let mock = anthropic(200, token_answer(), 200).await;
         let pkce = Pkce::generate();
-        let account = exchange(&mock.client(ORIGINS), "the-code", "st", &pkce)
-            .await
-            .unwrap();
+        let account = exchange(
+            &mock.client(ORIGINS),
+            "the-code",
+            "st",
+            &pkce,
+            &redirect_uri(),
+        )
+        .await
+        .unwrap();
         assert_eq!(account.provider, ProviderId::Claude);
         assert_eq!(account.tokens.access_token, "at");
         assert_eq!(account.tokens.refresh_token.as_deref(), Some("rt"));
@@ -376,9 +416,15 @@ mod tests {
     #[tokio::test]
     async fn a_failed_profile_lookup_keeps_the_token_identity() {
         let mock = anthropic(200, token_answer(), 500).await;
-        let account = exchange(&mock.client(ORIGINS), "c", "s", &Pkce::generate())
-            .await
-            .unwrap();
+        let account = exchange(
+            &mock.client(ORIGINS),
+            "c",
+            "s",
+            &Pkce::generate(),
+            &redirect_uri(),
+        )
+        .await
+        .unwrap();
         assert_eq!(account.email.as_deref(), Some("token@x.dev"));
         assert_eq!(account.plan, None);
     }
@@ -386,18 +432,30 @@ mod tests {
     #[tokio::test]
     async fn failed_exchanges_say_why() {
         let rejected = anthropic(400, json!({ "error": "invalid_grant" }), 200).await;
-        let err = exchange(&rejected.client(ORIGINS), "c", "s", &Pkce::generate())
-            .await
-            .unwrap_err();
+        let err = exchange(
+            &rejected.client(ORIGINS),
+            "c",
+            "s",
+            &Pkce::generate(),
+            &redirect_uri(),
+        )
+        .await
+        .unwrap_err();
         assert!(
             err.to_string()
                 .starts_with("token exchange failed (400 Bad Request)"),
             "{err}"
         );
         let garbled = anthropic(200, json!({ "nope": true }), 200).await;
-        let err = exchange(&garbled.client(ORIGINS), "c", "s", &Pkce::generate())
-            .await
-            .unwrap_err();
+        let err = exchange(
+            &garbled.client(ORIGINS),
+            "c",
+            "s",
+            &Pkce::generate(),
+            &redirect_uri(),
+        )
+        .await
+        .unwrap_err();
         assert_eq!(err.to_string(), "unexpected token response");
     }
 
@@ -431,8 +489,10 @@ mod tests {
         assert!(profile(&mock.client(ORIGINS), "at").await.is_err());
     }
 
-    #[tokio::test]
-    async fn logs_in_with_a_pasted_code_and_state() {
+    /// Signs in with a prompt that pastes `code#state` as soon as it is shown
+    /// the address, the way Anthropic's code page offers it; returns the
+    /// address and port shown, and the token request sent.
+    async fn sign_in_by_pasting(shows_code: bool) -> (String, u16, Value) {
         let mock = anthropic(200, token_answer(), 200).await;
         let (paste, pasted) = tokio::sync::mpsc::unbounded_channel();
         let authorized = std::sync::Arc::new(std::sync::Mutex::new(None));
@@ -442,10 +502,10 @@ mod tests {
                 url, opened, port, ..
             } = event
             {
+                assert!(!opened);
                 let state = url.rsplit("state=").next().unwrap().to_owned();
-                // Anthropic's manual page shows `code#state`.
                 paste.send(format!("pasted-code#{state}")).unwrap();
-                *shown.lock().unwrap() = Some((opened, port));
+                *shown.lock().unwrap() = Some((url, port));
             }
         })
         .with_pasted(pasted);
@@ -453,14 +513,34 @@ mod tests {
             no_browser: true,
             ..LoginOptions::default()
         };
-        let account = ProviderId::Claude
-            .get()
-            .login(&mock.client(ORIGINS), options, prompt)
+        let account = login_via(&mock.client(ORIGINS), shows_code, options, prompt)
             .await
             .unwrap();
         assert_eq!(account.tokens.access_token, "at");
-        assert_eq!(*authorized.lock().unwrap(), Some((false, CALLBACK_PORT)));
+        let (url, port) = authorized.lock().unwrap().take().unwrap();
         let sent = mock.seen_at("/v1/oauth/token")[0].json();
         assert_eq!(sent["code"], "pasted-code");
+        (url, port, sent)
+    }
+
+    #[tokio::test]
+    async fn logs_in_with_a_pasted_localhost_address() {
+        let (url, port, sent) = sign_in_by_pasting(false).await;
+        assert_eq!(port, CALLBACK_PORT);
+        assert!(url.contains("redirect_uri=http%3A%2F%2Flocalhost%3A54545%2Fcallback"));
+        assert_eq!(sent["redirect_uri"], redirect_uri());
+    }
+
+    #[tokio::test]
+    async fn without_a_browser_here_the_page_shows_a_code_to_paste() {
+        let (url, port, sent) = sign_in_by_pasting(true).await;
+        // Nothing listens here: the code comes only from the paste.
+        assert_eq!(port, 0);
+        assert!(
+            url.contains(
+                "redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback"
+            )
+        );
+        assert_eq!(sent["redirect_uri"], MANUAL_REDIRECT_URI);
     }
 }

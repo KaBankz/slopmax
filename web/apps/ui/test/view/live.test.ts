@@ -81,7 +81,7 @@ describe("sign-in", () => {
       { _tag: "DeviceCode", url: "https://auth.example/device", code: "AB12-CD34" },
     ]
     signIn = stepSignIn(signIn, steps[0] ?? steps[1] ?? never())
-    expect(signIn.step).toEqual({ _tag: "Authorize", url: "https://auth.example/a", opened: true })
+    expect(signIn.step).toEqual({ _tag: "Authorize", url: "https://auth.example/a", opened: true, port: 1455 })
     signIn = stepSignIn(stepSignIn(signIn, steps[1] ?? never()), steps[2] ?? never())
     expect(signIn.step).toEqual({ _tag: "DeviceCode", url: "https://auth.example/device", code: "AB12-CD34" })
     expect(signIn.notes).toEqual(["The browser did not open; open the address yourself."])
@@ -90,14 +90,24 @@ describe("sign-in", () => {
   test("says what to do next at each step", () => {
     const start = startSignIn("claude")
     expect(signInView(start)).toEqual({ title: "Signing in to Claude", detail: "Starting…", notes: "" })
-    const opened = { ...start, step: { _tag: "Authorize" as const, url: "https://claude.ai/x", opened: true } }
+    const opened = {
+      ...start,
+      step: { _tag: "Authorize" as const, url: "https://claude.ai/x", opened: true, port: 54545 },
+    }
     expect(signInView(opened)).toMatchObject({
       detail: "Finish signing in to Claude in your browser, which opened this address:",
       link: "https://claude.ai/x",
+      paste: { action: "Use address" },
     })
     expect(signInView({ ...opened, step: { ...opened.step, opened: false } }).detail).toBe(
       "Open this address in a browser and sign in to Claude:",
     )
+    // Port 0: no browser on the proxy's machine, so the page shows a code to paste.
+    expect(signInView({ ...opened, step: { ...opened.step, opened: false, port: 0 } })).toMatchObject({
+      detail: "Open this address in any browser, sign in to Claude, and paste the code it shows:",
+      link: "https://claude.ai/x",
+      paste: { hint: "Paste the code the page shows", action: "Use code" },
+    })
     const code = { ...start, step: { _tag: "DeviceCode" as const, url: "https://x/device", code: "QX7F" } }
     expect(signInView(code)).toMatchObject({
       detail: "Open https://x/device and enter this code:",

@@ -4,6 +4,10 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Fixed
+
+- Signing in to Claude on a machine without a browser, such as a server reached over SSH, no longer sends the browser to a localhost page that cannot load. Anthropic's own page shows a code to paste back instead, as Claude Code does. The dashboard asks for the code too. With a browser on the same machine, nothing changes.
+
 ## [0.4.1] - 2026-11-09
 
 ### Security

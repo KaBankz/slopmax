@@ -44,6 +44,8 @@ impl Event {
 #[serde(tag = "_tag")]
 pub enum LoginEvent {
     /// Open this address to sign in; `opened` says the daemon opened it.
+    /// `port` is where the daemon waits for the browser's redirect, or 0 when
+    /// nothing listens: the provider's page then shows a code to paste.
     Authorize {
         title: String,
         url: String,

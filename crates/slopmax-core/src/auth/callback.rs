@@ -106,7 +106,7 @@ pub async fn receive(
     expected_state: &str,
     prompt: &mut Prompt,
 ) -> Result<Callback> {
-    let (tx, mut redirects) = mpsc::channel::<Result<Callback>>(4);
+    let (tx, redirects) = mpsc::channel::<Result<Callback>>(4);
     let server = match TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port))).await {
         Ok(listener) => Some(tokio::spawn(serve(listener, path, tx))),
         Err(e) => {
@@ -118,8 +118,32 @@ pub async fn receive(
             None
         }
     };
+    let busy = format!("port {port} is busy and no redirect address can be pasted");
+    let result = wait(redirects, prompt, &busy).await;
+    if let Some(server) = server {
+        server.abort();
+    }
+    checked(result?, expected_state)
+}
 
-    let result = tokio::time::timeout(LOGIN_TIMEOUT, async {
+/// Waits for a code pasted into `prompt` (or an address carrying one), and
+/// checks the CSRF `state` when it comes with one.
+pub async fn receive_pasted(expected_state: &str, prompt: &mut Prompt) -> Result<Callback> {
+    // No redirect comes: the channel closes as its sender drops.
+    let (_, redirects) = mpsc::channel::<Result<Callback>>(1);
+    checked(
+        wait(redirects, prompt, "nothing can be pasted into this sign-in").await?,
+        expected_state,
+    )
+}
+
+/// The first usable code from a redirect or a paste, within the time limit.
+async fn wait(
+    mut redirects: mpsc::Receiver<Result<Callback>>,
+    prompt: &mut Prompt,
+    stuck: &str,
+) -> Result<Callback> {
+    tokio::time::timeout(LOGIN_TIMEOUT, async {
         loop {
             let attempt = tokio::select! {
                 Some(redirect) = redirects.recv() => redirect,
@@ -129,7 +153,7 @@ pub async fn receive(
                     }
                     parse_pasted(&line)
                 }
-                else => bail!("port {port} is busy and no redirect address can be pasted"),
+                else => bail!("{stuck}"),
             };
             match attempt {
                 Ok(callback) => return Ok(callback),
@@ -138,12 +162,10 @@ pub async fn receive(
         }
     })
     .await
-    .map_err(|_| anyhow!("timed out waiting for authorization"))?;
-    if let Some(server) = server {
-        server.abort();
-    }
+    .map_err(|_| anyhow!("timed out waiting for authorization"))?
+}
 
-    let callback = result?;
+fn checked(callback: Callback, expected_state: &str) -> Result<Callback> {
     match callback.state.as_deref() {
         Some(state) if state != expected_state => bail!("OAuth state mismatch; start over"),
         _ => Ok(callback),
