@@ -222,7 +222,7 @@ The desktop apps are on their way and not yet released: a SwiftUI app for macOS 
 
 Apps that show a CLIProxyAPI hub's quotas can show slopmax's. In T3 Code, add a CLIProxyAPI hub to the provider settings, with `http://127.0.0.1:7567` as the hub URL and slopmax's `api_key` as the management key. T3 then lists every pooled account's windows and ChatGPT's limit resets, and can redeem them.
 
-slopmax answers the three management calls these tools make: `auth-files`, `api-call`, and `reset-quota`. CLIProxyAPI's `api-call` sends any request to any address with an account's token filled in. slopmax's answers only the usage and limit reset calls, so the key never puts a token in a client's hands:
+slopmax answers the three management calls these tools make: `auth-files`, `api-call`, and `reset-quota`. Its `api-call` answers only the usage and limit reset calls those tools send and refuses every other request, so the key never puts an account's token in a client's hands:
 
 - Usage comes from the readings slopmax already keeps, without calling the providers.
 - Limit resets are listed by ChatGPT, and each list is reused for five minutes.
@@ -367,24 +367,6 @@ What crosses: text, images, documents, tool definitions and calls, tool results,
 | `[[keys]]`                | none             | Client keys, made with `slopmax key add`, each possibly limited to some models |
 
 The proxy applies a changed config.toml within two seconds, without a restart; only `listen` and `proxy` need one. The background proxy logs to `~/.slopmax/slopmax.log`. `SLOPMAX_LOG` sets the log level, for example `SLOPMAX_LOG=debug`.
-
-## How slopmax compares
-
-[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) and [opencodex](https://github.com/lidge-jun/opencodex) also pool accounts behind a local proxy, and both reach many more providers and clients. slopmax does one job: making several subscriptions of one provider feel like a single account to Claude Code and Codex. It spends quota before it resets, leaves Claude Code's requests as they were sent, and fits in one small binary.
-
-|                        | slopmax                                                                          | CLIProxyAPI                                                                 | opencodex                                          |
-| ---------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------- |
-| Built with             | Rust: one binary of about 8 MB, about 5 MB of memory when idle                   | Go: a 69 MB binary                                                          | TypeScript on Bun, with a desktop app              |
-| Setup                  | `slopmax setup` walks through it or runs unattended; `slopmax doctor` checks it  | A config file and login flags                                               | Desktop app and CLI                                |
-| Default account choice | The used quota that resets soonest, so less of it goes to waste; or fill-first, least-used, round-robin | Round-robin or fill-first within priority tiers                  | One active account, switching at 80% used          |
-| Usage data             | Usage endpoints and response headers; agents are shown the pool's combined usage | Response headers, kept for display                                          | Usage endpoint and response headers                |
-| Session stickiness     | Built in; off for the proxy or one request (`x-slopmax-affinity`)                | Opt-in                                                                      | Built in                                           |
-| Retries                | Failover on limits, revoked logins, and server errors (after one retry on the same account) | Retries on listed statuses across accounts                    | Failover on limits                                 |
-| Config changes         | Applied live, also from the dashboard and the app                                | Hot reload                                                                  | From its app                                       |
-| Translation            | Through one common form: Messages, Responses, and Chat clients                   | Pairwise translators between many formats                                   | Responses-centered, with Claude Code inbound       |
-| Claude requests        | From Claude Code only, unchanged but for the credential                          | From any client, rewritten to pass as Claude Code                           | From any client, with Claude Code's identity added |
-| Limit resets           | Claude's and ChatGPT's: on request, before expiry, and when spent (opt-in)       | —                                                                           | Before expiry (opt-in), plus Claude reset grants   |
-| Quota for other tools  | CLIProxyAPI's quota calls, for T3 Code and others, without relaying tokens       | A management API whose `api-call` sends any request with an account's token | Its own API, for its apps                          |
 
 ## Caveats
 

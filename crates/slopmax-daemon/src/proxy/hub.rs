@@ -3,11 +3,10 @@
 //! management key, they list its accounts, read each account's usage and
 //! reset credits, and redeem credits.
 //!
-//! CLIProxyAPI serves those reads through `api-call`, which sends any
-//! request to any address with an account's token filled in. slopmax keeps
-//! the request and reply shapes but not the relay: its `api-call` answers
-//! the usage and reset-credit calls those tools make, usage from the
-//! readings slopmax already keeps, and refuses everything else.
+//! Those tools make their reads through `api-call`, which names a request
+//! to send with an account's token. slopmax answers only the usage and
+//! reset-credit requests they make, usage from the readings it already
+//! keeps, and refuses every other request, so no token leaves it.
 
 use std::sync::Arc;
 
@@ -97,7 +96,7 @@ fn find(app: &App, index: &str) -> Option<Account> {
         .map(|a| Account::clone(a))
 }
 
-/// The subscription accounts, listed as CLIProxyAPI lists its auth files.
+/// The subscription accounts, in the shape of the `auth-files` reply.
 fn auth_files(app: &App) -> Response {
     let now = Timestamp::now();
     let files: Vec<Value> = app
@@ -375,8 +374,8 @@ struct Index {
     auth_index: String,
 }
 
-/// Lifts slopmax's blocks on the account, as CLIProxyAPI clears its
-/// cooldown, and reads its usage again to learn what the windows hold now.
+/// `reset-quota`: lifts slopmax's blocks on the account and reads its usage
+/// again to learn what the windows hold now.
 fn reset_quota(app: Arc<App>, index: &str) -> Response {
     let Some(account) = find(&app, index) else {
         return fail(StatusCode::NOT_FOUND, "no account has this auth_index");
