@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-09
+
 ### Fixed
 
 - Signing in to Claude on a machine without a browser, such as a server reached over SSH, no longer sends the browser to a localhost page that cannot load. Anthropic's own page shows a code to paste back instead, as Claude Code does. The dashboard asks for the code too. With a browser on the same machine, nothing changes.
@@ -170,7 +172,8 @@ The first version.
 - `slopmax run`, `env`, and `setup` (with `--undo`) connect Claude Code and Codex.
 - Adapted Claude requests to the serving account (`metadata.user_id` and the billing-header checksum). 0.2.0 removed this.
 
-[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/KaBankz/slopmax/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/KaBankz/slopmax/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/KaBankz/slopmax/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/KaBankz/slopmax/compare/v0.2.0...v0.3.0

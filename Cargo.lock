@@ -6376,7 +6376,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "slopmax"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "bytes",
@@ -6397,7 +6397,7 @@ dependencies = [
 
 [[package]]
 name = "slopmax-api"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -6406,7 +6406,7 @@ dependencies = [
 
 [[package]]
 name = "slopmax-app"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "serde",
@@ -6421,7 +6421,7 @@ dependencies = [
 
 [[package]]
 name = "slopmax-client"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "bytes",
  "http",
@@ -6437,7 +6437,7 @@ dependencies = [
 
 [[package]]
 name = "slopmax-common"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "base64 0.23.1",
  "libc",
@@ -6448,7 +6448,7 @@ dependencies = [
 
 [[package]]
 name = "slopmax-core"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -6473,7 +6473,7 @@ dependencies = [
 
 [[package]]
 name = "slopmax-daemon"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "bytes",
@@ -6493,7 +6493,7 @@ dependencies = [
 
 [[package]]
 name = "slopmax-desktop-gpui"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -6511,7 +6511,7 @@ dependencies = [
 
 [[package]]
 name = "slopmax-net"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -6534,7 +6534,7 @@ dependencies = [
 
 [[package]]
 name = "slopmax-wire"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "base64 0.23.1",
  "memchr",
