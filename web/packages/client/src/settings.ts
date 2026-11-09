@@ -238,7 +238,7 @@ export class Settings extends Schema.Class<Settings>("Settings")({
   planPrices: Schema.Record(Schema.String, Schema.Finite)
     .annotate({
       description:
-        'What each subscription really costs a month, for what unused quota is worth, such as { "claude/max 20x": 200 }. List prices are built in.',
+        'What each subscription really costs a month, for what unused quota is worth, such as { "claude/ultra": 200 }. List prices are built in.',
       default: {},
     })
     .pipe(withDefault({})),

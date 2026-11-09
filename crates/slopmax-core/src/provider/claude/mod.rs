@@ -127,8 +127,21 @@ async fn usage(http: &Client, account: &Account) -> Result<Reading, UsageError> 
     let body = super::usage_body(response).await?;
     Ok(Reading {
         limits: limits::from_usage(&body, Timestamp::now()),
-        plan: None,
+        plan: renamed_plan(http, account).await,
     })
+}
+
+/// The plan's current name for an account still labelled by the names
+/// Anthropic retired on 2026-10-30 (Max 5x is now Max, Max 20x is Ultra),
+/// read from its profile once; `None` for every other account.
+async fn renamed_plan(http: &Client, account: &Account) -> Option<String> {
+    if !matches!(account.plan.as_deref(), Some("max 5x" | "max 20x")) {
+        return None;
+    }
+    let profile = oauth::profile(http, &account.tokens.access_token)
+        .await
+        .ok()?;
+    profile.plan()
 }
 
 #[cfg(test)]
@@ -266,6 +279,16 @@ mod tests {
                 json!({ "account": { "email": "me@x.dev" },
                         "organization": { "organization_type": "claude_pro" } }),
             ),
+            ("/api/oauth/profile", Some("Bearer ultra")) => testkit::json(
+                200,
+                json!({ "organization": { "organization_type": "claude_max",
+                                          "rate_limit_tier": "default_claude_max_20x",
+                                          "plan_display_name": "Ultra" } }),
+            ),
+            ("/api/oauth/usage", Some("Bearer ultra")) => testkit::json(
+                200,
+                json!({ "five_hour": null, "seven_day": { "utilization": 3 } }),
+            ),
             _ => testkit::reply(401, ""),
         })
         .await
@@ -286,6 +309,20 @@ mod tests {
         // Older replies name per-model weekly windows at the top level.
         assert_eq!(reading.limits.windows[2].model.as_deref(), Some("Opus"));
         assert_eq!(reading.plan, None);
+        // Only an account with a retired plan name looks its plan up.
+        assert!(mock.seen_at("/api/oauth/profile").is_empty());
+        let mut old = account("ultra");
+        old.plan = Some("max 20x".into());
+        let reading = Claude.usage(&http, &old).await.unwrap();
+        assert_eq!(reading.plan.as_deref(), Some("ultra"));
+        // Ultra has no 5-hour window.
+        let spans: Vec<&str> = reading
+            .limits
+            .windows
+            .iter()
+            .map(|w| w.span.as_str())
+            .collect();
+        assert_eq!(spans, ["7d"]);
         let sent = &mock.seen_at("/api/oauth/usage")[0];
         assert_eq!(sent.header("anthropic-beta"), Some(oauth::OAUTH_BETA));
 

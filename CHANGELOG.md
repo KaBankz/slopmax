@@ -4,6 +4,15 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Changed
+
+- Claude's plans go by their new names: Max 20x is Ultra and Max 5x is Max, as Anthropic renamed them on 2026-10-30. Accounts signed in before then are renamed at their next usage check. `[plan_prices]` takes `"claude/ultra"` and `"claude/max"`, and the old names still work.
+- A pool's usage weighs Claude plans by their weekly allowance, 5 and 10 times Pro's for Max and Ultra, where Max 20x used to count as 20.
+
+### Fixed
+
+- Plans without a 5-hour limit, Claude Ultra once verified and ChatGPT Pro, no longer make a pool's 5-hour window look fuller than it is. They count as room in it, so a spent 5-hour window on another account shows as part of the pool rather than all of it.
+
 ## [0.4.2] - 2026-11-09
 
 ### Fixed

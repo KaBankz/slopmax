@@ -6,7 +6,7 @@ slopmax pools your Claude and ChatGPT subscriptions behind one local proxy, so C
 
 - One Rust binary under 6 MB. No runtime, database, or browser extension.
 - Signs in with each provider's own OAuth flow, or takes over logins from Claude Code, Codex, and CLIProxyAPI. A guided `slopmax setup` does it all, or runs unattended for a script or an agent, and `slopmax doctor` says what to fix.
-- Tracks every account's 5-hour and weekly windows, from the usage APIs and from the headers on every response.
+- Tracks every account's usage windows (weekly, per-model, and 5-hour where the plan still has one), from the usage APIs and from the headers on every response.
 - Fails over before the agent sees an error, and streams every response back as it arrives.
 - Forwards Claude Code's requests unchanged except for the credential.
 - Records every request, with `slopmax usage` totals and what they would have cost on the API, and notifies you when accounts need attention.
@@ -73,14 +73,14 @@ slopmax                 # every account's usage and status
 
 ```
 CLAUDE                PLAN       5H                      WEEK                    STATUS
- 1 work@example.com   max 20x    ████░░░░░░  43% 3h19m   █████░░░░░  49% 1d23h   ● active · 2 sessions · 41 req · 1.2M tok
+ 1 work@example.com   ultra      —                       █████░░░░░  49% 1d23h   ● active · 2 sessions · 41 req · 1.2M tok
    └ 7d Fable                                            ██████░░░░  58% 1d23h
- 2 home@example.com   max 5x     ██████████ 100% 1h02m   ███████░░░  71% 4d2h    limited · back in 1h02m
+ 2 home@example.com   max        ██████████ 100% 1h02m   ███████░░░  71% 4d2h    limited · back in 1h02m
  3 team@example.com   team       ░░░░░░░░░░   0%         ░░░░░░░░░░   0%         ready · priority -1
-   pool               3 accts    ██████░░░░  57% 1h02m   ████░░░░░░  40% 1d23h   what the agents see
+   pool               3 accts    ███░░░░░░░  33% 1h02m   ████░░░░░░  40% 1d23h   what the agents see
 
 CODEX                 PLAN       5H                      WEEK                    STATUS
- 4 me@example.com     pro        █░░░░░░░░░  12% 4h10m   ███░░░░░░░  29% 5d17h   ● active · 1 session · 3 limit resets · 9 req · 310.4k tok
+ 4 me@example.com     pro        —                       ███░░░░░░░  29% 5d17h   ● active · 1 session · 3 limit resets · 9 req · 310.4k tok
 
 XAI                   BILLING    MODELS                                          STATUS
  5 xAI API key …x9Qe  per token  grok-*                                          ready
@@ -144,7 +144,7 @@ Unused quota is lost when its window resets. The default strategy therefore spen
 
 An agent's housekeeping, such as Claude Code listing models before a session, takes no turn from `round-robin`. A block lasts until the provider's stated reset, unless a fresh reading shows room sooner.
 
-ChatGPT starts a 5-hour window at an account's first request, so an account left idle after a reset gets its next reset late. With `warm_windows = true`, slopmax sends an idle ChatGPT account one tiny request as soon as its window resets, using the model Codex last used, so the next reset comes sooner when the account is needed. Claude accounts are never warmed: slopmax sends Claude only what Claude Code writes.
+ChatGPT starts a 5-hour window at an account's first request, so an account left idle after a reset gets its next reset late. With `warm_windows = true`, slopmax sends an idle ChatGPT account one tiny request as soon as its window resets, using the model Codex last used, so the next reset comes sooner when the account is needed. ChatGPT Pro has no 5-hour window, so its accounts need no warming. Claude accounts are never warmed: slopmax sends Claude only what Claude Code writes.
 
 Claude and ChatGPT accounts can hold limit resets, which reset an account's windows on the spot. Claude's are grants, such as the one Pro and Max accounts got at Claude Opus 5.5's launch, which claude.ai lists under Limit resets; ChatGPT's are its reset credits. slopmax lists them with each account and redeems them:
 
@@ -183,7 +183,7 @@ total                 508    398.3k    229.7k      114.4M         2.9M    $39.98
 
 ### Left on the table
 
-A subscription's weekly quota that goes unused is lost at the reset, and with it that part of the fee. slopmax notes each window that resets with how much of it was used (in the usage ledger, `~/.slopmax/usage/`), and values the unused part of each week at the plan's price: Claude Pro $20, Max 5x $100, Max 20x $200, ChatGPT Plus $20, Pro $200, and Team $30 a month, or what you pay, under `[plan_prices]`:
+A subscription's weekly quota that goes unused is lost at the reset, and with it that part of the fee. slopmax notes each window that resets with how much of it was used (in the usage ledger, `~/.slopmax/usage/`), and values the unused part of each week at the plan's price: Claude Pro $20, Max $100, Ultra $200, ChatGPT Plus $20, Pro $200 (ChatGPT reports every Pro tier as `pro`), and Team $30 a month, or what you pay, under `[plan_prices]`:
 
 ```
 Left on the table: $39.74, 20% unused on average, across 16 weekly windows
@@ -362,7 +362,7 @@ What crosses: text, images, documents, tool definitions and calls, tool results,
 | `proxy`                   | none             | Upstream proxy (`http://`, `socks5://`, `socks5h://`), else `HTTPS_PROXY` |
 | `[aliases]`, `[fallbacks]` | none            | Model renames, and models to try once one is limited everywhere     |
 | `[prices]`                | none             | API prices for `slopmax usage`, beyond the built-in lists           |
-| `[plan_prices]`           | list prices      | What each plan costs a month (`"claude/max 20x" = 200`), for what unused quota is worth |
+| `[plan_prices]`           | list prices      | What each plan costs a month (`"claude/ultra" = 200`), for what unused quota is worth |
 | `[notify]`                | none             | Webhook, command, and events for notifications                      |
 | `[[keys]]`                | none             | Client keys, made with `slopmax key add`, each possibly limited to some models |
 

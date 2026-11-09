@@ -109,11 +109,25 @@ pub struct ProfileOrganization {
     pub organization_type: Option<String>,
     /// e.g. `default_claude_max_20x`.
     pub rate_limit_tier: Option<String>,
+    /// The plan's name as sold, e.g. `Ultra` (formerly Max 20x) or `Max`.
+    pub plan_display_name: Option<String>,
 }
 
 impl Profile {
-    /// A short plan label such as `max 20x`, `pro`, or `team`.
+    /// A short plan label such as `ultra`, `max`, `pro`, or `team`. Since
+    /// 2026-10-30, Anthropic sells Max 20x as Ultra and Max 5x as Max, and
+    /// the profile names them; older profiles give the tier's multiplier.
     pub fn plan(&self) -> Option<String> {
+        if self.organization.organization_type.as_deref() == Some("claude_max")
+            && let Some(name) = self
+                .organization
+                .plan_display_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+        {
+            return Some(name.to_ascii_lowercase());
+        }
         let tier = self.organization.rate_limit_tier.as_deref().unwrap_or("");
         let multiplier = tier.rsplit('_').next().filter(|m| m.ends_with('x'));
         let base = match self.organization.organization_type.as_deref() {
@@ -288,6 +302,28 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(profile.plan().as_deref(), Some("max 20x"));
+
+        // Today's profiles name the plan.
+        let ultra: Profile = serde_json::from_value(json!({
+            "account": { "has_claude_max": true },
+            "organization": {
+                "organization_type": "claude_max",
+                "rate_limit_tier": "default_claude_max_20x",
+                "plan_display_name": "Ultra"
+            }
+        }))
+        .unwrap();
+        assert_eq!(ultra.plan().as_deref(), Some("ultra"));
+        // A team's seat keeps its own label, whatever its tier.
+        let team: Profile = serde_json::from_value(json!({
+            "organization": {
+                "organization_type": "claude_team",
+                "rate_limit_tier": "default_claude_max_5x",
+                "plan_display_name": "Team"
+            }
+        }))
+        .unwrap();
+        assert_eq!(team.plan().as_deref(), Some("team"));
 
         let pro: Profile = serde_json::from_value(json!({
             "account": { "has_claude_pro": true }, "organization": {}

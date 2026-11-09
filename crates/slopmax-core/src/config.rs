@@ -85,7 +85,7 @@ pub struct Config {
     /// Per-model API prices for `slopmax usage`, beyond the built-in ones.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub prices: BTreeMap<String, Custom>,
-    /// What each subscription plan costs a month, as `"claude/max 20x" =
+    /// What each subscription plan costs a month, as `"claude/ultra" =
     /// 200`, for what unused quota is worth; list prices otherwise.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub plan_prices: BTreeMap<String, f64>,
@@ -537,7 +537,7 @@ api_key = "{api_key}"
 # List prices are built in (Claude Pro $20, Max 5x $100, Max 20x $200;
 # ChatGPT Plus $20, Pro $200); set what you really pay:
 #   [plan_prices]
-#   "claude/max 20x" = 200
+#   "claude/ultra" = 200
 #   "codex/pro" = 200
 
 # API prices for `slopmax usage`, in dollars per million tokens. Anthropic's

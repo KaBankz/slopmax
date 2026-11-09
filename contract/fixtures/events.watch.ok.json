@@ -188,13 +188,13 @@
             "windows": [
               {
                 "span": "5h",
-                "used": 68.00000000000001,
+                "used": 58.666666666666664,
                 "resetsAt": "2026-11-01T12:00:00Z",
                 "weighted": true
               },
               {
                 "span": "7d",
-                "used": 43.6,
+                "used": 41.33333333333333,
                 "resetsAt": "2026-11-01T12:00:00Z",
                 "weighted": true
               }
@@ -208,8 +208,8 @@
               }
             ],
             "shares": {
-              "claude-7cad1d23": 0.2,
-              "claude-df8fd9fa": 0.8
+              "claude-7cad1d23": 0.3333333333333333,
+              "claude-df8fd9fa": 0.6666666666666666
             },
             "next": {
               "account": "claude-7cad1d23",

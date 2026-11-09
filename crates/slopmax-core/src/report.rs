@@ -14,7 +14,7 @@ use crate::net::Origins;
 use crate::pool::{AccountState, Pins, Pool, State};
 use crate::provider::ProviderId;
 use crate::time::{SignedDuration, Timestamp};
-use crate::{fsx, human, usage};
+use crate::{fsx, human, log, usage};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Report {
@@ -453,7 +453,15 @@ pub async fn offline(
             .filter(|a| a.auth_error.is_none() && a.provider.spec().is_subscription());
         for account in polled {
             match usage::poll(&http, store, account, config.refresh_tokens).await {
-                Ok((_, reading)) => pool.observe(&account.id, reading.limits, Timestamp::now()),
+                Ok((_, reading)) => {
+                    if reading.plan.is_some() && reading.plan != account.plan {
+                        let plan = reading.plan.clone();
+                        if let Err(e) = store.update(&account.id, |a| a.plan = plan) {
+                            log::warn!("saving {}'s plan: {e:#}", account.id);
+                        }
+                    }
+                    pool.observe(&account.id, reading.limits, Timestamp::now());
+                }
                 Err(e) => pool.record_error(&account.id, &format!("usage poll: {e:#}")),
             }
         }

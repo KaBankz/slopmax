@@ -75,6 +75,8 @@ const OPENAI: &[(&str, f64, f64, f64)] = &[
 const PLANS: &[(ProviderId, &str, f64)] = &[
     (ProviderId::Claude, "pro", 20.0),
     (ProviderId::Claude, "max", 100.0),
+    (ProviderId::Claude, "ultra", 200.0),
+    // Their names before 2026-10-30, which older accounts still carry.
     (ProviderId::Claude, "max 5x", 100.0),
     (ProviderId::Claude, "max 20x", 200.0),
     (ProviderId::Claude, "team", 30.0),
@@ -85,7 +87,7 @@ const PLANS: &[(ProviderId, &str, f64)] = &[
 ];
 
 /// What a subscription plan costs a month: the user's own figure, set as
-/// `"claude/max 20x" = 200` under `[plan_prices]`, else the list price.
+/// `"claude/ultra" = 200` under `[plan_prices]`, else the list price.
 pub fn plan_monthly(
     provider: ProviderId,
     plan: &str,
@@ -102,12 +104,15 @@ pub fn plan_monthly(
 }
 
 /// How much usage each plan allows, against the smallest of its provider:
-/// Claude's Max plans are sold as 5 and 20 times Pro. ChatGPT states no
-/// such ratio, so its plans have none here.
+/// Claude's Max and Ultra are sold as 5 and 10 times Pro's weekly usage
+/// (Ultra was Max 20x, named for its 5-hour limit, which it no longer has).
+/// ChatGPT states no such ratio, so its plans have none here.
 const CAPACITY: &[(ProviderId, &str, f64)] = &[
     (ProviderId::Claude, "pro", 1.0),
+    (ProviderId::Claude, "max", 5.0),
     (ProviderId::Claude, "max 5x", 5.0),
-    (ProviderId::Claude, "max 20x", 20.0),
+    (ProviderId::Claude, "ultra", 10.0),
+    (ProviderId::Claude, "max 20x", 10.0),
 ];
 
 /// Each account's share of its pool's capacity, by plan, in the order
@@ -195,8 +200,15 @@ mod tests {
 
     #[test]
     fn shares_follow_plan_sizes_only_when_every_one_is_known() {
-        let shares = shares(ProviderId::Claude, &[Some("max 20x"), Some("Max 5x")]).unwrap();
-        assert_eq!(shares, [0.8, 0.2]);
+        let shares = shares(
+            ProviderId::Claude,
+            &[Some("ultra"), Some("Max"), Some("pro")],
+        )
+        .unwrap();
+        assert_eq!(shares, [10.0 / 16.0, 5.0 / 16.0, 1.0 / 16.0]);
+        // The old names size the same plans.
+        let old = super::shares(ProviderId::Claude, &[Some("max 20x"), Some("Max 5x")]).unwrap();
+        assert_eq!(old, [2.0 / 3.0, 1.0 / 3.0]);
         assert!(super::shares(ProviderId::Claude, &[Some("max 20x"), None]).is_none());
         assert!(super::shares(ProviderId::Codex, &[Some("pro"), Some("plus")]).is_none());
         assert!(super::shares(ProviderId::Claude, &[]).is_none());
@@ -205,6 +217,10 @@ mod tests {
     #[test]
     fn plans_are_priced_by_provider_and_can_be_set() {
         let none = BTreeMap::new();
+        assert_eq!(
+            plan_monthly(ProviderId::Claude, "ultra", &none),
+            Some(200.0)
+        );
         assert_eq!(
             plan_monthly(ProviderId::Claude, "max 20x", &none),
             Some(200.0)

@@ -302,20 +302,33 @@ pub fn pooled_by<'a>(
     let accounts: Vec<(&Limits, bool, f64)> = accounts.into_iter().collect();
     let mut windows = Vec::new();
     for span in ["5h", "7d", "30d"] {
+        let mut measured = false;
         let readings: Vec<(f64, Option<Timestamp>, f64)> = accounts
             .iter()
             .filter_map(|(limits, blocked, weight)| {
-                let window = limits.shared().find(|w| w.span == span)?;
-                let shortest = limits.shared().map(|w| span_rank(&w.span)).min();
-                let used = match blocked {
-                    true if shortest == Some(span_rank(span)) => 100.0,
-                    _ => window.used_at(now),
-                };
-                Some((used, window.upcoming_reset(now), *weight))
+                let shortest = limits.shared().map(|w| span_rank(&w.span)).min()?;
+                match limits.shared().find(|w| w.span == span) {
+                    Some(window) => {
+                        measured = true;
+                        let used = match blocked {
+                            true if shortest == span_rank(span) => 100.0,
+                            _ => window.used_at(now),
+                        };
+                        Some((used, window.upcoming_reset(now), *weight))
+                    }
+                    // A plan with no window this short has no such limit:
+                    // Claude's Ultra and ChatGPT's Pro have no 5-hour one.
+                    // It adds room to the pool's window, full only while
+                    // the account is blocked.
+                    None if span_rank(span) < shortest => {
+                        Some((if *blocked { 100.0 } else { 0.0 }, None, *weight))
+                    }
+                    None => None,
+                }
             })
             .collect();
         let weight: f64 = readings.iter().map(|r| r.2).sum();
-        if readings.is_empty() || weight <= 0.0 {
+        if !measured || weight <= 0.0 {
             continue;
         }
         let used = readings.iter().map(|(used, _, w)| used * w).sum::<f64>() / weight;
@@ -488,6 +501,41 @@ mod tests {
             weighted[0].used > plain[0].used,
             "{weighted:?} vs {plain:?}"
         );
+    }
+
+    #[test]
+    fn a_plan_without_a_five_hour_limit_adds_room_to_the_pools() {
+        let now = ts(1000);
+        let weekly_only = |week: f64| Limits {
+            windows: vec![Window::new("7d", week, Some(ts(90_000)))],
+            observed_at: Some(now),
+            reset_credits: None,
+        };
+        let capped = Limits {
+            windows: vec![
+                Window::new("5h", 100.0, Some(ts(4000))),
+                Window::new("7d", 40.0, Some(ts(90_000))),
+            ],
+            observed_at: Some(now),
+            reset_credits: None,
+        };
+        let ultra = weekly_only(20.0);
+        // The capped account's 5 hours are spent, but the other has none to
+        // spend: the pool's 5-hour window is half used, not full.
+        let pool = pooled([(&capped, false), (&ultra, false)], now);
+        assert_eq!(pool[0].span, "5h");
+        assert_eq!(pool[0].used, 50.0);
+        assert_eq!(pool[0].resets_at, Some(ts(4000)));
+        assert_eq!(pool[1].used, 30.0);
+        // Blocked, it adds no room.
+        let pool = pooled([(&capped, false), (&ultra, true)], now);
+        assert_eq!(pool[0].used, 100.0);
+        assert_eq!(pool[1].used, 70.0);
+        // With no account limited over 5 hours, the pool has no such window.
+        let pool = pooled([(&ultra, false), (&weekly_only(60.0), false)], now);
+        assert_eq!(pool.len(), 1);
+        assert_eq!(pool[0].span, "7d");
+        assert_eq!(pool[0].used, 40.0);
     }
 
     #[test]
