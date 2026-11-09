@@ -68,8 +68,6 @@ actions!(
 );
 actions!(sidebar, [SelectPrevious, SelectNext]);
 
-const TRAY_ICON: &[u8] = include_bytes!("../../../assets/tray.svg");
-
 /// The API-key providers, in the order the key row offers them.
 const KEYS: [Provider; 3] = [Provider::Anthropic, Provider::OpenAi, Provider::Xai];
 
@@ -310,7 +308,7 @@ fn menu_bar_icon(cx: &mut App) -> gpui_tray::Result<Tray> {
         native::menu_bar_glyph();
         Ok(tray)
     } else {
-        let image = Image::from_bytes(ImageFormat::Svg, TRAY_ICON.to_vec());
+        let image = Image::from_bytes(ImageFormat::Svg, ui::MARK.to_vec());
         tray.icon(Icon::from_gpui(&image, cx)?).build(cx)
     }
 }
@@ -779,7 +777,7 @@ impl Main {
                     .pl(px(LEAD))
                     .pr(px(8.))
                     .gap(px(8.))
-                    .child(logo(18., c))
+                    .child(logo(18.))
                     .child(
                         div()
                             .flex_1()

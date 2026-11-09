@@ -220,7 +220,7 @@ impl Panel {
             .pt(px(12.))
             .pb(px(10.))
             .gap(px(10.))
-            .child(logo(22., c))
+            .child(logo(22.))
             .child(
                 v_flex()
                     .flex_1()

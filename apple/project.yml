@@ -38,6 +38,10 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.slopmax.app
+        # Slopmax/Assets.xcassets, which assets/icon/build.ts derives from
+        # the icon: the app icon, and the icon's cobalt as the accent.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
     postBuildScripts:
       # The CLI is the daemon: it goes beside the app's own executable,
       # signed first, and its launch agent under Library/LaunchAgents.

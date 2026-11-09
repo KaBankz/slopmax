@@ -36,14 +36,17 @@ struct SlopmaxApp: App {
     }
 }
 
-/// The menu bar's item: the fullest pool window's use, colored by the
-/// daemon's tone for it.
+/// The menu bar's item: slopmax's mark, the Option key, as a template the
+/// menu bar tints (faded while the daemon is not answering), and the
+/// fullest pool window's use.
 struct MenuLabel: View {
     let store: Store
 
     var body: some View {
         HStack(spacing: 3) {
-            Image(systemName: store.connected ? "gauge.with.dots.needle.50percent" : "gauge.with.dots.needle.0percent")
+            Image("MenuBarIcon")
+                .opacity(store.connected ? 1 : 0.5)
+                .accessibilityLabel("slopmax")
             Text(store.menuTitle).monospacedDigit()
         }
     }

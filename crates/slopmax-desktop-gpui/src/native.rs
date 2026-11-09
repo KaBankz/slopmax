@@ -6,12 +6,12 @@
 #[cfg(target_os = "macos")]
 mod mac {
     use gpui_kit::*;
-    use objc2::MainThreadMarker;
     use objc2::rc::Retained;
+    use objc2::{AnyThread as _, MainThreadMarker};
     use objc2_app_kit::{
         NSApplication, NSImage, NSScreen, NSStatusBarButton, NSView, NSWindow, NSWindowStyleMask,
     };
-    use objc2_foundation::NSString;
+    use objc2_foundation::{NSData, NSSize, NSString};
 
     /// The menu bar item's button, in a status bar window of the app's own.
     fn status_button(
@@ -29,17 +29,24 @@ mod mac {
             .find_map(|window| Some((window.clone(), find(window.contentView()?)?)))
     }
 
-    /// Gives the menu bar item a template glyph, which the menu bar tints
-    /// to suit itself: three rising bars, as the app's mark has.
+    /// The Option key (⌥) as the menu bar draws it: black, its alpha all
+    /// that counts, at twice the size of the 16-point glyph.
+    const GLYPH: &[u8] = include_bytes!("../../../assets/icon/trayTemplate@2x.png");
+
+    /// Gives the menu bar item slopmax's mark as a template glyph, which the
+    /// menu bar tints to suit itself.
     pub(crate) fn menu_bar_glyph() {
         let Some(mtm) = MainThreadMarker::new() else {
             return;
         };
-        let glyph = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-            &NSString::from_str("chart.bar.fill"),
-            Some(&NSString::from_str("slopmax")),
-        );
-        if let (Some(glyph), Some((_, button))) = (glyph, status_button(mtm)) {
+        let Some(glyph) = NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(GLYPH))
+        else {
+            return;
+        };
+        glyph.setSize(NSSize::new(16., 16.));
+        glyph.setTemplate(true);
+        glyph.setAccessibilityDescription(Some(&NSString::from_str("slopmax")));
+        if let Some((_, button)) = status_button(mtm) {
             button.setImage(Some(&glyph));
         }
     }

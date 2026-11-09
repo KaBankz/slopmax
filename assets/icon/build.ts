@@ -6,10 +6,13 @@
  *   bun assets/icon/build.ts render   the 1024 px master, icon.png (about 20 min on 8 CPU cores)
  *   bun assets/icon/build.ts derive   every size the apps use, from icon.png, mark.svg and tray-template.svg
  *
+ * Run from the repository's root. `derive` writes the files here, the web UI's copies,
+ * and the macOS app's asset catalog (its icon, menu bar glyph and accent color).
+ *
  * Blender 5.2 and ImageMagick must be on PATH (or set BLENDER and MAGICK).
  * The master is committed, so `derive` needs only ImageMagick.
  */
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { $ } from "bun"
@@ -18,7 +21,9 @@ const here = import.meta.dir
 const blender = process.env.BLENDER ?? "blender"
 const magick = process.env.MAGICK ?? "convert"
 const master = path.join(here, "icon.png")
-const ui = path.join(here, "../../apps/ui/src")
+const root = path.join(here, "../..")
+const ui = path.join(root, "web/apps/ui/src")
+const catalog = path.join(root, "apple/Slopmax/Assets.xcassets")
 
 /** Big Sur's icon grid: the tile is 824 of the 1024 canvas, its corner radius 228 at full size. */
 const squircle = async (dir: string, size: number, radius: number): Promise<string> => {
@@ -85,6 +90,54 @@ const icns = async (dir: string, macos: string): Promise<Uint8Array> => {
   return out
 }
 
+const json = (file: string, value: unknown) => Bun.write(file, `${JSON.stringify(value, null, 2)}\n`)
+const info = { author: "xcode", version: 1 }
+
+/** The macOS app's asset catalog: the app icon at every size macOS asks for, the menu bar glyph, the accent. */
+const apple = async (macos: string): Promise<void> => {
+  await json(path.join(catalog, "Contents.json"), { info })
+  const icon = path.join(catalog, "AppIcon.appiconset")
+  await mkdir(icon, { recursive: true })
+  const images = []
+  for (const points of [16, 32, 128, 256, 512]) {
+    for (const scale of [1, 2]) {
+      const filename = `icon-${points}@${scale}x.png`
+      await $`${magick} ${macos} -filter Lanczos -resize ${points * scale}x${points * scale} -depth 8 -strip ${path.join(icon, filename)}`
+      images.push({ filename, idiom: "mac", scale: `${scale}x`, size: `${points}x${points}` })
+    }
+  }
+  await json(path.join(icon, "Contents.json"), { images, info })
+  // The menu bar tints a template image to suit itself; the vector scales to any display.
+  const glyph = path.join(catalog, "MenuBarIcon.imageset")
+  await Bun.write(path.join(glyph, "menubar.svg"), Bun.file(path.join(here, "tray-template.svg")))
+  await json(path.join(glyph, "Contents.json"), {
+    images: [{ filename: "menubar.svg", idiom: "universal" }],
+    info,
+    properties: { "preserves-vector-representation": true, "template-rendering-intent": "template" },
+  })
+  // The cobalt of the tile, as the web UI's --brand has it in light and dark.
+  const color = (hex: string) => ({
+    "color-space": "srgb",
+    components: {
+      alpha: "1.000",
+      red: `0x${hex.slice(0, 2)}`,
+      green: `0x${hex.slice(2, 4)}`,
+      blue: `0x${hex.slice(4, 6)}`,
+    },
+  })
+  await json(path.join(catalog, "AccentColor.colorset", "Contents.json"), {
+    colors: [
+      { color: color("2470EE"), idiom: "universal" },
+      {
+        appearances: [{ appearance: "luminosity", value: "dark" }],
+        color: color("6AA0FF"),
+        idiom: "universal",
+      },
+    ],
+    info,
+  })
+}
+
 const derive = async (): Promise<void> => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "slopmax-icon-"))
   try {
@@ -109,7 +162,10 @@ const derive = async (): Promise<void> => {
     await Bun.write(path.join(here, "icon.icns"), await icns(dir, macos))
     // Windows and Linux show the tile as it is.
     await $`${magick} ${master} -filter Lanczos -define icon:auto-resize=256,128,64,48,32,24,16 ${path.join(here, "icon.ico")}`
-    console.log("wrote icon-macos.png, icon.icns, icon.ico, the tray images, and the UI's logo.svg and icon-128.png")
+    await apple(macos)
+    console.log(
+      "wrote icon-macos.png, icon.icns, icon.ico, the tray images, the UI's logo.svg and icon-128.png, and apple/Slopmax/Assets.xcassets",
+    )
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

@@ -12,6 +12,8 @@
   <string>slopmax</string>
   <key>CFBundleExecutable</key>
   <string>slopmax-desktop-gpui</string>
+  <key>CFBundleIconFile</key>
+  <string>icon</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>

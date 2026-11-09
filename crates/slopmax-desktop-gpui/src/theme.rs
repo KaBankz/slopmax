@@ -6,7 +6,8 @@
 //! inverts the foreground. Color appears only where it reports a state: a
 //! window running short, something failed or wants a look. Providers and
 //! chart series tell apart by their names and by shades of neutral.
-//! slopmax's pink marks its logo and keyboard focus, nothing else.
+//! slopmax's cobalt, the app icon's, marks keyboard focus and selection,
+//! nothing else.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -104,8 +105,6 @@ pub(crate) struct Colors {
     pub(crate) track: Hsla,
     pub(crate) meter: Hsla,
     pub(crate) popover: Hsla,
-    /// slopmax's pink: its logo and keyboard focus.
-    pub(crate) accent: Hsla,
     pub(crate) good: Hsla,
     pub(crate) warn: Hsla,
     pub(crate) bad: Hsla,
@@ -133,7 +132,6 @@ impl Colors {
             track: pick(0xebebeeff, 0x2c2c31ff),
             meter: pick(0x5a5a62ff, 0xa8a8b0ff),
             popover: theme.popover,
-            accent: rgb(0xd63370).into(),
             good: theme.success,
             warn: theme.warning,
             bad: theme.danger,

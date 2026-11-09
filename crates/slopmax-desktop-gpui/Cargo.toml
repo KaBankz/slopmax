@@ -49,8 +49,10 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
   "std",
   "NSArray",
   "NSBundle",
+  "NSData",
   "NSEnumerator",
   "NSError",
+  "NSGeometry",
   "NSString",
 ] }
 # Nudges as the system's own notifications.

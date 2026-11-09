@@ -20,8 +20,9 @@ app=$target/slopmax.app
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -1)
 
 rm -rf "$app"
-mkdir -p "$app/Contents/MacOS"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 sed "s/VERSION/$version/g" "$here/Info.plist" >"$app/Contents/Info.plist"
+cp "$root/assets/icon/icon.icns" "$app/Contents/Resources/icon.icns"
 # The app finds the CLI beside itself.
 cp "$target/slopmax-desktop-gpui" "$target/slopmax" "$app/Contents/MacOS/"
 codesign --force --sign - "$app/Contents/MacOS/slopmax"

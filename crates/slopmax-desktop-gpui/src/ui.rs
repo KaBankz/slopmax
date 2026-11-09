@@ -4,6 +4,8 @@
 //! window is dragged by. Spacing groups; a hairline separates; color only
 //! reports a state.
 
+use std::sync::Arc;
+
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
@@ -275,29 +277,16 @@ pub(crate) fn swatch(color: Hsla) -> Div {
     div().flex_shrink_0().size(px(8.)).rounded(px(2.)).bg(color)
 }
 
-/// slopmax's mark: three rising bars on a tile of its pink, as the app's
-/// icon draws them on a 64-point grid.
-pub(crate) fn logo(size: f32, c: &Colors) -> Div {
-    let unit = size / 64.;
-    div()
-        .relative()
+/// slopmax's mark, the same flat Option key (⌥) on cobalt that the web UI,
+/// the tray and the favicon show: `assets/icon/mark.svg`.
+pub(crate) fn logo(size: f32) -> Img {
+    img(Arc::new(Image::from_bytes(ImageFormat::Svg, MARK.to_vec())))
         .flex_shrink_0()
         .size(px(size))
-        .rounded(px(14. * unit))
-        .bg(c.accent)
-        .children(
-            [(14., 34., 16.), (27.5, 24., 26.), (41., 14., 36.)].map(|(x, y, h)| {
-                div()
-                    .absolute()
-                    .left(px(x * unit))
-                    .top(px(y * unit))
-                    .w(px(9. * unit))
-                    .h(px(h * unit))
-                    .rounded(px(2. * unit))
-                    .bg(white())
-            }),
-        )
 }
+
+/// The mark's source, which the tray on Windows and Linux shows too.
+pub(crate) const MARK: &[u8] = include_bytes!("../../../assets/icon/mark.svg");
 
 /// A choice of a few, as a row of segments, the chosen one raised; `choose`
 /// takes a press.
