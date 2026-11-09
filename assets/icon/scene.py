@@ -106,10 +106,17 @@ def fan(r, c, mat):
         bm.faces.new((r[i], r[(i + 1) % n], c)).material_index = mat
 for i in range(len(rings) - 1):
     bridge(rings[i], rings[i + 1], max(mats[i], mats[i + 1]) if mats[i + 1] == 2 else mats[i + 1])
-# close the dish and the floor with single n-gons, not triangle fans: a fan pole under the subdivision
-# surface showed up as a dark speck refracted through the front skirt
+# close the dish with a single n-gon, not a triangle fan: a fan pole under the subdivision surface showed up
+# as a dark speck refracted through the front skirt
 bm.faces.new(rings[-1]).material_index = 2
-bm.faces.new(list(reversed(rings[0]))).material_index = 3
+# the floor is concentric rings rising in an even, shallow dome toward the rim, closed by a small n-gon at the
+# centre. One n-gon for the whole floor subdivided into wedges whose tilt changed from vertex to vertex, and
+# the skirt refracted that as sawtooth teeth along its base.
+ring = rings[0]
+for sv in (0.05, 0.07, 0.1, 0.15, 0.22, 0.32, 0.45, 0.6, 0.8):
+    inner = [bm.verts.new(p) for p in rrect(A0 - sv, max(corner_r(0) - (sv - prof[0][0]), 0.03), 0.00015 * (sv ** -0.7 - 1))]
+    bridge(inner, ring, 3); ring = inner
+bm.faces.new(ring).material_index = 3
 bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
 me = bpy.data.meshes.new("keycap"); bm.to_mesh(me); bm.free()
 key = bpy.data.objects.new("keycap", me); s.collection.objects.link(key)
@@ -152,6 +159,23 @@ def add_glow(m, color, strength, height):
     nt.links.new(ml.outputs[0], g.inputs["Emission Strength"])
     m.cycles.emission_sampling = "NONE"
 add_glow(skirt, "#5CFFD2", 0.55, 0.28)
+# and in the floor, strongest at its rim: the skirt carries it up as the key's teal edge
+def rim_glow(m, color, strength, start):
+    nt = m.node_tree; g = [n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"][0]
+    tc = nt.nodes.new("ShaderNodeTexCoord"); sp = nt.nodes.new("ShaderNodeSeparateXYZ")
+    nt.links.new(tc.outputs["Object"], sp.inputs[0])
+    ax = nt.nodes.new("ShaderNodeMath"); ax.operation = "ABSOLUTE"; nt.links.new(sp.outputs["X"], ax.inputs[0])
+    ay = nt.nodes.new("ShaderNodeMath"); ay.operation = "ABSOLUTE"; nt.links.new(sp.outputs["Y"], ay.inputs[0])
+    mx = nt.nodes.new("ShaderNodeMath"); mx.operation = "MAXIMUM"
+    nt.links.new(ax.outputs[0], mx.inputs[0]); nt.links.new(ay.outputs[0], mx.inputs[1])
+    mr = nt.nodes.new("ShaderNodeMapRange"); mr.interpolation_type = "SMOOTHSTEP"
+    mr.inputs["From Min"].default_value = start; mr.inputs["From Max"].default_value = A0
+    mr.inputs["To Min"].default_value = 0.0; mr.inputs["To Max"].default_value = strength
+    nt.links.new(mx.outputs[0], mr.inputs["Value"])
+    g.inputs["Emission Color"].default_value = base.srgb(color)
+    nt.links.new(mr.outputs[0], g.inputs["Emission Strength"])
+    m.cycles.emission_sampling = "NONE"
+rim_glow(bot, "#5CFFD2", 3.0, 0.55)
 for m in (skirt, edge, dish, bot): me.materials.append(m)
 
 # ---------------------------------------------------------------- glyph: the option key, inlaid flush in the dish

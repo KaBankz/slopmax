@@ -67,5 +67,9 @@ Lessons from getting here, so an edit does not undo them:
   bright to reflect, and one light keeps the highlights honest.
 - Khronos PBR Neutral, not AgX, keeps the cobalt cobalt; AgX drifts saturated blue
   toward violet.
-- The dish rings are subdivided on the straight sides too, and the floor and dish are
-  closed with n-gons, not triangle fans: fan poles showed as dark specks through the skirt.
+- The dish rings are subdivided on the straight sides too, and the dish is closed with an
+  n-gon, not a triangle fan: fan poles showed as dark specks through the skirt.
+- The floor is concentric rings in an even, shallow dome, not one n-gon. Subdivided, a
+  floor-wide n-gon becomes wedges that each tilt a little differently, and the skirt
+  refracted that as sawtooth teeth along its base. The mint at the base comes from light
+  in the floor's rim (`rim_glow`), not from that rippled reflection.
