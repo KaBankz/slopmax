@@ -4,6 +4,10 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Fixed
+
+- On Windows, asking whether the proxy runs when it does not (`slopmax status`, the apps, `doctor`) answers at once instead of after a second or two. Windows sends a refused connection's SYN again before giving up; slopmax now turns that off for connections to this machine, as curl and Chrome do.
+
 ## [0.4.0] - 2026-11-09
 
 ### Added

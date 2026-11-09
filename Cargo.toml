@@ -57,10 +57,11 @@ tokio-util = { version = "0.7.19", default-features = false, features = ["rt"] }
 tower-service = "0.3.3"
 
 [workspace.lints.rust]
-# Unsafe code lives in three places, each allowed where it is written: the
+# Unsafe code lives in four places, each allowed where it is written: the
 # local time offset (slopmax-common), turning off terminal echo for secrets
-# (the CLI), and keeping the CLI's standard handles out of the background
-# proxy on Windows (the CLI).
+# (the CLI), keeping the CLI's standard handles out of the background proxy on
+# Windows (the CLI), and making refused local connections fail at once on
+# Windows (slopmax-net).
 unsafe_code = "deny"
 
 # A desktop UI lays out and draws every frame on the CPU: unoptimized, a GPUI

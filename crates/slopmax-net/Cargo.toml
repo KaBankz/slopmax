@@ -25,5 +25,9 @@ slopmax-common.workspace = true
 tokio.workspace = true
 tower-service.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+socket2 = "0.6.5"
+windows-sys = { version = "0.61", features = ["Win32_Networking_WinSock"] }
+
 [lints]
 workspace = true

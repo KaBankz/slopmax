@@ -26,7 +26,8 @@ use slopmax_core::provider::ProviderId;
 use slopmax_core::time::{SignedDuration, Timestamp};
 use slopmax_core::wire::Dialect;
 
-/// A dead proxy: connections to it are refused at once.
+/// A dead proxy: connections to it are refused at once (on Windows too, as
+/// slopmax turns off SYN resends for local connections).
 const NOWHERE: &str = "http://127.0.0.1:9";
 
 const STUBS: &[&str] = &[

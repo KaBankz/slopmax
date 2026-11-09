@@ -2,7 +2,7 @@
 //! `slopmax doctor` prints and the app shows. Findings never include a key
 //! or token.
 
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener};
 use std::path::Path;
 use std::time::Duration;
 
@@ -380,7 +380,7 @@ fn cliproxyapi(accounts: &[Account], port: u16) -> Section {
         return s;
     }
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    let running = TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok();
+    let running = crate::net::reachable(addr, Duration::from_millis(300));
     if running {
         s.add(
             Level::Note,

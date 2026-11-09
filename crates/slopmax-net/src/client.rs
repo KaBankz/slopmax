@@ -2,8 +2,6 @@
 //! HTTP CONNECT or SOCKS5 proxies, and timeouts.
 
 use std::fmt;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -16,7 +14,6 @@ use http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode, Uri}
 use http_body_util::Full;
 use hyper::body::Incoming;
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
-use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::connect::proxy::{SocksV5, Tunnel};
 use hyper_util::client::legacy::{self, Client as Pool};
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
@@ -27,6 +24,7 @@ use tokio::time::Instant;
 use tower_service::Service;
 
 use super::body::{self, BoxError, IdleTimeout};
+use super::dial::{Connecting, Dial};
 use super::form;
 
 /// Largest response body [`Response::bytes`] reads into memory.
@@ -224,19 +222,17 @@ impl Bypass {
 
 #[derive(Clone)]
 enum Through {
-    Tunnel(Tunnel<HttpConnector>),
-    Socks(SocksV5<HttpConnector>),
+    Tunnel(Tunnel<Dial>),
+    Socks(SocksV5<Dial>),
 }
 
 /// Opens TCP connections, directly or through the configured proxy.
 #[derive(Clone)]
 struct Connector {
-    direct: HttpConnector,
+    direct: Dial,
     through: Option<Through>,
     bypass: Arc<Bypass>,
 }
-
-type Connecting = Pin<Box<dyn Future<Output = Result<TokioIo<TcpStream>, BoxError>> + Send>>;
 
 impl Service<Uri> for Connector {
     type Response = TokioIo<TcpStream>;
@@ -258,10 +254,7 @@ impl Service<Uri> for Connector {
                 let connecting = socks.call(dst);
                 Box::pin(async move { connecting.await.map_err(Into::into) })
             }
-            _ => {
-                let connecting = self.direct.call(dst);
-                Box::pin(async move { connecting.await.map_err(Into::into) })
-            }
+            _ => self.direct.call(dst),
         }
     }
 }
@@ -380,13 +373,7 @@ impl Builder {
     }
 
     pub fn build(self) -> Client {
-        let mut direct = HttpConnector::new();
-        direct.enforce_http(false);
-        direct.set_nodelay(true);
-        direct.set_keepalive(Some(Duration::from_secs(60)));
-        direct.set_connect_timeout(Some(
-            self.connect_timeout.unwrap_or(Duration::from_secs(10)),
-        ));
+        let direct = Dial::new(self.connect_timeout.unwrap_or(Duration::from_secs(10)));
 
         let through = self
             .proxy
