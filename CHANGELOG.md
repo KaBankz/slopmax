@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-09
+
 ### Security
 
 - rustls 0.23.46, which fixes GHSA-c8m5-c952-6cm4, GHSA-h2v8-394m-p7vv, GHSA-w44r-93j7-qv28 and GHSA-vp88-798v-h67f.
@@ -164,7 +166,8 @@ The first version.
 - `slopmax run`, `env`, and `setup` (with `--undo`) connect Claude Code and Codex.
 - Adapted Claude requests to the serving account (`metadata.user_id` and the billing-header checksum). 0.2.0 removed this.
 
-[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/KaBankz/slopmax/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/KaBankz/slopmax/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/KaBankz/slopmax/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/KaBankz/slopmax/compare/v0.1.0...v0.2.0
