@@ -292,7 +292,9 @@ mod tests {
     fn days_fill_their_buckets_by_provider() {
         let now = Timestamp::now();
         let since = summary::since("7d", now).unwrap();
-        let today = since + SignedDuration::from_hours(24 * 6 + 1);
+        // Now, not a fixed hour of today: before that hour it would be in
+        // the future, and not counted.
+        let today = now;
         let entries = vec![
             entry(
                 since + SignedDuration::from_hours(1),
