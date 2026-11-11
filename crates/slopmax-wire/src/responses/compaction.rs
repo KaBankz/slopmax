@@ -9,6 +9,7 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use serde_json::Value;
 
 /// Marks compaction content slopmax sealed.
 const SEAL: &str = "slopmax1:";
@@ -34,9 +35,54 @@ pub fn open(content: &str) -> Option<String> {
     String::from_utf8(STANDARD.decode(encoded).ok()?).ok()
 }
 
+/// Whether a Responses request needs compaction done by slopmax on an API
+/// that cannot do it: it asks for compaction, or brings back a summary
+/// slopmax sealed.
+pub fn involved(body: &[u8]) -> bool {
+    // Most requests never mention compaction, and need no parse to tell.
+    if memchr::memmem::find(body, b"compaction").is_none() {
+        return false;
+    }
+    let Ok(body) = serde_json::from_slice::<Value>(body) else {
+        return false;
+    };
+    let items = body.get("input").and_then(Value::as_array);
+    items
+        .into_iter()
+        .flatten()
+        .any(|item| match item.get("type").and_then(Value::as_str) {
+            Some("compaction_trigger") => true,
+            Some("compaction") => item
+                .get("encrypted_content")
+                .and_then(Value::as_str)
+                .is_some_and(|content| content.starts_with(SEAL)),
+            _ => false,
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tells_requests_that_need_local_compaction() {
+        let trigger = br#"{"input":[{"type":"message","role":"user","content":"hi"},{"type":"compaction_trigger"}]}"#;
+        assert!(involved(trigger));
+        let ours = format!(
+            r#"{{"input":[{{"type":"compaction","encrypted_content":"{}"}}]}}"#,
+            seal("done")
+        );
+        assert!(involved(ours.as_bytes()));
+        // OpenAI's own summary is for OpenAI; talk of compaction is talk.
+        assert!(!involved(
+            br#"{"input":[{"type":"compaction","encrypted_content":"gAAAA"}]}"#
+        ));
+        assert!(!involved(
+            br#"{"input":[{"type":"message","role":"user","content":"what is compaction_trigger?"}]}"#
+        ));
+        assert!(!involved(br#"{"input":"compaction"}"#));
+        assert!(!involved(br#"{"input":[]}"#));
+    }
 
     #[test]
     fn seals_round_trip_and_ignore_openais() {

@@ -50,6 +50,9 @@ pub fn encode(upstream: Dialect, request: &Request) -> Value {
             parts: vec![Part::Text(responses::compaction::PROMPT.to_owned())],
         });
         summary.tool_choice = ToolChoice::None;
+        // The summary is prose: a schema the client set for its answers,
+        // such as `codex exec --output-schema`, would shape it instead.
+        summary.format = None;
         compacting = summary;
         &compacting
     } else {
@@ -314,5 +317,38 @@ mod tests {
             panic!("expected the summary first");
         };
         assert!(summary.ends_with("Fixed a.rs; tests pass."), "{summary}");
+    }
+
+    /// `codex exec --output-schema` sets a schema for the answer; the
+    /// summary that compaction asks for is not that answer.
+    #[test]
+    fn compaction_asks_for_prose_whatever_the_answer_schema() {
+        let body = br#"{"model":"grok-4","stream":true,
+            "text":{"format":{"type":"json_schema","name":"out","strict":true,
+                "schema":{"type":"object","properties":{"ok":{"type":"boolean"}}}}},
+            "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"check"}]},
+                     {"type":"compaction_trigger"}]}"#;
+        let request = decode(Dialect::Responses, body).unwrap();
+        assert!(request.format.is_some());
+        assert!(
+            encode(Dialect::Chat, &request)
+                .get("response_format")
+                .is_none()
+        );
+        assert!(
+            encode(Dialect::Responses, &request)
+                .pointer("/text/format")
+                .is_none()
+        );
+
+        let answer = Request {
+            compact: false,
+            ..request
+        };
+        assert!(
+            encode(Dialect::Chat, &answer)
+                .get("response_format")
+                .is_some()
+        );
     }
 }

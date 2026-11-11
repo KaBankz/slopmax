@@ -91,7 +91,7 @@ async fn mock(log: Log, mut request: Request) -> Response {
     log.lock().unwrap().push(Seen {
         path: parts.uri.to_string(),
         headers: parts.headers.clone(),
-        body,
+        body: body.clone(),
     });
     let headers = &parts.headers;
     match (parts.method, parts.uri.path()) {
@@ -133,6 +133,8 @@ async fn mock(log: Log, mut request: Request) -> Response {
             keyed(headers, "Bearer key-xai", chat_answer())
         }
         (Method::POST, "/local/v1/chat/completions") => chat_answer(),
+        (Method::POST, "/deepseek/v1/chat/completions") => mock_deepseek(&body),
+        (Method::POST, "/ollama/v1/responses") => mock_ollama_responses(&body),
         (Method::GET, "/xai/v1/models") => {
             let list =
                 json!({"object": "list", "data": [{"id": "grok-4"}, {"id": "grok-code-fast-1"}]});
@@ -255,6 +257,75 @@ fn keyed(headers: &HeaderMap, authorization: &str, answer: Response) -> Response
         Some(value) if value == authorization => answer,
         _ => reply(StatusCode::UNAUTHORIZED, &[], ""),
     }
+}
+
+/// A thinking model behind a Chat API, as DeepSeek's: it refuses a tool
+/// loop whose earlier tool-calling turns lack `reasoning_content`, thinks,
+/// then calls `Bash` or, given a result, answers.
+fn mock_deepseek(body: &[u8]) -> Response {
+    let request: Value = serde_json::from_slice(body).unwrap();
+    let messages = request["messages"].as_array().unwrap();
+    let missing = messages.iter().any(|m| {
+        m["role"] == "assistant"
+            && m.get("tool_calls").is_some()
+            && m.get("reasoning_content").and_then(Value::as_str).is_none()
+    });
+    if missing {
+        let refusal = json!({"error": {"type": "invalid_request_error", "message":
+            "The `reasoning_content` in the thinking mode must be passed back to the API."}});
+        return reply(StatusCode::BAD_REQUEST, &[], refusal.to_string());
+    }
+    let events = if messages.last().unwrap()["role"] == "tool" {
+        vec![
+            json!({"choices": [{"index": 0, "delta": {"role": "assistant", "reasoning_content": "It listed."}}]}),
+            json!({"choices": [{"index": 0, "delta": {"content": "a.rs"}, "finish_reason": "stop"}]}),
+        ]
+    } else {
+        vec![
+            json!({"choices": [{"index": 0, "delta": {"role": "assistant", "reasoning_content": "Need "}}]}),
+            json!({"choices": [{"index": 0, "delta": {"reasoning_content": "ls."}}]}),
+            json!({"choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_ds",
+                "type": "function", "function": {"name": "Bash", "arguments": "{\"command\":\"ls\"}"}}]},
+                "finish_reason": "tool_calls"}]}),
+        ]
+    };
+    let mut stream: String = events.iter().map(|e| format!("data: {e}\n\n")).collect();
+    stream.push_str("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\ndata: [DONE]\n\n");
+    reply(
+        StatusCode::OK,
+        &[("content-type", "text/event-stream".to_owned())],
+        stream,
+    )
+}
+
+/// A local server speaking Responses, as Ollama's: Codex's compaction
+/// items are not input types it knows.
+fn mock_ollama_responses(body: &[u8]) -> Response {
+    let request: Value = serde_json::from_slice(body).unwrap();
+    let unknown = request["input"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|item| {
+            matches!(
+                item["type"].as_str(),
+                Some("compaction_trigger" | "compaction")
+            )
+        });
+    if let Some(item) = unknown {
+        let refusal = json!({"error": {"type": "invalid_request_error",
+            "message": format!("invalid input item type: {}", item["type"])}});
+        return reply(StatusCode::BAD_REQUEST, &[], refusal.to_string());
+    }
+    let stream = concat!(
+        "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"m1\",\"delta\":\"Fixed a.rs; tests pass.\"}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"usage\":{\"input_tokens\":9,\"output_tokens\":6}}}\n\n",
+    );
+    reply(
+        StatusCode::OK,
+        &[("content-type", "text/event-stream".to_owned())],
+        stream,
+    )
 }
 
 fn chat_answer() -> Response {
@@ -1690,6 +1761,137 @@ async fn claude_code_runs_gpt_models_on_chatgpt_accounts() {
     let response = claude_request(&h).send().await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(paths(&h).last().unwrap(), "/v1/messages?beta=true");
+}
+
+#[tokio::test]
+async fn claude_code_keeps_a_thinking_chat_models_tool_loop_going() {
+    let h = harness_of(
+        |base| {
+            vec![endpoint(
+                base,
+                "deepseek",
+                Dialect::Chat,
+                &["deepseek-*"],
+                "key-ds",
+            )]
+        },
+        |_| {},
+    )
+    .await;
+    let turn = |messages: &str| {
+        let body = format!(
+            r#"{{"model":"deepseek-v4","max_tokens":1000,"stream":true,"system":"You are Claude Code.","messages":{messages},"tools":[{{"name":"Bash","description":"Run","input_schema":{{"type":"object"}}}}]}}"#
+        );
+        claude_request(&h).body(body)
+    };
+    let response = turn(r#"[{"role":"user","content":"list files"}]"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let stream = response.text().await.unwrap();
+    assert!(
+        stream.contains(r#""type":"tool_use","id":"call_ds","name":"Bash""#),
+        "{stream}"
+    );
+    assert!(!stream.contains("Need ls."), "Claude Code is not shown it");
+
+    // Claude Code sends the call back without the thinking it never saw;
+    // the model gets that thinking back, and a blank for a call from
+    // before slopmax's memory.
+    let response = turn(
+        r#"[{"role":"user","content":"list files"},
+            {"role":"assistant","content":[{"type":"tool_use","id":"call_old","name":"Bash","input":{"command":"pwd"}}]},
+            {"role":"user","content":[{"type":"tool_result","tool_use_id":"call_old","content":"/src"}]},
+            {"role":"assistant","content":[{"type":"tool_use","id":"call_ds","name":"Bash","input":{"command":"ls"}}]},
+            {"role":"user","content":[{"type":"tool_result","tool_use_id":"call_ds","content":"a.rs"}]}]"#,
+    )
+    .send()
+    .await
+    .unwrap();
+    let status = response.status();
+    let stream = response.text().await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{stream}");
+    assert!(stream.contains(r#""text":"a.rs""#), "{stream}");
+    let seen = h.log.lock().unwrap().last().cloned().unwrap();
+    let sent: Value = serde_json::from_slice(&seen.body).unwrap();
+    let thoughts: Vec<&Value> = sent["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["role"] == "assistant")
+        .map(|m| &m["reasoning_content"])
+        .collect();
+    assert_eq!(thoughts, [" ", "Need ls."]);
+}
+
+#[tokio::test]
+async fn codex_compacts_on_responses_servers_that_cannot() {
+    let h = harness_of(
+        |base| {
+            vec![endpoint(
+                base,
+                "ollama",
+                Dialect::Responses,
+                &["qwen3-*"],
+                "",
+            )]
+        },
+        |_| {},
+    )
+    .await;
+    let codex = |body: String| {
+        client()
+            .post(format!("{}/codex/responses", h.proxy))
+            .header("authorization", format!("Bearer {KEY}"))
+            .header("content-type", "application/json")
+            .body(body)
+    };
+    // An ordinary turn goes as Codex wrote it.
+    let plain = r#"{"model":"qwen3-coder","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"fix a.rs"}]}]}"#;
+    let response = codex(plain.into()).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let seen = h.log.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(seen.path, "/ollama/v1/responses");
+    assert_eq!(seen.body, plain.as_bytes());
+
+    // Compaction is asked of the model as a summary, and comes back to
+    // Codex as one compaction item.
+    let compact = r#"{"model":"qwen3-coder","stream":true,"text":{"format":{"type":"json_schema","name":"out","schema":{"type":"object"}}},"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"fix a.rs"}]},{"type":"compaction_trigger"}]}"#;
+    let response = codex(compact.into()).send().await.unwrap();
+    let status = response.status();
+    let stream = response.text().await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{stream}");
+    let seen = h.log.lock().unwrap().last().cloned().unwrap();
+    let sent: Value = serde_json::from_slice(&seen.body).unwrap();
+    let last = sent["input"].as_array().unwrap().last().unwrap();
+    assert!(
+        last["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Summarize"),
+        "{sent}"
+    );
+    assert!(sent.pointer("/text/format").is_none(), "{sent}");
+    let sealed = stream
+        .split(r#""encrypted_content":""#)
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap_or_else(|| panic!("no compaction item in {stream}"));
+    assert!(!stream.contains("output_text"), "{stream}");
+
+    // The next turn brings the summary back, which the server gets as text.
+    let next = format!(
+        r#"{{"model":"qwen3-coder","stream":true,"input":[{{"type":"compaction","encrypted_content":"{sealed}"}},{{"type":"message","role":"user","content":[{{"type":"input_text","text":"go on"}}]}}]}}"#
+    );
+    let response = codex(next).send().await.unwrap();
+    let status = response.status();
+    let stream = response.text().await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{stream}");
+    let seen = h.log.lock().unwrap().last().cloned().unwrap();
+    let sent: Value = serde_json::from_slice(&seen.body).unwrap();
+    let first = sent["input"][0]["content"][0]["text"].as_str().unwrap();
+    assert!(first.ends_with("Fixed a.rs; tests pass."), "{sent}");
 }
 
 #[tokio::test]

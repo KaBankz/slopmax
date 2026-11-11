@@ -89,6 +89,12 @@ impl Provider for Compat {
             .map_or(&[], |e| std::slice::from_ref(&e.dialect))
     }
 
+    /// Local servers and gateways that speak Responses refuse Codex's
+    /// compaction items, or answer them as an ordinary turn.
+    fn compacts(&self) -> bool {
+        false
+    }
+
     fn catalog<'a>(
         &'a self,
         _http: &'a Client,

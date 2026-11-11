@@ -43,7 +43,7 @@ use crate::time::{SignedDuration, Timestamp};
 use crate::wire::ir::{self, Answer, Event, Part};
 use crate::wire::rawjson::{self, Seg};
 use crate::wire::sse::Tap;
-use crate::wire::{Dialect, translate};
+use crate::wire::{Dialect, responses, translate};
 
 /// Largest request body accepted (images make Messages bodies big).
 const MAX_BODY: usize = 256 * 1024 * 1024;
@@ -124,6 +124,12 @@ impl Inbound {
         .await;
         let _ = self.decoded.set(decoded.clone());
         decoded
+    }
+
+    /// Whether the request asks for Codex's compaction or brings back a
+    /// summary slopmax sealed.
+    fn compaction(&self) -> bool {
+        self.json && responses::compaction::involved(&self.body)
     }
 
     /// The request [`Inbound::decode`] decoded.
@@ -569,7 +575,11 @@ async fn attempt(
     let dialect = inbound.target.dialect;
     let model = Some(step.model.as_str()).filter(|m| !m.is_empty());
     // The format to translate into, when the account's API speaks another.
-    let lane = lane(provider.dialects(&account), dialect);
+    let lane = lane(provider.dialects(&account), dialect).or_else(|| {
+        // Compaction the API cannot do is done here, by translation.
+        let local = dialect == Dialect::Responses && !provider.compacts() && inbound.compaction();
+        local.then_some(Dialect::Responses)
+    });
     // Keys cannot be refreshed; a rejected one is simply set aside.
     let refreshable = account.tokens.refresh_token.is_some() || account.link.is_some();
     let mut stripped = moved;
@@ -784,8 +794,7 @@ async fn outbound(
         });
     };
     let decoded = inbound.decode().await?;
-    let replay = (upstream == Dialect::Responses && !stripped)
-        .then(|| (Arc::clone(app), account.id.clone()));
+    let replay = (!stripped).then(|| (Arc::clone(app), account.id.clone()));
     let (model, session, which) = (step.model.clone(), inbound.session.clone(), step.provider);
     let body = offload(inbound.body.len(), move || {
         let mut request = ir::Request::clone(&decoded);
@@ -795,7 +804,7 @@ async fn outbound(
         }
         if let Some((app, id)) = replay {
             let replay = app.replay.lock().unwrap_or_else(|p| p.into_inner());
-            restore_reasoning(&mut request, |call| replay.recall(call, &id));
+            restore_reasoning(&mut request, upstream, |call| replay.recall(call, &id));
         }
         let mut body = translate::encode(upstream, &request);
         which.get().shape(upstream, &mut body);
@@ -818,9 +827,15 @@ async fn outbound(
     })
 }
 
-/// Puts reasoning state the upstream issued on an earlier turn back before
-/// the calls it led to, when `recall` still has it.
-fn restore_reasoning(request: &mut ir::Request, recall: impl Fn(&str) -> Option<String>) {
+/// Puts reasoning the upstream gave on an earlier turn back before the
+/// calls it led to, when `recall` still has it: Responses' sealed state, or
+/// the text a Chat model thought, which thinking models such as DeepSeek's
+/// require back and Claude Code never saw.
+fn restore_reasoning(
+    request: &mut ir::Request,
+    upstream: Dialect,
+    recall: impl Fn(&str) -> Option<String>,
+) {
     for message in &mut request.messages {
         let first_call = message
             .parts
@@ -830,13 +845,28 @@ fn restore_reasoning(request: &mut ir::Request, recall: impl Fn(&str) -> Option<
         let Part::Call(call) = &message.parts[at] else {
             continue;
         };
-        if let Some(state) = recall(&call.id) {
-            let reasoning = ir::Reasoning {
+        let Some(state) = recall(&call.id) else {
+            continue;
+        };
+        let reasoning = match upstream {
+            Dialect::Responses => ir::Reasoning {
                 text: String::new(),
                 opaque: Some(state),
-            };
-            message.parts.insert(at, Part::Reasoning(reasoning));
-        }
+            },
+            // A client that kept the text sent it back itself.
+            _ if message
+                .parts
+                .iter()
+                .any(|p| matches!(p, Part::Reasoning(r) if !r.text.is_empty())) =>
+            {
+                continue;
+            }
+            _ => ir::Reasoning {
+                text: state,
+                opaque: None,
+            },
+        };
+        message.parts.insert(at, Part::Reasoning(reasoning));
     }
 }
 
@@ -1066,21 +1096,18 @@ async fn read_whole(opened: Opened) -> Result<Bytes, (End, body::BoxError)> {
     Ok(whole.into())
 }
 
-/// Watches a translated answer for reasoning state, to restore it before
-/// the calls it led to on the next turn.
+/// Watches a translated answer for reasoning, to restore it before the
+/// calls it led to on the next turn: Responses' sealed state, or a Chat
+/// model's reasoning text.
 fn remembering(app: &Arc<App>, account: String, upstream: Dialect) -> Watch {
-    if upstream != Dialect::Responses {
-        return Box::new(|_| {});
-    }
     let app = Arc::clone(app);
-    let mut pending: Option<String> = None;
-    Box::new(move |event| match event {
-        Event::State(state) => pending = Some(state.clone()),
-        Event::Call(call) => {
-            if let Some(state) = pending.take() {
-                let mut replay = app.replay.lock().unwrap_or_else(|p| p.into_inner());
-                replay.remember(&call.id, &account, state);
-            }
+    let mut pending = String::new();
+    Box::new(move |event| match (event, upstream) {
+        (Event::State(state), Dialect::Responses) => pending.clone_from(state),
+        (Event::Reasoning(text), Dialect::Chat) => pending.push_str(text),
+        (Event::Call(call), _) if !pending.is_empty() => {
+            let mut replay = app.replay.lock().unwrap_or_else(|p| p.into_inner());
+            replay.remember(&call.id, &account, std::mem::take(&mut pending));
         }
         _ => {}
     })

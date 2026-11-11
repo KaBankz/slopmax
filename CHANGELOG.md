@@ -4,6 +4,15 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Added
+
+- Claude Fable 5.2 is priced, at Fable 5.1's rates. Its usage showed no cost before.
+
+### Fixed
+
+- Claude Code can run tools on a thinking model behind a Chat endpoint, such as DeepSeek's. From the second tool call on, the endpoint refused the request ("reasoning_content in the thinking mode must be passed back"), because Claude Code is not shown the model's thinking and so cannot send it back. slopmax now remembers that thinking and returns it with the turn it led to.
+- Codex can compact a conversation on an endpoint that speaks Responses but cannot compact, such as Ollama's. The endpoint used to refuse the compaction request or answer it as an ordinary turn. slopmax now asks the model for a summary itself, as it already did for Chat endpoints.
+
 ## [0.4.4] - 2026-11-09
 
 ### Fixed

@@ -238,6 +238,13 @@ pub fn encode(request: &Request) -> Value {
 
 fn messages(request: &Request) -> Vec<Value> {
     let mut out = Vec::new();
+    // A thinking model, such as DeepSeek's, refuses a tool loop unless each
+    // turn that called a tool brings back what the model thought. When a
+    // turn's thoughts are lost, a blank stands in for them.
+    let thinks = request
+        .messages
+        .iter()
+        .any(|m| m.role == Role::Assistant && !thought(m).is_empty());
     if !request.system.is_empty() {
         out.push(json!({"role": "system", "content": request.system.join("\n\n")}));
     }
@@ -274,6 +281,12 @@ fn messages(request: &Request) -> Vec<Value> {
                 }
                 let mut assistant = json!({"role": "assistant",
                     "content": if text.is_empty() { Value::Null } else { json!(text) }});
+                let reasoning = thought(message);
+                if !reasoning.is_empty() {
+                    assistant["reasoning_content"] = json!(reasoning);
+                } else if thinks && !calls.is_empty() {
+                    assistant["reasoning_content"] = json!(" ");
+                }
                 if !calls.is_empty() {
                     assistant["tool_calls"] = Value::Array(calls);
                 }
@@ -331,6 +344,19 @@ fn str_of(value: &Value, key: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned()
+}
+
+/// What a Chat model thought before this turn, as it gave it. Reasoning
+/// with sealed state came from another API, which only that API reads.
+fn thought(message: &Message) -> String {
+    message
+        .parts
+        .iter()
+        .filter_map(|p| match p {
+            Part::Reasoning(r) if r.opaque.is_none() => Some(r.text.as_str()),
+            _ => None,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -420,6 +446,70 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Value>(arguments).unwrap()["input"],
             "*** Begin Patch"
+        );
+    }
+
+    /// DeepSeek's thinking models refuse a tool loop whose earlier turns
+    /// lack `reasoning_content`.
+    #[test]
+    fn thinking_goes_back_with_the_turns_that_called_tools() {
+        let call = |id: &str| {
+            Part::Call(Call {
+                id: id.into(),
+                name: "Bash".into(),
+                input: "{}".into(),
+                kind: ToolKind::Function,
+            })
+        };
+        let thought = |text: &str, opaque: Option<&str>| {
+            Part::Reasoning(crate::ir::Reasoning {
+                text: text.into(),
+                opaque: opaque.map(str::to_owned),
+            })
+        };
+        let assistant = |parts| Message {
+            role: Role::Assistant,
+            parts,
+        };
+        let request = Request {
+            model: "deepseek-v4".into(),
+            messages: vec![
+                assistant(vec![thought("Need ls.", None), call("c1")]),
+                // Its thoughts were lost: a blank stands in.
+                assistant(vec![call("c2")]),
+                // State another API sealed is not this model's to read.
+                assistant(vec![thought("Plan", Some("gAAAA")), call("c3")]),
+                assistant(vec![Part::Text("Done.".into())]),
+            ],
+            ..Request::default()
+        };
+        let out = encode(&request);
+        let reasoning: Vec<Option<&str>> = out["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m.get("reasoning_content").and_then(Value::as_str))
+            .collect();
+        assert_eq!(reasoning, [Some("Need ls."), Some(" "), Some(" "), None]);
+
+        // A model that never thought gets no field it may not know.
+        let plain = Request {
+            messages: vec![assistant(vec![call("c1")])],
+            ..Request::default()
+        };
+        assert!(
+            encode(&plain)["messages"][0]
+                .get("reasoning_content")
+                .is_none()
+        );
+        let sealed = Request {
+            messages: vec![assistant(vec![thought("Plan", Some("gAAAA")), call("c1")])],
+            ..Request::default()
+        };
+        assert!(
+            encode(&sealed)["messages"][0]
+                .get("reasoning_content")
+                .is_none()
         );
     }
 }

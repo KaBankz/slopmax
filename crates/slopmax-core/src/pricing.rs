@@ -46,6 +46,7 @@ impl From<Custom> for Price {
 /// writes are 1.25× input; cache reads vary by model.
 const CLAUDE: &[(&str, f64, f64, f64)] = &[
     // (model, input, output, cache read)
+    ("claude-fable-5-2", 10.0, 50.0, 0.25),
     ("claude-fable-5-1", 10.0, 50.0, 0.25),
     ("claude-mythos-5-1", 10.0, 50.0, 0.25),
     ("claude-fable-5", 10.0, 50.0, 1.0),
@@ -188,6 +189,7 @@ mod tests {
     fn matches_a_model_or_its_dated_snapshots() {
         assert_eq!(list("claude-opus-5-5").unwrap().input, 4.0);
         assert_eq!(list("claude-opus-5").unwrap().input, 5.0);
+        assert_eq!(list("claude-fable-5-2").unwrap().cache_read, 0.25);
         assert_eq!(list("claude-fable-5-1").unwrap().cache_read, 0.25);
         assert_eq!(list("claude-fable-5").unwrap().cache_read, 1.0);
         assert_eq!(list("claude-haiku-4-5-20251001").unwrap().output, 5.0);

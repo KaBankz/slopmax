@@ -336,6 +336,12 @@ pub trait Provider: Send + Sync {
         self.spec().dialects
     }
 
+    /// Whether the API compacts a Codex conversation itself when Codex asks
+    /// (a `compaction_trigger` item). When it cannot, slopmax does.
+    fn compacts(&self) -> bool {
+        true
+    }
+
     /// Whether the account serves `model`.
     fn serves(&self, _account: &Account, model: &str) -> bool {
         self.spec().models.iter().any(|p| matches(p, model))
