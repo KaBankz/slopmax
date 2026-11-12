@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-12
+
 ### Added
 
 - Claude Fable 5.2 is priced, at Fable 5.1's rates. Its usage showed no cost before.
@@ -204,7 +206,8 @@ The first version.
 - `slopmax run`, `env`, and `setup` (with `--undo`) connect Claude Code and Codex.
 - Adapted Claude requests to the serving account (`metadata.user_id` and the billing-header checksum). 0.2.0 removed this.
 
-[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.4.4...HEAD
+[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/KaBankz/slopmax/compare/v0.4.4...v0.5.0
 [0.4.4]: https://github.com/KaBankz/slopmax/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/KaBankz/slopmax/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/KaBankz/slopmax/compare/v0.4.1...v0.4.2
