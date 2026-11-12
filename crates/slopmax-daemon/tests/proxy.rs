@@ -135,6 +135,7 @@ async fn mock(log: Log, mut request: Request) -> Response {
         (Method::POST, "/local/v1/chat/completions") => chat_answer(),
         (Method::POST, "/deepseek/v1/chat/completions") => mock_deepseek(&body),
         (Method::POST, "/ollama/v1/responses") => mock_ollama_responses(&body),
+        (Method::POST, "/mistral/v1/chat/completions") => mock_mistral(),
         (Method::GET, "/xai/v1/models") => {
             let list =
                 json!({"object": "list", "data": [{"id": "grok-4"}, {"id": "grok-code-fast-1"}]});
@@ -291,6 +292,28 @@ fn mock_deepseek(body: &[u8]) -> Response {
     };
     let mut stream: String = events.iter().map(|e| format!("data: {e}\n\n")).collect();
     stream.push_str("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5}}\n\ndata: [DONE]\n\n");
+    reply(
+        StatusCode::OK,
+        &[("content-type", "text/event-stream".to_owned())],
+        stream,
+    )
+}
+
+/// A thinking model behind Mistral's Chat API: content comes as typed
+/// parts while it thinks, then as plain strings.
+fn mock_mistral() -> Response {
+    let events = [
+        json!({"choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}}]}),
+        json!({"choices": [{"index": 0, "delta": {"content": [{"type": "thinking",
+            "thinking": [{"type": "text", "text": "Short answer."}], "closed": true}]}}]}),
+        json!({"choices": [{"index": 0, "delta": {"content": [{"type": "thinking",
+            "thinking": [{"type": "text", "text": " Done."}], "closed": true},
+            {"type": "text", "text": "Link "}]}}]}),
+        json!({"choices": [{"index": 0, "delta": {"content": "works."}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 31, "completion_tokens": 9}}),
+    ];
+    let mut stream: String = events.iter().map(|e| format!("data: {e}\n\n")).collect();
+    stream.push_str("data: [DONE]\n\n");
     reply(
         StatusCode::OK,
         &[("content-type", "text/event-stream".to_owned())],
@@ -1823,6 +1846,46 @@ async fn claude_code_keeps_a_thinking_chat_models_tool_loop_going() {
         .map(|m| &m["reasoning_content"])
         .collect();
     assert_eq!(thoughts, [" ", "Need ls."]);
+}
+
+#[tokio::test]
+async fn answers_in_typed_parts_reach_claude_code_and_codex() {
+    let h = harness_of(
+        |base| {
+            vec![endpoint(
+                base,
+                "mistral",
+                Dialect::Chat,
+                &["magistral-*"],
+                "key-ms",
+            )]
+        },
+        |_| {},
+    )
+    .await;
+    let body = r#"{"model":"magistral-medium","max_tokens":1000,"stream":true,"messages":[{"role":"user","content":"test"}]}"#;
+    let response = claude_request(&h).body(body).send().await.unwrap();
+    let status = response.status();
+    let stream = response.text().await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{stream}");
+    assert!(stream.contains(r#""text":"Link ""#), "{stream}");
+    assert!(stream.contains(r#""text":"works.""#), "{stream}");
+    assert!(!stream.contains("closed"), "{stream}");
+
+    let response = client()
+        .post(format!("{}/codex/responses", h.proxy))
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("content-type", "application/json")
+        .body(r#"{"model":"magistral-medium","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"test"}]}]}"#)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let stream = response.text().await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{stream}");
+    assert!(stream.contains(r#""text":"Link works.""#), "{stream}");
+    assert!(stream.contains("Short answer. Done."), "{stream}");
+    assert!(!stream.contains("closed"), "{stream}");
 }
 
 #[tokio::test]

@@ -4,6 +4,11 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Fixed
+
+- A thinking model behind a Chat endpoint that sends its answer in typed parts, as Mistral's do, now reaches Claude Code and Codex whole. slopmax dropped every part, so the answer came through with pieces missing, or empty, and Codex never showed the thinking.
+- When a Chat endpoint sends a model's thinking under two names at once, `reasoning_content` and `reasoning`, Codex shows it once rather than twice.
+
 ## [0.5.0] - 2026-11-12
 
 ### Added

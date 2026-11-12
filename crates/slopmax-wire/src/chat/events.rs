@@ -66,17 +66,28 @@ impl Events {
     }
 
     fn delta(&mut self, delta: &Value, out: &mut Vec<Event>) {
-        for key in ["reasoning_content", "reasoning"] {
-            if let Some(text) = delta.get(key).and_then(Value::as_str)
-                && !text.is_empty()
-            {
-                out.push(Event::Reasoning(text.to_owned()));
-            }
+        // Servers name the thinking differently, and some send it under two
+        // names at once, so only the first name with text counts.
+        let reasoning = ["reasoning_content", "reasoning", "reasoning_details"]
+            .into_iter()
+            .map(|key| text_of(delta.get(key)))
+            .find(|text| !text.is_empty());
+        let separate_reasoning = reasoning.is_some();
+        if let Some(text) = reasoning {
+            out.push(Event::Reasoning(text));
         }
-        if let Some(text) = delta.get("content").and_then(Value::as_str)
-            && !text.is_empty()
-        {
-            out.push(Event::Text(text.to_owned()));
+        match delta.get("content") {
+            Some(Value::String(text)) if !text.is_empty() => {
+                out.push(Event::Text(text.clone()));
+            }
+            // Some servers, Mistral's among them, send typed parts instead:
+            // the thinking, then the text, in one chunk or across several.
+            Some(Value::Array(parts)) => {
+                for part in parts {
+                    part_event(part, separate_reasoning, out);
+                }
+            }
+            _ => {}
         }
         let calls = delta.get("tool_calls").and_then(Value::as_array);
         for (position, call) in calls.into_iter().flatten().enumerate() {
@@ -153,6 +164,48 @@ impl Events {
             input: partial.arguments,
             kind: ToolKind::Function,
         }
+    }
+}
+
+/// One typed part of a message's content. Thinking also sent under
+/// `reasoning_content` and the like was already passed on from there.
+fn part_event(part: &Value, separate_reasoning: bool, out: &mut Vec<Event>) {
+    let event = match part {
+        Value::String(text) => Event::Text(text.clone()),
+        _ => match part.get("type").and_then(Value::as_str).unwrap_or("") {
+            "thinking" | "reasoning" | "thought" | "reasoning.text" | "reasoning_text" => {
+                if separate_reasoning {
+                    return;
+                }
+                let text = ["thinking", "reasoning", "reasoning_content", "text"]
+                    .into_iter()
+                    .map(|key| text_of(part.get(key)))
+                    .find(|text| !text.is_empty())
+                    .unwrap_or_default();
+                Event::Reasoning(text)
+            }
+            "text" | "output_text" => Event::Text(text_of(part.get("text"))),
+            "refusal" => Event::Text(text_of(part.get("refusal").or_else(|| part.get("text")))),
+            // Images and the like have no place in a text answer.
+            _ => return,
+        },
+    };
+    if !matches!(&event, Event::Text(text) | Event::Reasoning(text) if text.is_empty()) {
+        out.push(event);
+    }
+}
+
+/// The text in a string, a `{"text": …}` part, or a list of either.
+fn text_of(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(items)) => items.iter().map(|item| text_of(Some(item))).collect(),
+        Some(Value::Object(object)) => object
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        _ => String::new(),
     }
 }
 
@@ -273,6 +326,88 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn thinking_and_text_in_typed_parts() {
+        // Mistral streams a thinking model's answer as content parts, the
+        // thinking's own text in parts too, then falls back to strings.
+        let mut events = Events::new(HashSet::new());
+        let mut out = Vec::new();
+        for c in [
+            chunk(json!({"role": "assistant", "content": ""}), None),
+            chunk(
+                json!({"content": [{"type": "thinking", "thinking": [{"type": "text", "text": "The"}], "closed": true}]}),
+                None,
+            ),
+            chunk(
+                json!({"content": [
+                    {"type": "thinking", "thinking": [{"type": "text", "text": "erse."}], "closed": true},
+                    {"type": "text", "text": "Got it, "}
+                ]}),
+                None,
+            ),
+            chunk(json!({"content": "all good."}), None),
+            chunk(
+                json!({"content": [{"type": "image_url", "image_url": {"url": "x"}}, {"type": "refusal", "refusal": "!"}]}),
+                Some("stop"),
+            ),
+        ] {
+            events.feed(&c, &mut out);
+        }
+        events.finish(&mut out);
+        assert_eq!(
+            out[..5],
+            [
+                Event::Reasoning("The".into()),
+                Event::Reasoning("erse.".into()),
+                Event::Text("Got it, ".into()),
+                Event::Text("all good.".into()),
+                Event::Text("!".into()),
+            ]
+        );
+        assert!(matches!(
+            out[5],
+            Event::Done {
+                stop: Stop::End,
+                ..
+            }
+        ));
+
+        let completion = json!({"object": "chat.completion", "choices": [{"index": 0,
+            "message": {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "Short answer."},
+                {"type": "text", "text": "Test received."}
+            ]}, "finish_reason": "stop"}]});
+        let out = whole(&completion, HashSet::new());
+        assert_eq!(out[0], Event::Reasoning("Short answer.".into()));
+        assert_eq!(out[1], Event::Text("Test received.".into()));
+    }
+
+    #[test]
+    fn thinking_under_two_names_counts_once() {
+        let mut events = Events::new(HashSet::new());
+        let mut out = Vec::new();
+        events.feed(
+            &chunk(
+                json!({"reasoning_content": "Hmm", "reasoning": "Hmm",
+                    "content": [{"type": "thinking", "thinking": "Hmm"}, {"type": "text", "text": "Yes"}]}),
+                None,
+            ),
+            &mut out,
+        );
+        events.feed(
+            &chunk(json!({"reasoning_details": [{"type": "reasoning.text", "text": " more"}, {"type": "reasoning.encrypted", "data": "x"}]}), None),
+            &mut out,
+        );
+        assert_eq!(
+            out,
+            [
+                Event::Reasoning("Hmm".into()),
+                Event::Text("Yes".into()),
+                Event::Reasoning(" more".into()),
+            ]
+        );
     }
 
     #[test]
