@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-13
+
 ### Fixed
 
 - A thinking model behind a Chat endpoint that sends its answer in typed parts, as Mistral's do, now reaches Claude Code and Codex whole. slopmax dropped every part, so the answer came through with pieces missing, or empty, and Codex never showed the thinking.
@@ -211,7 +213,8 @@ The first version.
 - `slopmax run`, `env`, and `setup` (with `--undo`) connect Claude Code and Codex.
 - Adapted Claude requests to the serving account (`metadata.user_id` and the billing-header checksum). 0.2.0 removed this.
 
-[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/KaBankz/slopmax/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/KaBankz/slopmax/compare/v0.4.4...v0.5.0
 [0.4.4]: https://github.com/KaBankz/slopmax/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/KaBankz/slopmax/compare/v0.4.2...v0.4.3
