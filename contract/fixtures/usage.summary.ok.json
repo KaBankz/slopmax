@@ -39,7 +39,7 @@
           "output": 640,
           "cacheRead": 48000,
           "cacheWrite": 900,
-          "cost": 0.0202,
+          "cost": 0.02065,
           "unpriced": 0,
           "failed": 0
         }
@@ -51,7 +51,7 @@
       "output": 1920,
       "cacheRead": 144000,
       "cacheWrite": 2700,
-      "cost": 0.11915,
+      "cost": 0.1196,
       "unpriced": 0,
       "failed": 0
     }

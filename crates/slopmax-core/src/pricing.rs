@@ -41,12 +41,15 @@ impl From<Custom> for Price {
     }
 }
 
-/// Anthropic first-party API list prices as of 2026-09-25, by model id
+/// Anthropic first-party API list prices as of 2026-11-14, by model id
 /// prefix (dated ids such as `claude-haiku-4-5-20251001` match too). Cache
-/// writes are 1.25× input; cache reads vary by model.
+/// writes are 1.25× input; cache reads vary by model. Haiku 5.5 costs five
+/// times as much on a prompt over 100K tokens; it is priced here at the
+/// rate for shorter ones, as are GPT models past 272K.
 const CLAUDE: &[(&str, f64, f64, f64)] = &[
     // (model, input, output, cache read)
-    ("claude-fable-5-2", 10.0, 50.0, 0.25),
+    ("claude-fable-5-2", 8.0, 40.0, 0.20),
+    ("claude-mythos-5-2", 8.0, 40.0, 0.20),
     ("claude-fable-5-1", 10.0, 50.0, 0.25),
     ("claude-mythos-5-1", 10.0, 50.0, 0.25),
     ("claude-fable-5", 10.0, 50.0, 1.0),
@@ -56,18 +59,28 @@ const CLAUDE: &[(&str, f64, f64, f64)] = &[
     ("claude-opus-4-8", 5.0, 25.0, 0.50),
     ("claude-opus-4-7", 5.0, 25.0, 0.50),
     ("claude-opus-4-6", 5.0, 25.0, 0.50),
-    ("claude-sonnet-5-5", 2.0, 10.0, 0.20),
+    ("claude-opus-4-5", 5.0, 25.0, 0.50),
+    ("claude-sonnet-5-5", 2.0, 10.0, 0.10),
     ("claude-sonnet-5", 2.0, 10.0, 0.20),
     ("claude-sonnet-4-6", 3.0, 15.0, 0.30),
+    ("claude-sonnet-4-5", 3.0, 15.0, 0.30),
+    ("claude-haiku-5-5", 0.10, 0.50, 0.01),
     ("claude-haiku-4-5", 1.0, 5.0, 0.10),
 ];
 
-/// OpenAI API list prices as of 2026-09-22, when GPT-6's were halved.
-/// Cached input is a tenth of input, and caching costs nothing extra.
+/// OpenAI API list prices as of 2026-11-14 (GPT-5.6 Sol's is a promotion
+/// that ends 2026-11-30). Cached input is a tenth of input or less, and a
+/// 30-minute cache write costs 1.25× input.
 const OPENAI: &[(&str, f64, f64, f64)] = &[
     // (model, input, output, cache read)
+    ("gpt-6-astra", 10.0, 50.0, 1.0),
+    ("gpt-6.1-sol", 2.0, 10.0, 0.10),
+    ("gpt-6.1-terra", 1.0, 5.0, 0.05),
     ("gpt-6-sol", 2.0, 10.0, 0.20),
     ("gpt-6-luna", 0.10, 0.50, 0.01),
+    ("gpt-5.6-sol", 4.0, 20.0, 0.40),
+    ("gpt-5.6-terra", 2.0, 12.0, 0.20),
+    ("gpt-5.6-luna", 0.20, 1.20, 0.02),
 ];
 
 /// Subscription list prices in US dollars a month, by provider and the
@@ -142,16 +155,15 @@ pub fn price(model: &str, custom: &BTreeMap<String, Custom>) -> Option<Price> {
     if let Some((_, price)) = custom.iter().find(|(id, _)| is_model(model, id)) {
         return Some((*price).into());
     }
-    let claude = CLAUDE.iter().map(|row| (row, 1.25));
-    let openai = OPENAI.iter().map(|row| (row, 1.0));
-    claude
-        .chain(openai)
-        .find(|((id, ..), _)| is_model(model, id))
-        .map(|(&(_, input, output, cache_read), write)| Price {
+    CLAUDE
+        .iter()
+        .chain(OPENAI)
+        .find(|(id, ..)| is_model(model, id))
+        .map(|&(_, input, output, cache_read)| Price {
             input,
             output,
             cache_read,
-            cache_write: input * write,
+            cache_write: input * 1.25,
         })
 }
 
@@ -189,7 +201,7 @@ mod tests {
     fn matches_a_model_or_its_dated_snapshots() {
         assert_eq!(list("claude-opus-5-5").unwrap().input, 4.0);
         assert_eq!(list("claude-opus-5").unwrap().input, 5.0);
-        assert_eq!(list("claude-fable-5-2").unwrap().cache_read, 0.25);
+        assert_eq!(list("claude-fable-5-2").unwrap().cache_read, 0.20);
         assert_eq!(list("claude-fable-5-1").unwrap().cache_read, 0.25);
         assert_eq!(list("claude-fable-5").unwrap().cache_read, 1.0);
         assert_eq!(list("claude-haiku-4-5-20251001").unwrap().output, 5.0);
@@ -236,13 +248,44 @@ mod tests {
     }
 
     #[test]
-    fn openai_prices_charge_nothing_extra_to_cache() {
+    fn openai_prices_charge_for_cache_writes() {
         let sol = list("gpt-6-sol").unwrap();
         assert_eq!(
             (sol.input, sol.output, sol.cache_read, sol.cache_write),
-            (2.0, 10.0, 0.20, 2.0)
+            (2.0, 10.0, 0.20, 2.5)
         );
         assert_eq!(list("gpt-6-luna").unwrap().output, 0.50);
+    }
+
+    /// The models both providers listed on 2026-11-14, at that day's
+    /// list prices: (model, input, output, cache read).
+    #[test]
+    fn prices_every_listed_model() {
+        let listed = [
+            ("claude-fable-5-2", 8.0, 40.0, 0.20),
+            ("claude-mythos-5-2", 8.0, 40.0, 0.20),
+            ("claude-haiku-5-5", 0.10, 0.50, 0.01),
+            ("claude-sonnet-5-5", 2.0, 10.0, 0.10),
+            ("claude-opus-4-5-20251101", 5.0, 25.0, 0.50),
+            ("claude-sonnet-4-5-20250929", 3.0, 15.0, 0.30),
+            ("gpt-6-astra", 10.0, 50.0, 1.0),
+            ("gpt-6.1-sol", 2.0, 10.0, 0.10),
+            ("gpt-6.1-terra", 1.0, 5.0, 0.05),
+            ("gpt-5.6-sol", 4.0, 20.0, 0.40),
+            ("gpt-5.6-terra", 2.0, 12.0, 0.20),
+            ("gpt-5.6-luna", 0.20, 1.20, 0.02),
+        ];
+        for (model, input, output, cache_read) in listed {
+            let p = list(model).unwrap_or_else(|| panic!("{model} is unpriced"));
+            assert_eq!(
+                (p.input, p.output, p.cache_read),
+                (input, output, cache_read),
+                "{model}"
+            );
+        }
+        // A point release is its own model, not the one it follows.
+        assert_eq!(list("gpt-6.1-sol").unwrap().cache_read, 0.10);
+        assert_eq!(list("gpt-6-sol").unwrap().cache_read, 0.20);
     }
 
     #[test]
@@ -279,8 +322,8 @@ mod tests {
     #[test]
     fn costs_every_kind_of_token() {
         let p = list("claude-sonnet-5-5").unwrap();
-        // 1M of each: 2 + 10 + 0.20 + 2.50.
+        // 1M of each: 2 + 10 + 0.10 + 2.50.
         let cost = p.cost(1_000_000, 1_000_000, 1_000_000, 1_000_000);
-        assert!((cost - 14.70).abs() < 1e-9, "{cost}");
+        assert!((cost - 14.60).abs() < 1e-9, "{cost}");
     }
 }

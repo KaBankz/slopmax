@@ -79,7 +79,7 @@ pub fn run(config: &Config, store: &Store, range: &str, by: &str, json: bool) ->
     println!("{}", ui::bold(line("total", total)));
     let mut note = format!(
         "Usage for {title}. API cost is what these requests would cost at API list \
-         prices (Anthropic's as of 2026-09, and any set in config.toml)."
+         prices (Anthropic's and OpenAI's as of 2026-11, and any set in config.toml)."
     );
     if total.unpriced > 0 {
         let n = total.unpriced;

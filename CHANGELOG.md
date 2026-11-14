@@ -4,6 +4,14 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Added
+
+- `slopmax usage` prices Claude Haiku 5.5, Claude Mythos 5.2, Claude Opus 4.5 and Claude Sonnet 4.5, and GPT-6 Astra, GPT-6.1 Sol and Terra, and GPT-5.6 Sol, Terra and Luna, which Claude and ChatGPT now offer. Their usage showed no cost before.
+
+### Fixed
+
+- Claude Fable 5.2's usage is costed at its own list price, $8 and $40 per million tokens with cache reads at $0.20, rather than Fable 5.1's higher one, and Claude Sonnet 5.5's cache reads at $0.10 rather than $0.20. `slopmax usage` overstated both.
+
 ## [0.5.1] - 2026-11-13
 
 ### Fixed
