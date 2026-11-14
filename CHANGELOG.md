@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-14
+
 ### Added
 
 - `slopmax usage` prices Claude Haiku 5.5, Claude Mythos 5.2, Claude Opus 4.5 and Claude Sonnet 4.5, and GPT-6 Astra, GPT-6.1 Sol and Terra, and GPT-5.6 Sol, Terra and Luna, which Claude and ChatGPT now offer. Their usage showed no cost before.
@@ -221,7 +223,8 @@ The first version.
 - `slopmax run`, `env`, and `setup` (with `--undo`) connect Claude Code and Codex.
 - Adapted Claude requests to the serving account (`metadata.user_id` and the billing-header checksum). 0.2.0 removed this.
 
-[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/KaBankz/slopmax/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/KaBankz/slopmax/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/KaBankz/slopmax/compare/v0.4.4...v0.5.0
 [0.4.4]: https://github.com/KaBankz/slopmax/compare/v0.4.3...v0.4.4
