@@ -52,6 +52,23 @@ pub fn uuid_v4() -> String {
     )
 }
 
+/// Whether `id` is a UUID in its usual hyphenated form.
+pub fn is_uuid(id: &str) -> bool {
+    id.len() == 36
+        && id.char_indices().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_hexdigit(),
+        })
+}
+
+/// The id a redemption is sent with: the caller's own when it is a UUID, so
+/// a caller asking again is answered as before, else a fresh one.
+pub fn request_id(asked: Option<&str>) -> String {
+    asked
+        .filter(|id| is_uuid(id))
+        .map_or_else(uuid_v4, str::to_owned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,5 +82,18 @@ mod tests {
         assert_eq!(id.as_bytes()[14], b'4');
         assert!(matches!(id.as_bytes()[19], b'8' | b'9' | b'a' | b'b'));
         assert_ne!(uuid_v4(), uuid_v4());
+        assert!(is_uuid(&id));
+        assert!(is_uuid("0b4e1f5a-9c2d-4e8f-a1b3-c5d7e9f0a2b4"));
+        assert!(!is_uuid("org-claude0"));
+        assert!(!is_uuid("../../v1/messages?x=0b4e1f5a-9c2d-4e8f-a1"));
+        assert!(!is_uuid("0b4e1f5a-9c2d-4e8f-a1b3-c5d7e9f0a2b4/x"));
+    }
+
+    #[test]
+    fn a_callers_request_id_is_kept_when_it_is_a_uuid() {
+        let asked = "0b1c2d3e-0000-5000-8000-000000000000";
+        assert_eq!(request_id(Some(asked)), asked);
+        assert_ne!(request_id(Some("retry-1")), "retry-1");
+        assert!(is_uuid(&request_id(None)));
     }
 }

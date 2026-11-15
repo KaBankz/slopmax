@@ -40,6 +40,7 @@ use crate::net::{Client, Origins};
 use crate::paths::Home;
 use crate::pool::{Pool, Routing, State as PoolState};
 use crate::provider::ProviderId;
+use crate::provider::credits::Outcome;
 use crate::report::{self, Report};
 use crate::time::{SignedDuration, Timestamp};
 use crate::wire::Dialect;
@@ -400,6 +401,67 @@ impl App {
         )
         .with_next(&self.pool, now)
         .with_nudges(&self.config(), now)
+    }
+}
+
+/// Why a limit reset someone asked for was not redeemed.
+#[derive(Debug)]
+pub(crate) enum RedeemError {
+    /// The account's provider grants none.
+    NoResets,
+    SignedOut,
+    /// Listing or redeeming failed at the provider.
+    Failed(anyhow::Error),
+}
+
+impl App {
+    /// Redeems a limit reset someone asked for, through slopmax's API or a
+    /// hub client: `credit`, or the one that expires soonest. `request` is
+    /// the asker's idempotency key, when it sends one.
+    pub(crate) async fn redeem(
+        &self,
+        account: &Account,
+        credit: Option<&str>,
+        request: Option<&str>,
+    ) -> Result<Outcome, RedeemError> {
+        let Some(credits) = account.provider.get().credits() else {
+            return Err(RedeemError::NoResets);
+        };
+        let _redeeming = self.redeeming.lock().await;
+        let account = self.ready(account).await.ok_or(RedeemError::SignedOut)?;
+        let agent = self.pool.agent(account.provider);
+        let credit = match credit {
+            Some(credit) => credit.to_owned(),
+            None => {
+                let listed = credits
+                    .list(&self.auth_http, &account, agent.as_deref())
+                    .await
+                    .map_err(RedeemError::Failed)?;
+                let soonest = listed.first().map(|c| c.id.clone());
+                self.pool
+                    .record_credits(&account.id, listed, Timestamp::now());
+                match soonest {
+                    Some(credit) => credit,
+                    None => return Ok(Outcome::NoCredit),
+                }
+            }
+        };
+        let outcome = credits
+            .redeem(
+                &self.auth_http,
+                &account,
+                agent.as_deref(),
+                Some(&credit),
+                request,
+            )
+            .await
+            .map_err(RedeemError::Failed)?;
+        if outcome == Outcome::Reset {
+            log::info!("{}: redeemed a limit reset on request", account.id);
+            self.pool
+                .record_reset(&account.id, Timestamp::now(), Some(&credit));
+        }
+        Ok(outcome)
     }
 }
 

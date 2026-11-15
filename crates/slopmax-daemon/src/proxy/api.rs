@@ -27,7 +27,7 @@ use slopmax_api::{AgentId, ApiError};
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use super::{App, authorized};
+use super::{App, RedeemError, authorized};
 use crate::config::Config;
 use crate::net::body;
 use crate::net::server::{Request, Response};
@@ -460,47 +460,18 @@ async fn update_account(app: &App, id: &str, patch: AccountPatch) -> Answer {
 
 async fn redeem(app: &App, id: &str, asked: RedeemRequest) -> Answer {
     let account = find(app, id)?;
-    let Some(credits) = account.provider.get().credits() else {
-        return Err(ApiError::bad_request(
-            "this account's provider has no limit resets",
-        ));
-    };
-    let _redeeming = app.redeeming.lock().await;
-    let account = app
-        .ready(&account)
-        .await
-        .ok_or_else(|| ApiError::conflict("the account needs signing in again"))?;
-    let agent = app.pool.agent(account.provider);
-    let credit = match asked.reset {
-        Some(credit) => credit,
-        None => {
-            let listed = credits
-                .list(&app.auth_http, &account, agent.as_deref())
-                .await
-                .map_err(crate::error::ProviderError::Failed)?;
-            let soonest = listed.first().map(|c| c.id.clone());
-            app.pool
-                .record_credits(&account.id, listed, Timestamp::now());
-            match soonest {
-                Some(credit) => credit,
-                None => {
-                    return ok(&RedeemResult {
-                        outcome: RedeemOutcome::NoCredit,
-                        report: app.api_report(),
-                    });
-                }
-            }
+    let outcome = match app.redeem(&account, asked.reset.as_deref(), None).await {
+        Ok(outcome) => outcome,
+        Err(RedeemError::NoResets) => {
+            return Err(ApiError::bad_request(
+                "this account's provider has no limit resets",
+            ));
         }
+        Err(RedeemError::SignedOut) => {
+            return Err(ApiError::conflict("the account needs signing in again"));
+        }
+        Err(RedeemError::Failed(e)) => return Err(crate::error::ProviderError::Failed(e).into()),
     };
-    let outcome = credits
-        .redeem(&app.auth_http, &account, agent.as_deref(), Some(&credit))
-        .await
-        .map_err(crate::error::ProviderError::Failed)?;
-    if outcome == Outcome::Reset {
-        log::info!("{}: redeemed a limit reset on request", account.id);
-        app.pool
-            .record_reset(&account.id, Timestamp::now(), Some(&credit));
-    }
     let outcome = match outcome {
         Outcome::Reset => RedeemOutcome::Reset,
         Outcome::NothingToReset => RedeemOutcome::NothingToReset,

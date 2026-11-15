@@ -70,8 +70,9 @@ impl ResetCredits for Credits {
         account: &'a Account,
         _agent: Option<&'a str>,
         credit: Option<&'a str>,
+        request: Option<&'a str>,
     ) -> BoxFuture<'a, Result<Outcome>> {
-        Box::pin(redeem(http, account, credit))
+        Box::pin(redeem(http, account, credit, request))
     }
 }
 
@@ -107,11 +108,16 @@ fn available(list: CreditList) -> Vec<Credit> {
     credits
 }
 
-/// The request id is reused on a retry, so a lost response cannot spend
-/// two credits.
-async fn redeem(http: &Client, account: &Account, credit: Option<&str>) -> Result<Outcome> {
+/// The request id, the caller's when it gives one, is reused on a retry, so
+/// a lost response cannot spend two credits.
+async fn redeem(
+    http: &Client,
+    account: &Account,
+    credit: Option<&str>,
+    request: Option<&str>,
+) -> Result<Outcome> {
     let url = format!("{BACKEND}/wham/rate-limit-reset-credits/consume");
-    let mut body = json!({ "redeem_request_id": ids::uuid_v4() });
+    let mut body = json!({ "redeem_request_id": ids::request_id(request) });
     if let Some(id) = credit {
         body["credit_id"] = id.into();
     }
@@ -198,7 +204,7 @@ mod tests {
         assert_eq!(seen.header("authorization"), Some("Bearer tok"));
 
         let err = Credits
-            .redeem(&http, &account(Some("ws")), None, Some("c1"))
+            .redeem(&http, &account(Some("ws")), None, Some("c1"), None)
             .await
             .unwrap_err();
         assert_eq!(
@@ -206,10 +212,21 @@ mod tests {
             "redeeming a reset credit failed (409 Conflict)"
         );
         let outcome = Credits
-            .redeem(&http, &account(Some("ws")), None, None)
+            .redeem(&http, &account(Some("ws")), None, None, None)
             .await
             .unwrap();
         assert_eq!(outcome, Outcome::NothingToReset);
+        // A caller's own request id goes out as given, so a repeat is
+        // answered as the first was.
+        let asked = "0b1c2d3e-0000-5000-8000-000000000000";
+        Credits
+            .redeem(&http, &account(Some("ws")), None, None, Some(asked))
+            .await
+            .unwrap();
+        assert_eq!(
+            mock.seen().last().unwrap().json()["redeem_request_id"],
+            asked
+        );
 
         let nowhere = crate::net::Client::builder()
             .plain_http()
@@ -217,7 +234,7 @@ mod tests {
             .build();
         assert!(
             Credits
-                .redeem(&nowhere, &account(None), None, None)
+                .redeem(&nowhere, &account(None), None, None, None)
                 .await
                 .is_err()
         );

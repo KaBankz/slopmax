@@ -28,7 +28,6 @@ use crate::account::Account;
 use crate::agent::{self, Agent};
 use crate::auth;
 use crate::config::{ClientKey, Config};
-use crate::human;
 use crate::ledger::{End, Entry};
 use crate::log;
 use crate::net::body;
@@ -1007,6 +1006,7 @@ async fn rescue(app: &App, provider: ProviderId) -> Option<String> {
                 &account,
                 agent.as_deref(),
                 credit.as_deref(),
+                None,
             )
             .await
         {
@@ -1208,15 +1208,15 @@ fn give_up(
 
 fn limit_reached(dialect: Dialect, provider: ProviderId, until: Timestamp) -> Response {
     let now = Timestamp::now();
+    let wait = until.duration_since(now).as_secs().max(1);
     let message = format!(
-        "slopmax: every {} account is rate limited; the next one frees up in {} (`slopmax status` for details)",
+        "slopmax: every {} account is rate limited (reset after {}); `slopmax status` for details",
         provider.spec().title,
-        human::duration(until.duration_since(now))
+        reset_after(wait)
     );
     let (body, extra) = dialect.limit_reached(&message, until, now);
     let mut response = json_reply(StatusCode::TOO_MANY_REQUESTS, &body);
     let headers = response.headers_mut();
-    let wait = until.duration_since(now).as_secs().max(1);
     headers.insert("retry-after", HeaderValue::from(wait));
     for (name, value) in extra {
         if let Ok(value) = HeaderValue::from_str(&value) {
@@ -1224,6 +1224,27 @@ fn limit_reached(dialect: Dialect, provider: ProviderId, until: Timestamp) -> Re
         }
     }
     response
+}
+
+/// The wait in a gateway's `(reset after 2h 5m 12s)`, to the second. Claude
+/// Code tells a session keyed to a gateway nothing of the reset headers, so
+/// clients that run it, such as T3 Code, read when it can serve again from
+/// the error's text.
+fn reset_after(secs: i64) -> String {
+    let parts: Vec<String> = [
+        (secs / 3600, "h"),
+        (secs % 3600 / 60, "m"),
+        (secs % 60, "s"),
+    ]
+    .into_iter()
+    .filter(|&(n, _)| n > 0)
+    .map(|(n, unit)| format!("{n}{unit}"))
+    .collect();
+    if parts.is_empty() {
+        "1s".into()
+    } else {
+        parts.join(" ")
+    }
 }
 
 #[cfg(test)]
@@ -1305,6 +1326,15 @@ mod tests {
         assert_eq!(status, 502);
         let (status, _) = read(retold(Dialect::Messages, StatusCode::NOT_FOUND, body)).await;
         assert_eq!(status, 404);
+    }
+
+    #[test]
+    fn waits_read_as_a_gateways_reset() {
+        assert_eq!(reset_after(7512), "2h 5m 12s");
+        assert_eq!(reset_after(7200), "2h");
+        assert_eq!(reset_after(187_260), "52h 1m");
+        assert_eq!(reset_after(42), "42s");
+        assert_eq!(reset_after(0), "1s");
     }
 
     #[test]

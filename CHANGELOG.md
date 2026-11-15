@@ -6,11 +6,13 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ### Added
 
-- SuperGrok subscriptions, for Grok Build. `slopmax login grok` signs in with xAI's device code, `slopmax import cliproxyapi` brings over CLIProxyAPI's xAI sign-ins, and `slopmax run grok`, `env grok`, and `setup grok` point Grok Build at the proxy (`/grok/v1`) through its chat-proxy and auth-provider settings. Sessions stay on one account by Grok Build's conversation group and move when an account's monthly allowance is spent. Each account's allowance, read from xAI's billing endpoint, shows as a 30-day window, and its plan (`lite`, `supergrok`, `plus`, or `heavy`, as `[plan_prices]` names them under `grok/`) is priced for the dashboard's value figures. SuperGrok accounts serve Grok Build alone. The dashboard signs in to SuperGrok, and `slopmax doctor` checks Grok Build's wiring, that its own xAI sign-in isn't bypassing slopmax, and that xAI is reachable. The CLIProxyAPI hub lists SuperGrok accounts as `xai`, as CLIProxyAPI does.
+- SuperGrok subscriptions, for Grok Build. `slopmax login grok` signs in with xAI's device code, `slopmax import cliproxyapi` brings over CLIProxyAPI's xAI sign-ins, and `slopmax run grok`, `env grok`, and `setup grok` point Grok Build at the proxy (`/grok/v1`) through its chat-proxy and auth-provider settings. Sessions stay on one account by Grok Build's conversation group and move when an account's monthly allowance is spent. Each account's allowance, read from xAI's billing endpoint, shows as a 30-day window, and its plan (`lite`, `supergrok`, `plus`, or `heavy`, as `[plan_prices]` names them under `grok/`) is priced for the dashboard's value figures. SuperGrok accounts serve Grok Build alone. The dashboard signs in to SuperGrok, and `slopmax doctor` checks Grok Build's wiring, that its own xAI sign-in isn't bypassing slopmax, and that xAI is reachable. The CLIProxyAPI hub lists SuperGrok accounts as `xai`, as CLIProxyAPI does, and answers T3 Code's read of their allowance from slopmax's own reading.
 
 ### Changed
 
 - xAI API keys now back SuperGrok: with a SuperGrok account connected, they serve Grok Build only as paid overflow (`paid_overflow = true`). They still serve `grok-*` models to every other client.
+- When every account is rate limited, the agent's error says when the first frees up as `(reset after 2h 5m 12s)`, to the second, so T3 Code and other apps running Claude Code show the time.
+- A limit reset redeemed from T3 Code goes to ChatGPT with T3's own request id, so a retry from any machine is answered as the first was, and a redemption that names no reset spends the soonest to expire, as ChatGPT does.
 
 ## [0.9.0] - 2026-11-15
 

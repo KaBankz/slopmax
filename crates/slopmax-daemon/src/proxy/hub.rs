@@ -16,22 +16,23 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use super::{App, authorized, constant_time_eq, json_reply};
+use super::{App, RedeemError, authorized, constant_time_eq, json_reply};
 use crate as daemon;
 use crate::account::Account;
 use crate::config::Config;
 use crate::limits::{Limits, Window};
-use crate::log;
 use crate::net::body;
 use crate::net::server::{Request, Response};
 use crate::provider::ProviderId;
-use crate::provider::credits::{Credit, Outcome};
+use crate::provider::credits::Credit;
 use crate::time::{SignedDuration, Timestamp};
 
 const CLAUDE_USAGE: &str = "https://api.anthropic.com/api/oauth/usage";
 const CODEX_USAGE: &str = "https://chatgpt.com/backend-api/wham/usage";
 const CODEX_CREDITS: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 const CODEX_CONSUME: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
+/// xAI's billing, which tools read with `?format=credits`.
+const GROK_BILLING: &str = "https://cli-chat-proxy.grok.com/v1/billing";
 /// How long a credit list is reused. Tools read it on every refresh, and it
 /// changes only when a credit is granted or spent.
 const CREDITS_FRESH: SignedDuration = SignedDuration::from_mins(5);
@@ -167,7 +168,10 @@ async fn api_call(app: &App, call: Call) -> Response {
     };
     let now = Timestamp::now();
     let method = call.method.trim().to_ascii_uppercase();
-    let answer = match (method.as_str(), call.url.trim(), account.provider) {
+    // The query only picks a format; the answer is slopmax's own either way.
+    let url = call.url.trim();
+    let url = url.split_once('?').map_or(url, |(path, _)| path);
+    let answer = match (method.as_str(), url, account.provider) {
         ("GET", CLAUDE_USAGE, ProviderId::Claude) => {
             reading(app, &account).map(|limits| claude_usage(&limits, now))
         }
@@ -175,6 +179,9 @@ async fn api_call(app: &App, call: Call) -> Response {
             reading(app, &account).map(|limits| codex_usage(&account, &limits, now))
         }
         ("GET", CODEX_CREDITS, ProviderId::Codex) => credit_list(app, &account).await,
+        ("GET", GROK_BILLING, ProviderId::Grok) => {
+            reading(app, &account).map(|limits| grok_usage(&limits, now))
+        }
         ("POST", CODEX_CONSUME, ProviderId::Codex) => consume(app, &account, &call.data).await,
         _ => {
             return fail(
@@ -281,6 +288,23 @@ fn codex_usage(account: &Account, limits: &Limits, now: Timestamp) -> Value {
     usage
 }
 
+/// A reading in the shape of xAI's `GET /v1/billing?format=credits`: the
+/// share of the monthly allowance used, and when the period ends. A plan
+/// with no allowance has no window, and reads as an empty config.
+fn grok_usage(limits: &Limits, now: Timestamp) -> Value {
+    let Some(window) = limits.windows.iter().find(|w| w.model.is_none()) else {
+        return json!({ "config": {} });
+    };
+    let mut period = json!({ "type": "USAGE_PERIOD_TYPE_MONTHLY" });
+    if let Some(end) = reset(window, now) {
+        period["end"] = json!(end);
+    }
+    json!({ "config": {
+        "creditUsagePercent": window.used_at(now),
+        "currentPeriod": period,
+    } })
+}
+
 fn span_seconds(span: &str) -> i64 {
     match span {
         "5h" => 5 * 3600,
@@ -337,34 +361,36 @@ async fn credits(app: &App, account: &Account) -> Result<Vec<Credit>, (StatusCod
     Ok(credits)
 }
 
-/// Redeems the credit `data` names (`{"credit_id": …}`), answering in
-/// ChatGPT's shape.
+/// Redeems the credit `data` names (`{"credit_id": …}`), or the soonest to
+/// expire when it names none, answering in ChatGPT's shape. The client's
+/// `redeem_request_id` goes to ChatGPT as given, so a client that asks
+/// again, from this machine or another, is answered as it was the first time.
 async fn consume(app: &App, account: &Account, data: &str) -> Answer {
     #[derive(Deserialize)]
     struct Consume {
-        credit_id: String,
+        #[serde(default)]
+        credit_id: Option<String>,
+        #[serde(default)]
+        redeem_request_id: Option<String>,
     }
-    let Ok(Consume { credit_id }) = serde_json::from_str(data) else {
-        return Err((StatusCode::BAD_REQUEST, "no credit_id to redeem".into()));
+    let Ok(asked) = serde_json::from_str::<Consume>(data) else {
+        return Err((StatusCode::BAD_REQUEST, "invalid redeem request".into()));
     };
-    let Some(credits) = account.provider.get().credits() else {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "this account has no limit resets".into(),
-        ));
-    };
-    let _redeeming = app.redeeming.lock().await;
-    let ready = app.ready(account).await.ok_or_else(signed_out)?;
-    let agent = app.pool.agent(account.provider);
-    let outcome = credits
-        .redeem(&app.auth_http, &ready, agent.as_deref(), Some(&credit_id))
+    let outcome = app
+        .redeem(
+            account,
+            asked.credit_id.as_deref(),
+            asked.redeem_request_id.as_deref(),
+        )
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
-    if outcome == Outcome::Reset {
-        log::info!("{}: redeemed a limit reset for a hub client", account.id);
-        app.pool
-            .record_reset(&account.id, Timestamp::now(), Some(&credit_id));
-    }
+        .map_err(|e| match e {
+            RedeemError::NoResets => (
+                StatusCode::BAD_REQUEST,
+                "this account has no limit resets".into(),
+            ),
+            RedeemError::SignedOut => signed_out(),
+            RedeemError::Failed(e) => (StatusCode::BAD_GATEWAY, format!("{e:#}")),
+        })?;
     Ok(json!({ "code": outcome }))
 }
 
@@ -454,6 +480,22 @@ mod tests {
         assert_eq!(codex["rate_limit_reset_credits"]["available_count"], 2);
         account.plan = Some("pro".into());
         assert_eq!(codex_usage(&account, &limits, now)["plan_type"], "pro");
+
+        let grok = Limits {
+            windows: vec![Window::new("30d", 25.0, Some(at(70)))],
+            observed_at: Some(now),
+            reset_credits: None,
+        };
+        let usage = grok_usage(&grok, now);
+        assert_eq!(usage["config"]["creditUsagePercent"], 25.0);
+        let period = &usage["config"]["currentPeriod"];
+        assert_eq!(period["type"], "USAGE_PERIOD_TYPE_MONTHLY");
+        assert_eq!(period["end"], at(70).to_string());
+        let unlimited = Limits {
+            windows: Vec::new(),
+            ..grok
+        };
+        assert_eq!(grok_usage(&unlimited, now), json!({ "config": {} }));
 
         // Once a window resets, it reads as unused with no reset ahead.
         let later = at(3);
