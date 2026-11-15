@@ -10,7 +10,7 @@ slopmax updates itself, and the running proxy moves to a new version without ref
 
 ### Added
 
-- `slopmax update` installs the newest release the way slopmax was installed and moves the running proxy to it. An install script install downloads the release, checks its SHA-256, and replaces the binary in place. A mise install runs `mise upgrade`, moving a version pinned in the global mise config. Homebrew, cargo, and Nix installs are told the command to run. `slopmax update --check` only looks.
+- `slopmax update` installs the newest release the way slopmax was installed and moves the running proxy to it. Installed by the install script, it downloads the release, checks its SHA-256, and replaces the binary in place. Installed by mise, it runs `mise upgrade`, moving a version pinned in the global mise config. Installed by Homebrew, cargo, or Nix, it prints the command to run. `slopmax update --check` only looks.
 - The proxy moves to a new binary without a gap. It hands its listening socket to the new one, which takes every new connection from its first moment, and finishes what it has: streams run to their end, Codex's sockets finish their turn before closing, and requests on connections already open are still answered. Under systemd, the new process becomes the service's main one.
 - The proxy follows updates made another way. Within a minute of a newer slopmax being installed (`mise upgrade`, the install script run again, `brew upgrade`), it moves to it.
 - The proxy looks up the newest release once a day, one request to github.com, and `slopmax status` says when one is out, and when the proxy runs an older version than the CLI. `check_updates = false` or `SLOPMAX_NO_UPDATE_CHECK=1` turns the lookup off.
