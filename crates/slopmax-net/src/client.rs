@@ -17,8 +17,7 @@ use http_body_util::Full;
 use hyper::body::Incoming;
 use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 use hyper_util::client::legacy::connect::proxy::{SocksV5, Tunnel};
-use hyper_util::client::legacy::{self, Client as Pool};
-use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
+use hyper_util::rt::TokioIo;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::net::TcpStream;
@@ -28,6 +27,7 @@ use tower_service::Service;
 use super::body::{self, BoxError, IdleTimeout};
 use super::dial::{Connecting, Dial};
 use super::form;
+use super::pool::Pool;
 
 /// Largest response body [`Response::bytes`] reads into memory.
 const MAX_BODY: usize = 64 * 1024 * 1024;
@@ -355,7 +355,7 @@ fn parse_url(url: String) -> Result<Uri, Error> {
 /// An HTTP client. Cloning is cheap and shares the connection pool.
 #[derive(Clone)]
 pub struct Client {
-    pool: Pool<Bounded<HttpsConnector<Connector>>, Full<Bytes>>,
+    pool: Arc<Pool<Bounded<HttpsConnector<Connector>>>>,
     /// Why HTTPS cannot work, when the system has no trusted roots.
     no_tls: Option<&'static str>,
     user_agent: Option<HeaderValue>,
@@ -465,12 +465,8 @@ impl Builder {
             inner: https,
             limit: connect_timeout * 2,
         };
-        let pool = legacy::Client::builder(TokioExecutor::new())
-            .pool_idle_timeout(Duration::from_secs(60))
-            .pool_timer(TokioTimer::new())
-            .build(bounded);
         Client {
-            pool,
+            pool: Arc::new(Pool::new(bounded)),
             no_tls: roots.err(),
             user_agent: self
                 .user_agent
@@ -619,7 +615,7 @@ impl RequestBuilder {
             (Some(deadline), Some(read)) => Some(deadline.min(Instant::now() + read)),
             (deadline, read) => deadline.or_else(|| read.map(|r| Instant::now() + r)),
         };
-        let responding = self.client.pool.request(request);
+        let responding = self.client.pool.send(request);
         let response = match wait {
             Some(at) => tokio::time::timeout_at(at, responding)
                 .await
