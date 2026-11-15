@@ -4,15 +4,10 @@ name: Desktop
 # with, and keeps the binaries so they can be tried on a real desktop. The
 # summary lists their sizes.
 
+# Run by hand only while the desktop apps are on hold; the CLI and the web UI
+# are what ship.
 on:
   workflow_dispatch:
-  push:
-    branches: [master]
-    paths:
-      - "crates/slopmax-app/**"
-      - "crates/slopmax-desktop-gpui/**"
-      - "assets/**"
-      - ".github/workflows/desktop.yml"
 
 env:
   CARGO_TERM_COLOR: always

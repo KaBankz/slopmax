@@ -3,11 +3,10 @@
 # sign and notarize (apple/README.md).
 name: apple
 
+# Run by hand only while the desktop apps are on hold; the CLI and the web UI
+# are what ship.
 on:
-  push:
-    branches: [master]
-  pull_request:
-    paths: ["apple/**", "contract/**", "crates/slopmax-api/**", ".github/workflows/apple.yml"]
+  workflow_dispatch:
 
 permissions:
   contents: read
