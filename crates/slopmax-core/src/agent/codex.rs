@@ -321,7 +321,7 @@ mod tests {
         );
         let token = |config: &Config| {
             Codex
-                .command(config, &[])
+                .command(config, &Home::sandbox("/home/me"), &[])
                 .get_envs()
                 .find(|(k, _)| *k == KEY_ENV)
                 .and_then(|(_, v)| v.map(|v| v.to_string_lossy().into_owned()))

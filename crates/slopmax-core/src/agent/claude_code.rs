@@ -341,10 +341,9 @@ mod tests {
         let wired: Value = fsx::read_json(&file).unwrap().unwrap();
         assert_eq!(wired["env"]["ANTHROPIC_AUTH_TOKEN"], "sm-x");
 
-        let script = ClaudeCode.env(&hub(None), Path::new("slopmax"));
+        let script = ClaudeCode.env(&hub(None), &Home::sandbox("/home/me"), Path::new("slopmax"));
         assert!(script.contains("export ANTHROPIC_BASE_URL=https://hub.example.ts.net:7567"));
         assert!(script.contains("export ANTHROPIC_AUTH_TOKEN=tailnet"));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

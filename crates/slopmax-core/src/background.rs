@@ -371,7 +371,8 @@ mod tests {
             }),
             ..config_at(&mock)
         };
-        let home = Home::at(temp_dir("hub-refusal"));
+        let dir = temp_dir("hub-refusal");
+        let home = Home::at(dir.to_path_buf());
         let error = ensure_running(&config, &home, Path::new("/nonexistent/slopmax"))
             .await
             .unwrap_err();
@@ -379,7 +380,6 @@ mod tests {
         assert!(mock.seen_at("/healthz").is_empty());
         // The daemon it would talk to stays this machine's own.
         assert_eq!(Daemon::new(&config).client.base(), config.base_url());
-        std::fs::remove_dir_all(home.dir()).unwrap();
     }
 
     #[tokio::test]

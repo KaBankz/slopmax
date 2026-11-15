@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn wiring_is_judged_against_the_hub_when_there_is_one() {
         let root = crate::testkit::temp_dir("wiring-hub");
-        let home = Home::sandbox(&root);
+        let home = Home::sandbox(root.to_path_buf());
         let local = Config {
             api_key: "sm-test".into(),
             ..Config::default()
@@ -360,7 +360,6 @@ mod tests {
         );
         setup(&ClaudeCode, &local, &home).unwrap();
         assert_eq!(wiring(&ClaudeCode, &local, &home), Wiring::Slopmax);
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

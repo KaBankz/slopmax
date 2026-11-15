@@ -315,7 +315,7 @@ mod tests {
     #[test]
     fn by_machine_reads_the_ledger() {
         let dir = crate::testkit::temp_dir("summary-machine");
-        let ledger = ledger::Ledger::at(dir.clone());
+        let ledger = ledger::Ledger::at(dir.to_path_buf());
         ledger.record(&Entry {
             machine: Some("laptop".into()),
             ..entry("claude-opus-5-5", 100)
@@ -333,7 +333,6 @@ mod tests {
         let keys: Vec<&str> = summary.rows.keys().map(String::as_str).collect();
         assert_eq!(keys, ["laptop", "this machine"]);
         assert_eq!(summary.total.requests, 2);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

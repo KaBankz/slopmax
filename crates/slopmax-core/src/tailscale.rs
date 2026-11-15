@@ -1972,7 +1972,7 @@ mod tests {
             "tailscale"
         };
         std::fs::write(dir.join(name), "").unwrap();
-        let path = std::env::join_paths([dir.join("nothing-here"), dir.clone()]).unwrap();
+        let path = std::env::join_paths([dir.join("nothing-here"), dir.to_path_buf()]).unwrap();
         assert_eq!(
             locate_from(Some("/opt/ts/tailscale".into()), Some(path.clone())),
             Some(PathBuf::from("/opt/ts/tailscale"))
@@ -1984,7 +1984,6 @@ mod tests {
             assert_eq!(locate_from(None, Some(empty)), None);
             assert_eq!(locate_from(None, None), None);
         }
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -2020,7 +2019,6 @@ mod tests {
         )
         .unwrap();
         assert!(!in_app_bundle(&brew));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// Run in a child by `locate_honours_the_variable`, with
@@ -2259,7 +2257,6 @@ mod tests {
         // On a busy machine the shell may be killed before it writes its
         // pid; then there is nothing left to look for.
         let Ok(pid) = std::fs::read_to_string(&pid_file) else {
-            std::fs::remove_dir_all(dir).unwrap();
             return;
         };
         let pid = pid.trim().to_owned();
@@ -2277,7 +2274,6 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         assert!(!alive(), "pid {pid} still runs");
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// What `inspect` would find with these answers from Tailscale, for
