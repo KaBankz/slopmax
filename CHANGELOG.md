@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-15
+
 ### Added
 
 - On Windows, `slopmax service install` (and `slopmax setup`) starts the proxy at login, as systemd and launchd do elsewhere. It adds `slopmaxw.exe`, which the Windows release archives now carry, to your login programs, with no administrator rights needed. `slopmaxw.exe` runs the proxy without a console window and starts it again 5 seconds after a failure; `slopmax stop` stops both. Before, the proxy on Windows ran only until it was stopped or you logged out.
