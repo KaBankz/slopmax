@@ -203,7 +203,7 @@ function LiveSections() {
                       value: strategy.id,
                       title: strategyTitle(strategy.id),
                       detail: strategyDetail(strategy.summary),
-                      ...(strategy.id === "reset-first" ? { tag: "default" } : {}),
+                      ...(strategy.id === "fill-first" ? { tag: "default" } : {}),
                     }))}
                   />
                   <SettingRow title="Session affinity" detail={affinityDetail}>

@@ -1045,9 +1045,64 @@ fn logs_show_the_tail_of_the_background_log() {
 }
 
 #[test]
+fn order_shows_and_sets_the_order_new_sessions_use() {
+    let s = Sandbox::new("order");
+    let out = s.run(&["order"]).ok();
+    assert!(out.stdout.contains("No accounts yet"), "{out:?}");
+    for email in ["a@x.dev", "b@x.dev", "c@x.dev"] {
+        s.add(&claude(email));
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    s.add(&codex("d@x.dev"));
+    let emails = || -> Vec<String> {
+        let accounts = s.store().list().unwrap();
+        accounts.iter().filter_map(|a| a.email.clone()).collect()
+    };
+    assert_eq!(emails(), ["a@x.dev", "b@x.dev", "c@x.dev", "d@x.dev"]);
+
+    let out = s.run(&["order"]).ok();
+    assert!(
+        out.stdout.contains("Claude accounts, in the order"),
+        "{out:?}"
+    );
+    assert!(out.stdout.contains("ChatGPT"), "{out:?}");
+
+    // Numbers as `order` lists them; the rest keep their order after.
+    let out = s.run(&["order", "3", "b@x.dev"]).ok();
+    assert_eq!(emails(), ["c@x.dev", "b@x.dev", "a@x.dev", "d@x.dev"]);
+    let listed: Vec<&str> = out
+        .stdout
+        .lines()
+        .filter(|l| l.contains("@x.dev"))
+        .collect();
+    assert!(
+        listed[0].contains("c@x.dev") && listed[2].contains("a@x.dev"),
+        "{out:?}"
+    );
+    assert!(
+        !out.stdout.contains("d@x.dev"),
+        "only the kind ordered: {out:?}"
+    );
+
+    s.run(&["order", "1", "d@x.dev"])
+        .fails(1, "order one kind at a time");
+    s.run(&["order", "1", "1"]).fails(1, "listed twice");
+    s.run(&["priority", "a@x.dev", "1"]).ok();
+    s.run(&["order", "c@x.dev", "a@x.dev"])
+        .fails(1, "slopmax priority");
+    s.run(&["order", "nobody"]).fails(1, "no account matches");
+
+    // Under another strategy, it says the order is not what places sessions.
+    std::fs::write(s.config(), "strategy = \"least-used\"\n").unwrap();
+    let out = s.run(&["order"]).ok();
+    assert!(out.stdout.contains("strategy fill-first"), "{out:?}");
+}
+
+#[test]
 fn the_background_proxy_starts_reports_and_stops() {
     let s = Sandbox::new("background");
     s.add(&key(ProviderId::Anthropic, "sk-ant-9999"));
+    s.add(&key(ProviderId::Anthropic, "sk-ant-8888"));
     let out = s.run(&["stop"]).ok();
     assert!(out.stdout.contains("slopmax is not running"), "{out:?}");
 
@@ -1058,7 +1113,7 @@ fn the_background_proxy_starts_reports_and_stops() {
 
     // The status now comes from the proxy.
     let json: Value = serde_json::from_str(&s.run(&["status", "--json"]).ok().stdout).unwrap();
-    assert_eq!(json["accounts"].as_array().unwrap().len(), 1, "{json:#}");
+    assert_eq!(json["accounts"].as_array().unwrap().len(), 2, "{json:#}");
     let table = s.run(&["status", "--refresh"]).ok().stdout;
     assert!(table.contains("ANTHROPIC"), "{table}");
 
@@ -1076,6 +1131,13 @@ fn the_background_proxy_starts_reports_and_stops() {
     let account = &json["accounts"][0];
     assert_eq!(account["name"], "work", "{json:#}");
     assert_eq!(account["pinned"], true, "{json:#}");
+    // The order too, which the daemon saves and the next status shows.
+    s.run(&["order", "anthropic-"]).fails(1, "ambiguous");
+    let second = s.store().list().unwrap()[1].id.clone();
+    s.run(&["order", &second]).ok();
+    let json: Value = serde_json::from_str(&s.run(&["status", "--json"]).ok().stdout).unwrap();
+    assert_eq!(json["accounts"][0]["id"], second.as_str(), "{json:#}");
+    assert_eq!(s.store().list().unwrap()[0].id, second);
     // The daemon saves the pin it was told of at once.
     eventually("the daemon saves the pin", || {
         std::fs::read_to_string(s.slopmax.join("state.toml"))

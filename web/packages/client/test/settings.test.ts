@@ -49,14 +49,14 @@ describe("Settings", () => {
     const empty = load({})
     expect([empty.listen, empty.strategy, empty.sessionMinutes, empty.pollMinutes]).toEqual([
       "127.0.0.1:7567",
-      "reset-first",
+      "fill-first",
       60,
       5,
     ])
     expect([empty.sessionAffinity, empty.refreshTokens, empty.redeemExpiring, empty.websockets]).toEqual([
       true,
       true,
-      true,
+      false,
       true,
     ])
     expect([empty.redeemWhenExhausted, empty.warmWindows, empty.paidOverflow]).toEqual([false, false, false])
@@ -238,7 +238,7 @@ describe("live settings", () => {
 
   it("read back as they are typed, and every default reads in again", () => {
     const settings = load({})
-    expect(liveText(settings, "strategy")).toBe("reset-first")
+    expect(liveText(settings, "strategy")).toBe("fill-first")
     expect(liveText(settings, "sessionMinutes")).toBe("60")
     expect(liveText(settings, "sessionAffinity")).toBe("on")
     expect(liveText(settings, "warmWindows")).toBe("off")
@@ -269,7 +269,7 @@ describe("strategies", () => {
     expect(Strategy.literals).toEqual(["reset-first", "fill-first", "least-used", "round-robin"])
     expect(strategySummaries).toEqual({
       "reset-first": "Spend the quota that resets soonest, so none is lost",
-      "fill-first": "Use accounts in priority order; fail over when one is limited",
+      "fill-first": "Use accounts in order; fail over when one is limited",
       "least-used": "Balance load toward the least used account",
       "round-robin": "Take turns across accounts",
     })

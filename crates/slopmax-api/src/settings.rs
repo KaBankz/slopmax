@@ -259,7 +259,7 @@ impl Strategy {
     pub fn summary(self) -> &'static str {
         match self {
             Self::ResetFirst => "Spend the quota that resets soonest, so none is lost",
-            Self::FillFirst => "Use accounts in priority order; fail over when one is limited",
+            Self::FillFirst => "Use accounts in order; fail over when one is limited",
             Self::LeastUsed => "Balance load toward the least used account",
             Self::RoundRobin => "Take turns across accounts",
         }

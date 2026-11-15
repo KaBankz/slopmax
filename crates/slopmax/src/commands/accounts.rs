@@ -392,6 +392,116 @@ pub(super) async fn set_priority(
     Ok(())
 }
 
+/// Shows the order fill-first uses accounts in, or puts `queries` first in
+/// it, in the order given.
+pub(super) async fn order(config: &Config, store: &Store, queries: &[String]) -> Result<()> {
+    let accounts = store.list()?;
+    if accounts.is_empty() {
+        println!(
+            "No accounts yet. Connect one with `slopmax login claude` or `slopmax login codex`."
+        );
+        return Ok(());
+    }
+    if queries.is_empty() {
+        let providers: Vec<ProviderId> = accounts.iter().fold(Vec::new(), |mut seen, a| {
+            if !seen.contains(&a.provider) {
+                seen.push(a.provider);
+            }
+            seen
+        });
+        for (i, provider) in providers.into_iter().enumerate() {
+            if i > 0 {
+                println!();
+            }
+            show_order(&accounts, provider);
+        }
+        println!();
+        println!(
+            "{}",
+            ui::dim(
+                "Put accounts first with `slopmax order <account>...`, numbers as listed here."
+            )
+        );
+        strategy_note(config);
+        return Ok(());
+    }
+    let ids = queries
+        .iter()
+        .map(|q| store.find(q).map(|a| a.id))
+        .collect::<Result<Vec<_>, _>>()?;
+    let first: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let changes = account::reorder(&accounts, &first).map_err(anyhow::Error::msg)?;
+    let client = daemon(config).await;
+    for (id, place) in changes {
+        match &client {
+            Some(client) => {
+                let patch = AccountPatch {
+                    order: Some(place),
+                    ..AccountPatch::default()
+                };
+                drop(client.update_account(id, &patch).await?);
+            }
+            None => drop(store.update(id, |a| a.order = Some(place))?),
+        }
+    }
+    let accounts = store.list()?;
+    let provider = accounts
+        .iter()
+        .find(|a| a.id == ids[0])
+        .map(|a| a.provider)
+        .context("the account went away while it was ordered")?;
+    show_order(&accounts, provider);
+    strategy_note(config);
+    Ok(())
+}
+
+/// `provider`'s accounts in the order fill-first uses them, numbered as
+/// `slopmax status` numbers them.
+fn show_order(accounts: &[account::Account], provider: ProviderId) {
+    println!(
+        "{} accounts, in the order new sessions use them:",
+        ui::bold(provider.spec().title)
+    );
+    let mut tier = None;
+    for (n, account) in accounts.iter().enumerate() {
+        if account.provider != provider {
+            continue;
+        }
+        let mut notes = Vec::new();
+        if tier.is_some_and(|t| t != account.priority) || (tier.is_none() && account.priority != 0)
+        {
+            notes.push(format!("priority {}", account.priority));
+        }
+        tier = Some(account.priority);
+        if account.disabled {
+            notes.push("disabled, skipped".to_owned());
+        }
+        if account.auth_error.is_some() {
+            notes.push("signed out, skipped".to_owned());
+        }
+        let notes = if notes.is_empty() {
+            String::new()
+        } else {
+            format!("  {}", ui::dim(notes.join(", ")))
+        };
+        println!("  {:>2}  {}{notes}", n + 1, account.name());
+    }
+}
+
+/// Says when the order is not what places sessions.
+fn strategy_note(config: &Config) {
+    if config.strategy != slopmax_core::config::Strategy::FillFirst {
+        println!(
+            "{}",
+            ui::dim(format!(
+                "The strategy is {}, which ranks accounts by their usage instead; \
+                 `slopmax config strategy fill-first` uses this order.",
+                config.strategy
+            ))
+        );
+    }
+}
+
 pub(super) async fn remove(config: &Config, store: &Store, query: &str) -> Result<()> {
     let account = store.find(query)?;
     match daemon(config).await {

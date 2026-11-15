@@ -76,6 +76,10 @@ pub struct Account {
     /// Higher priorities are preferred; ties fall back to the strategy.
     #[serde(default)]
     pub priority: i32,
+    /// Its place within its priority tier, from `slopmax order`: lower goes
+    /// first, and accounts without one follow, oldest first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub order: Option<u32>,
     /// Set when the refresh token is rejected; cleared by a new login.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_error: Option<String>,
@@ -173,6 +177,7 @@ impl Account {
             org_name: None,
             disabled: false,
             priority: 0,
+            order: None,
             auth_error: None,
             tokens,
             link: None,
@@ -246,8 +251,77 @@ impl Account {
         self.label = self.label.take().or_else(|| old.label.clone());
         self.disabled = old.disabled;
         self.priority = old.priority;
+        self.order = old.order;
         self.added_at = old.added_at;
     }
+
+    /// Where it stands among its provider's accounts: priority first, then
+    /// its place from `slopmax order`, then age. Fill-first uses them in
+    /// this order.
+    pub fn rank(&self) -> (std::cmp::Reverse<i32>, u32, Timestamp) {
+        (
+            std::cmp::Reverse(self.priority),
+            self.order.unwrap_or(u32::MAX),
+            self.added_at,
+        )
+    }
+}
+
+/// The places `slopmax order` gives `provider`'s accounts so that `first`
+/// lead, in the order given, and the rest follow in their present order:
+/// each account's id and its new place, for those it changes. Priorities
+/// still come first; `first` must not put an account ahead of one in a
+/// higher tier.
+pub fn reorder<'a>(accounts: &'a [Account], first: &[&str]) -> Result<Vec<(&'a str, u32)>, String> {
+    let mut listed: Vec<&Account> = Vec::new();
+    for id in first {
+        let account = accounts
+            .iter()
+            .find(|a| a.id == *id)
+            .ok_or_else(|| format!("no account {id}"))?;
+        if listed.iter().any(|a| a.id == account.id) {
+            return Err(format!("{} is listed twice", account.name()));
+        }
+        if let Some(other) = listed.first()
+            && other.provider != account.provider
+        {
+            return Err(format!(
+                "{} is a {} account and {} a {} one; order one kind at a time",
+                other.name(),
+                other.provider,
+                account.name(),
+                account.provider
+            ));
+        }
+        listed.push(account);
+    }
+    for pair in listed.windows(2) {
+        if pair[1].priority > pair[0].priority {
+            return Err(format!(
+                "{} has priority {}, above {}'s {}, so it is used first whatever the order; \
+                 change that with `slopmax priority`",
+                pair[1].name(),
+                pair[1].priority,
+                pair[0].name(),
+                pair[0].priority
+            ));
+        }
+    }
+    let Some(provider) = listed.first().map(|a| a.provider) else {
+        return Ok(Vec::new());
+    };
+    let mut rest: Vec<&Account> = accounts
+        .iter()
+        .filter(|a| a.provider == provider && !listed.iter().any(|l| l.id == a.id))
+        .collect();
+    rest.sort_by_key(|a| a.rank());
+    Ok(listed
+        .into_iter()
+        .chain(rest)
+        .zip(1..)
+        .filter(|(account, place)| account.order != Some(*place))
+        .map(|(account, place)| (account.id.as_str(), place))
+        .collect())
 }
 
 /// Directory-backed account storage.
@@ -300,9 +374,7 @@ impl Store {
                 }
             }
         }
-        accounts.sort_by(|a, b| {
-            (a.provider, -a.priority, a.added_at).cmp(&(b.provider, -b.priority, b.added_at))
-        });
+        accounts.sort_by_key(|a| (a.provider, a.rank()));
         Ok(accounts)
     }
 
@@ -459,6 +531,62 @@ mod tests {
         account.email = Some(email.into());
         account.assign_id();
         account
+    }
+
+    #[test]
+    fn order_puts_the_accounts_given_first_and_keeps_the_rest_after() {
+        let store = temp_store("order");
+        let mut made = Vec::new();
+        for (i, email) in ["a@x.dev", "b@x.dev", "c@x.dev", "d@x.dev"]
+            .iter()
+            .enumerate()
+        {
+            let mut account = claude(&format!("org-{i}"), email);
+            account.added_at = Timestamp::from_second(1_000 + i as i64).unwrap();
+            store.save(&account).unwrap();
+            made.push(account.id);
+        }
+        let names = |store: &Store| -> Vec<String> {
+            store
+                .list()
+                .unwrap()
+                .iter()
+                .map(|a| a.email.clone().unwrap())
+                .collect()
+        };
+        assert_eq!(names(&store), ["a@x.dev", "b@x.dev", "c@x.dev", "d@x.dev"]);
+
+        let apply = |first: &[&str]| {
+            let accounts = store.list().unwrap();
+            let changes = reorder(&accounts, first).unwrap();
+            for (id, place) in changes {
+                store.update(id, |a| a.order = Some(place)).unwrap();
+            }
+        };
+        apply(&[&made[2], &made[0]]);
+        assert_eq!(names(&store), ["c@x.dev", "a@x.dev", "b@x.dev", "d@x.dev"]);
+        // The rest keep the order they had, not their age.
+        apply(&[&made[3]]);
+        assert_eq!(names(&store), ["d@x.dev", "c@x.dev", "a@x.dev", "b@x.dev"]);
+        // Nothing to change, nothing written.
+        let accounts = store.list().unwrap();
+        assert!(reorder(&accounts, &[&made[3]]).unwrap().is_empty());
+
+        // An account added later goes last.
+        let mut late = claude("org-9", "e@x.dev");
+        late.added_at = Timestamp::from_second(500).unwrap();
+        store.save(&late).unwrap();
+        assert_eq!(names(&store).last().unwrap(), "e@x.dev");
+
+        // Priority tiers still come first, and the order cannot contradict them.
+        store.update(&made[1], |a| a.priority = 1).unwrap();
+        assert_eq!(names(&store)[0], "b@x.dev");
+        let accounts = store.list().unwrap();
+        let wrong = reorder(&accounts, &[&made[0], &made[1]]).unwrap_err();
+        assert!(wrong.contains("priority 1"), "{wrong}");
+        let twice = reorder(&accounts, &[&made[0], &made[0]]).unwrap_err();
+        assert!(twice.contains("listed twice"), "{twice}");
+        let _ = fs::remove_dir_all(&store.dir);
     }
 
     #[test]

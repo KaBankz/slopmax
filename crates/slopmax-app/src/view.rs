@@ -1873,7 +1873,7 @@ mod tests {
         let mut config = Settings::default();
         assert_eq!(
             routing(&config),
-            "Reset first · sessions keep their account"
+            "Fill first · sessions keep their account"
         );
         config.strategy = Strategy::RoundRobin;
         config.session_affinity = false;

@@ -1001,9 +1001,8 @@ fn place<'a>(
     let score = |a: &Account| Score(limits(a).score(now));
 
     match strategy {
-        // Store order is priority then age, so the first ready account is
-        // the one to keep filling.
-        Strategy::FillFirst => tier.min_by_key(|a| a.added_at),
+        // The first in the order `slopmax order` set, then the oldest.
+        Strategy::FillFirst => tier.min_by_key(|a| a.rank()),
         // Earliest-deadline-first over spare capacity: an account whose
         // window resets soon loses its unused quota at that reset, while an
         // idle account loses nothing by waiting. Ties go to the less used.
@@ -1363,6 +1362,12 @@ mod tests {
             a.id,
             "returns after the reset"
         );
+
+        // `slopmax order` comes before age.
+        let mut b = b.clone();
+        b.order = Some(1);
+        let ordered = self::pool(Strategy::FillFirst, &[&a, &b]);
+        assert_eq!(pick(&ordered, None, 1000).unwrap(), b.id);
     }
 
     #[test]

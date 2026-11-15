@@ -205,8 +205,10 @@ pub fn parse(
     let mut filled = 0;
     let mut options_done = false;
     while let Some(arg) = args.next() {
-        // Once the positionals are in, a trailing list takes everything.
-        if takes_rest && filled == positionals.len() {
+        // Once the positionals are in, a trailing list takes everything;
+        // only a command that is all list (`order`) still reads `--help`.
+        let asks_help = positionals.is_empty() && (arg == "-h" || arg == "--help");
+        if takes_rest && filled == positionals.len() && !asks_help {
             matches.rest.push(arg);
             matches.rest.extend(args.by_ref());
             break;

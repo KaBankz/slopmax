@@ -92,9 +92,9 @@ impl Default for Settings {
     /// As a fresh config.toml has them, until the daemon answers.
     fn default() -> Self {
         Self {
-            strategy: Strategy::ResetFirst,
+            strategy: Strategy::FillFirst,
             session_affinity: true,
-            redeem_expiring_credits: true,
+            redeem_expiring_credits: false,
             redeem_when_exhausted: false,
             session_ttl_mins: 60,
             poll_mins: 5,

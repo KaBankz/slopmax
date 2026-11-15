@@ -131,8 +131,8 @@ export class NotifySettings extends Schema.Class<NotifySettings>("NotifySettings
 
 const strategyHelp = [
   "How a new session picks its account:",
+  "fill-first uses accounts in order, moving on when one is limited (the order `slopmax order` sets);",
   "reset-first spends the quota that resets soonest, so none is lost;",
-  "fill-first drains accounts in priority order (plain failover);",
   "least-used spreads sessions over the least used accounts;",
   "round-robin hands sessions to each account in turn.",
 ].join(" ")
@@ -154,9 +154,9 @@ export class Settings extends Schema.Class<Settings>("Settings")({
   ).pipe(withDefault("")),
   strategy: Strategy.annotate({
     description: strategyHelp,
-    default: "reset-first",
+    default: "fill-first",
     live: { summary: "How a new session picks its account: reset-first, fill-first, least-used, or round-robin" },
-  }).pipe(withDefault("reset-first")),
+  }).pipe(withDefault("fill-first")),
   sessionAffinity: Schema.Boolean.annotate({
     description:
       "Keep a session on the account it started on while that account can serve, so the provider's prompt cache stays warm. Off, every request is placed by the strategy. A client can decide per request with the header `x-slopmax-affinity: on` or `off`.",
@@ -171,9 +171,9 @@ export class Settings extends Schema.Class<Settings>("Settings")({
   redeemExpiring: Schema.Boolean.annotate({
     description:
       "Redeem a ChatGPT limit reset in its last hours, if the account has usage to reset, rather than let it expire unused.",
-    default: true,
+    default: false,
     live: { summary: "Redeem a limit reset before it expires unused" },
-  }).pipe(withDefault(true)),
+  }).pipe(withDefault(false)),
   redeemWhenExhausted: Schema.Boolean.annotate({
     description: "When every Codex account is spent, redeem a limit reset instead of failing the request.",
     default: false,
@@ -464,7 +464,7 @@ export const liveOf = (settings: Settings): LiveSettings => new LiveSettings(Str
 /** The summaries the strategy choices are offered with. */
 export const strategySummaries: { readonly [K in Strategy]: string } = {
   "reset-first": "Spend the quota that resets soonest, so none is lost",
-  "fill-first": "Use accounts in priority order; fail over when one is limited",
+  "fill-first": "Use accounts in order; fail over when one is limited",
   "least-used": "Balance load toward the least used account",
   "round-robin": "Take turns across accounts",
 }

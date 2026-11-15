@@ -293,10 +293,21 @@ fn clean(error: &serde_json::Error) -> String {
 
 /// The account `id` names, as the pool holds it.
 fn find(app: &App, id: &str) -> Result<crate::account::Account, ApiError> {
-    app.pool
-        .account(id)
-        .map(|a| crate::account::Account::clone(&a))
-        .ok_or_else(|| ApiError::not_found("account"))
+    let known = |app: &App| {
+        app.pool
+            .account(id)
+            .map(|a| crate::account::Account::clone(&a))
+    };
+    if let Some(account) = known(app) {
+        return Ok(account);
+    }
+    // One saved since the proxy last read its accounts, as by a tool
+    // writing the files itself.
+    let _ = app.sync();
+    known(app).ok_or_else(|| ApiError::NotFound {
+        what: "account".into(),
+        message: format!("no account {id}; `slopmax status` lists them"),
+    })
 }
 
 /// Applies a change made on disk at once, then reports.
@@ -416,6 +427,9 @@ async fn update_account(app: &App, id: &str, patch: AccountPatch) -> Answer {
                 }
                 if let Some(priority) = patch.priority {
                     a.priority = priority;
+                }
+                if let Some(order) = patch.order {
+                    a.order = Some(order);
                 }
                 if let Some(disabled) = patch.disabled {
                     a.disabled = disabled;

@@ -6,7 +6,7 @@
       "strategy": "reset-first",
       "sessionAffinity": true,
       "sessionMinutes": 60,
-      "redeemExpiring": true,
+      "redeemExpiring": false,
       "redeemWhenExhausted": false,
       "warmWindows": false,
       "paidOverflow": false,
@@ -94,7 +94,7 @@
       },
       {
         "id": "fill-first",
-        "summary": "Use accounts in priority order; fail over when one is limited"
+        "summary": "Use accounts in order; fail over when one is limited"
       },
       {
         "id": "least-used",

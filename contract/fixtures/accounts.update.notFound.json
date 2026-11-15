@@ -3,6 +3,6 @@
   "body": {
     "_tag": "NotFound",
     "what": "account",
-    "message": "no such account"
+    "message": "no account nope; `slopmax status` lists them"
   }
 }

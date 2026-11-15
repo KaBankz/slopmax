@@ -2102,9 +2102,11 @@ async fn the_api_reports_acts_and_streams() {
     let report = patch(AccountPatch {
         disabled: Some(false),
         priority: Some(3),
+        order: Some(1),
         label: Some(Some("work laptop".into())),
     })
     .await;
+    assert_eq!(report.accounts[0].id, first, "listed in its new place");
     let account = held(&report, &first);
     assert!(!account.disabled);
     assert_eq!(

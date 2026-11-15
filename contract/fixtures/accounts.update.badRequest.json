@@ -2,6 +2,6 @@
   "status": 400,
   "body": {
     "_tag": "BadRequest",
-    "message": "unknown field `nickname`, expected one of `label`, `priority`, `disabled`"
+    "message": "unknown field `nickname`, expected one of `label`, `priority`, `order`, `disabled`"
   }
 }

@@ -12,7 +12,7 @@ use std::io::IsTerminal;
 use anyhow::{Context, Result, bail};
 
 use self::accounts::{
-    import, login, own, redeem, remove, rename, set_disabled, set_priority, use_account,
+    import, login, order, own, redeem, remove, rename, set_disabled, set_priority, use_account,
 };
 use self::background::{ensure_running, service, start, stop};
 use crate::args::{self, App, Arg, Choice, Command, Kind, Parsed};
@@ -339,6 +339,15 @@ pub static APP: App = App {
                 ),
             ],
         ),
+        command(
+            "order",
+            "Show or set the order new sessions use accounts in",
+            &[arg(
+                "accounts",
+                "Accounts to use first, in order: numbers from `slopmax order`, ids, emails, or labels",
+                Kind::Rest,
+            )],
+        ),
         command("enable", "Route to an account again", &[ACCOUNT_ARG]),
         command(
             "disable",
@@ -560,6 +569,7 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
             let priority: i32 = m.get("priority")?;
             set_priority(&config, &store, &m.get::<String>("account")?, priority).await?;
         }
+        "order" => order(&config, &store, &m.rest).await?,
         "enable" => set_disabled(&config, &store, &m.get::<String>("account")?, false).await?,
         "disable" => set_disabled(&config, &store, &m.get::<String>("account")?, true).await?,
         "remove" => remove(&config, &store, &m.get::<String>("account")?).await?,
@@ -926,6 +936,8 @@ mod tests {
             "use auto",
             "label 1 work",
             "priority 3 -1",
+            "order 2 work",
+            "order",
             "enable 1",
             "disable work",
             "remove me@x.dev",

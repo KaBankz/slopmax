@@ -111,7 +111,7 @@ Any other client can use the proxy as an OpenAI- or Anthropic-style API at `http
 
 ### Switching
 
-Each request names its session: Claude Code's session id, Codex's `session-id`, or for other clients a session header or `prompt_cache_key`. A session stays on its account for as long as that account can serve it, which keeps prompt caches warm. It moves only when the account refuses, fills up, or signs out, and it is forgotten after `session_ttl_mins` idle minutes. A new session goes to the account chosen with `slopmax use`, if that one can serve. Otherwise it goes to the highest priority tier, and within the tier the strategy decides.
+Each request names its session: Claude Code's session id, Codex's `session-id`, or for other clients a session header or `prompt_cache_key`. A session stays on its account for as long as that account can serve it, which keeps prompt caches warm. It moves only when the account refuses, fills up, or signs out, and it is forgotten after `session_ttl_mins` idle minutes. A new session goes to the account chosen with `slopmax use`, if that one can serve. Otherwise it goes to the highest priority tier, and within the tier the strategy decides. When an account that filled up recovers, the sessions that moved off it stay where they are, keeping their cache, and new sessions go back to it.
 
 Session affinity is what keeps prompt caching working, so it is on by default. With `session_affinity = false` every request is placed by the strategy instead, which spreads load across accounts at the cost of the cache; a client can decide per request by sending `x-slopmax-affinity: off` (or `on`, when the config turns it off). Claude Code sends extra headers from `ANTHROPIC_CUSTOM_HEADERS`. slopmax still remembers which account a session used last, so account-bound state is dropped when a request lands elsewhere, and its own `x-slopmax-*` headers never reach a provider.
 
@@ -135,12 +135,12 @@ slopmax aims to make several accounts of one provider feel like a single account
 
 ### Resets
 
-Unused quota is lost when its window resets. The default strategy therefore spends the quota about to expire. All four place new sessions (or, without affinity, every request) within the highest priority tier:
+By default slopmax uses accounts in a fixed order, moving to the next only when one is limited. `slopmax order` shows that order and sets it: `slopmax order 3 1` puts account 3 first and account 1 second, and the rest follow as they were. Unused quota is lost when its window resets, so `reset-first` instead spends the quota about to expire. All four place new sessions (or, without affinity, every request) within the highest priority tier:
 
 | `strategy`    | Places a new session on                                   | Good for                        |
 | ------------- | --------------------------------------------------------- | ------------------------------- |
-| `reset-first` | the account whose started window resets soonest           | wasting no quota (the default)  |
-| `fill-first`  | the oldest account, until it is limited                   | plain failover, a fixed order   |
+| `fill-first`  | the first in `slopmax order`, until it is limited         | plain failover, a fixed order (the default) |
+| `reset-first` | the account whose started window resets soonest           | wasting no quota                |
 | `least-used`  | the account with the most room left                       | keeping accounts level          |
 | `round-robin` | the account handed a request longest ago                  | even load across accounts       |
 
@@ -151,7 +151,7 @@ ChatGPT starts a 5-hour window at an account's first request, so an account left
 Claude and ChatGPT accounts can hold limit resets, which reset an account's windows on the spot. Claude's are grants, such as the one Pro and Max accounts got at Claude Opus 5.5's launch, which claude.ai lists under Limit resets; ChatGPT's are its reset credits. slopmax lists them with each account and redeems them:
 
 - on request, with `slopmax redeem <account>`;
-- in the last three hours before one would expire unused, if the account has usage to reset (`redeem_expiring_credits`, on by default);
+- in the last three hours before one would expire unused, if the account has usage to reset (`redeem_expiring_credits`, off by default; the `reset-expiring` notification says when one is about to lapse);
 - when every account of the provider is spent, then retries the request on the reset account (`redeem_when_exhausted`, off by default).
 
 Claude lists and spends limit resets for Claude Code alone, so slopmax makes those two calls with the user agent Claude Code last sent through it, and makes neither before Claude Code has sent a request.
@@ -208,7 +208,7 @@ The same data is available as JSON under `/slopmax/api`, with the slopmax key as
 | `GET history?range=today\|7d\|30d` | tokens, cost, failovers, caching, and speed over time, by account, model, and agent |
 | `GET usage?range=…&by=…`         | totals by day, model, or account                                         |
 | `GET`, `PATCH settings`          | the settings; `PATCH` takes the live ones as JSON, such as `{"strategy": "round-robin"}`, writes config.toml, and applies them at once |
-| `PATCH`, `DELETE accounts/<id>`  | change an account's label, priority or whether it is on, or remove it    |
+| `PATCH`, `DELETE accounts/<id>`  | change an account's label, priority, order or whether it is on, or remove it    |
 | `POST accounts/<id>/pin`, `DELETE pins` | prefer an account for new sessions, or let slopmax choose again |
 | `POST accounts/<id>/redeem`, `…/own` | redeem a limit reset; have slopmax refresh an imported login itself |
 | `POST accounts`, `POST imports`, `POST logins` | add an API key or a compatible endpoint, import logins, or sign in to a subscription |
@@ -318,6 +318,7 @@ What crosses: text, images, documents, tool definitions and calls, tool results,
 | `slopmax own <account\|all>`         | Refresh an account slopmax has been following from CLIProxyAPI               |
 | `slopmax use <account\|auto>`        | Prefer an account for new sessions, or let slopmax choose                     |
 | `slopmax label <account> <name>`     | Rename an account                                                             |
+| `slopmax order [account...]`         | Show the order new sessions use accounts in, or put these first               |
 | `slopmax priority <account> <tier>`  | Higher tiers are used first; negative tiers hold an account in reserve        |
 | `slopmax enable\|disable <account>`  | Put an account in or take it out of rotation                                  |
 | `slopmax remove <account>`           | Forget an account                                                             |
@@ -347,12 +348,12 @@ What crosses: text, images, documents, tool definitions and calls, tool results,
 | ------------------------- | ---------------- | ------------------------------------------------------------------- |
 | `listen`                  | `127.0.0.1:7567` | Proxy address                                                       |
 | `api_key`                 | generated        | Key clients present to the proxy                                    |
-| `strategy`                | `reset-first`    | `reset-first`, `fill-first`, `least-used`, or `round-robin`         |
+| `strategy`                | `fill-first`     | `fill-first`, `reset-first`, `least-used`, or `round-robin`         |
 | `session_affinity`        | `true`           | Keep a session on its account for the prompt cache (a request can say otherwise with `x-slopmax-affinity`) |
 | `session_ttl_mins`        | `60`             | Idle minutes before a session's account is forgotten                |
 | `poll_mins`               | `5`              | Minutes between usage polls per account (`0` turns polling off)     |
 | `refresh_tokens`          | `true`           | Refresh OAuth tokens before they expire                             |
-| `redeem_expiring_credits` | `true`           | Redeem a limit reset before it expires unused                       |
+| `redeem_expiring_credits` | `false`          | Redeem a limit reset before it expires unused                       |
 | `redeem_when_exhausted`   | `false`          | Redeem one when every account of a provider is spent                |
 | `websockets`              | `true`           | Relay Codex's WebSockets to ChatGPT's                               |
 | `warm_windows`            | `false`          | Start idle ChatGPT accounts' 5-hour windows as soon as they reset   |
@@ -374,7 +375,7 @@ The proxy applies a changed config.toml within two seconds, without a restart; o
 | ---------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------- |
 | Built with             | Rust: one binary of about 8 MB, about 5 MB of memory when idle                   | Go: a 69 MB binary                                                          | TypeScript on Bun, with a desktop app              |
 | Setup                  | `slopmax setup` walks through it or runs unattended; `slopmax doctor` checks it  | A config file and login flags                                               | Desktop app and CLI                                |
-| Default account choice | The used quota that resets soonest, so less of it goes to waste; or fill-first, least-used, round-robin | Round-robin or fill-first within priority tiers                  | One active account, switching at 80% used          |
+| Default account choice | Fill-first, in an order you set; or the used quota that resets soonest, least-used, round-robin | Round-robin or fill-first within priority tiers                  | One active account, switching at 80% used          |
 | Usage data             | Usage endpoints and response headers; agents are shown the pool's combined usage | Response headers, kept for display                                          | Usage endpoint and response headers                |
 | Session stickiness     | Built in; off for the proxy or one request (`x-slopmax-affinity`)                | Opt-in                                                                      | Built in                                           |
 | Retries                | Failover on limits, revoked logins, and server errors (after one retry on the same account) | Retries on listed statuses across accounts                    | Failover on limits                                 |

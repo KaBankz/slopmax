@@ -130,7 +130,7 @@ impl Default for Config {
             session_affinity: true,
             poll_mins: 5,
             refresh_tokens: true,
-            redeem_expiring_credits: true,
+            redeem_expiring_credits: false,
             redeem_when_exhausted: false,
             websockets: true,
             warm_windows: false,
@@ -152,9 +152,10 @@ impl Default for Config {
 pub enum Strategy {
     /// Spend the quota that expires first: prefer the account whose usage
     /// window resets soonest, so no capacity is lost to a reset.
-    #[default]
     ResetFirst,
-    /// Drain accounts in priority order, moving on only when one is limited.
+    /// Drain accounts in order (priority, then `slopmax order`), moving on
+    /// only when one is limited.
+    #[default]
     FillFirst,
     /// Spread sessions across accounts, preferring the least used.
     LeastUsed,
@@ -179,7 +180,7 @@ impl Strategy {
     pub fn summary(self) -> &'static str {
         match self {
             Self::ResetFirst => "Spend the quota that resets soonest, so none is lost",
-            Self::FillFirst => "Use accounts in priority order; fail over when one is limited",
+            Self::FillFirst => "Use accounts in order; fail over when one is limited",
             Self::LeastUsed => "Balance load toward the least used account",
             Self::RoundRobin => "Take turns across accounts",
         }
@@ -456,11 +457,12 @@ api_key = "{api_key}"
 # listen = "127.0.0.1:{DEFAULT_PORT}"
 
 # How a new session picks its account:
+#   fill-first   use accounts in order, moving on when one is limited
+#                (the order `slopmax order` sets)
 #   reset-first  spend the quota that resets soonest, so none is lost
-#   fill-first   drain accounts in priority order (plain failover)
 #   least-used   spread sessions over the least used accounts
 #   round-robin  hand sessions to each account in turn
-# strategy = "reset-first"
+# strategy = "fill-first"
 
 # Keep a session on the account it started on while that account can serve,
 # so the provider's prompt cache stays warm. Off, every request is placed by
@@ -479,8 +481,9 @@ api_key = "{api_key}"
 # refresh_tokens = true
 
 # Redeem a ChatGPT reset credit in its last hours, if the account has usage
-# to reset, rather than let it expire unused.
-# redeem_expiring_credits = true
+# to reset, rather than let it expire unused. Off, slopmax only says so
+# (the reset-expiring notice); `slopmax redeem` spends one by hand.
+# redeem_expiring_credits = false
 
 # When every Codex account is spent, redeem a reset credit instead of
 # failing the request.

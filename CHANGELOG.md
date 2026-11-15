@@ -4,6 +4,21 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Added
+
+- `slopmax order` shows the order new sessions use accounts in, and `slopmax order 3 1` puts accounts 3 and 1 first, in that order, the rest following as they were. Priority tiers still come first.
+
+### Changed
+
+- New sessions now fill accounts in order (`fill-first`), moving to the next only when one is limited, instead of spending the quota that resets soonest. A config that names a strategy keeps it; `strategy = "reset-first"` brings back the old default.
+- Limit resets are no longer redeemed by themselves before they expire; the `reset-expiring` notification says when one is about to lapse, and `slopmax redeem` spends it. `redeem_expiring_credits = true` brings back the old default.
+- When every kept connection to a provider is busy, a request takes the first to come free if that is sooner than making a new one.
+- A request whose connection fails now says which server and what happened, such as `api.anthropic.com closed the connection before it answered` or `connecting to api.openai.com: Connection refused`, instead of `connection closed before message completed`. A new connection the server closes before the request goes out is tried once more.
+
+### Fixed
+
+- A change through the proxy to an account saved while it ran, as by a script writing the account files, failed with `no such account`; the proxy now reads its accounts again first.
+
 ## [0.8.1] - 2026-11-15
 
 ### Changed
