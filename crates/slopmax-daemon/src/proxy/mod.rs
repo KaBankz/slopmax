@@ -440,12 +440,8 @@ pub async fn handle(app: Arc<App>, request: Request) -> Response {
 }
 
 async fn proxy(app: Arc<App>, request: Request) -> Response {
-    let path_and_query = request
-        .uri()
-        .path_and_query()
-        .map_or("/", |pq| pq.as_str())
-        .to_owned();
-    let Some(target) = route(&path_and_query, request.headers()) else {
+    let path_and_query = request.uri().path_and_query().map_or("/", |pq| pq.as_str());
+    let Some(target) = route(path_and_query, request.headers()) else {
         return error(
             None,
             StatusCode::NOT_FOUND,
@@ -516,7 +512,6 @@ fn route(path_and_query: &str, headers: &HeaderMap) -> Option<Target> {
         path_and_query
             .strip_prefix(prefix)
             .filter(|rest| rest.is_empty() || rest.starts_with(['/', '?']))
-            .map(str::to_owned)
     };
     let starts = |path: &str, prefix: &str| {
         path.split('?')
@@ -538,17 +533,17 @@ fn route(path_and_query: &str, headers: &HeaderMap) -> Option<Target> {
         path,
     };
     if let Some(rest) = strip("/claude") {
-        return Some(claude(rest));
+        return Some(claude(rest.to_owned()));
     }
     if let Some(rest) = strip("/codex") {
-        return Some(codex(rest));
+        return Some(codex(rest.to_owned()));
     }
     // Unprefixed /v1 paths, as an OpenAI- or Anthropic-style base URL sends.
     let rest = strip("/v1")?;
-    if starts(&rest, "/chat/completions") {
+    if starts(rest, "/chat/completions") {
         return Some(Target {
             provider: None,
-            path: rest,
+            path: rest.to_owned(),
             dialect: Dialect::Chat,
             by_model: true,
         });
@@ -559,9 +554,10 @@ fn route(path_and_query: &str, headers: &HeaderMap) -> Option<Target> {
             && rest.contains("client_version=")
             && !headers.contains_key("anthropic-version"));
     Some(if is_codex {
-        codex(rest)
+        codex(rest.to_owned())
     } else {
-        claude(format!("/v1{rest}"))
+        // `/v1` and the rest: the path as it came.
+        claude(path_and_query.to_owned())
     })
 }
 
