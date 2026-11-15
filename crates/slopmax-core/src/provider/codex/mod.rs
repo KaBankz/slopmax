@@ -6,7 +6,7 @@ pub mod oauth;
 pub mod wire;
 
 use anyhow::Result;
-use http::{HeaderMap, StatusCode};
+use http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 
 use super::{
     Billing, BoxFuture, Credential, Provider, Reading, ResetCredits, Spec, UsageError, Verdict,
@@ -82,12 +82,7 @@ impl Provider for Codex {
     }
 
     fn headers(&self, client: &HeaderMap, account: &Account, moved: bool) -> HeaderMap {
-        wire::upstream_headers(
-            client,
-            &account.tokens.access_token,
-            account.account_id.as_deref(),
-            moved,
-        )
+        wire::upstream_headers(client, account.bearer(), account.account_id_value(), moved)
     }
 
     fn rebind(&self, body: &[u8]) -> Option<Vec<u8>> {
@@ -105,8 +100,12 @@ impl Provider for Codex {
         limits::from_headers(headers, now)
     }
 
-    fn show_pool(&self, windows: &[PoolWindow], headers: &mut HeaderMap) {
-        limits::pool_headers(windows, headers);
+    fn pool_headers(&self, windows: &[PoolWindow], out: &mut Vec<(HeaderName, HeaderValue)>) {
+        limits::pool_headers(windows, out);
+    }
+
+    fn strip_standing(&self, headers: &mut HeaderMap) {
+        limits::strip_standing(headers);
     }
 
     fn verdict(

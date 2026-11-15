@@ -22,7 +22,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use anyhow::{Result, anyhow};
-use http::{HeaderMap, StatusCode};
+use http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -378,7 +378,21 @@ pub trait Provider: Send + Sync {
 
     /// Puts the pool's usage windows in place of the serving account's in
     /// the response headers the agent reads, so it sees one account.
-    fn show_pool(&self, _windows: &[PoolWindow], _headers: &mut HeaderMap) {}
+    fn show_pool(&self, windows: &[PoolWindow], headers: &mut HeaderMap) {
+        let mut pooled = Vec::new();
+        self.pool_headers(windows, &mut pooled);
+        self.strip_standing(headers);
+        for (name, value) in pooled {
+            headers.insert(name, value);
+        }
+    }
+
+    /// The headers [`Provider::show_pool`] sets for the pool's windows.
+    fn pool_headers(&self, _windows: &[PoolWindow], _out: &mut Vec<(HeaderName, HeaderValue)>) {}
+
+    /// Removes the serving account's usage windows from response headers,
+    /// for the pool's to take their place.
+    fn strip_standing(&self, _headers: &mut HeaderMap) {}
 
     /// Banked reset credits, for providers that grant them.
     fn credits(&self) -> Option<&dyn ResetCredits> {

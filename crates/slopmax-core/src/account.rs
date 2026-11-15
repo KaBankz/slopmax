@@ -5,10 +5,12 @@
 //! of the provider-side identity (Claude organization, ChatGPT workspace), so
 //! one email in two organizations stays two accounts with separate limits.
 
-use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::{fmt, fs};
 
 use anyhow::Result;
+use http::HeaderValue;
 use serde::{Deserialize, Serialize};
 
 use crate::error::StoreError;
@@ -86,6 +88,53 @@ pub struct Account {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<Endpoint>,
     pub added_at: Timestamp,
+    #[serde(skip)]
+    values: Values,
+}
+
+/// Header values made from an account's fields, each the first time a
+/// request needs it, and shared by the requests after. A copy of the
+/// account starts without them, and each serves only while it still reads
+/// as its field.
+#[derive(Default)]
+struct Values {
+    bearer: OnceLock<HeaderValue>,
+    account_id: OnceLock<HeaderValue>,
+}
+
+impl Clone for Values {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl fmt::Debug for Values {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Values")
+    }
+}
+
+/// `prefix` and `text` as a header value: the one in `slot` while it still
+/// reads so, else made, and kept there the first time.
+fn value(
+    slot: &OnceLock<HeaderValue>,
+    prefix: &str,
+    text: &str,
+    sensitive: bool,
+) -> Option<HeaderValue> {
+    let made = slot.get();
+    let current =
+        |v: &&HeaderValue| v.as_bytes().strip_prefix(prefix.as_bytes()) == Some(text.as_bytes());
+    if let Some(value) = made.filter(current) {
+        return Some(value.clone());
+    }
+    let mut value = HeaderValue::try_from([prefix, text].concat()).ok()?;
+    value.set_sensitive(sensitive);
+    // A field changed in place since is rare; its value is made each time.
+    if made.is_none() {
+        let _ = slot.set(value.clone());
+    }
+    Some(value)
 }
 
 /// An OpenAI- or Anthropic-compatible API.
@@ -129,9 +178,29 @@ impl Account {
             link: None,
             endpoint: None,
             added_at: Timestamp::now(),
+            values: Values::default(),
         };
         account.assign_id();
         account
+    }
+
+    /// `Bearer` and the access token, as a header value marked sensitive;
+    /// `None` when the token cannot be one. Made once and then shared, so
+    /// a request costs a reference count.
+    pub fn bearer(&self) -> Option<HeaderValue> {
+        let token = &self.tokens.access_token;
+        value(&self.values.bearer, "Bearer ", token, true)
+    }
+
+    /// [`Account::account_id`] as a header value, made once like
+    /// [`Account::bearer`].
+    pub fn account_id_value(&self) -> Option<HeaderValue> {
+        value(
+            &self.values.account_id,
+            "",
+            self.account_id.as_deref()?,
+            false,
+        )
     }
 
     /// The provider-side key that distinguishes accounts with separate limits.
@@ -390,6 +459,30 @@ mod tests {
         account.email = Some(email.into());
         account.assign_id();
         account
+    }
+
+    #[test]
+    fn header_values_are_made_once_and_follow_the_token() {
+        let mut account = claude("org-1", "me@x.dev");
+        account.tokens.access_token = "one".into();
+        let bearer = account.bearer().unwrap();
+        assert_eq!(bearer, "Bearer one");
+        assert!(bearer.is_sensitive());
+        // The same value, shared.
+        let again = account.bearer().unwrap();
+        assert_eq!(again.as_bytes().as_ptr(), bearer.as_bytes().as_ptr());
+        account.tokens.access_token = "two".into();
+        assert_eq!(account.bearer().unwrap(), "Bearer two");
+        // A copy makes its own.
+        let mut copy = account.clone();
+        copy.tokens.access_token = "three".into();
+        assert_eq!(copy.bearer().unwrap(), "Bearer three");
+        assert_eq!(copy.bearer().unwrap(), "Bearer three");
+        assert_eq!(account.account_id_value(), None);
+        copy.account_id = Some("ws-1".into());
+        assert_eq!(copy.account_id_value().unwrap(), "ws-1");
+        account.tokens.access_token = "bad\ntoken".into();
+        assert_eq!(account.bearer(), None);
     }
 
     #[test]

@@ -301,9 +301,12 @@ impl App {
         if !provider.spec().is_subscription() {
             return;
         }
-        let windows = self.pool.pooled(provider, Timestamp::now());
-        if !windows.is_empty() {
-            provider.get().show_pool(&windows, headers);
+        let Some(pooled) = self.pool.pooled_headers(provider, Timestamp::now()) else {
+            return;
+        };
+        provider.get().strip_standing(headers);
+        for (name, value) in pooled.iter() {
+            headers.insert(name.clone(), value.clone());
         }
     }
 

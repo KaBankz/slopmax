@@ -387,7 +387,7 @@ fn pool(provider: ProviderId, accounts: &[AccountReport], now: Timestamp) -> Opt
             .map(|(a, w)| (&a.state.limits, a.state.is_blocked(now), *w)),
         now,
     )
-    .into_iter()
+    .iter()
     .map(|w| Window::new(w.span, w.used, w.resets_at))
     .collect();
     // A model's own window, read as one over the accounts that report it.

@@ -7,6 +7,7 @@
 //! and time helpers here are shared by the provider parsers.
 
 use http::HeaderMap;
+use http::header::AsHeaderName;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -261,7 +262,7 @@ impl Urgency {
 }
 
 /// One window of a pool of accounts, read as if they were one account.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct PoolWindow {
     /// `5h`, `7d`, or `30d`.
     pub span: &'static str,
@@ -283,63 +284,99 @@ impl PoolWindow {
     }
 }
 
+/// The spans a pool can have a window in, shortest first.
+const SPANS: [&str; 3] = ["5h", "7d", "30d"];
+
+/// A pool's windows, shortest first: at most one per span, held inline, so
+/// reading the pool on every response allocates nothing. It reads as a
+/// slice of [`PoolWindow`]s.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PoolWindows {
+    windows: [PoolWindow; SPANS.len()],
+    len: usize,
+}
+
+impl PoolWindows {
+    fn push(&mut self, window: PoolWindow) {
+        self.windows[self.len] = window;
+        self.len += 1;
+    }
+}
+
+impl std::ops::Deref for PoolWindows {
+    type Target = [PoolWindow];
+
+    fn deref(&self) -> &[PoolWindow] {
+        &self.windows[..self.len]
+    }
+}
+
+impl PartialEq for PoolWindows {
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+
 /// The windows of a pool of accounts, each given by its limits and whether
 /// it sits out (a blocked account counts as full in its shortest window).
 /// Accounts without a reading for a window are left out of its mean.
-pub fn pooled<'a>(
-    accounts: impl IntoIterator<Item = (&'a Limits, bool)>,
-    now: Timestamp,
-) -> Vec<PoolWindow> {
+pub fn pooled<'a, I>(accounts: I, now: Timestamp) -> PoolWindows
+where
+    I: IntoIterator<Item = (&'a Limits, bool)>,
+    I::IntoIter: Clone,
+{
     pooled_by(accounts.into_iter().map(|(l, b)| (l, b, 1.0)), now)
 }
 
 /// [`pooled`], each account weighted by its share of the pool's capacity,
-/// so a large plan's usage counts for more than a small one's.
-pub fn pooled_by<'a>(
-    accounts: impl IntoIterator<Item = (&'a Limits, bool, f64)>,
-    now: Timestamp,
-) -> Vec<PoolWindow> {
-    let accounts: Vec<(&Limits, bool, f64)> = accounts.into_iter().collect();
-    let mut windows = Vec::new();
-    for span in ["5h", "7d", "30d"] {
+/// so a large plan's usage counts for more than a small one's. The
+/// accounts are gone through once for each span.
+pub fn pooled_by<'a, I>(accounts: I, now: Timestamp) -> PoolWindows
+where
+    I: IntoIterator<Item = (&'a Limits, bool, f64)>,
+    I::IntoIter: Clone,
+{
+    let accounts = accounts.into_iter();
+    let mut windows = PoolWindows::default();
+    for span in SPANS {
         let mut measured = false;
-        let readings: Vec<(f64, Option<Timestamp>, f64)> = accounts
-            .iter()
-            .filter_map(|(limits, blocked, weight)| {
-                let shortest = limits.shared().map(|w| span_rank(&w.span)).min()?;
-                match limits.shared().find(|w| w.span == span) {
-                    Some(window) => {
-                        measured = true;
-                        let used = match blocked {
-                            true if shortest == span_rank(span) => 100.0,
-                            _ => window.used_at(now),
-                        };
-                        Some((used, window.upcoming_reset(now), *weight))
-                    }
-                    // A plan with no window this short has no such limit:
-                    // Claude's Ultra and ChatGPT's Pro have no 5-hour one.
-                    // It adds room to the pool's window, full only while
-                    // the account is blocked.
-                    None if span_rank(span) < shortest => {
-                        Some((if *blocked { 100.0 } else { 0.0 }, None, *weight))
-                    }
-                    None => None,
+        // Sums start from -0.0, as `Iterator::sum` does.
+        let mut weight = -0.0;
+        let mut weighted = -0.0;
+        let mut resets_at: Option<Timestamp> = None;
+        for (limits, blocked, share) in accounts.clone() {
+            let Some(shortest) = limits.shared().map(|w| span_rank(&w.span)).min() else {
+                continue;
+            };
+            let (used, reset) = match limits.shared().find(|w| w.span == span) {
+                Some(window) => {
+                    measured = true;
+                    let used = match blocked {
+                        true if shortest == span_rank(span) => 100.0,
+                        _ => window.used_at(now),
+                    };
+                    (used, window.upcoming_reset(now))
                 }
-            })
-            .collect();
-        let weight: f64 = readings.iter().map(|r| r.2).sum();
+                // A plan with no window this short has no such limit:
+                // Claude's Ultra and ChatGPT's Pro have no 5-hour one.
+                // It adds room to the pool's window, full only while
+                // the account is blocked.
+                None if span_rank(span) < shortest => (if blocked { 100.0 } else { 0.0 }, None),
+                None => continue,
+            };
+            weight += share;
+            weighted += used * share;
+            // The soonest reset of a window in use.
+            if let Some(reset) = reset.filter(|_| used > 0.0) {
+                resets_at = Some(resets_at.map_or(reset, |at| at.min(reset)));
+            }
+        }
         if !measured || weight <= 0.0 {
             continue;
         }
-        let used = readings.iter().map(|(used, _, w)| used * w).sum::<f64>() / weight;
-        let resets_at = readings
-            .iter()
-            .filter(|(used, ..)| *used > 0.0)
-            .filter_map(|(_, reset, _)| *reset)
-            .min();
         windows.push(PoolWindow {
             span,
-            used,
+            used: weighted / weight,
             resets_at,
         });
     }
@@ -354,11 +391,11 @@ fn span_rank(span: &str) -> u8 {
     }
 }
 
-pub(crate) fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+pub(crate) fn header(headers: &HeaderMap, name: impl AsHeaderName) -> Option<&str> {
     headers.get(name)?.to_str().ok().map(str::trim)
 }
 
-pub(crate) fn header_f64(headers: &HeaderMap, name: &str) -> Option<f64> {
+pub(crate) fn header_f64(headers: &HeaderMap, name: impl AsHeaderName) -> Option<f64> {
     header(headers, name)?
         .parse()
         .ok()
@@ -366,7 +403,7 @@ pub(crate) fn header_f64(headers: &HeaderMap, name: &str) -> Option<f64> {
 }
 
 /// Parses a unix-seconds timestamp header.
-pub(crate) fn header_time(headers: &HeaderMap, name: &str) -> Option<Timestamp> {
+pub(crate) fn header_time(headers: &HeaderMap, name: impl AsHeaderName) -> Option<Timestamp> {
     let secs = header_f64(headers, name)?;
     Timestamp::from_second(secs as i64)
 }

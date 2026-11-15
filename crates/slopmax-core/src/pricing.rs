@@ -159,16 +159,20 @@ const CAPACITY: &[(ProviderId, &str, f64)] = &[
 pub fn shares(provider: ProviderId, plans: &[Option<&str>]) -> Option<Vec<f64>> {
     let sizes: Vec<f64> = plans
         .iter()
-        .map(|plan| {
-            let plan = (*plan)?.trim().to_ascii_lowercase();
-            CAPACITY
-                .iter()
-                .find(|(p, name, _)| *p == provider && *name == plan)
-                .map(|(.., size)| *size)
-        })
+        .map(|plan| capacity(provider, *plan))
         .collect::<Option<_>>()?;
     let total: f64 = sizes.iter().sum();
     (total > 0.0).then(|| sizes.iter().map(|s| s / total).collect())
+}
+
+/// How much usage `plan` allows against the smallest plan of `provider`,
+/// if that is known: the sizes [`shares`] divides up.
+pub fn capacity(provider: ProviderId, plan: Option<&str>) -> Option<f64> {
+    let plan = plan?.trim();
+    CAPACITY
+        .iter()
+        .find(|(p, name, _)| *p == provider && name.eq_ignore_ascii_case(plan))
+        .map(|(.., size)| *size)
 }
 
 /// The price of `model`: the user's own if they set one, else the list

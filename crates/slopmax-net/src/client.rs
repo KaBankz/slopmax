@@ -338,9 +338,18 @@ impl Origins {
     fn apply(&self, url: &str) -> Option<String> {
         self.0.iter().find_map(|(from, to)| {
             let rest = url.strip_prefix(from.as_str())?;
-            (rest.is_empty() || rest.starts_with(['/', '?'])).then(|| format!("{to}{rest}"))
+            (rest.is_empty() || rest.starts_with(['/', '?'])).then(|| [to, rest].concat())
         })
     }
+}
+
+/// A URL as a [`Uri`], which keeps the string as it is rather than a copy.
+fn parse_url(url: String) -> Result<Uri, Error> {
+    let url = Bytes::from(url);
+    Uri::from_maybe_shared(url.clone()).map_err(|e| {
+        let url = String::from_utf8_lossy(&url);
+        Error::new(Kind::Request, format!("invalid URL {url:?}: {e}"))
+    })
 }
 
 /// An HTTP client. Cloning is cheap and shares the connection pool.
@@ -478,23 +487,23 @@ impl Client {
         Builder::default()
     }
 
-    pub fn get(&self, url: impl AsRef<str>) -> RequestBuilder {
+    pub fn get(&self, url: impl Into<String>) -> RequestBuilder {
         self.request(Method::GET, url)
     }
 
-    pub fn post(&self, url: impl AsRef<str>) -> RequestBuilder {
+    pub fn post(&self, url: impl Into<String>) -> RequestBuilder {
         self.request(Method::POST, url)
     }
 
-    pub fn request(&self, method: Method, url: impl AsRef<str>) -> RequestBuilder {
-        let rewritten = self.origins.apply(url.as_ref());
-        let url = rewritten.as_deref().unwrap_or(url.as_ref());
+    /// A request to `url`; a `String` given is kept as the request's URL,
+    /// not copied.
+    pub fn request(&self, method: Method, url: impl Into<String>) -> RequestBuilder {
+        let url = url.into();
+        let url = self.origins.apply(&url).unwrap_or(url);
         RequestBuilder {
             client: self.clone(),
             method,
-            uri: url
-                .parse::<Uri>()
-                .map_err(|e| Error::new(Kind::Request, format!("invalid URL {url:?}: {e}"))),
+            uri: parse_url(url),
             headers: HeaderMap::new(),
             body: Bytes::new(),
             timeout: self.timeout,
@@ -529,6 +538,11 @@ impl RequestBuilder {
 
     /// Adds every header in `headers`, replacing same-named ones.
     pub fn headers(mut self, headers: HeaderMap) -> Self {
+        // With none set yet, the map is taken whole.
+        if self.headers.is_empty() {
+            self.headers = headers;
+            return self;
+        }
         let mut last = None;
         for (name, value) in headers {
             let name = match name {
@@ -689,6 +703,13 @@ impl Response {
     /// watches for stalls itself.
     pub fn into_incoming(self) -> Incoming {
         self.inner.into_body()
+    }
+
+    /// The status, the headers, and the body as [`Response::into_incoming`]
+    /// gives it: the headers handed over, not copied.
+    pub fn into_parts(self) -> (StatusCode, HeaderMap, Incoming) {
+        let (parts, body) = self.inner.into_parts();
+        (parts.status, parts.headers, body)
     }
 
     /// The body as a stream of chunks, failing if it stalls for longer than

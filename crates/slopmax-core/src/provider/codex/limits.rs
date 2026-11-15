@@ -1,7 +1,7 @@
 //! ChatGPT's usage windows: response headers, the usage endpoint, and
 //! refusals.
 
-use http::{HeaderMap, HeaderValue};
+use http::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Value, json};
 
 use crate::limits::{
@@ -9,14 +9,46 @@ use crate::limits::{
 };
 use crate::time::{SignedDuration, Timestamp};
 
+/// One of Codex's two window slots, with its header names written out, so
+/// reading and writing them on every response formats nothing.
+struct Slot {
+    used_percent: HeaderName,
+    window_minutes: HeaderName,
+    reset_at: HeaderName,
+    reset_after_seconds: HeaderName,
+    over_secondary_limit_percent: HeaderName,
+}
+
+/// `x-codex-primary-*` and `x-codex-secondary-*`.
+static SLOTS: [Slot; 2] = [
+    Slot {
+        used_percent: HeaderName::from_static("x-codex-primary-used-percent"),
+        window_minutes: HeaderName::from_static("x-codex-primary-window-minutes"),
+        reset_at: HeaderName::from_static("x-codex-primary-reset-at"),
+        reset_after_seconds: HeaderName::from_static("x-codex-primary-reset-after-seconds"),
+        over_secondary_limit_percent: HeaderName::from_static(
+            "x-codex-primary-over-secondary-limit-percent",
+        ),
+    },
+    Slot {
+        used_percent: HeaderName::from_static("x-codex-secondary-used-percent"),
+        window_minutes: HeaderName::from_static("x-codex-secondary-window-minutes"),
+        reset_at: HeaderName::from_static("x-codex-secondary-reset-at"),
+        reset_after_seconds: HeaderName::from_static("x-codex-secondary-reset-after-seconds"),
+        over_secondary_limit_percent: HeaderName::from_static(
+            "x-codex-secondary-over-secondary-limit-percent",
+        ),
+    },
+];
+
 /// Codex: `x-codex-{primary,secondary}-{used-percent,window-minutes,reset-at}`.
 pub fn from_headers(headers: &HeaderMap, now: Timestamp) -> Option<Limits> {
-    let windows: Vec<Window> = ["primary", "secondary"]
-        .into_iter()
+    let windows: Vec<Window> = SLOTS
+        .iter()
         .filter_map(|slot| {
-            let used = header_f64(headers, &format!("x-codex-{slot}-used-percent"))?;
-            let minutes = header_f64(headers, &format!("x-codex-{slot}-window-minutes"));
-            let reset = header_time(headers, &format!("x-codex-{slot}-reset-at"));
+            let used = header_f64(headers, &slot.used_percent)?;
+            let minutes = header_f64(headers, &slot.window_minutes);
+            let reset = header_time(headers, &slot.reset_at);
             let span = minutes.map_or("7d", |m| span_for((m * 60.0) as i64));
             Some(Window::new(span, used, reset))
         })
@@ -24,37 +56,36 @@ pub fn from_headers(headers: &HeaderMap, now: Timestamp) -> Option<Limits> {
     Limits::observed(windows, now)
 }
 
-/// Puts the pool's standing in place of the serving account's in
-/// `x-codex-{primary,secondary}-*`, shortest window first, so Codex's limit
-/// display and warnings describe the pool as one account.
-pub fn pool_headers(windows: &[PoolWindow], headers: &mut HeaderMap) {
-    let mut windows = windows.iter();
-    for slot in ["primary", "secondary"] {
-        for field in [
-            "used-percent",
-            "window-minutes",
-            "reset-at",
-            "reset-after-seconds",
-            "over-secondary-limit-percent",
+/// Removes the serving account's standing from `x-codex-{primary,secondary}-*`,
+/// for the pool's to take its place.
+pub fn strip_standing(headers: &mut HeaderMap) {
+    for slot in &SLOTS {
+        for name in [
+            &slot.used_percent,
+            &slot.window_minutes,
+            &slot.reset_at,
+            &slot.reset_after_seconds,
+            &slot.over_secondary_limit_percent,
         ] {
-            headers.remove(format!("x-codex-{slot}-{field}"));
+            headers.remove(name);
         }
-        let Some(window) = windows.next() else {
-            continue;
-        };
-        let mut set = |field: &str, value: String| {
-            if let Ok(value) = HeaderValue::try_from(value) {
-                headers.insert(
-                    http::HeaderName::try_from(format!("x-codex-{slot}-{field}"))
-                        .expect("valid header names"),
-                    value,
-                );
-            }
-        };
-        set("used-percent", format!("{:.1}", window.used));
-        set("window-minutes", window.minutes().to_string());
+    }
+}
+
+/// The pool's standing in `x-codex-{primary,secondary}-*`, shortest window
+/// first, to put in place of the serving account's ([`strip_standing`]) so
+/// Codex's limit display and warnings describe the pool as one account.
+pub fn pool_headers(windows: &[PoolWindow], out: &mut Vec<(HeaderName, HeaderValue)>) {
+    for (slot, window) in SLOTS.iter().zip(windows) {
+        if let Ok(value) = HeaderValue::try_from(format!("{:.1}", window.used)) {
+            out.push((slot.used_percent.clone(), value));
+        }
+        out.push((
+            slot.window_minutes.clone(),
+            HeaderValue::from(window.minutes()),
+        ));
         if let Some(at) = window.resets_at {
-            set("reset-at", at.as_second().to_string());
+            out.push((slot.reset_at.clone(), HeaderValue::from(at.as_second())));
         }
     }
 }
@@ -171,8 +202,12 @@ pub fn refusal(status: u16, headers: &HeaderMap, body: &[u8], now: Timestamp) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use http::HeaderValue;
-    use serde_json::json;
+    use crate::provider::Provider;
+
+    /// The pool's standing in place of the account's, as the proxy puts it.
+    fn show(windows: &[PoolWindow], headers: &mut HeaderMap) {
+        super::super::Codex.show_pool(windows, headers);
+    }
 
     fn ts(secs: i64) -> Timestamp {
         Timestamp::from_second(secs).unwrap()
@@ -207,7 +242,7 @@ mod tests {
             ("x-codex-secondary-used-percent", "70"),
             ("x-codex-credits-has-credits", "true"),
         ]);
-        pool_headers(&pool, &mut h);
+        show(&pool, &mut h);
         let get = |name: &str| h.get(name).map(|v| v.to_str().unwrap());
         assert_eq!(get("x-codex-primary-used-percent"), Some("22.5"));
         assert_eq!(get("x-codex-primary-window-minutes"), Some("300"));

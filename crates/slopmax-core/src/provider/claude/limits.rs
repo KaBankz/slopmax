@@ -15,30 +15,35 @@ const UNIFIED: &str = "anthropic-ratelimit-unified-";
 struct Unified {
     key: &'static str,
     claim: &'static str,
-    utilization: &'static str,
-    reset: &'static str,
-    status: &'static str,
-    surpassed: &'static str,
+    utilization: HeaderName,
+    reset: HeaderName,
+    status: HeaderName,
+    surpassed: HeaderName,
 }
 
-const WINDOWS: [Unified; 2] = [
+static WINDOWS: [Unified; 2] = [
     Unified {
         key: "5h",
         claim: "five_hour",
-        utilization: "anthropic-ratelimit-unified-5h-utilization",
-        reset: "anthropic-ratelimit-unified-5h-reset",
-        status: "anthropic-ratelimit-unified-5h-status",
-        surpassed: "anthropic-ratelimit-unified-5h-surpassed-threshold",
+        utilization: HeaderName::from_static("anthropic-ratelimit-unified-5h-utilization"),
+        reset: HeaderName::from_static("anthropic-ratelimit-unified-5h-reset"),
+        status: HeaderName::from_static("anthropic-ratelimit-unified-5h-status"),
+        surpassed: HeaderName::from_static("anthropic-ratelimit-unified-5h-surpassed-threshold"),
     },
     Unified {
         key: "7d",
         claim: "seven_day",
-        utilization: "anthropic-ratelimit-unified-7d-utilization",
-        reset: "anthropic-ratelimit-unified-7d-reset",
-        status: "anthropic-ratelimit-unified-7d-status",
-        surpassed: "anthropic-ratelimit-unified-7d-surpassed-threshold",
+        utilization: HeaderName::from_static("anthropic-ratelimit-unified-7d-utilization"),
+        reset: HeaderName::from_static("anthropic-ratelimit-unified-7d-reset"),
+        status: HeaderName::from_static("anthropic-ratelimit-unified-7d-status"),
+        surpassed: HeaderName::from_static("anthropic-ratelimit-unified-7d-surpassed-threshold"),
     },
 ];
+
+const STATUS: HeaderName = HeaderName::from_static("anthropic-ratelimit-unified-status");
+const CLAIM: HeaderName =
+    HeaderName::from_static("anthropic-ratelimit-unified-representative-claim");
+const RESET: HeaderName = HeaderName::from_static("anthropic-ratelimit-unified-reset");
 
 /// Claude: `anthropic-ratelimit-unified-{5h,7d}-{utilization,reset}`.
 /// Utilization is a 0–1 fraction; resets are unix seconds.
@@ -46,82 +51,85 @@ pub fn from_headers(headers: &HeaderMap, now: Timestamp) -> Option<Limits> {
     let windows: Vec<Window> = WINDOWS
         .iter()
         .filter_map(|w| {
-            let fraction = header_f64(headers, w.utilization)?;
+            let fraction = header_f64(headers, &w.utilization)?;
             Some(Window::new(
                 w.key,
                 fraction * 100.0,
-                header_time(headers, w.reset),
+                header_time(headers, &w.reset),
             ))
         })
         .collect();
     Limits::observed(windows, now)
 }
 
-/// Puts the pool's standing in place of the serving account's, so the agent
-/// sees one account. This follows Claude Code's contract for gateways:
-/// strip the upstream's `anthropic-ratelimit-unified-*` headers and report
-/// the caller's own standing, warning past 75% and again past 95%.
-pub fn pool_headers(windows: &[PoolWindow], headers: &mut HeaderMap) {
-    let upstream: Vec<HeaderName> = headers
-        .keys()
-        .filter(|name| name.as_str().starts_with(UNIFIED))
-        .cloned()
-        .collect();
-    for name in upstream {
-        headers.remove(name);
-    }
-    let mut set = |name: &'static str, value: String| {
-        if let Ok(value) = HeaderValue::try_from(value) {
-            headers.insert(HeaderName::from_static(name), value);
+/// Removes the upstream's `anthropic-ratelimit-unified-*` headers, for the
+/// pool's standing to take their place.
+pub fn strip_standing(headers: &mut HeaderMap) {
+    // Each name is copied out before it is removed, as the map cannot
+    // change while it is searched; onto the stack, as the names are short.
+    let mut copy = [0u8; 96];
+    while let Some(name) = headers.keys().find(|n| n.as_str().starts_with(UNIFIED)) {
+        let name = name.as_str();
+        match copy.get_mut(..name.len()) {
+            Some(copy) => {
+                copy.copy_from_slice(name.as_bytes());
+                headers.remove(std::str::from_utf8(copy).expect("header names are ASCII"));
+            }
+            None => {
+                let name = name.to_owned();
+                headers.remove(name);
+            }
         }
+    }
+}
+
+/// The pool's standing, to put in place of the serving account's so the
+/// agent sees one account. This follows Claude Code's contract for
+/// gateways: strip the upstream's `anthropic-ratelimit-unified-*` headers
+/// ([`strip_standing`]) and report the caller's own standing, warning past
+/// 75% and again past 95%.
+pub fn pool_headers(windows: &[PoolWindow], out: &mut Vec<(HeaderName, HeaderValue)>) {
+    let status = |warning: bool| {
+        HeaderValue::from_static(if warning {
+            "allowed_warning"
+        } else {
+            "allowed"
+        })
     };
-    let mut fullest: Option<(&PoolWindow, &str)> = None;
+    let mut fullest: Option<(&PoolWindow, &'static str)> = None;
     for window in windows {
         let Some(names) = WINDOWS.iter().find(|w| w.key == window.span) else {
             continue;
         };
-        let claim = names.claim;
         // Below 1 while requests are still served.
         let fraction = (window.used / 100.0).clamp(0.0, 0.99);
-        let passed = [0.95, 0.75].into_iter().find(|t| fraction >= *t);
-        set(names.utilization, format!("{fraction:.2}"));
-        let status = if passed.is_some() {
-            "allowed_warning"
-        } else {
-            "allowed"
-        };
-        set(names.status, status.into());
-        if let Some(at) = window.resets_at {
-            set(names.reset, at.as_second().to_string());
+        let passed = [(0.95, "0.95"), (0.75, "0.75")]
+            .into_iter()
+            .find(|(t, _)| fraction >= *t);
+        if let Ok(value) = HeaderValue::try_from(format!("{fraction:.2}")) {
+            out.push((names.utilization.clone(), value));
         }
-        if let Some(threshold) = passed {
-            set(names.surpassed, threshold.to_string());
+        out.push((names.status.clone(), status(passed.is_some())));
+        if let Some(at) = window.resets_at {
+            out.push((names.reset.clone(), HeaderValue::from(at.as_second())));
+        }
+        if let Some((_, threshold)) = passed {
+            out.push((names.surpassed.clone(), HeaderValue::from_static(threshold)));
         }
         if fullest.is_none_or(|(f, _)| window.used > f.used) {
-            fullest = Some((window, claim));
+            fullest = Some((window, names.claim));
         }
     }
     let Some((window, claim)) = fullest else {
         return;
     };
     let warning = window.used >= 75.0;
-    let status = if warning {
-        "allowed_warning"
-    } else {
-        "allowed"
-    };
-    set("anthropic-ratelimit-unified-status", status.into());
+    out.push((STATUS, status(warning)));
     if warning {
-        set(
-            "anthropic-ratelimit-unified-representative-claim",
-            claim.into(),
-        );
+        out.push((CLAIM, HeaderValue::from_static(claim)));
     }
     if let Some(at) = window.resets_at {
-        set(
-            "anthropic-ratelimit-unified-reset",
-            at.as_second().to_string(),
-        );
+        out.push((RESET, HeaderValue::from(at.as_second())));
     }
 }
 
@@ -184,7 +192,7 @@ pub fn from_usage(body: &Value, now: Timestamp) -> Limits {
 /// answer the same, and all of them stay healthy for ordinary requests.
 pub fn fast_mode_refused(headers: &HeaderMap, body: &[u8]) -> bool {
     let window_rejected = ["5h-", "7d-"].iter().any(|key| {
-        header(headers, &format!("anthropic-ratelimit-unified-{key}status")) == Some("rejected")
+        header(headers, format!("anthropic-ratelimit-unified-{key}status")) == Some("rejected")
     });
     if window_rejected {
         return false;
@@ -213,10 +221,9 @@ const LONGEST_WINDOW: SignedDuration = SignedDuration::from_hours(7 * 24 + 1);
 /// boundary (the same time as the overage reset), which would set the
 /// account or model aside for weeks.
 pub fn refusal(headers: &HeaderMap, model: Option<&str>, now: Timestamp) -> Refusal {
-    let status = |key: &str| header(headers, &format!("anthropic-ratelimit-unified-{key}status"));
+    let status = |key: &str| header(headers, format!("anthropic-ratelimit-unified-{key}status"));
     let rejected = |key: &str| status(key) == Some("rejected");
-    let reset =
-        |key: &str| header_time(headers, &format!("anthropic-ratelimit-unified-{key}reset"));
+    let reset = |key: &str| header_time(headers, format!("anthropic-ratelimit-unified-{key}reset"));
     let overage_claim = header(headers, "anthropic-ratelimit-unified-representative-claim")
         .is_some_and(|claim| claim.contains("overage"));
     let unified_reset = reset("").filter(|at| !(overage_claim && Some(*at) == reset("overage-")));
@@ -256,6 +263,12 @@ pub fn refusal(headers: &HeaderMap, model: Option<&str>, now: Timestamp) -> Refu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::provider::Provider;
+
+    /// The pool's standing in place of the account's, as the proxy puts it.
+    fn show(windows: &[PoolWindow], headers: &mut HeaderMap) {
+        super::super::Claude.show_pool(windows, headers);
+    }
 
     #[test]
     fn pool_headers_replace_the_accounts() {
@@ -285,7 +298,7 @@ mod tests {
                 resets_at: None,
             },
         ];
-        pool_headers(&pool, &mut headers);
+        show(&pool, &mut headers);
         let get = |name: &str| headers.get(name).map(|v| v.to_str().unwrap());
         assert_eq!(get("anthropic-ratelimit-unified-status"), Some("allowed"));
         assert_eq!(
@@ -311,7 +324,7 @@ mod tests {
             used: 96.0,
             resets_at: Some(reset),
         }];
-        pool_headers(&low, &mut headers);
+        show(&low, &mut headers);
         let get = |name: &str| headers.get(name).map(|v| v.to_str().unwrap());
         assert_eq!(
             get("anthropic-ratelimit-unified-status"),

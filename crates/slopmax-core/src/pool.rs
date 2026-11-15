@@ -20,11 +20,12 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
+use http::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 
 use crate::account::Account;
 use crate::config::Strategy;
-use crate::limits::{Limits, PoolWindow, UNKNOWN_SCORE};
+use crate::limits::{Limits, PoolWindows, UNKNOWN_SCORE};
 use crate::provider::ProviderId;
 use crate::provider::credits::Credit;
 use crate::time::{SignedDuration, Timestamp};
@@ -313,6 +314,41 @@ struct Inner {
     lapses: Vec<(String, crate::limits::Lapse)>,
     taken: Vec<(String, crate::limits::Lapse)>,
     dirty: bool,
+    /// The pool's windows as response headers, by provider, with the
+    /// windows they were rendered from.
+    shown: Vec<(ProviderId, PoolWindows, PoolHeaders)>,
+}
+
+/// Response headers that show a provider's pool as one account, as
+/// [`Provider::pool_headers`](crate::provider::Provider::pool_headers)
+/// renders them. Shared: handing them out copies a pointer, and each value
+/// a reference count.
+pub type PoolHeaders = Arc<[(HeaderName, HeaderValue)]>;
+
+impl Inner {
+    /// See [`Pool::pooled`]. Each account counts by its share of the pool,
+    /// as [`pricing::shares`](crate::pricing::shares) gives it, worked out
+    /// here in two passes over the accounts.
+    fn pooled(&self, provider: ProviderId, now: Timestamp) -> PoolWindows {
+        let unknown = AccountState::default();
+        let working = || {
+            self.accounts
+                .iter()
+                .filter(move |a| a.provider == provider && !a.disabled && a.auth_error.is_none())
+        };
+        let capacity = |a: &Account| crate::pricing::capacity(provider, a.plan.as_deref());
+        // Shares are even unless every plan's size is known.
+        let total = working()
+            .map(|a| capacity(a))
+            .sum::<Option<f64>>()
+            .filter(|total| *total > 0.0);
+        let accounts = working().map(|a| {
+            let share = total.and_then(|total| Some(capacity(a)? / total));
+            let state = self.states.get(&a.id).unwrap_or(&unknown);
+            (&state.limits, state.is_blocked(now), share.unwrap_or(1.0))
+        });
+        crate::limits::pooled_by(accounts, now)
+    }
 }
 
 /// Thread-safe pool shared by the proxy and its background tasks.
@@ -824,23 +860,35 @@ impl Pool {
 
     /// The provider's working accounts read as one account: see
     /// [`limits::pooled`](crate::limits::pooled).
-    pub fn pooled(&self, provider: ProviderId, now: Timestamp) -> Vec<PoolWindow> {
-        let inner = self.lock();
-        let unknown = AccountState::default();
-        let working: Vec<&Account> = inner
-            .accounts
-            .iter()
-            .filter(|a| a.provider == provider && !a.disabled && a.auth_error.is_none())
-            .map(|a| &**a)
-            .collect();
-        let plans: Vec<Option<&str>> = working.iter().map(|a| a.plan.as_deref()).collect();
-        let shares =
-            crate::pricing::shares(provider, &plans).unwrap_or_else(|| vec![1.0; working.len()]);
-        let accounts = working.iter().zip(shares).map(|(a, share)| {
-            let state = inner.states.get(&a.id).unwrap_or(&unknown);
-            (&state.limits, state.is_blocked(now), share)
-        });
-        crate::limits::pooled_by(accounts, now)
+    pub fn pooled(&self, provider: ProviderId, now: Timestamp) -> PoolWindows {
+        self.lock().pooled(provider, now)
+    }
+
+    /// The pool's windows as the response headers the agent reads, or
+    /// `None` when the pool has none. They are rendered again only when
+    /// the windows change.
+    pub fn pooled_headers(&self, provider: ProviderId, now: Timestamp) -> Option<PoolHeaders> {
+        let mut inner = self.lock();
+        let windows = inner.pooled(provider, now);
+        if windows.is_empty() {
+            return None;
+        }
+        let shown = &mut inner.shown;
+        let at = shown.iter().position(|(p, ..)| *p == provider);
+        if let Some(at) = at
+            && shown[at].1 == windows
+        {
+            return Some(Arc::clone(&shown[at].2));
+        }
+        let mut rendered = Vec::new();
+        provider.get().pool_headers(&windows, &mut rendered);
+        let rendered = PoolHeaders::from(rendered);
+        let entry = (provider, windows, Arc::clone(&rendered));
+        match at {
+            Some(at) => shown[at] = entry,
+            None => shown.push(entry),
+        }
+        Some(rendered)
     }
 
     pub fn state(&self, id: &str) -> AccountState {
@@ -1032,6 +1080,54 @@ mod tests {
             exclude: &[],
         };
         pool.pick(&req, ts(now)).map(|c| c.account.id.clone())
+    }
+
+    #[test]
+    fn the_pool_reads_as_one_account_weighted_by_plan() {
+        let mut max = account(ProviderId::Claude, "max", 1);
+        max.plan = Some(" Max ".into());
+        let mut pro = account(ProviderId::Claude, "pro", 2);
+        pro.plan = Some("pro".into());
+        let pool = pool(Strategy::FillFirst, &[&max, &pro]);
+        pool.observe(
+            &max.id,
+            limits(vec![window("7d", 60.0, Some(9_000))]),
+            ts(1000),
+        );
+        pool.observe(
+            &pro.id,
+            limits(vec![window("7d", 0.0, Some(8_000))]),
+            ts(1000),
+        );
+        let windows = pool.pooled(ProviderId::Claude, ts(1000));
+        assert_eq!(windows.len(), 1);
+        // Max is five times Pro: 60% of five sixths of the pool.
+        assert!((windows[0].used - 50.0).abs() < 1e-9, "{windows:?}");
+        assert_eq!(windows[0].resets_at, Some(ts(9_000)));
+
+        // Its headers are rendered once, and again when the windows change.
+        let shown = pool.pooled_headers(ProviderId::Claude, ts(1000)).unwrap();
+        let again = pool.pooled_headers(ProviderId::Claude, ts(1000)).unwrap();
+        assert!(Arc::ptr_eq(&shown, &again));
+        let value = |headers: &PoolHeaders, name: &str| {
+            let (_, value) = headers.iter().find(|(n, _)| n == name).unwrap();
+            value.to_str().unwrap().to_owned()
+        };
+        assert_eq!(
+            value(&shown, "anthropic-ratelimit-unified-7d-utilization"),
+            "0.50"
+        );
+        pool.observe(
+            &pro.id,
+            limits(vec![window("7d", 60.0, Some(8_000))]),
+            ts(1000),
+        );
+        let changed = pool.pooled_headers(ProviderId::Claude, ts(1000)).unwrap();
+        assert_eq!(
+            value(&changed, "anthropic-ratelimit-unified-7d-utilization"),
+            "0.60"
+        );
+        assert!(pool.pooled_headers(ProviderId::Codex, ts(1000)).is_none());
     }
 
     #[test]

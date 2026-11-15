@@ -33,7 +33,7 @@ use crate::ledger::{End, Entry};
 use crate::log;
 use crate::net::body;
 use crate::net::client::{self, Response as Upstream};
-use crate::net::headers::returnable;
+use crate::net::headers::keep_returnable;
 use crate::net::server::{Request, Response};
 use crate::pool::{Choice, DEFAULT_BLOCK, DEFAULT_THROTTLE, Pick, Unavailable};
 use crate::provider::credits::Outcome;
@@ -42,7 +42,7 @@ use crate::route::{self, NoRoute, Step};
 use crate::time::{SignedDuration, Timestamp};
 use crate::wire::ir::{self, Answer, Event, Part};
 use crate::wire::rawjson::{self, Seg};
-use crate::wire::sse::Tap;
+use crate::wire::sse::{Shape, Tap};
 use crate::wire::{Dialect, responses, translate};
 
 /// Largest request body accepted (images make Messages bodies big).
@@ -319,7 +319,8 @@ impl Failure {
         }
         let mut response = Response::new(body::full(self.body));
         *response.status_mut() = self.status;
-        let mut headers = returnable(&self.headers);
+        let mut headers = self.headers;
+        keep_returnable(&mut headers);
         app.show_pool(self.provider, &mut headers);
         *response.headers_mut() = headers;
         response
@@ -607,11 +608,10 @@ async fn attempt(
         // The format of the upstream's answer.
         let wire = lane.unwrap_or(dialect);
         if response.status().is_success() {
-            let status = response.status();
-            let headers = response.headers().clone();
+            let (status, headers, body) = response.into_parts();
             let mut opened = Opened {
                 held: Vec::new(),
-                body: response.into_incoming(),
+                body,
                 broke: None,
             };
             if wire.holds_start() {
@@ -661,7 +661,7 @@ async fn attempt(
             };
             let settle = Settle::new(Arc::clone(app), served);
             let response = match lane {
-                None => stream_back(app, dialect, settle, &headers, opened),
+                None => stream_back(app, dialect, settle, headers, opened),
                 Some(upstream) => {
                     translate_back(app, inbound, settle, upstream, &headers, opened).await
                 }
@@ -788,7 +788,7 @@ async fn outbound(
     let base = provider.api(account).trim_end_matches('/');
     let Some(upstream) = lane else {
         return Ok(Outbound {
-            url: format!("{base}{}", inbound.target.path),
+            url: [base, inbound.target.path.as_str()].concat(),
             headers: provider.headers(&inbound.parts.headers, account, moved),
             body: inbound.body(step, stripped),
         });
@@ -972,21 +972,10 @@ struct Opened {
 }
 
 impl Opened {
-    /// The answer as the agent receives it, recorded when it ends.
-    fn relay(
-        self,
-        wire: Dialect,
-        headers: &HeaderMap,
-        settle: Settle,
-    ) -> Relay<hyper::body::Incoming> {
-        let relay = Relay::new(
-            self.body,
-            self.held,
-            wire,
-            relay::shape(headers),
-            settle,
-            relay::STALL,
-        );
+    /// The answer as the agent receives it, read as `shape` says, and
+    /// recorded when it ends.
+    fn relay(self, wire: Dialect, shape: Shape, settle: Settle) -> Relay<hyper::body::Incoming> {
+        let relay = Relay::new(self.body, self.held, wire, shape, settle, relay::STALL);
         match self.broke {
             Some(error) => relay.broken(error),
             None => relay,
@@ -994,21 +983,23 @@ impl Opened {
     }
 }
 
-/// Streams a successful response to the agent as it came.
+/// Streams a successful response to the agent as it came, with the
+/// upstream's headers.
 fn stream_back(
     app: &Arc<App>,
     dialect: Dialect,
     settle: Settle,
-    headers: &HeaderMap,
+    mut headers: HeaderMap,
     opened: Opened,
 ) -> Response {
     let status = settle.status();
     let provider = settle.provider();
-    let mut returned = returnable(headers);
-    app.show_pool(provider, &mut returned);
-    let mut out = Response::new(body::boxed(opened.relay(dialect, headers, settle)));
+    let shape = relay::shape(&headers);
+    keep_returnable(&mut headers);
+    app.show_pool(provider, &mut headers);
+    let mut out = Response::new(body::boxed(opened.relay(dialect, shape, settle)));
     *out.status_mut() = status;
-    *out.headers_mut() = returned;
+    *out.headers_mut() = headers;
     out
 }
 
@@ -1038,7 +1029,7 @@ async fn translate_back(
     let watch = remembering(app, settle.account().to_owned(), upstream);
     let decoder = translate::Decoder::new(upstream, request);
     if request.stream {
-        let body = body::boxed(opened.relay(upstream, headers, settle));
+        let body = body::boxed(opened.relay(upstream, relay::shape(headers), settle));
         let encoder =
             translate::Encoder::for_request(client, request, &model, inbound.wants_usage());
         let stream = Transcode::new(body, json, decoder, encoder, watch);

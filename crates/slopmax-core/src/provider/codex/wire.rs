@@ -5,31 +5,35 @@
 //! account that produced it, so it is dropped when a session changes
 //! accounts; the readable summaries stay.
 
+use http::header::{ACCEPT_ENCODING, AUTHORIZATION};
 use http::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
 
-/// Headers for the upstream request. `moved` drops the per-turn routing
-/// token, which belongs to the previous account's backend session.
+const CHATGPT_ACCOUNT_ID: HeaderName = HeaderName::from_static("chatgpt-account-id");
+
+/// Headers for the upstream request, with the account's `Authorization`
+/// value ([`Account::bearer`]) and workspace id. `moved` drops the per-turn
+/// routing token, which belongs to the previous account's backend session.
+///
+/// [`Account::bearer`]: crate::account::Account::bearer
 pub fn upstream_headers(
     client: &HeaderMap,
-    access_token: &str,
-    account_id: Option<&str>,
+    bearer: Option<HeaderValue>,
+    account_id: Option<HeaderValue>,
     moved: bool,
 ) -> HeaderMap {
     let mut headers = crate::net::headers::forwardable(client);
-    insert(
-        &mut headers,
-        "authorization",
-        &format!("Bearer {access_token}"),
-    );
+    if let Some(bearer) = bearer {
+        headers.insert(AUTHORIZATION, bearer);
+    }
     if let Some(id) = account_id {
-        insert(&mut headers, "chatgpt-account-id", id);
+        headers.insert(CHATGPT_ACCOUNT_ID, id);
     }
     if moved {
         headers.remove("x-codex-turn-state");
     }
     // Uncompressed streams can be read for usage and in-stream refusals.
-    insert(&mut headers, "accept-encoding", "identity");
+    headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("identity"));
     // Custom providers omit the `version` header the built-in one sends; the
     // backend gates some models on client version.
     if !headers.contains_key("version")
@@ -120,7 +124,13 @@ mod tests {
             ("session-id", "s"),
             ("host", "127.0.0.1:7567"),
         ]);
-        let out = upstream_headers(&client, "tok", Some("ws-1"), true);
+        let bearer = HeaderValue::from_static("Bearer tok");
+        let out = upstream_headers(
+            &client,
+            Some(bearer),
+            Some(HeaderValue::from_static("ws-1")),
+            true,
+        );
         assert_eq!(out["authorization"], "Bearer tok");
         assert_eq!(out["chatgpt-account-id"], "ws-1");
         assert_eq!(out["version"], "0.159.3");

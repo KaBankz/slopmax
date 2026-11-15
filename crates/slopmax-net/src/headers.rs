@@ -36,16 +36,15 @@ pub fn forwardable(client: &HeaderMap) -> HeaderMap {
     headers
 }
 
-/// Upstream response headers safe to return to the agent.
-pub fn returnable(upstream: &HeaderMap) -> HeaderMap {
-    let mut headers = HeaderMap::with_capacity(upstream.len());
-    for (name, value) in upstream {
-        let name_str = name.as_str();
-        if !HOP_BY_HOP.contains(&name_str) && !matches!(name_str, "content-length" | "set-cookie") {
-            headers.append(name.clone(), value.clone());
-        }
+/// Keeps the upstream response headers safe to return to the agent,
+/// removing the rest in place.
+pub fn keep_returnable(upstream: &mut HeaderMap) {
+    for name in HOP_BY_HOP
+        .into_iter()
+        .chain(["content-length", "set-cookie"])
+    {
+        upstream.remove(name);
     }
-    headers
 }
 
 #[cfg(test)]
@@ -66,5 +65,25 @@ mod tests {
         assert!(!out.contains_key("connection"));
         assert_eq!(out["accept-encoding"], "gzip, br");
         assert_eq!(out["x-app"], "cli");
+    }
+
+    #[test]
+    fn returnable_drops_hop_by_hop_length_and_cookies() {
+        let mut upstream = HeaderMap::new();
+        upstream.insert("transfer-encoding", HeaderValue::from_static("chunked"));
+        upstream.insert("content-length", HeaderValue::from_static("12"));
+        upstream.append("set-cookie", HeaderValue::from_static("a=1"));
+        upstream.append("set-cookie", HeaderValue::from_static("b=2"));
+        upstream.insert(
+            "content-type",
+            HeaderValue::from_static("text/event-stream"),
+        );
+        upstream.append("x-request", HeaderValue::from_static("1"));
+        upstream.append("x-request", HeaderValue::from_static("2"));
+        keep_returnable(&mut upstream);
+        let mut names: Vec<&str> = upstream.keys().map(|n| n.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["content-type", "x-request"]);
+        assert_eq!(upstream.get_all("x-request").iter().count(), 2);
     }
 }
