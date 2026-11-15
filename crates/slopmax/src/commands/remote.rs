@@ -155,7 +155,7 @@ fn off(config: &Config) -> Result<()> {
         println!("  {} {}", ui::green("wired"), ui::dim(home().show(&file)));
     }
     println!(
-        "Claude Code and Codex now use this machine's proxy. Start it with `slopmax start` \
+        "Its agents now use this machine's proxy. Start it with `slopmax start` \
          (or `slopmax service install`)."
     );
     Ok(())

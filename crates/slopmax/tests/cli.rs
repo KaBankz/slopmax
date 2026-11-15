@@ -3024,7 +3024,7 @@ fn a_machine_uses_another_as_its_hub() {
     let out = client.run(&["setup", "--hub", "off"]).ok();
     assert!(
         out.stdout
-            .contains("Claude Code and Codex now use this machine's proxy."),
+            .contains("Its agents now use this machine's proxy."),
         "{out:?}"
     );
     assert!(!has_hub(&client));

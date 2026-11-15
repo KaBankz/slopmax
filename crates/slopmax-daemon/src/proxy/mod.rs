@@ -1010,9 +1010,12 @@ fn known<'a, 's>(
         }
         return Ok(Known::Login(login));
     }
-    Err(match on_tailnet && seen.login.is_none() {
-        true => Denied::Tagged,
-        false => Denied::NoKey,
+    // A login on the tailnet with no list to be on, as after the last
+    // user is removed, hears how to let it in rather than to find a key.
+    Err(match (on_tailnet, seen.login.as_deref()) {
+        (true, None) => Denied::Tagged,
+        (true, Some(login)) => Denied::NotAllowed(login.to_owned()),
+        (false, _) => Denied::NoKey,
     })
 }
 
@@ -1479,7 +1482,7 @@ mod tests {
             })
         );
         drop(config);
-        // Without users, a login is no one.
+        // Without users, a login is no one, and hears how to be let in.
         app.set_config(Config {
             api_key: "sm-owner".into(),
             ..Config::default()
@@ -1490,7 +1493,7 @@ mod tests {
             caller(&app, &config, &headers, &me, Access::Use)
                 .await
                 .map(|c| c.access()),
-            Err(Denied::NoKey)
+            Err(Denied::NotAllowed("me@test".into()))
         );
         let _ = std::fs::remove_dir_all(dir);
     }
