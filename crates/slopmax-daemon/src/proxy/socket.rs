@@ -304,24 +304,29 @@ async fn relay(
     let mut turn = Turn::default();
     let mut last = Instant::now();
     let mut closing: Option<Instant> = None;
+    // The daemon stopped mid-turn: the turn finishes, then the socket closes.
+    let mut stopping = false;
     let idle = tokio::time::sleep(IDLE);
     tokio::pin!(idle);
     let end = loop {
         let woke = tokio::select! {
-            () = app.stop.cancelled() => Woke::Stop,
+            () = app.stop.cancelled(), if !stopping => Woke::Stop,
             read = from_client.message(), if closing.is_none() => Woke::Client(read),
             read = from_upstream.message() => Woke::Upstream(read),
             () = &mut idle => Woke::Idle,
         };
         let next = match woke {
-            Woke::Stop => {
-                let _ = ends.upstream.send(&Message::Close(None)).await;
-                let _ = ends
-                    .client
-                    .send(&Message::close(1001, "slopmax is stopping"))
-                    .await;
-                Next::Done(End::Cut)
+            // Handing off to a new binary, a turn under way finishes first:
+            // the next one goes to the new process on a new socket, and
+            // Codex never sees a turn cut. A plain stop cuts it at once.
+            Woke::Stop
+                if turn.started.is_some()
+                    && app.handing_off.load(std::sync::atomic::Ordering::SeqCst) =>
+            {
+                stopping = true;
+                Next::Go
             }
+            Woke::Stop => close_for_stop(&mut ends).await,
             Woke::Idle => {
                 let due = closing.map_or(last + IDLE, |at| at + CLOSING);
                 if Instant::now() < due {
@@ -347,7 +352,12 @@ async fn relay(
             }
             Woke::Upstream(read) => {
                 last = Instant::now();
-                from_chatgpt(&app, &account.id, read, &mut ends, &mut turn, &origin).await
+                match from_chatgpt(&app, &account.id, read, &mut ends, &mut turn, &origin).await {
+                    Next::Go if stopping && turn.started.is_none() => {
+                        close_for_stop(&mut ends).await
+                    }
+                    next => next,
+                }
             }
         };
         if let Next::Done(end) = next {
@@ -362,6 +372,16 @@ async fn relay(
     if turn.started.is_some() {
         record(&app, &account.id, None, &mut turn, &origin, Some(end));
     }
+}
+
+/// Closes both sides because the daemon stops.
+async fn close_for_stop(ends: &mut Ends) -> Next {
+    let _ = ends.upstream.send(&Message::Close(None)).await;
+    let _ = ends
+        .client
+        .send(&Message::close(1001, "slopmax is stopping"))
+        .await;
+    Next::Done(End::Cut)
 }
 
 /// Both sides' writers.

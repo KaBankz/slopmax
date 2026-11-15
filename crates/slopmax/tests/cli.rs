@@ -1956,3 +1956,225 @@ fn unattended_setup_that_misses_part_of_what_was_asked_says_so() {
     assert_eq!(s.store().list().unwrap().len(), 1);
     s.run(&["stop"]).ok();
 }
+
+/// A chat endpoint whose answers stream slowly: `/v1/models` lists one
+/// model, and each completion sends ten events 200 ms apart. Plain TCP, so
+/// the pace is the test's own.
+#[cfg(unix)]
+async fn slow_endpoint() -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 4096];
+                // The headers, then as much body as they announce.
+                let (head, length) = loop {
+                    let Ok(n) = socket.read(&mut chunk).await else {
+                        return;
+                    };
+                    if n == 0 {
+                        return;
+                    }
+                    request.extend_from_slice(&chunk[..n]);
+                    if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&request[..end]).to_lowercase();
+                        let length = head
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length:"))
+                            .and_then(|v| v.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        break (head, end + 4 + length);
+                    }
+                };
+                while request.len() < length {
+                    match socket.read(&mut chunk).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => request.extend_from_slice(&chunk[..n]),
+                    }
+                }
+                if head.starts_with("get /v1/models") {
+                    let body = r#"{"data":[{"id":"slow-model"}]}"#;
+                    let reply = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(reply.as_bytes()).await;
+                    return;
+                }
+                let _ = socket
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n")
+                    .await;
+                for i in 0..10 {
+                    let event = format!(
+                        "data: {{\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"model\":\"slow-model\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"part{i} \"}}}}]}}\n\n"
+                    );
+                    if socket.write_all(event.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+                let _ = socket.write_all(b"data: [DONE]\n\n").await;
+            });
+        }
+    });
+    url
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn handing_the_proxy_to_another_binary_refuses_and_cuts_off_nothing() {
+    use slopmax_core::net::Client;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    let upstream = slow_endpoint().await;
+    let s = Arc::new(Sandbox::new("handoff"));
+    let login = {
+        let s = s.clone();
+        let url = format!("{upstream}/v1");
+        tokio::task::spawn_blocking(move || {
+            s.run_with(
+                &["login", "compat", "--url", &url, "--models", "slow-model"],
+                "sk-slow\n",
+            )
+        })
+        .await
+        .unwrap()
+    };
+    assert_eq!(login.code, 0, "{login:?}");
+    let info: Value = serde_json::from_str(&s.run(&["daemon-info", "--json"]).ok().stdout).unwrap();
+    let key = info["key"].as_str().unwrap().to_owned();
+    let base = format!("http://127.0.0.1:{}", s.port);
+
+    let mut first = s.command(&["serve"]).spawn().unwrap();
+    let http = Client::builder().plain_http().build();
+    let health = |http: Client, base: String| async move {
+        let response = http.get(format!("{base}/healthz")).send().await.ok()?;
+        response.json::<Value>().await.ok()
+    };
+    let start = Instant::now();
+    while health(http.clone(), base.clone()).await.is_none() {
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "the proxy never answered"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        health(http.clone(), base.clone()).await.unwrap()["pid"],
+        first.id()
+    );
+
+    // A stream under way when the proxy moves…
+    let streaming = {
+        let (http, base, key) = (http.clone(), base.clone(), key.clone());
+        tokio::spawn(async move {
+            let response = http
+                .post(format!("{base}/v1/chat/completions"))
+                .bearer_auth(&key)
+                .json(&json!({
+                    "model": "slow-model",
+                    "stream": true,
+                    "messages": [{ "role": "user", "content": "hi" }]
+                }))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 200);
+            response.text().await.unwrap()
+        })
+    };
+    // …and new connections, one after another, all through the move.
+    let stop = Arc::new(AtomicBool::new(false));
+    let (answered, refused) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let knocking = {
+        let (stop, answered, refused) = (stop.clone(), answered.clone(), refused.clone());
+        let base = base.clone();
+        tokio::spawn(async move {
+            while !stop.load(Ordering::SeqCst) {
+                let fresh = Client::builder().plain_http().build();
+                match health(fresh, base.clone()).await {
+                    Some(_) => answered.fetch_add(1, Ordering::SeqCst),
+                    None => refused.fetch_add(1, Ordering::SeqCst),
+                };
+            }
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let exe = env!("CARGO_BIN_EXE_slopmax");
+    let moved = http
+        .post(format!("{base}/slopmax/api/shutdown"))
+        .bearer_auth(&key)
+        .json(&json!({ "exe": exe }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(moved.status(), 200, "{:?}", moved.text().await);
+    // A new connection reaches the new process…
+    let now = health(Client::builder().plain_http().build(), base.clone())
+        .await
+        .unwrap();
+    let second = now["pid"].as_u64().unwrap() as u32;
+    assert_ne!(second, first.id(), "{now}");
+    // …and one opened before the move still answers, from the old one,
+    // which closes it after: no client finds its connection gone.
+    let kept = http.get(format!("{base}/healthz")).send().await.unwrap();
+    assert_eq!(
+        kept.headers()
+            .get("connection")
+            .map(|v| v.to_str().unwrap()),
+        Some("close")
+    );
+    let kept: Value = kept.json().await.unwrap();
+    assert_eq!(kept["pid"], first.id());
+    let after = health(http.clone(), base.clone()).await.unwrap();
+    assert_eq!(after["pid"], second);
+
+    let text = tokio::time::timeout(Duration::from_secs(20), streaming)
+        .await
+        .expect("the stream ends")
+        .unwrap();
+    for i in 0..10 {
+        assert!(
+            text.contains(&format!("part{i} ")),
+            "part {i} missing: {text}"
+        );
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    stop.store(true, Ordering::SeqCst);
+    knocking.await.unwrap();
+    assert_eq!(
+        refused.load(Ordering::SeqCst),
+        0,
+        "connections refused during the move"
+    );
+    assert!(answered.load(Ordering::SeqCst) > 10);
+
+    // The first process stands in for the second with whatever started it:
+    // stopping the proxy ends both, cleanly.
+    assert!(
+        first.try_wait().unwrap().is_none(),
+        "the first process left"
+    );
+    s.run(&["stop"]).ok();
+    let start = Instant::now();
+    loop {
+        if let Some(status) = first.try_wait().unwrap() {
+            assert!(status.success(), "{status:?}");
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(15),
+            "the first process kept running"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let left = std::fs::read_to_string(s.slopmax.join(".serve.pid")).unwrap();
+    assert_eq!(left.trim(), second.to_string());
+}

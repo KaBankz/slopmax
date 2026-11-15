@@ -93,6 +93,24 @@ pub struct App {
     logins: Mutex<HashMap<String, api::Login>>,
     /// Asked to stop so the service manager starts it again.
     pub restart: std::sync::atomic::AtomicBool,
+    /// Moving to another binary ([`crate::handoff`]): set while it starts,
+    /// and for good once it serves.
+    pub handing_off: std::sync::atomic::AtomicBool,
+    /// Set while handing off: the state is no longer this process's to save.
+    pub frozen: std::sync::atomic::AtomicBool,
+    /// The listener and lock a handoff passes on, once serving.
+    pub handles: std::sync::OnceLock<crate::handoff::Handles>,
+    /// The process the proxy was handed to, and whether systemd adopted it.
+    pub successor: Mutex<Option<(u32, bool)>>,
+    /// Cancelled when a handed-off daemon should stop draining: the new
+    /// process stopped, or this one was signalled.
+    pub cut: CancellationToken,
+    /// The exit code of the process the proxy was handed to, once it ended.
+    pub successor_exit: Mutex<Option<i32>>,
+    /// The binary this daemon runs, to notice a newer one installed.
+    pub running: Option<crate::handoff::Running>,
+    /// What looking for a newer install has seen.
+    pub install_seen: tokio::sync::Mutex<crate::handoff::Seen>,
 }
 
 impl App {
@@ -133,6 +151,14 @@ impl App {
             api_events: broadcast::channel(256).0,
             logins: Mutex::default(),
             restart: std::sync::atomic::AtomicBool::new(false),
+            handing_off: std::sync::atomic::AtomicBool::new(false),
+            frozen: std::sync::atomic::AtomicBool::new(false),
+            handles: std::sync::OnceLock::new(),
+            successor: Mutex::default(),
+            cut: CancellationToken::new(),
+            successor_exit: Mutex::default(),
+            running: crate::handoff::Running::now(),
+            install_seen: Default::default(),
         })
     }
 

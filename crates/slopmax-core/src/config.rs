@@ -106,6 +106,9 @@ pub struct Config {
     /// account is limited. Off, they serve those models only when asked
     /// for by name (`openai/gpt-6-sol`) or when no subscription exists.
     pub paid_overflow: bool,
+    /// Look for a new slopmax release once a day, for `slopmax status` to
+    /// tell.
+    pub check_updates: bool,
     /// Proxy for requests to providers (`http://…`, `socks5://…`), in place
     /// of HTTPS_PROXY.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -169,6 +172,7 @@ impl Default for Config {
             websockets: true,
             warm_windows: false,
             paid_overflow: false,
+            check_updates: true,
             proxy: None,
             aliases: BTreeMap::new(),
             fallbacks: BTreeMap::new(),
@@ -495,6 +499,10 @@ api_key = "{api_key}"
 # they serve those models only when asked for by name (`openai/gpt-6-sol`)
 # or when you have no such subscription.
 # paid_overflow = false
+
+# Look for a new slopmax release once a day (one request to github.com),
+# for `slopmax status` to tell. `slopmax update` installs it.
+# check_updates = true
 
 # Proxy for requests to providers, instead of HTTPS_PROXY:
 #   proxy = "socks5h://127.0.0.1:1080"

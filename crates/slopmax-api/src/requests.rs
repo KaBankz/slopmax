@@ -208,6 +208,13 @@ pub enum StoppingStatus {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Shutdown {
+    /// Start the proxy again: in a new process that takes its socket where
+    /// that can be done, else by exiting for the service manager to.
     #[serde(default)]
     pub restart: bool,
+    /// Hand the proxy to the slopmax binary at this path, as an update
+    /// does: it answers once that one serves. A daemon older than this
+    /// field refuses it as unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exe: Option<String>,
 }

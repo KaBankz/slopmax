@@ -17,6 +17,8 @@ http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 memchr.workspace = true
+# SHA-256 of downloaded releases; already rustls's.
+ring.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 slopmax-api.workspace = true
@@ -36,5 +38,7 @@ toml_edit.workspace = true
 workspace = true
 
 [dev-dependencies]
+# Release archives built in tests.
+flate2.workspace = true
 # Paused time, for timeouts tested without waiting them out.
 tokio = { workspace = true, features = ["test-util"] }

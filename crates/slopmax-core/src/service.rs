@@ -10,6 +10,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::fsx;
 use crate::paths::Home;
+use crate::update::install::{self, Install};
 
 const NAME: &str = "slopmax";
 const LABEL: &str = "dev.slopmax";
@@ -82,9 +83,23 @@ impl Manager {
     }
 
     /// Writes the service definition for `exe`, then enables and starts it.
+    ///
+    /// On Linux and macOS the service runs `exe` through the home's link
+    /// ([`Home::service_exe`]), which an update moves to the new binary:
+    /// the definition never names a version that may be removed.
     pub fn install(self, exe: &Path, home: &Home) -> Result<PathBuf> {
         let file = self.file(home);
         let log = home.log();
+        let linked = if self == Self::Windows {
+            exe.to_path_buf()
+        } else {
+            let resolved = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
+            let target = Install::of(&resolved).entry(&resolved);
+            install::link(home, &target)
+                .with_context(|| format!("linking {}", home.service_exe().display()))?;
+            home.service_exe()
+        };
+        let exe = linked.as_path();
         let home = std::env::var_os("SLOPMAX_HOME").map(PathBuf::from);
         if self == Self::Windows {
             let line = windows_command(&launcher(exe)?, exe, &log, home.as_deref());
@@ -204,6 +219,11 @@ fn config_home(home: &Home) -> PathBuf {
         .unwrap_or_else(|| home.user().join(".config"))
 }
 
+/// The user unit. `Type=notify`: systemd counts the proxy started once it
+/// listens, and `NotifyAccess=all` lets a proxy that hands its socket to a
+/// newer binary name that one the main process (`MAINPID=`), so an update
+/// keeps the service running without a restart. A crash restarts it within
+/// a second, as often as it takes.
 fn systemd_unit(exe: &Path, log: &Path, home: Option<&Path>) -> String {
     let environment = home
         .map(|h| format!("Environment=\"SLOPMAX_HOME={}\"\n", h.display()))
@@ -213,12 +233,15 @@ fn systemd_unit(exe: &Path, log: &Path, home: Option<&Path>) -> String {
          Description=slopmax account pool for Claude Code, Codex, and Grok Build\n\
          After=network-online.target\n\
          Wants=network-online.target\n\
+         StartLimitIntervalSec=0\n\
          \n\
          [Service]\n\
+         Type=notify\n\
+         NotifyAccess=all\n\
          ExecStart=\"{exe}\" serve\n\
          {environment}\
          Restart=on-failure\n\
-         RestartSec=5\n\
+         RestartSec=1\n\
          StandardOutput=append:{log}\n\
          StandardError=append:{log}\n\
          \n\

@@ -141,6 +141,19 @@ impl Home {
         self.dir.join("slopmax.log")
     }
 
+    /// The binary the login service runs: a link to the installed slopmax,
+    /// moved when it updates, so the service never runs a removed version.
+    pub fn service_exe(&self) -> PathBuf {
+        self.dir
+            .join("bin")
+            .join(format!("slopmax{}", std::env::consts::EXE_SUFFIX))
+    }
+
+    /// The newest release, as last looked up.
+    pub fn update_check(&self) -> PathBuf {
+        self.dir.join("update.toml")
+    }
+
     /// Each subscription window that reset, and how much of it was used.
     pub fn windows(&self) -> PathBuf {
         self.dir.join("windows.jsonl")

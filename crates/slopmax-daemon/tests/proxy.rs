@@ -230,7 +230,12 @@ fn mock_socket(log: Log, request: &mut Request) -> Response {
                          "output_tokens": 4, "total_tokens": 54}}}),
                 ],
             };
-            for event in events {
+            // Answers after a pause once the answer has started.
+            let pause = token == "Bearer tok-pause";
+            for (i, event) in events.into_iter().enumerate() {
+                if pause && i == 1 {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                }
                 if writer
                     .send(&ws::Message::Text(event.to_string()))
                     .await
@@ -1359,6 +1364,50 @@ async fn a_stop_closes_open_sockets_and_records_the_turn_it_cut() {
     assert_eq!(entries[0].end, Some(ledger::End::Cut));
     assert_eq!(entries[0].model.as_deref(), Some("gpt-6-sol"));
     assert!(entries[0].failed());
+}
+
+#[tokio::test]
+async fn a_stop_that_hands_off_lets_the_turn_under_way_finish_first() {
+    let h = harness(ProviderId::Codex, &["tok-pause"]).await;
+    let (_, socket) = open_socket(&h, "gpt-6-sol").await;
+    let (mut reader, mut writer) = socket.unwrap();
+    let create = json!({"type": "response.create", "model": "gpt-6-sol", "input": []});
+    writer
+        .send(&ws::Message::Text(create.to_string()))
+        .await
+        .unwrap();
+    let Some(ws::Message::Text(created)) = reader.message().await.unwrap() else {
+        panic!("the answer started");
+    };
+    assert!(created.contains("response.created"));
+    // Moving to a new binary: the turn goes on to its end, then the socket
+    // closes, and Codex's next turn opens one on the new process.
+    h.app
+        .handing_off
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    h.app.stop.cancel();
+    let mut seen = Vec::new();
+    let closed = loop {
+        match tokio::time::timeout(Duration::from_secs(5), reader.message())
+            .await
+            .expect("the turn goes on")
+            .unwrap()
+        {
+            Some(ws::Message::Text(text)) => seen.push(text),
+            Some(ws::Message::Close(close)) => break close,
+            other => panic!("{other:?}"),
+        }
+    };
+    assert!(
+        seen.last().unwrap().contains("response.completed"),
+        "{seen:?}"
+    );
+    assert_eq!(closed, Some((1001, "slopmax is stopping".into())));
+    let usage = h.dir.join("usage");
+    eventually(|| !ledger::read(&usage, Timestamp::UNIX_EPOCH).is_empty()).await;
+    let entries = ledger::read(&usage, Timestamp::UNIX_EPOCH);
+    assert_eq!(entries.len(), 1);
+    assert!(!entries[0].failed(), "{:?}", entries[0]);
 }
 
 #[tokio::test]

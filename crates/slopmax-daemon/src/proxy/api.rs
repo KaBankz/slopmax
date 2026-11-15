@@ -156,14 +156,33 @@ async fn answer(app: &Arc<App>, route: Route<'_>, query: &str, body: &[u8]) -> A
         }
         Route::Shutdown => {
             let asked: Shutdown = optional(body)?;
+            let stopping = Stopping {
+                status: StoppingStatus::Stopping,
+            };
+            if let Some(exe) = asked.exe.filter(|e| !e.trim().is_empty()) {
+                return match crate::handoff::hand_off(app, std::path::Path::new(&exe), false).await
+                {
+                    Ok(()) => ok(&stopping),
+                    Err(e) => Err(ApiError::conflict(format!("{e:#}"))),
+                };
+            }
             if asked.restart {
+                // Into a new process on the same socket where it can be
+                // handed over: the binary the service runs, else this one.
+                let exe = Some(app.home.service_exe())
+                    .filter(|p| p.exists())
+                    .or_else(|| app.running.as_ref().map(|r| r.path.clone()));
+                if cfg!(unix)
+                    && let Some(exe) = exe
+                    && crate::handoff::hand_off(app, &exe, false).await.is_ok()
+                {
+                    return ok(&stopping);
+                }
                 app.restart
                     .store(true, std::sync::atomic::Ordering::Relaxed);
             }
             app.stop.cancel();
-            ok(&Stopping {
-                status: StoppingStatus::Stopping,
-            })
+            ok(&stopping)
         }
         Route::Doctor => doctor(app).await,
         Route::AddAccount => add_account(app, strict(body)?).await,

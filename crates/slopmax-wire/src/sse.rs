@@ -231,6 +231,23 @@ impl Inflate {
     }
 }
 
+/// A whole gzip file decompressed, or `None` if it is not one. At most
+/// `limit` bytes come out: a file that says more is refused.
+pub fn gunzip(bytes: &[u8], limit: usize) -> Option<Vec<u8>> {
+    let GzipHeader::Ends(start) = gzip_header(bytes) else {
+        return None;
+    };
+    // The deflate data, then CRC-32 and the size, eight bytes.
+    let data = bytes.get(start..bytes.len().checked_sub(8)?)?;
+    inflate_raw(data, limit)
+}
+
+/// Raw deflate data (RFC 1951) decompressed, or `None` if it does not
+/// decompress or comes to more than `limit` bytes.
+pub fn inflate_raw(data: &[u8], limit: usize) -> Option<Vec<u8>> {
+    miniz_oxide::inflate::decompress_to_vec_with_limit(data, limit).ok()
+}
+
 /// How far a gzip header (RFC 1952) has been read.
 #[derive(Debug, PartialEq, Eq)]
 enum GzipHeader {

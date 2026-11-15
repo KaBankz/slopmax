@@ -232,13 +232,25 @@ State a format cannot carry back is kept by slopmax: the encrypted reasoning an 
 - reloading the accounts when told (`POST /slopmax/api/sync`), and otherwise when a stat every 30 seconds shows a file changed, with config.toml when it changed. Requests use the accounts the pool holds in memory and read no files; a refresh puts its new tokens back into the pool. `App::config` is swapped whole; only the listener is bound for good;
 - saving pool state (windows, blocks, sessions) every 10 seconds, so a restart keeps sessions on their accounts;
 - refreshing tokens ahead of expiry (every 5 minutes), polling usage when due, listing limit resets, and warming idle windows (each checked every minute), and redeeming resets about to expire (every 30 minutes);
-- watching account conditions every 30 seconds: notifications and nudges, told on the event stream and to the configured hooks, and remembered in `state.toml`; and each window that reset, written to the ledger for quota left on the table.
+- watching account conditions every 30 seconds: notifications and nudges, told on the event stream and to the configured hooks, and remembered in `state.toml`; and each window that reset, written to the ledger for quota left on the table;
+- following installs every minute: when the install the daemon runs from has a newer slopmax (its file replaced at the same path, or for mise a new version directory, then `mise where`), the daemon hands the proxy to it (below);
+- looking up the newest release once a day (`update::latest`, the `releases/latest` redirect rather than GitHub's rate-limited API), kept in `update.toml` for `slopmax status`.
 
 Each task reads the config as it runs, so a changed setting turns it on or off without a restart. A task that panics is logged and runs again on schedule.
 
 Everything runs on one thread unless `SLOPMAX_WORKERS` asks for more (`daemon::runtime`), so nothing on it may block: file locks, the ledger reads behind `/slopmax/api/usage` and the history index's first build, and saves run through `blocking::run`. The one disk write left on the request path is the ledger's: one `write` per request to the month file it keeps open.
 
-Stopping (a signal or `POST /slopmax/shutdown`) cancels `App::stop`, and then runs in order: the listener drains open connections (event streams end at once), the background loops end and the work they started finishes (`App::tasks`), a token refresh in flight saves what it got (`auth::settle`), state is saved by the only writer left, and the ledger is synced to disk.
+Stopping (a signal or `POST /slopmax/shutdown`) cancels `App::stop`, and then runs in order: the listener closes and open connections drain (event streams end at once), the background loops end and the work they started finishes (`App::tasks`), a token refresh in flight saves what it got (`auth::settle`), state is saved by the only writer left, and the ledger is synced to disk.
+
+### Handing off
+
+An update moves the proxy to a new binary without closing its socket (`handoff.rs`). The daemon stops starting background jobs, lets refreshes in flight save their tokens, saves its state, and from then on saves nothing. It starts `<new binary> serve` with the listening socket, the `.serve.lock` descriptor, and a pipe, named in `SLOPMAX_HANDOFF` with its own pid (so a process further down that inherits the variable takes nothing). The new daemon adopts them instead of binding and locking, reads the state, starts its jobs, and writes to the pipe once it serves. If it does not within 30 seconds, it is killed and the old daemon carries on as before.
+
+Once the new one serves, the old one stops accepting, and the kernel's queue goes to the new one alone. The old one keeps what it has: requests under way finish (up to 30 minutes), a Codex socket in the middle of a turn finishes the turn and then closes, and any further request on an open connection is answered with `Connection: close`. It never closes an idle connection under a client that may be about to send on it. Nothing is refused and nothing is cut, as `handing_the_proxy_to_another_binary_refuses_and_cuts_off_nothing` checks.
+
+The supervisor keeps seeing a running proxy. Under systemd the unit is `Type=notify` with `NotifyAccess=all`, and the old daemon names the new one the main process (`MAINPID=`) and exits once drained. Elsewhere (launchd, `slopmaxw.exe`, a terminal) the old process stays: drained, it waits for the new one, passes on the signals it gets, and exits with its code. A stop or signal during the drain ends it at once. Windows can't hand the socket to a child this way, so there a move is a restart through `slopmaxw.exe`.
+
+The login service runs `~/.slopmax/bin/slopmax`, a link the handoff and `slopmax update` point at the installed binary (`update::install`): mise keeps each version in its own directory and removes old ones a day after an upgrade, so a service that named a version's path would one day start a removed binary.
 
 ## Files
 
@@ -254,6 +266,8 @@ Stopping (a signal or `POST /slopmax/shutdown`) cancels `App::stop`, and then ru
                             much of it was used (waste.rs)
   windows.jsonl             each window that reset, as versions before 0.4 kept them (read,
                             never written: the ledger holds them now)
+  bin/slopmax               the link the login service runs, moved to each new binary
+  update.toml               the newest release, as last looked up
   setup-backup.json         what `setup` replaced
   app.toml                  the desktop app's own choices (whether it posts notifications)
   slopmax.log
@@ -276,7 +290,7 @@ CLIProxyAPI's) are theirs.
 
 ## Dependencies
 
-The binary is about 8.7 MB, from 71 crates besides slopmax's own. The async stack is tokio, hyper, and rustls (with ring). serde_json, toml_edit, memchr, base64, thiserror and anyhow round it out. Time, logging, the CLI parser, form encoding, and the HTTP client conveniences are small in-house modules, because the crates for them each pull in far more than slopmax uses. A crate earns its place by doing its job measurably better than a small module would: faster, leaner, or more correct. The CI holds the tree to 71 crates and the binary to 9 MiB; raising either needs that reason in the commit. miniz_oxide (with adler2) is the newest: Anthropic gzips Claude's answers, and its streaming inflate lets slopmax read a copy of them for token usage; slopmax reads the gzip header itself. Before it, tokio-util's `CancellationToken` and `TaskTracker` let the daemon stop in order, for 30 KB.
+The binary is about 8.9 MB, from 71 crates besides slopmax's own. The async stack is tokio, hyper, and rustls (with ring). serde_json, toml_edit, memchr, base64, thiserror and anyhow round it out. Time, logging, the CLI parser, form encoding, and the HTTP client conveniences are small in-house modules, because the crates for them each pull in far more than slopmax uses. A crate earns its place by doing its job measurably better than a small module would: faster, leaner, or more correct. The CI holds the tree to 71 crates and the binary to 9 MiB; raising either needs that reason in the commit. miniz_oxide (with adler2) is the newest: Anthropic gzips Claude's answers, and its streaming inflate lets slopmax read a copy of them for token usage; slopmax reads the gzip header itself. Before it, tokio-util's `CancellationToken` and `TaskTracker` let the daemon stop in order, for 30 KB.
 
 ## Performance
 

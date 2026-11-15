@@ -225,8 +225,26 @@ impl Client {
     /// Stops the daemon; with `restart`, so its service manager starts it
     /// again.
     pub async fn shutdown(&self, restart: bool) -> Result<Stopping> {
-        self.call(Method::POST, "shutdown", Some(&Shutdown { restart }))
-            .await
+        self.call(
+            Method::POST,
+            "shutdown",
+            Some(&Shutdown { restart, exe: None }),
+        )
+        .await
+    }
+
+    /// Hands the proxy to the slopmax binary at `exe`; answers once that
+    /// one serves, and this one finishes its requests and stops.
+    pub async fn hand_off(&self, exe: &str) -> Result<Stopping> {
+        self.call(
+            Method::POST,
+            "shutdown",
+            Some(&Shutdown {
+                restart: false,
+                exe: Some(exe.to_owned()),
+            }),
+        )
+        .await
     }
 
     pub async fn doctor(&self) -> Result<Vec<Section>> {

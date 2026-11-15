@@ -33,8 +33,34 @@ pub(super) async fn run(config: &Config, store: &Store, args: StatusArgs) -> Res
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
         print!("{}", render(&report, Timestamp::now()));
+        let running = match &daemon {
+            Some(client) => client.health().await.map(|h| h.version),
+            None => None,
+        };
+        for line in update_notes(running.as_deref()) {
+            println!("{}", ui::dim(line));
+        }
     }
     Ok(())
+}
+
+/// What `status` says of updates: a newer release, as the daemon last
+/// looked it up, and a proxy that runs another version than this binary.
+fn update_notes(running: Option<&str>) -> Vec<String> {
+    use slopmax_core::update::{Checked, Version};
+    let ours = Version::current();
+    let mut notes = Vec::new();
+    if let Some(newer) = Checked::read(super::home()).and_then(|c| c.newer()) {
+        notes.push(format!(
+            "slopmax {newer} is out (this is {ours}); `slopmax update` installs it."
+        ));
+    }
+    if let Some(running) = running.filter(|r| Version::parse(r).is_some_and(|v| v < ours)) {
+        notes.push(format!(
+            "The proxy runs {running}; `slopmax update` moves it to {ours}."
+        ));
+    }
+    notes
 }
 
 /// The report read from disk, while no daemon runs.

@@ -21,7 +21,28 @@ pub type Response = http::Response<Body>;
 /// How long a client may take to send its request headers.
 const HEADER_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long shutdown waits for in-flight requests (long streams included).
-const DRAIN: Duration = Duration::from_secs(10);
+pub const DRAIN: Duration = Duration::from_secs(10);
+
+/// How a server stops taking connections, and how long what it has may
+/// still take.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stop {
+    /// Idle connections close at once; requests under way get this long.
+    Now(Duration),
+    /// Another process took the socket over: no connection is closed under
+    /// a client that may be about to send on it. Each answers what comes
+    /// next with `Connection: close`, and ends after that or when its
+    /// client closes it, within this long.
+    HandedOver(Duration),
+}
+
+impl Stop {
+    fn limit(self) -> Duration {
+        match self {
+            Self::Now(limit) | Self::HandedOver(limit) => limit,
+        }
+    }
+}
 
 /// Serves `handler` on `listener` until `shutdown` completes, then lets
 /// in-flight requests finish for a moment.
@@ -30,10 +51,30 @@ where
     H: Fn(Request) -> F + Clone + Send + Sync + 'static,
     F: Future<Output = Response> + Send + 'static,
 {
+    serve_until(listener, handler, async {
+        shutdown.await;
+        Stop::Now(DRAIN)
+    })
+    .await;
+}
+
+/// Serves `handler` on `listener` until `shutdown` says how to stop, then
+/// waits at most as long as it says for the connections to end. The
+/// listener closes as soon as it stops taking connections, so none wait on
+/// it for an answer that never comes; a process it was handed to keeps the
+/// socket open and takes them instead.
+pub async fn serve_until<H, F>(
+    listener: TcpListener,
+    handler: H,
+    shutdown: impl Future<Output = Stop>,
+) where
+    H: Fn(Request) -> F + Clone + Send + Sync + 'static,
+    F: Future<Output = Response> + Send + 'static,
+{
     // Each connection holds a receiver; the sender learns when all are gone.
-    let (stop, stopping) = watch::channel(());
+    let (stop, stopping) = watch::channel(None::<Stop>);
     tokio::pin!(shutdown);
-    loop {
+    let how = loop {
         let stream = tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => stream,
@@ -44,7 +85,7 @@ where
                     continue;
                 }
             },
-            () = &mut shutdown => break,
+            how = &mut shutdown => break how,
         };
         // Streamed answers are many small writes. Nagle's algorithm would
         // hold each until the client acknowledges the last, and clients
@@ -52,10 +93,23 @@ where
         let _ = stream.set_nodelay(true);
         let handler = handler.clone();
         let mut stopping = stopping.clone();
+        let closing = stopping.clone();
         tokio::spawn(async move {
             let service = service_fn(move |request| {
                 let response = handler(request);
-                async move { Ok::<_, Infallible>(response.await) }
+                let closing = closing.clone();
+                async move {
+                    let mut response = response.await;
+                    // Answered after a handover: the client's next request
+                    // opens a connection, which the new process takes.
+                    if matches!(*closing.borrow(), Some(Stop::HandedOver(_))) {
+                        response.headers_mut().insert(
+                            http::header::CONNECTION,
+                            http::HeaderValue::from_static("close"),
+                        );
+                    }
+                    Ok::<_, Infallible>(response)
+                }
             });
             let connection = http1::Builder::new()
                 .timer(TokioTimer::new())
@@ -66,15 +120,18 @@ where
             tokio::select! {
                 _ = connection.as_mut() => {}
                 _ = stopping.changed() => {
-                    connection.as_mut().graceful_shutdown();
+                    if !matches!(*stopping.borrow(), Some(Stop::HandedOver(_))) {
+                        connection.as_mut().graceful_shutdown();
+                    }
                     let _ = connection.await;
                 }
             }
         });
-    }
+    };
+    drop(listener);
     drop(stopping);
-    stop.send_replace(());
-    let _ = tokio::time::timeout(DRAIN, stop.closed()).await;
+    stop.send_replace(Some(how));
+    let _ = tokio::time::timeout(how.limit(), stop.closed()).await;
 }
 
 #[cfg(test)]

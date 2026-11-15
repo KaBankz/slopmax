@@ -18,7 +18,7 @@ pub(super) async fn start(config: &Config) -> Result<()> {
         } else {
             println!(
                 "slopmax {version} is already running on {}; this is {ours}. \
-                 Restart it with `slopmax stop && slopmax start`.",
+                 `slopmax update` moves it to {ours} without dropping a connection.",
                 config.base_url()
             );
         }

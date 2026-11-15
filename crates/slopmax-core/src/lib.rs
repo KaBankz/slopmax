@@ -33,6 +33,7 @@ pub mod state;
 pub mod summary;
 #[cfg(test)]
 mod testkit;
+pub mod update;
 pub mod usage;
 pub mod waste;
 

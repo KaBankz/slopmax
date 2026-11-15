@@ -38,22 +38,25 @@ trap 'rm -rf "$tmp"' EXIT
 
 say "Downloading slopmax for $target…"
 curl -fsSL "$base/$archive" -o "$tmp/$archive" || fail "could not download $base/$archive"
-if curl -fsSL "$base/$archive.sha256" -o "$tmp/$archive.sha256" 2>/dev/null; then
-  expected="$(cut -d ' ' -f 1 < "$tmp/$archive.sha256")"
-  if command -v sha256sum >/dev/null; then
-    actual="$(sha256sum "$tmp/$archive" | cut -d ' ' -f 1)"
-  else
-    actual="$(shasum -a 256 "$tmp/$archive" | cut -d ' ' -f 1)"
-  fi
-  [ "$expected" = "$actual" ] || fail "checksum mismatch for $archive"
+sums="slopmax-$target.sha256"
+curl -fsSL "$base/$sums" -o "$tmp/$sums" || fail "could not download $base/$sums to check the download"
+expected="$(cut -d ' ' -f 1 < "$tmp/$sums")"
+if command -v sha256sum >/dev/null; then
+  actual="$(sha256sum "$tmp/$archive" | cut -d ' ' -f 1)"
+else
+  actual="$(shasum -a 256 "$tmp/$archive" | cut -d ' ' -f 1)"
 fi
+[ -n "$expected" ] && [ "$expected" = "$actual" ] || fail "$archive does not match its SHA-256; nothing was installed"
 
 tar -xzf "$tmp/$archive" -C "$tmp"
 mkdir -p "$dir"
-install -m 0755 "$tmp/slopmax" "$dir/slopmax"
+# Beside the old binary, then renamed over it: a proxy running the old one
+# keeps its file, and sees a new one to move to.
+install -m 0755 "$tmp/slopmax" "$dir/.slopmax.new"
+mv -f "$dir/.slopmax.new" "$dir/slopmax"
 say "Installed $("$dir/slopmax" --version) to $dir/slopmax"
 
 case ":$PATH:" in
-  *":$dir:"*) say "Run \`slopmax\` to set it up." ;;
+  *":$dir:"*) say "Run \`slopmax\` to set it up. A proxy already running moves to this version within a minute." ;;
   *) say "Add $dir to your PATH, then run \`slopmax\` to set it up." ;;
 esac

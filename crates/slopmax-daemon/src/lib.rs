@@ -5,12 +5,13 @@
 //! [`slopmax_core`], and is the only process that writes what it holds while
 //! it runs; the CLI and the apps reach it through `/slopmax/api`.
 
+pub mod handoff;
 pub mod proxy;
 
 // The engine's modules, under the names the daemon's code uses.
 pub(crate) use slopmax_core::{
     account, agent, api, auth, blocking, config, doctor, error, fsx, history, import, ledger,
-    limits, notify, paths, pool, provider, report, route, state, summary, usage, waste,
+    limits, notify, paths, pool, provider, report, route, state, summary, update, usage, waste,
 };
 pub(crate) use slopmax_core::{ids, log, net, time, wire};
 
@@ -82,18 +83,32 @@ pub async fn run(config: Config, home: Home) -> Result<Stopped> {
 pub enum Stopped {
     /// Asked to stop, or signalled.
     Done,
-    /// Asked to stop so it is started again (`POST /shutdown {"restart":
-    /// true}` after an update): the service manager restarts it on exit
-    /// code 75.
+    /// Asked to stop so it is started again, where the socket can't be
+    /// handed over: the service manager restarts it on exit code 75.
     Restart,
+    /// Handed the proxy to the process `pid` ([`handoff`]). `adopted`:
+    /// systemd took that one as the service's main process. `exited`: its
+    /// exit code, if it already stopped.
+    HandedOff {
+        pid: u32,
+        adopted: bool,
+        exited: Option<i32>,
+    },
 }
 
 impl Stopped {
     /// The process's exit code: 75 (`EX_TEMPFAIL`) asks for a restart.
-    pub fn code(self) -> i32 {
+    /// After a handoff that systemd did not adopt, this process stands in
+    /// for the new one with whatever supervises it: it waits for it and
+    /// exits as it does.
+    pub async fn finish(self) -> i32 {
         match self {
-            Self::Done => 0,
+            Self::Done | Self::HandedOff { adopted: true, .. } => 0,
             Self::Restart => 75,
+            Self::HandedOff {
+                exited: Some(code), ..
+            } => code,
+            Self::HandedOff { pid, .. } => handoff::wait_for(pid).await,
         }
     }
 }
@@ -110,27 +125,35 @@ const SETTLE: Duration = Duration::from_secs(5);
 /// finishes, refreshes in flight save their tokens, and state is saved
 /// last, by the only writer left.
 pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<Stopped> {
-    let serving = serve_lock(&home)?;
-    let listen = config.listen;
-    let listener = TcpListener::bind(listen).await.map_err(|source| {
-        // Windows refuses a port another process holds as access denied;
-        // elsewhere that means a port below 1024, whoever holds it.
-        let taken = source.kind() == std::io::ErrorKind::AddrInUse
-            || cfg!(windows) && source.kind() == std::io::ErrorKind::PermissionDenied;
-        match server::port_holder(listen.port()).filter(|_| taken) {
-            Some(holder) => ListenError::Held {
-                addr: listen,
-                holder,
-            },
-            None => ListenError::Unavailable {
-                addr: listen,
-                cause: source,
-            },
+    let (serving, listener, ready) = match handoff::Inherited::take() {
+        Some(inherited) => {
+            let (listener, lock, ready) = inherited.ready();
+            write_pid(&home)?;
+            listener.set_nonblocking(true)?;
+            (lock, TcpListener::from_std(listener)?, Some(ready))
         }
-    })?;
+        None => (serve_lock(&home)?, bind(config.listen).await?, None),
+    };
+    if listener.local_addr().ok() != Some(config.listen) {
+        log::warn!(
+            "serving the socket handed over, on {}; listen = {} applies at the next restart",
+            listener.local_addr().map_or("?".into(), |a| a.to_string()),
+            config.listen
+        );
+    }
     let state = read_state(&home);
     let app = App::new(config, home, state, origins);
     app.sync()?;
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        let _ = app.handles.set(handoff::Handles {
+            listener: listener.as_raw_fd(),
+            lock: serving.as_raw_fd(),
+        });
+    }
+    #[cfg(not(unix))]
+    let _ = app.handles.set(handoff::Handles {});
 
     // Logins, removals and `slopmax use` from the CLI and the apps are told
     // to the daemon at once (`/slopmax/api/sync`); the rescan catches the rest.
@@ -179,6 +202,20 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<Stopp
             },
         ),
         Job::new(
+            "follow installs",
+            Duration::from_secs(60),
+            |app| async move {
+                follow_installs(&app).await;
+            },
+        ),
+        Job::new(
+            "look for releases",
+            Duration::from_secs(3600),
+            |app| async move {
+                look_for_releases(&app).await;
+            },
+        ),
+        Job::new(
             "redeem expiring",
             Duration::from_secs(1800),
             |app| async move {
@@ -199,25 +236,123 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<Stopp
         let app = Arc::clone(&app);
         move |request| proxy::handle(Arc::clone(&app), request)
     };
-    server::serve(listener, handler, shutdown(app.clone())).await;
+    // Taking connections now: the daemon this one replaces stops, and a
+    // service manager counts it started.
+    if let Some(ready) = ready {
+        ready.tell();
+    }
+    handoff::notify("READY=1");
+    // After a handoff, draining ends early if the new process stops, or
+    // this one is told to: what it still holds is cut.
+    tokio::select! {
+        () = server::serve_until(listener, handler, shutdown(app.clone())) => {}
+        () = app.cut.cancelled() => log::info!("ending what this proxy still had"),
+    }
+    let successor = *app.successor.lock().unwrap_or_else(|p| p.into_inner());
+    // What the daemon started finishes too: after a handoff, Codex's
+    // sockets end their turns, which takes as long as the streams.
+    let settle = if successor.is_some() {
+        handoff::DRAIN
+    } else {
+        SETTLE
+    };
     app.tasks.close();
-    if tokio::time::timeout(SETTLE, app.tasks.wait())
-        .await
-        .is_err()
-    {
+    let settled = tokio::select! {
+        done = tokio::time::timeout(settle, app.tasks.wait()) => done.is_ok(),
+        () = app.cut.cancelled() => false,
+    };
+    if !settled {
         log::warn!("stopping without waiting longer for background work");
     }
     auth::settle(SETTLE).await;
     save_state(&app);
     app.ledger.sync();
     drop(serving);
-    log::info!("stopped");
-    Ok(
-        match app.restart.load(std::sync::atomic::Ordering::Relaxed) {
-            true => Stopped::Restart,
-            false => Stopped::Done,
+    if successor.is_some() {
+        log::info!("finished what this proxy started; the new one serves");
+    } else {
+        log::info!("stopped");
+    }
+    Ok(match successor {
+        Some((pid, adopted)) => Stopped::HandedOff {
+            pid,
+            adopted,
+            exited: *app.successor_exit.lock().unwrap_or_else(|p| p.into_inner()),
         },
-    )
+        None if app.restart.load(std::sync::atomic::Ordering::Relaxed) => Stopped::Restart,
+        None => Stopped::Done,
+    })
+}
+
+/// Moves the proxy to a newer slopmax once its install has one.
+async fn follow_installs(app: &Arc<App>) {
+    let Some(newer) = handoff::look_for_newer(app).await else {
+        return;
+    };
+    log::info!(
+        "a newer slopmax is installed at {}; moving to it",
+        newer.display()
+    );
+    if cfg!(unix) {
+        let _ = handoff::hand_off(app, &newer, true).await;
+    } else if app.running.as_ref().is_some_and(|r| r.path == newer) {
+        // Windows: replaced in place, so a restart runs it.
+        app.restart
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        app.stop.cancel();
+    }
+}
+
+/// Looks up the newest release once a day, for `slopmax status` to tell.
+async fn look_for_releases(app: &Arc<App>) {
+    if !update::checks(&app.config()) {
+        return;
+    }
+    let now = Timestamp::now();
+    if update::Checked::read(&app.home).is_some_and(|c| !c.stale(now)) {
+        return;
+    }
+    // Offline, or GitHub away: quietly, and again in an hour.
+    let Ok(latest) = update::latest(&app.auth_http).await else {
+        return;
+    };
+    let checked = update::Checked {
+        checked_at: now,
+        latest: latest.to_string(),
+    };
+    if let Some(newer) = checked.newer() {
+        log::info!(
+            "slopmax {newer} is out (this is {}); `slopmax update` installs it",
+            env!("CARGO_PKG_VERSION")
+        );
+    }
+    let home = app.home.clone();
+    blocking::run(move || {
+        if let Err(e) = checked.write(&home) {
+            log::warn!("saving the release lookup: {e}");
+        }
+    })
+    .await;
+}
+
+/// Listens on `listen`, saying what holds the port when it is taken.
+async fn bind(listen: std::net::SocketAddr) -> Result<TcpListener> {
+    Ok(TcpListener::bind(listen).await.map_err(|source| {
+        // Windows refuses a port another process holds as access denied;
+        // elsewhere that means a port below 1024, whoever holds it.
+        let taken = source.kind() == std::io::ErrorKind::AddrInUse
+            || cfg!(windows) && source.kind() == std::io::ErrorKind::PermissionDenied;
+        match server::port_holder(listen.port()).filter(|_| taken) {
+            Some(holder) => ListenError::Held {
+                addr: listen,
+                holder,
+            },
+            None => ListenError::Unavailable {
+                addr: listen,
+                cause: source,
+            },
+        }
+    })?)
 }
 
 /// How often the account files are checked for changes the daemon was not
@@ -254,8 +389,7 @@ fn serve_lock(home: &Home) -> Result<std::fs::File> {
     };
     match taken {
         Ok(()) => {
-            std::fs::write(&pid, std::process::id().to_string())
-                .with_context(|| format!("writing {}", pid.display()))?;
+            write_pid(home)?;
             Ok(file)
         }
         Err(std::fs::TryLockError::WouldBlock) => {
@@ -273,6 +407,13 @@ fn serve_lock(home: &Home) -> Result<std::fs::File> {
             Err(e).with_context(|| format!("locking {}", path.display()))
         }
     }
+}
+
+/// Names this process the lock's holder, in `.serve.pid`.
+fn write_pid(home: &Home) -> Result<()> {
+    let pid = home.dir().join(".serve.pid");
+    std::fs::write(&pid, std::process::id().to_string())
+        .with_context(|| format!("writing {}", pid.display()))
 }
 
 /// The state saved at the last stop. One that cannot be read is moved
@@ -361,6 +502,11 @@ async fn schedule(app: Arc<App>, jobs: Vec<Job>) {
             if running[i].as_ref().is_some_and(|run| !run.is_finished()) {
                 continue;
             }
+            // Moving to another binary: that one runs the jobs from now,
+            // and a refresh here would rotate a token under it.
+            if app.handing_off.load(std::sync::atomic::Ordering::SeqCst) {
+                continue;
+            }
             if let Some(run) = running[i].take()
                 && let Err(e) = run.await
                 && e.is_panic()
@@ -372,7 +518,10 @@ async fn schedule(app: Arc<App>, jobs: Vec<Job>) {
     }
 }
 
-async fn shutdown(app: Arc<App>) {
+/// Waits for the daemon to be stopped. How it stops: after a handoff, its
+/// connections end as their clients finish with them; else at once, with a
+/// few seconds for requests under way.
+async fn shutdown(app: Arc<App>) -> server::Stop {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
     };
@@ -394,6 +543,16 @@ async fn shutdown(app: Arc<App>) {
         () = app.stop.cancelled() => {},
     }
     app.stop.cancel();
+    if app
+        .successor
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .is_some()
+    {
+        server::Stop::HandedOver(handoff::DRAIN)
+    } else {
+        server::Stop::Now(server::DRAIN)
+    }
 }
 
 /// Watches the accounts' conditions, telling each change: in the log, on
@@ -466,6 +625,15 @@ pub(crate) fn save_soon(app: &Arc<App>) {
 }
 
 fn save_state(app: &App) {
+    // Handing off: the new process has read the state and writes it now.
+    if app.frozen.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    save_state_now(app);
+}
+
+/// Saves the state whatever else is going on.
+pub(crate) fn save_state_now(app: &App) {
     let now = Timestamp::now();
     record_lapses(app, now);
     let (state, dirty) = app.pool.snapshot(now);

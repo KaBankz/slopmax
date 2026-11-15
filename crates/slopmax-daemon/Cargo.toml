@@ -23,6 +23,10 @@ tokio.workspace = true
 tokio-util.workspace = true
 toml_edit.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# Handing the listening socket to a new binary: fcntl, pipe, waitpid.
+libc.workspace = true
+
 [dev-dependencies]
 # Gzipped answers, as Anthropic sends them.
 flate2.workspace = true

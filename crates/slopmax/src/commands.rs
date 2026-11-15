@@ -5,6 +5,7 @@ mod background;
 mod doctor;
 mod init;
 mod status;
+mod update;
 mod usage;
 
 use std::io::IsTerminal;
@@ -371,6 +372,15 @@ pub static APP: App = App {
                 arg("yes", "Skip the confirmation prompt", Kind::Flag(Some('y'))),
             ],
         ),
+        command(
+            "update",
+            "Install the newest slopmax and move the running proxy to it",
+            &[arg(
+                "check",
+                "Only say whether a newer release is out",
+                Kind::Flag(None),
+            )],
+        ),
         command("serve", "Run the proxy in the foreground", &[]),
         command("start", "Start the proxy in the background", &[]),
         command("stop", "Stop the background proxy", &[]),
@@ -608,10 +618,10 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
         "remove" => remove(&config, &store, &m.get::<String>("account")?).await?,
         "redeem" => redeem(&config, &store, &m.get::<String>("account")?, m.flag("yes")).await?,
         "serve" => {
-            return daemon::run(config, home().clone())
-                .await
-                .map(daemon::Stopped::code);
+            let stopped = daemon::run(config, home().clone()).await?;
+            return Ok(stopped.finish().await);
         }
+        "update" => return update::run(&config, m.flag("check")).await,
         "start" => start(&config).await?,
         "stop" => stop(&config).await?,
         "service" => service(&config, &m.get::<String>("action")?).await?,
@@ -1024,6 +1034,7 @@ mod tests {
             "disable work",
             "remove me@x.dev",
             "redeem 3 --yes",
+            "update --check",
             "serve",
             "start",
             "stop",

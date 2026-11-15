@@ -4,6 +4,28 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-15
+
+slopmax updates itself, and the running proxy moves to a new version without refusing or cutting off a single connection. One change to rely on: the Linux login service is now a `Type=notify` unit that runs `~/.slopmax/bin/slopmax`, which updates move to each new binary.
+
+### Added
+
+- `slopmax update` installs the newest release the way slopmax was installed and moves the running proxy to it. An install script install downloads the release, checks its SHA-256, and replaces the binary in place. A mise install runs `mise upgrade`, moving a version pinned in the global mise config. Homebrew, cargo, and Nix installs are told the command to run. `slopmax update --check` only looks.
+- The proxy moves to a new binary without a gap. It hands its listening socket to the new one, which takes every new connection from its first moment, and finishes what it has: streams run to their end, Codex's sockets finish their turn before closing, and requests on connections already open are still answered. Under systemd, the new process becomes the service's main one.
+- The proxy follows updates made another way. Within a minute of a newer slopmax being installed (`mise upgrade`, the install script run again, `brew upgrade`), it moves to it.
+- The proxy looks up the newest release once a day, one request to github.com, and `slopmax status` says when one is out, and when the proxy runs an older version than the CLI. `check_updates = false` or `SLOPMAX_NO_UPDATE_CHECK=1` turns the lookup off.
+
+### Changed
+
+- The login service runs `~/.slopmax/bin/slopmax`, a link to the installed binary. mise removes old versions a day after an upgrade, and a service that named a version's own path would have failed at its next start.
+- The Linux unit is `Type=notify`: systemd counts the proxy started once it listens. After a crash it restarts within a second, as often as it takes, rather than after 5 seconds.
+- `POST /slopmax/api/shutdown {"restart": true}` restarts the proxy by handing its socket to a new process, so nothing is refused while it starts. The request also takes `exe`, a binary to hand the proxy to.
+- A stopping proxy closes its listener at once. Connections that came in while it drained used to wait for an answer and then be reset; now they are refused at once, and agents retry at once.
+
+### Fixed
+
+- The install script checks the download's SHA-256. It asked for the checksum under the wrong file name, found none, and went on without checking. It now fails when the checksum is missing or doesn't match, and puts the new binary in place with a rename, so a running proxy keeps its file.
+
 ## [0.10.1] - 2026-11-15
 
 Claude requests count their tokens again, and moving the Linux login service to a new version no longer leaves the proxy stopped.

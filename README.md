@@ -29,6 +29,24 @@ cargo install --locked --git https://github.com/KaBankz/slopmax slopmax
 
 From a checkout, [mise](https://mise.jdx.dev) provides the toolchain: `mise install`, then `mise run install`.
 
+With mise:
+
+```sh
+mise use -g github:KaBankz/slopmax
+```
+
+### Updating
+
+`slopmax update` installs the newest release the way slopmax was installed, then moves the running proxy to it:
+
+- **The install script:** it downloads the release, checks its SHA-256, and replaces `slopmax` where it is.
+- **mise:** it runs `mise upgrade`. A version pinned in your global mise config is moved to the new one; a pin in a project's config is left to you.
+- **Homebrew, cargo, or Nix:** it prints the command that updates it.
+
+The proxy changes over without dropping anything. The running proxy starts the new binary with its listening socket, and once the new one serves, it stops taking connections and finishes the requests it has, streams and Codex's turns included. New connections go to the new proxy from the first moment, so agents are never refused or cut off. It also follows an update you make another way, such as `mise upgrade` or re-running the install script: within a minute of a newer slopmax being installed, the proxy moves to it. A proxy older than 0.11 can't hand over its socket, so moving from one restarts it once.
+
+The proxy looks up the newest release once a day, one request to github.com, and `slopmax status` says when one is out. `check_updates = false` or `SLOPMAX_NO_UPDATE_CHECK=1` turns that off; `slopmax update --check` looks now.
+
 In a container, accounts and settings live in the `/data` volume:
 
 ```sh
@@ -327,6 +345,7 @@ What crosses: text, images, documents, tool definitions and calls, tool results,
 | `slopmax enable\|disable <account>`  | Put an account in or take it out of rotation                                  |
 | `slopmax remove <account>`           | Forget an account                                                             |
 | `slopmax redeem <account>`           | Redeem a Claude or ChatGPT limit reset (`--yes` skips the prompt)             |
+| `slopmax update`                     | Install the newest release and move the running proxy to it (`--check` only looks) |
 | `slopmax service install\|uninstall\|status` | Run the proxy at login: a systemd user unit, a launchd agent, or on Windows `slopmaxw.exe` in the user's Run key |
 | `slopmax start\|stop`                | Run the proxy in the background (through the service, if installed), or stop it |
 | `slopmax serve`                      | Run the proxy in the foreground                                               |
@@ -362,6 +381,7 @@ What crosses: text, images, documents, tool definitions and calls, tool results,
 | `websockets`              | `true`           | Relay Codex's WebSockets to ChatGPT's                               |
 | `warm_windows`            | `false`          | Start idle ChatGPT accounts' 5-hour windows as soon as they reset   |
 | `paid_overflow`           | `false`          | Let API keys take over a subscription's models once it is limited   |
+| `check_updates`           | `true`           | Look up the newest release once a day, for `slopmax status` to tell |
 | `proxy`                   | none             | Upstream proxy (`http://`, `socks5://`, `socks5h://`), else `HTTPS_PROXY` |
 | `[aliases]`, `[fallbacks]` | none            | Model renames, and models to try once one is limited everywhere     |
 | `[prices]`                | none             | API prices for `slopmax usage`, beyond the built-in lists           |
