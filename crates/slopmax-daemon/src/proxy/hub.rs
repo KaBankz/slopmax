@@ -16,16 +16,15 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use super::{App, authorized, constant_time_eq, json_reply};
+use super::{App, RedeemError, authorized, constant_time_eq, json_reply};
 use crate as daemon;
 use crate::account::Account;
 use crate::config::Config;
 use crate::limits::{Limits, Window};
-use crate::log;
 use crate::net::body;
 use crate::net::server::{Request, Response};
 use crate::provider::ProviderId;
-use crate::provider::credits::{Credit, Outcome};
+use crate::provider::credits::Credit;
 use crate::time::{SignedDuration, Timestamp};
 
 const CLAUDE_USAGE: &str = "https://api.anthropic.com/api/oauth/usage";
@@ -337,34 +336,36 @@ async fn credits(app: &App, account: &Account) -> Result<Vec<Credit>, (StatusCod
     Ok(credits)
 }
 
-/// Redeems the credit `data` names (`{"credit_id": …}`), answering in
-/// ChatGPT's shape.
+/// Redeems the credit `data` names (`{"credit_id": …}`), or the soonest to
+/// expire when it names none, answering in ChatGPT's shape. The client's
+/// `redeem_request_id` goes to ChatGPT as given, so a client that asks
+/// again, from this machine or another, is answered as it was the first time.
 async fn consume(app: &App, account: &Account, data: &str) -> Answer {
     #[derive(Deserialize)]
     struct Consume {
-        credit_id: String,
+        #[serde(default)]
+        credit_id: Option<String>,
+        #[serde(default)]
+        redeem_request_id: Option<String>,
     }
-    let Ok(Consume { credit_id }) = serde_json::from_str(data) else {
-        return Err((StatusCode::BAD_REQUEST, "no credit_id to redeem".into()));
+    let Ok(asked) = serde_json::from_str::<Consume>(data) else {
+        return Err((StatusCode::BAD_REQUEST, "invalid redeem request".into()));
     };
-    let Some(credits) = account.provider.get().credits() else {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "this account has no limit resets".into(),
-        ));
-    };
-    let _redeeming = app.redeeming.lock().await;
-    let ready = app.ready(account).await.ok_or_else(signed_out)?;
-    let agent = app.pool.agent(account.provider);
-    let outcome = credits
-        .redeem(&app.auth_http, &ready, agent.as_deref(), Some(&credit_id))
+    let outcome = app
+        .redeem(
+            account,
+            asked.credit_id.as_deref(),
+            asked.redeem_request_id.as_deref(),
+        )
         .await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
-    if outcome == Outcome::Reset {
-        log::info!("{}: redeemed a limit reset for a hub client", account.id);
-        app.pool
-            .record_reset(&account.id, Timestamp::now(), Some(&credit_id));
-    }
+        .map_err(|e| match e {
+            RedeemError::NoResets => (
+                StatusCode::BAD_REQUEST,
+                "this account has no limit resets".into(),
+            ),
+            RedeemError::SignedOut => signed_out(),
+            RedeemError::Failed(e) => (StatusCode::BAD_GATEWAY, format!("{e:#}")),
+        })?;
     Ok(json!({ "code": outcome }))
 }
 

@@ -691,7 +691,7 @@ pub(super) async fn redeem(config: &Config, store: &Store, query: &str, yes: boo
         return Ok(());
     }
     match credits
-        .redeem(&http, &account, agent, Some(&next.id))
+        .redeem(&http, &account, agent, Some(&next.id), None)
         .await?
     {
         Outcome::Reset => println!("Reset the usage windows on {}.", ui::bold(account.name())),

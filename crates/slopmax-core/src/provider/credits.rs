@@ -70,11 +70,15 @@ pub trait ResetCredits: Send + Sync {
     ) -> BoxFuture<'a, Result<Vec<Credit>>>;
 
     /// Redeems `credit`, or the one the provider would spend next.
+    /// `request` is a caller's idempotency key, a UUID it sends again when
+    /// it asks again, so the provider answers a repeat as it did the first;
+    /// slopmax makes one when it is absent.
     fn redeem<'a>(
         &'a self,
         http: &'a Client,
         account: &'a Account,
         agent: Option<&'a str>,
         credit: Option<&'a str>,
+        request: Option<&'a str>,
     ) -> BoxFuture<'a, Result<Outcome>>;
 }

@@ -61,8 +61,11 @@ impl ResetCredits for Credits {
         account: &'a Account,
         agent: Option<&'a str>,
         credit: Option<&'a str>,
+        request: Option<&'a str>,
     ) -> BoxFuture<'a, Result<Outcome>> {
-        Box::pin(async move { redeem(http, account, agent.ok_or_else(unseen)?, credit).await })
+        Box::pin(
+            async move { redeem(http, account, agent.ok_or_else(unseen)?, credit, request).await },
+        )
     }
 }
 
@@ -196,15 +199,16 @@ impl Claimed {
 }
 
 /// Spends one reset of `credit`, the grant it names, or of the grant Claude
-/// would spend next. The request id is reused on a retry, so a lost
-/// response cannot spend two.
+/// would spend next. The request id, the caller's when it gives one, is
+/// reused on a retry, so a lost response cannot spend two.
 async fn redeem(
     http: &Client,
     account: &Account,
     agent: &str,
     credit: Option<&str>,
+    request: Option<&str>,
 ) -> Result<Outcome> {
-    let Some(org) = account.org_id.as_deref().filter(|org| is_uuid(org)) else {
+    let Some(org) = account.org_id.as_deref().filter(|org| ids::is_uuid(org)) else {
         bail!("the account's organization is unknown; sign in again");
     };
     let grant = match credit {
@@ -215,7 +219,8 @@ async fn redeem(
         },
     };
     let url = format!("{API}/api/organizations/{org}/reset_rate_limits");
-    let body = json!({ "program": PROGRAM, "grant_id": grant, "request_id": ids::uuid_v4() });
+    let body =
+        json!({ "program": PROGRAM, "grant_id": grant, "request_id": ids::request_id(request) });
     let mut last_error = None;
     for _ in 0..2 {
         match as_claude_code(http.post(&url), account, agent)
@@ -244,15 +249,6 @@ async fn redeem(
         }
     }
     Err(last_error.expect("loop ran").into())
-}
-
-/// Whether `id` is a UUID, as an organization's is: it goes in the path.
-fn is_uuid(id: &str) -> bool {
-    id.len() == 36
-        && id.char_indices().all(|(i, c)| match i {
-            8 | 13 | 18 | 23 => c == '-',
-            _ => c.is_ascii_hexdigit(),
-        })
 }
 
 #[cfg(test)]
@@ -358,14 +354,6 @@ mod tests {
         assert_eq!(outcome("something_new", None), Outcome::Declined);
     }
 
-    #[test]
-    fn only_a_uuid_names_the_organization() {
-        assert!(is_uuid("0b4e1f5a-9c2d-4e8f-a1b3-c5d7e9f0a2b4"));
-        assert!(!is_uuid("org-claude0"));
-        assert!(!is_uuid("../../v1/messages?x=0b4e1f5a-9c2d-4e8f-a1"));
-        assert!(!is_uuid("0b4e1f5a-9c2d-4e8f-a1b3-c5d7e9f0a2b4/x"));
-    }
-
     use crate::account::Tokens;
     use crate::provider::ProviderId;
     use crate::testkit::{self, Mock};
@@ -395,7 +383,7 @@ mod tests {
                 .starts_with("Claude answers limit resets to Claude Code alone")
         );
         let err = Credits
-            .redeem(&http, &account(ORG), None, Some("g"))
+            .redeem(&http, &account(ORG), None, Some("g"), None)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("none of its requests"));
@@ -425,12 +413,12 @@ mod tests {
         );
         // Nothing listed: nothing to spend.
         let outcome = Credits
-            .redeem(&http, &account(ORG), Some(AGENT), None)
+            .redeem(&http, &account(ORG), Some(AGENT), None, None)
             .await
             .unwrap();
         assert_eq!(outcome, Outcome::NoCredit);
         let err = Credits
-            .redeem(&http, &account(ORG), Some(AGENT), Some("grant"))
+            .redeem(&http, &account(ORG), Some(AGENT), Some("grant"), None)
             .await
             .unwrap_err();
         assert_eq!(
@@ -438,7 +426,13 @@ mod tests {
             "using a limit reset failed (500 Internal Server Error)"
         );
         let err = Credits
-            .redeem(&http, &account("not-a-uuid"), Some(AGENT), Some("grant"))
+            .redeem(
+                &http,
+                &account("not-a-uuid"),
+                Some(AGENT),
+                Some("grant"),
+                None,
+            )
             .await
             .unwrap_err();
         assert_eq!(
@@ -455,7 +449,7 @@ mod tests {
             .build();
         assert!(
             Credits
-                .redeem(&http, &account(ORG), Some(AGENT), Some("grant"))
+                .redeem(&http, &account(ORG), Some(AGENT), Some("grant"), None)
                 .await
                 .is_err()
         );

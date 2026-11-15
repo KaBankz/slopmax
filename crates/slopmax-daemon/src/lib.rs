@@ -12,7 +12,7 @@ pub(crate) use slopmax_core::{
     account, agent, api, auth, blocking, config, doctor, error, fsx, history, import, ledger,
     limits, notify, paths, pool, provider, report, route, state, summary, usage, waste,
 };
-pub(crate) use slopmax_core::{human, ids, log, net, time, wire};
+pub(crate) use slopmax_core::{ids, log, net, time, wire};
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -696,7 +696,13 @@ async fn redeem_if_expiring(
         return Ok(None);
     };
     let outcome = credits
-        .redeem(&app.auth_http, account, agent.as_deref(), Some(&credit.id))
+        .redeem(
+            &app.auth_http,
+            account,
+            agent.as_deref(),
+            Some(&credit.id),
+            None,
+        )
         .await?;
     Ok(Some((outcome, credit.id.clone())))
 }

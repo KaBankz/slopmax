@@ -11,6 +11,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 ### Changed
 
 - xAI API keys now back SuperGrok: with a SuperGrok account connected, they serve Grok Build only as paid overflow (`paid_overflow = true`). They still serve `grok-*` models to every other client.
+- When every account is rate limited, the agent's error says when the first frees up as `(reset after 2h 5m 12s)`, to the second, so T3 Code and other apps running Claude Code show the time.
+- A limit reset redeemed from T3 Code goes to ChatGPT with T3's own request id, so a retry from any machine is answered as the first was, and a redemption that names no reset spends the soonest to expire, as ChatGPT does.
 
 ## [0.9.0] - 2026-11-15
 

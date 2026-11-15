@@ -836,6 +836,13 @@ async fn every_account_spent_returns_the_agents_own_limit_error() {
     );
     let body: Value = response.json().await.unwrap();
     assert_eq!(body["error"]["type"], "rate_limit_error");
+    // Claude Code keyed to slopmax drops the reset headers, so the wait is
+    // in the text too, as gateways put it.
+    let message = body["error"]["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("slopmax: every Claude account is rate limited (reset after "),
+        "{message}"
+    );
 
     // Both are known to be blocked now, so the next request is answered
     // without touching the provider.
@@ -2539,6 +2546,12 @@ async fn hub_clients_read_usage_and_redeem_credits_without_a_relay() {
     assert_eq!(sent.path, "/wham/rate-limit-reset-credits/consume");
     let sent: Value = serde_json::from_slice(&sent.body).unwrap();
     assert_eq!(sent["credit_id"], "credit-later");
+    // The client's request id goes as given, so its retries, from any
+    // machine, are answered as the first was.
+    assert_eq!(
+        sent["redeem_request_id"],
+        "0b1c2d3e-0000-5000-8000-000000000000"
+    );
 
     // reset-quota lifts slopmax's blocks and reads the usage again.
     let later = Timestamp::now() + SignedDuration::from_hours(1);

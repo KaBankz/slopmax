@@ -222,12 +222,12 @@ The same data is available as JSON under `/slopmax/api`, with the slopmax key as
 
 ### Tools built for CLIProxyAPI
 
-Apps that show a CLIProxyAPI hub's quotas can show slopmax's. In T3 Code, add a CLIProxyAPI hub to the provider settings, with `http://127.0.0.1:7567` as the hub URL and slopmax's `api_key` as the management key. T3 then lists every pooled account's windows and ChatGPT's limit resets, and can redeem them.
+Apps that show a CLIProxyAPI hub's quotas can show slopmax's. In T3 Code, add a CLIProxyAPI hub to the provider settings, with slopmax's `api_key` as the management key and, as the hub URL, the address your agents use (`http://127.0.0.1:7567` unless you changed `listen`; `localhost` won't match it). T3 then lists every pooled account's windows and ChatGPT's limit resets, and can redeem them. When every account is spent, T3 shows when the first frees up: slopmax's limit error says `(reset after 2h 5m 12s)`, and T3 asks the hub at the agent's address when the error doesn't.
 
 slopmax answers the three management calls these tools make: `auth-files`, `api-call`, and `reset-quota`. Its `api-call` answers only the usage and limit reset calls those tools send and refuses every other request, so the key never puts an account's token in a client's hands:
 
 - Usage comes from the readings slopmax already keeps, without calling the providers.
-- Limit resets are listed by ChatGPT, and each list is reused for five minutes.
+- Limit resets are listed by ChatGPT, and each list is reused for five minutes. A redemption goes through the same path as `slopmax redeem`, with the client's request id, so a retry from any machine is answered as the first was.
 - `reset-quota` lifts slopmax's blocks on the account and reads its usage again.
 
 ## Notifications
