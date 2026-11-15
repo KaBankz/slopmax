@@ -1184,19 +1184,26 @@ fn windows_login_service_runs_and_supervises_the_proxy() {
         "{out:?}"
     );
     wait_for("installed and running");
-    assert!(run(&["status"]).ok().stdout.contains("proxy running"));
+    let answers = || {
+        let info: Value =
+            serde_json::from_str(&run(&["daemon-info", "--json"]).ok().stdout).unwrap();
+        info["running"] == json!(true)
+    };
+    assert!(answers(), "the proxy does not answer");
 
     // A clean stop ends the launcher too, as `systemctl stop` would.
     run(&["stop"]).ok();
     wait_for("installed, not running");
+    assert!(!answers(), "the proxy outlived `stop`");
     // `start` goes through the service again.
     run(&["start"]).ok();
     wait_for("installed and running");
+    assert!(answers(), "`start` left the proxy stopped");
 
     let out = run(&["service", "uninstall"]).ok();
     assert!(out.stdout.contains("Removed the service"), "{out:?}");
     wait_for("not installed");
-    assert!(!run(&["status"]).ok().stdout.contains("proxy running"));
+    assert!(!answers(), "the proxy outlived its service");
 }
 
 #[test]
