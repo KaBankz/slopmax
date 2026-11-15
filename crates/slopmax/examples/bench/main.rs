@@ -8,13 +8,16 @@
 //! cargo run --release --example bench -- bodies /tmp/bodies
 //! cargo run --release --example bench -- raw 127.0.0.1:9102 http://127.0.0.1:9100
 //! cargo run --release --example bench -- swarm http://127.0.0.1:9101 300 20 /tmp/bodies/claude-large.json 20
+//! cargo run --release --example bench -- history-ledger /tmp/home 365 6000
+//! cargo run --release --example bench -- history /tmp/home 300 /tmp/out
 //! ```
 //!
 //! `mise run bench` runs them and drives the proxy with `oha`. `raw` is the
 //! least a proxy on the same HTTP stack can do, slopmax's floor. `swarm` is
 //! many agents at once: each streams answers back to back, the mock paced
 //! like a model, and it reports what the hop adds to the first byte and to
-//! the gap between events.
+//! the gap between events. `history` times `/slopmax/api/history` warm on
+//! the ledger `history-ledger` writes.
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -35,6 +38,7 @@ use slopmax_core::time::{SignedDuration, Timestamp};
 use tokio::net::TcpListener;
 
 mod allocs;
+mod history;
 mod swarm;
 
 // Without mimalloc, the system allocator, counted for `bench allocs`.
@@ -73,6 +77,10 @@ fn main() -> Result<()> {
         ["bodies", dir] => bodies(Path::new(dir)),
         ["translate", body] => translate(&std::fs::read(body)?),
         ["allocs", n] => allocs::run(n.parse()?),
+        ["history-ledger", home, days, per_day] => {
+            history::ledger(home, days.parse()?, per_day.parse()?)
+        }
+        ["history", home, rounds, out] => history::serve(home, rounds.parse()?, out),
         ["raw", listen, upstream] => slopmax_daemon::runtime()?.block_on(raw(
             listen.parse()?,
             upstream.trim_end_matches('/').to_owned(),
@@ -85,7 +93,7 @@ fn main() -> Result<()> {
             pace.parse()?,
         )),
         _ => bail!(
-            "usage: bench upstream <addr> | bench proxy <addr> <upstream-url> <home> | bench bodies <dir>\n       bench raw <addr> <upstream-url> | bench swarm <url> <sessions> <seconds> <body> <pace-ms>"
+            "usage: bench upstream <addr> | bench proxy <addr> <upstream-url> <home> | bench bodies <dir>\n       bench raw <addr> <upstream-url> | bench swarm <url> <sessions> <seconds> <body> <pace-ms>\n       bench history-ledger <home> <days> <answers-a-day> | bench history <home> <rounds> <out>"
         ),
     }
 }
@@ -335,7 +343,27 @@ fn responses_events() -> Vec<String> {
 /// traffic goes to `upstream`.
 async fn proxy(listen: SocketAddr, upstream: &str, home: &str) -> Result<()> {
     let home = Home::at(home);
+    accounts(&home)?;
+    // The home's own settings, but for what keeps the rig to itself.
+    let config = Config {
+        listen,
+        api_key: "bench".into(),
+        refresh_tokens: false,
+        poll_mins: 0,
+        ..Config::load_from(&home.config()).unwrap_or_default()
+    };
+    let origins = Origins::new([
+        ("https://api.anthropic.com", upstream),
+        ("https://chatgpt.com/backend-api", upstream),
+    ]);
+    slopmax_daemon::serve(config, home, origins).await.map(drop)
+}
+
+/// Two Claude and two ChatGPT accounts in `home`, signed in with tokens
+/// only the mock provider takes.
+fn accounts(home: &Home) -> Result<Vec<Account>> {
     let store = Store::at(home.accounts());
+    let mut seeded = Vec::new();
     for provider in [ProviderId::Claude, ProviderId::Codex] {
         for i in 0..2 {
             let mut account = Account::new(
@@ -360,22 +388,11 @@ async fn proxy(listen: SocketAddr, upstream: &str, home: &str) -> Result<()> {
             };
             account.plan = Some(plans[i].into());
             account.assign_id();
-            store.upsert(account).context("saving a bench account")?;
+            let (saved, _) = store.upsert(account).context("saving a bench account")?;
+            seeded.push(saved);
         }
     }
-    // The home's own settings, but for what keeps the rig to itself.
-    let config = Config {
-        listen,
-        api_key: "bench".into(),
-        refresh_tokens: false,
-        poll_mins: 0,
-        ..Config::load_from(&home.config()).unwrap_or_default()
-    };
-    let origins = Origins::new([
-        ("https://api.anthropic.com", upstream),
-        ("https://chatgpt.com/backend-api", upstream),
-    ]);
-    slopmax_daemon::serve(config, home, origins).await.map(drop)
+    Ok(seeded)
 }
 
 /// How long translating a request takes: what one such request holds up
