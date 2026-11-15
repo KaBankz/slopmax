@@ -213,7 +213,7 @@ where
         };
         made.await.map_err(|error| {
             self.kept.forget_if_unused(scheme, authority);
-            format!("connecting to {authority}: {}", root(&*error)).into()
+            unconnected(&*error, scheme, authority).into()
         })
     }
 }
@@ -223,7 +223,7 @@ where
 fn failure(error: &hyper::Error, authority: &Authority, sent: bool) -> String {
     let host = authority.host();
     if let Some(io) = root_io(error) {
-        return format!("{host}: {io}");
+        return format!("lost the connection to {host} ({})", io_reason(io));
     }
     if error.is_incomplete_message() || error.is_closed() || error.is_canceled() {
         return if sent {
@@ -236,6 +236,73 @@ fn failure(error: &hyper::Error, authority: &Authority, sent: bool) -> String {
         return format!("{host} answered with something that is not HTTP: {error}");
     }
     format!("{host}: {error}")
+}
+
+/// Why no connection to the origin could be made, in plain words:
+/// `couldn't connect to api.example.com (connection refused)`.
+fn unconnected(
+    error: &(dyn std::error::Error + 'static),
+    scheme: &Scheme,
+    authority: &Authority,
+) -> String {
+    let host = authority.host();
+    // hyper's connector calls a failed lookup a "dns error"; on Windows,
+    // connections to this machine look names up themselves.
+    let mut link = Some(error);
+    while let Some(e) = link {
+        let text = e.to_string();
+        if text == "dns error" || text.contains("lookup address") || text.contains("has no address")
+        {
+            return format!("couldn't find {host} (DNS lookup failed)");
+        }
+        link = e.source();
+    }
+    let default = if *scheme == Scheme::HTTPS { 443 } else { 80 };
+    let server = match authority.port_u16() {
+        Some(port) if port != default => format!("{host}:{port}"),
+        _ => host.to_owned(),
+    };
+    let root = root(error);
+    let why = match root.downcast_ref::<std::io::Error>() {
+        Some(io) => io_reason(io),
+        None => plain(&root.to_string()),
+    };
+    format!("couldn't connect to {server} ({why})")
+}
+
+/// What an I/O error says happened, without the OS's error number.
+fn io_reason(error: &std::io::Error) -> String {
+    use std::io::ErrorKind;
+    let named = match error.kind() {
+        ErrorKind::ConnectionRefused => "connection refused",
+        ErrorKind::ConnectionReset => "connection reset",
+        ErrorKind::ConnectionAborted => "connection aborted",
+        ErrorKind::TimedOut => "timed out",
+        ErrorKind::NetworkUnreachable => "network unreachable",
+        ErrorKind::HostUnreachable => "host unreachable",
+        ErrorKind::BrokenPipe => "connection closed",
+        ErrorKind::PermissionDenied => "permission denied",
+        _ => return plain(&error.to_string()),
+    };
+    named.to_owned()
+}
+
+/// An error's text as part of a sentence: no `(os error N)`, and a lower
+/// case first letter unless it starts a name or an acronym.
+pub(crate) fn plain(text: &str) -> String {
+    let text = text.trim();
+    let text = match text.rfind(" (os error ") {
+        Some(at) if text.ends_with(')') => &text[..at],
+        _ => text,
+    };
+    let mut chars = text.chars();
+    match (chars.next(), chars.next()) {
+        (Some(first), Some(second)) if first.is_uppercase() && second.is_lowercase() => first
+            .to_lowercase()
+            .chain(text[first.len_utf8()..].chars())
+            .collect(),
+        _ => text.to_owned(),
+    }
 }
 
 /// The deepest cause of `error`, which says what happened: a refused
@@ -760,11 +827,48 @@ mod tests {
         let gone = closed.local_addr().unwrap();
         drop(closed);
         let refused = failing(&pool, &format!("http://{gone}/x")).await;
-        assert!(
-            refused.starts_with(&format!("connecting to {gone}: ")),
-            "{refused}"
+        assert_eq!(
+            refused,
+            format!("couldn't connect to {gone} (connection refused)")
         );
         assert!(pool.kept.lock().is_empty());
+
+        let unknown = failing(&pool, "http://no-such-host.invalid:80/x").await;
+        assert_eq!(
+            unknown,
+            "couldn't find no-such-host.invalid (DNS lookup failed)"
+        );
+        // hyper's connector, as the client dials, says the same.
+        let dialing = Pool::new(crate::dial::Dial::new(Duration::from_secs(5)));
+        let mut request = Request::new(Full::new(Bytes::new()));
+        *request.uri_mut() = "http://no-such-host.invalid/x".parse().unwrap();
+        let unknown = dialing.send(request).await.err().unwrap().to_string();
+        assert_eq!(
+            unknown,
+            "couldn't find no-such-host.invalid (DNS lookup failed)"
+        );
+        let mut request = Request::new(Full::new(Bytes::new()));
+        *request.uri_mut() = format!("http://{gone}/x").parse().unwrap();
+        let refused = dialing.send(request).await.err().unwrap().to_string();
+        assert_eq!(
+            refused,
+            format!("couldn't connect to {gone} (connection refused)")
+        );
+    }
+
+    #[test]
+    fn errors_read_as_part_of_a_sentence() {
+        assert_eq!(
+            plain("Connection refused (os error 111)"),
+            "connection refused"
+        );
+        assert_eq!(plain("TLS handshake failed"), "TLS handshake failed");
+        assert_eq!(
+            plain("invalid peer certificate"),
+            "invalid peer certificate"
+        );
+        let reset = std::io::Error::from(std::io::ErrorKind::ConnectionReset);
+        assert_eq!(io_reason(&reset), "connection reset");
     }
 
     #[test]

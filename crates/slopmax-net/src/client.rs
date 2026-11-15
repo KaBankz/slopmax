@@ -72,12 +72,12 @@ impl Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let what = match &self.kind {
-            Kind::Request => "invalid request",
-            Kind::Connect => "request failed",
-            Kind::Timeout => "timed out",
+            Kind::Request => "invalid request: ",
+            // The connection pool says which server and what happened.
+            Kind::Connect | Kind::Timeout => "",
             Kind::Status(status) => return write!(f, "HTTP {status}"),
-            Kind::Body => "reading the response failed",
-            Kind::Decode => "unexpected response",
+            Kind::Body => "reading the response failed: ",
+            Kind::Decode => "unexpected response: ",
         };
         f.write_str(what)?;
         // The root cause is the useful part: "connection refused", a TLS
@@ -88,10 +88,10 @@ impl fmt::Display for Error {
             last = Some(e);
             cause = e.source();
         }
-        if let Some(root) = last {
-            write!(f, ": {root}")?;
+        match last {
+            Some(root) => f.write_str(&super::pool::plain(&root.to_string())),
+            None => f.write_str(what.trim_end_matches(": ")),
         }
-        Ok(())
     }
 }
 
@@ -615,11 +615,12 @@ impl RequestBuilder {
             (Some(deadline), Some(read)) => Some(deadline.min(Instant::now() + read)),
             (deadline, read) => deadline.or_else(|| read.map(|r| Instant::now() + r)),
         };
+        let host = request.uri().host().unwrap_or("the server").to_owned();
         let responding = self.client.pool.send(request);
         let response = match wait {
             Some(at) => tokio::time::timeout_at(at, responding)
                 .await
-                .map_err(|_| Error::new(Kind::Timeout, "no response"))?,
+                .map_err(|_| Error::new(Kind::Timeout, format!("{host} did not answer in time")))?,
             None => responding.await,
         }
         .map_err(|e| Error::new(Kind::Connect, e))?;
@@ -669,7 +670,7 @@ impl Response {
         let read = match deadline {
             Some(at) => tokio::time::timeout_at(at, reading)
                 .await
-                .map_err(|_| Error::new(Kind::Timeout, "reading the body"))?,
+                .map_err(|_| Error::new(Kind::Timeout, "the answer did not arrive in time"))?,
             None => reading.await,
         };
         read.map_err(|e| Error::new(Kind::Body, e))
