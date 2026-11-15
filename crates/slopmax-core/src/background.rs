@@ -2,11 +2,12 @@
 //! detached or as a login service. The CLI and the app both manage it
 //! through here; `exe` is always the slopmax binary that runs `serve`.
 
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use std::time::Duration;
+use std::process::{Child, Stdio};
+use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 
 use crate::config::Config;
 use crate::fsx;
@@ -17,28 +18,110 @@ use crate::service::Manager;
 #[derive(Clone)]
 pub struct Daemon {
     client: slopmax_client::Client,
+    listen: SocketAddr,
 }
+
+/// What answers at the configured address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Probe {
+    /// Nothing, or a program that is not slopmax.
+    Absent,
+    /// slopmax, taking this home's key.
+    Ours { version: String },
+    /// slopmax, refusing this home's key: started from another home, or
+    /// before `api_key` changed.
+    Foreign { version: String, pid: Option<u32> },
+}
+
+/// How long `start` waits for the proxy to answer, in all.
+const START_WAIT: Duration = Duration::from_secs(10);
+/// How long each look at a starting proxy waits for its answer: a program
+/// that holds the port and never answers costs no more than this.
+const START_PROBE: Duration = Duration::from_millis(500);
 
 impl Daemon {
     pub fn new(config: &Config) -> Self {
         Self {
             client: slopmax_client::Client::new(config.base_url(), &config.api_key),
+            listen: config.listen,
         }
     }
 
+    /// Whether this home's proxy answers on the configured port.
     pub async fn is_running(&self) -> bool {
-        self.version().await.is_some()
+        matches!(self.probe().await, Probe::Ours { .. })
     }
 
-    /// The running proxy's version, if one answers on the configured port.
+    /// The running proxy's version, if this home's proxy answers on the
+    /// configured port.
     pub async fn version(&self) -> Option<String> {
-        self.client.health().await.map(|h| h.version)
+        match self.probe().await {
+            Probe::Ours { version } => Some(version),
+            _ => None,
+        }
+    }
+
+    /// What answers on the configured port. A proxy on this machine
+    /// answers at once; a second's wait spares a program that holds the
+    /// port and never answers.
+    pub async fn probe(&self) -> Probe {
+        self.probe_within(Duration::from_secs(1)).await
+    }
+
+    async fn probe_within(&self, timeout: Duration) -> Probe {
+        match self.client.health_within(timeout).await {
+            None => Probe::Absent,
+            Some(health) if health.owner == Some(false) => Probe::Foreign {
+                version: health.version,
+                pid: health.pid,
+            },
+            Some(health) => Probe::Ours {
+                version: health.version,
+            },
+        }
+    }
+
+    /// The version of this home's proxy if it runs; an error saying what to
+    /// do when the port has a proxy that refuses this home's key.
+    pub async fn running(&self) -> Result<Option<String>> {
+        match self.probe().await {
+            Probe::Absent => Ok(None),
+            Probe::Ours { version } => Ok(Some(version)),
+            Probe::Foreign { pid, .. } => bail!(foreign(self.listen, pid)),
+        }
+    }
+
+    /// The running proxy's status report.
+    pub async fn report(&self) -> Result<slopmax_client::api::report::Report> {
+        Ok(self.client.status().await?)
     }
 
     pub async fn shutdown(&self) -> Result<()> {
         self.client.shutdown(false).await?;
         Ok(())
     }
+}
+
+/// What to say of a slopmax on `listen` that refuses this home's key, and
+/// how to get past it. `pid` is the process, when it said; else the port's
+/// holder is looked up.
+pub fn foreign(listen: SocketAddr, pid: Option<u32>) -> String {
+    let pid = pid.or_else(|| {
+        let holder = crate::net::server::port_holder(listen.port())?;
+        holder
+            .rsplit_once("(pid ")?
+            .1
+            .trim_end_matches(')')
+            .parse()
+            .ok()
+    });
+    let end = pid
+        .map(|pid| format!(" (or end pid {pid})"))
+        .unwrap_or_default();
+    format!(
+        "a slopmax proxy on {listen} doesn't accept this home's key: it was started from another \
+         SLOPMAX_HOME, or before api_key changed. Stop it from there{end}, then run `slopmax start`."
+    )
 }
 
 /// The binary this process runs as, for front ends that are slopmax itself.
@@ -49,7 +132,7 @@ pub fn current_exe() -> Result<PathBuf> {
 /// Starts the proxy unless one already answers. Returns whether it started
 /// one.
 pub async fn ensure_running(config: &Config, home: &Home, exe: &Path) -> Result<bool> {
-    if Daemon::new(config).is_running().await {
+    if Daemon::new(config).running().await?.is_some() {
         return Ok(false);
     }
     launch(config, home, exe).await?;
@@ -59,17 +142,22 @@ pub async fn ensure_running(config: &Config, home: &Home, exe: &Path) -> Result<
 /// Starts the proxy: through the service when one is installed, so it stays
 /// supervised, else as a detached process logging to the home's log.
 pub async fn launch(config: &Config, home: &Home, exe: &Path) -> Result<()> {
-    match Manager::detect().filter(|m| m.status(home).installed) {
-        Some(manager) => manager.start(exe, home)?,
-        None => spawn(exe, home)?,
-    }
-    wait_until_running(config, home).await
+    // What the proxy logs from here on says why, if it does not start.
+    let logged = std::fs::metadata(home.log()).map_or(0, |m| m.len());
+    let child = match Manager::detect().filter(|m| m.status(home).installed) {
+        Some(manager) => {
+            manager.start(exe, home)?;
+            None
+        }
+        None => Some(spawn(exe, home)?),
+    };
+    wait_until_running(config, home, child, logged).await
 }
 
 /// Stops a running proxy. Returns whether one was running.
 pub async fn stop(config: &Config) -> Result<bool> {
     let daemon = Daemon::new(config);
-    if !daemon.is_running().await {
+    if daemon.running().await?.is_none() {
         return Ok(false);
     }
     daemon.shutdown().await?;
@@ -89,13 +177,14 @@ pub async fn install_service(
         // Give the port back before the service takes it.
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
+    let logged = std::fs::metadata(home.log()).map_or(0, |m| m.len());
     let file = manager.install(exe, home)?;
-    wait_until_running(config, home).await?;
+    wait_until_running(config, home, None, logged).await?;
     Ok(file)
 }
 
 /// Starts `exe serve` detached from this process, logging to a file.
-fn spawn(exe: &Path, home: &Home) -> Result<()> {
+fn spawn(exe: &Path, home: &Home) -> Result<Child> {
     fsx::private_dir(home.dir())?;
     let log = std::fs::OpenOptions::new()
         .create(true)
@@ -112,19 +201,88 @@ fn spawn(exe: &Path, home: &Home) -> Result<()> {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    command.spawn().context("starting the proxy")?;
-    Ok(())
+    command.spawn().context("starting the proxy")
 }
 
-async fn wait_until_running(config: &Config, home: &Home) -> Result<()> {
+/// Waits for the proxy just started to answer. `child` is its process when
+/// this one started it, to notice at once when it gives up; `logged` is
+/// where the log ended before, so a failure shows what the proxy said.
+async fn wait_until_running(
+    config: &Config,
+    home: &Home,
+    mut child: Option<Child>,
+    logged: u64,
+) -> Result<()> {
     let daemon = Daemon::new(config);
-    for _ in 0..50 {
-        if daemon.is_running().await {
-            return Ok(());
+    let deadline = Instant::now() + START_WAIT;
+    loop {
+        match daemon.probe_within(START_PROBE).await {
+            Probe::Ours { .. } => return Ok(()),
+            Probe::Foreign { pid, .. } => bail!(foreign(config.listen, pid)),
+            Probe::Absent => {}
+        }
+        let exited = child
+            .as_mut()
+            .and_then(|c| c.try_wait().ok().flatten())
+            .is_some();
+        if exited {
+            return Err(did_not_start(home, logged, "it stopped"));
+        }
+        if Instant::now() >= deadline {
+            let waited = format!("it did not answer within {} s", START_WAIT.as_secs());
+            return Err(did_not_start(home, logged, &waited));
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    bail!("the proxy did not start; see {}", home.log().display())
+}
+
+/// Why the proxy did not start: the last thing it logged since `logged`,
+/// or else `otherwise` and where the log is.
+fn did_not_start(home: &Home, logged: u64, otherwise: &str) -> anyhow::Error {
+    match last_line(&home.log(), logged) {
+        Some(line) => anyhow!("the proxy did not start: {line}"),
+        None => anyhow!(
+            "the proxy did not start: {otherwise}; see {}",
+            home.log().display()
+        ),
+    }
+}
+
+/// The last line written to `log` past byte `from`, without the level or
+/// `error:` it starts with.
+fn last_line(log: &Path, from: u64) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(log).ok()?;
+    let len = file.metadata().ok()?.len();
+    // The end is enough: the reason is the last line.
+    file.seek(SeekFrom::Start(from.max(len.saturating_sub(64 * 1024))))
+        .ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    let line = text.lines().map(str::trim).rfind(|l| !l.is_empty())?;
+    let line = strip_ansi(line);
+    let line = line.trim_start_matches("error:").trim();
+    Some(line.to_owned())
+}
+
+/// `text` without terminal color codes.
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Up to the letter that ends the sequence.
+            for c in chars.by_ref() {
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -132,7 +290,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::testkit::{self, Mock};
+    use crate::testkit::{self, Mock, temp_dir};
 
     fn daemon_at(mock: &Mock) -> Daemon {
         Daemon::new(&config_at(mock))
@@ -151,7 +309,10 @@ mod tests {
         Mock::start(move |seen| {
             let authorized = seen.header("authorization") == Some("Bearer sm-key");
             match seen.route() {
-                "/healthz" => testkit::json(200, json!({ "service": service, "version": "9.9.9" })),
+                "/healthz" => testkit::json(
+                    200,
+                    json!({ "service": service, "version": "9.9.9", "pid": 4242, "owner": authorized }),
+                ),
                 _ if !authorized => testkit::json(
                     401,
                     json!({ "_tag": "Unauthorized", "message": "missing or invalid slopmax key" }),
@@ -205,6 +366,69 @@ mod tests {
             ..config_at(&mock)
         };
         assert!(Daemon::new(&wrong).shutdown().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_proxy_refusing_this_homes_key_is_named_with_its_pid() {
+        let mock = proxy("slopmax").await;
+        let other = Config {
+            api_key: "another-home".into(),
+            ..config_at(&mock)
+        };
+        let daemon = Daemon::new(&other);
+        assert_eq!(
+            daemon.probe().await,
+            Probe::Foreign {
+                version: "9.9.9".into(),
+                pid: Some(4242)
+            }
+        );
+        assert!(!daemon.is_running().await);
+        let refused = stop(&other).await.unwrap_err().to_string();
+        assert_eq!(
+            refused,
+            format!(
+                "a slopmax proxy on {} doesn't accept this home's key: it was started from \
+                 another SLOPMAX_HOME, or before api_key changed. Stop it from there (or end \
+                 pid 4242), then run `slopmax start`.",
+                other.listen
+            )
+        );
+        assert!(mock.seen_at("/slopmax/api/shutdown").is_empty());
+        // Starting would only fail to listen: it says the same.
+        let home = Home::at(temp_dir("foreign"));
+        let exe = Path::new("/nonexistent/slopmax");
+        let started = ensure_running(&other, &home, exe).await.unwrap_err();
+        assert!(started.to_string().contains("pid 4242"), "{started}");
+    }
+
+    #[test]
+    fn a_proxy_that_does_not_start_shows_what_it_logged() {
+        let home = Home::at(temp_dir("not-started"));
+        std::fs::create_dir_all(home.dir()).unwrap();
+        std::fs::write(home.log(), "an old line from yesterday\n").unwrap();
+        let logged = std::fs::metadata(home.log()).unwrap().len();
+        assert_eq!(
+            did_not_start(&home, logged, "it stopped").to_string(),
+            format!(
+                "the proxy did not start: it stopped; see {}",
+                home.log().display()
+            )
+        );
+        let mut log = std::fs::OpenOptions::new()
+            .append(true)
+            .open(home.log())
+            .unwrap();
+        std::io::Write::write_all(
+            &mut log,
+            b"\x1b[31merror:\x1b[0m python3 (pid 7) is using 127.0.0.1:7595. Set `listen` in config.toml to a free port.\n\n",
+        )
+        .unwrap();
+        assert_eq!(
+            did_not_start(&home, logged, "it stopped").to_string(),
+            "the proxy did not start: python3 (pid 7) is using 127.0.0.1:7595. \
+             Set `listen` in config.toml to a free port."
+        );
     }
 
     #[test]

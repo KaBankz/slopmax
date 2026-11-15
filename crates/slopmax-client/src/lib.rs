@@ -87,6 +87,12 @@ pub struct Client {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct Health {
     pub version: String,
+    /// The proxy's process (older proxies leave it out).
+    pub pid: Option<u32>,
+    /// Whether it takes this client's key (older proxies leave it out):
+    /// `Some(false)` for a proxy started from another home, or before the
+    /// key changed.
+    pub owner: Option<bool>,
 }
 
 impl Client {
@@ -118,15 +124,25 @@ impl Client {
 
     /// The version of the slopmax answering, if one does.
     pub async fn health(&self) -> Option<Health> {
+        self.health_within(Duration::from_secs(3)).await
+    }
+
+    /// [`Client::health`], waiting at most `timeout` for the answer.
+    pub async fn health_within(&self, timeout: Duration) -> Option<Health> {
         #[derive(serde::Deserialize)]
         struct Answer {
             service: String,
             version: String,
+            #[serde(default)]
+            pid: Option<u32>,
+            #[serde(default)]
+            owner: Option<bool>,
         }
         let answer: Answer = self
             .http
             .get(format!("{}/healthz", self.base))
-            .timeout(Duration::from_secs(3))
+            .bearer_auth(&self.key)
+            .timeout(timeout)
             .send()
             .await
             .ok()?
@@ -135,6 +151,8 @@ impl Client {
             .ok()?;
         (answer.service == "slopmax").then_some(Health {
             version: answer.version,
+            pid: answer.pid,
+            owner: answer.owner,
         })
     }
 

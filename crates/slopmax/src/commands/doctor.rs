@@ -6,13 +6,42 @@ use crate::ui;
 use slopmax_core::account::Store;
 use slopmax_core::config::Config;
 use slopmax_core::doctor::{self, Level};
+use slopmax_core::error::ConfigError;
 
 /// Prints every finding and returns the exit code: 1 if something is
 /// broken.
-pub async fn run(config: &Config, store: &Store) -> Result<i32> {
+///
+/// `broken` is why config.toml did not read, when it did not: the other
+/// checks run on what of it could be read.
+pub async fn run(config: &Config, store: &Store, broken: Option<&ConfigError>) -> Result<i32> {
     let mut worst = Level::Ok;
     let (mut problems, mut warnings) = (0, 0);
-    for section in doctor::check(config, store, super::home()).await? {
+    let mut sections = doctor::check(config, store, super::home()).await?;
+    if let Some(error) = broken {
+        let (text, fix) = match error {
+            ConfigError::Invalid { path, message } => (
+                format!("{} does not read: {message}", path.display()),
+                "fix that line, or delete it to use the default".to_owned(),
+            ),
+            other => (
+                other.to_string(),
+                format!("edit {}", super::home().config().display()),
+            ),
+        };
+        let finding = doctor::Finding {
+            level: Level::Fail,
+            text,
+            fix: Some(fix),
+        };
+        sections.insert(
+            0,
+            doctor::Section {
+                title: "Config",
+                findings: vec![finding],
+            },
+        );
+    }
+    for section in sections {
         println!("\n{}", ui::bold(section.title));
         for finding in &section.findings {
             let mark = match finding.level {

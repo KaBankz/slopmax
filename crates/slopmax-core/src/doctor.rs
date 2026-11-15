@@ -10,7 +10,7 @@ use anyhow::Result;
 use serde_json::Value;
 
 use crate::account::{Account, Store};
-use crate::background::Daemon;
+use crate::background::{Daemon, Probe};
 use crate::config::Config;
 use crate::net::{Client, Origins, server};
 use crate::paths::Home;
@@ -69,9 +69,30 @@ pub async fn check(config: &Config, store: &Store, home: &Home) -> Result<Vec<Se
     let accounts = store.list()?;
     let service = Manager::detect().map(|m| m.status(home));
     let http = auth::http_client(Origins::default());
+    let daemon = Daemon::new(config);
+    let probe = daemon.probe().await;
+    // Each account's last error, from a proxy that serves this home.
+    let report = match probe {
+        Probe::Ours { .. } => daemon.report().await.ok(),
+        _ => None,
+    };
+    let failing: Vec<(String, String)> = match report {
+        Some(report) => report
+            .accounts
+            .into_iter()
+            .filter_map(|a| {
+                let text = a.notes.into_iter().find_map(|n| match n {
+                    slopmax_client::api::report::Note::LastError { text } => Some(text),
+                    _ => None,
+                })?;
+                Some((a.id, text))
+            })
+            .collect(),
+        None => Vec::new(),
+    };
     let sections = [
-        proxy(config, service).await,
-        accounts_section(&accounts),
+        proxy(config, probe, service),
+        accounts_section(&accounts, &failing),
         claude_code(config, home.claude()),
         codex(config, home.codex()),
         cliproxyapi(&accounts, CLIPROXYAPI_PORT),
@@ -79,82 +100,124 @@ pub async fn check(config: &Config, store: &Store, home: &Home) -> Result<Vec<Se
         files(&home.accounts()),
     ];
     let mut sections = sections;
-    unserved(&mut sections, config, &accounts, home);
+    unserved(&mut sections, config, &accounts, home, &|agent| {
+        let program = agent.command(config, &[]).get_program().to_owned();
+        slopmax_common::which(&program.to_string_lossy()).is_some()
+    });
     Ok(sections
         .into_iter()
         .filter(|s| !s.findings.is_empty())
         .collect())
 }
 
-/// An agent wired to slopmax with no account to serve its own models gets
-/// an error for every request it sends.
+/// What each agent's section says to run first: install the agent, when
+/// it is not on PATH; connect an account, when none serves it, as wiring
+/// it now would only break it. An agent wired to slopmax with no account to
+/// serve its own models gets an error for every request it sends.
 fn unserved(
     sections: &mut [Section],
     config: &Config,
     accounts: &[crate::account::Account],
     home: &Home,
+    installed: &dyn Fn(&dyn crate::agent::Agent) -> bool,
 ) {
     for agent in crate::agent::AGENTS {
-        if crate::agent::servable(agent, accounts) {
+        let Some(section) = sections.iter_mut().find(|s| s.title == agent.title()) else {
             continue;
+        };
+        let servable = crate::agent::servable(agent, accounts);
+        let provider = agent.provider();
+        let mut steps = Vec::new();
+        if !installed(agent) {
+            steps.push(format!("install {}", agent.title()));
         }
-        let wired = crate::agent::wiring(agent, config, home) == crate::agent::Wiring::Slopmax;
-        if let Some(section) = sections.iter_mut().find(|s| s.title == agent.title()) {
-            let provider = agent.provider();
-            // Wiring it now would only break it.
-            let first = format!(
-                "slopmax login {provider}, then slopmax setup {}",
-                agent.id()
-            );
+        if !servable {
+            steps.push(format!("slopmax login {provider}"));
+        }
+        let setup = format!("slopmax setup {}", agent.id());
+        if !steps.is_empty() {
+            steps.push(setup.clone());
+            let first = steps.join(", then ");
             for finding in &mut section.findings {
-                if finding.fix.as_deref() == Some(&format!("slopmax setup {}", agent.id())) {
+                if finding.fix.as_deref() == Some(setup.as_str()) {
                     finding.fix = Some(first.clone());
                 }
             }
-            if !wired {
-                continue;
-            }
-            section.add(
-                Level::Fail,
-                format!(
-                    "points at slopmax, but no {} account is connected to serve it",
-                    provider.spec().title
-                ),
-                Some(&format!(
-                    "slopmax login {provider}, or `slopmax setup {} --undo`",
-                    agent.id()
-                )),
-            );
         }
+        let wired = crate::agent::wiring(agent, config, home) == crate::agent::Wiring::Slopmax;
+        if servable || !wired {
+            continue;
+        }
+        section.add(
+            Level::Fail,
+            format!(
+                "points at slopmax, but no {} account is connected to serve it",
+                provider.spec().title
+            ),
+            Some(&format!(
+                "slopmax login {provider}, or `slopmax setup {} --undo`",
+                agent.id()
+            )),
+        );
     }
 }
 
-async fn proxy(config: &Config, service: Option<Status>) -> Section {
+/// The proxy, as `probe` found it answering on the configured port.
+fn proxy(config: &Config, probe: Probe, service: Option<Status>) -> Section {
     let mut s = Section::new("Proxy");
     let ours = env!("CARGO_PKG_VERSION");
-    match Daemon::new(config).version().await {
-        Some(version) if version == ours => {
+    match probe {
+        Probe::Ours { version } if version == ours => {
             s.add(Level::Ok, format!("running on {}", config.base_url()), None);
         }
-        Some(version) => s.add(
+        Probe::Ours { version } => s.add(
             Level::Warn,
             format!("running version {version}, but this binary is {ours}"),
             Some("slopmax stop && slopmax start"),
         ),
-        None if port_taken(config.listen) => {
-            let port = config.listen.port();
-            let holder = server::port_holder(port).unwrap_or_else(|| "another program".into());
+        Probe::Foreign { pid, .. } => {
+            let end = pid
+                .map(|p| format!(" (or end pid {p})"))
+                .unwrap_or_default();
             s.add(
                 Level::Fail,
-                format!("port {port} is taken by {holder}"),
-                Some("set `listen` in config.toml to a free port"),
+                format!(
+                    "the slopmax on {} doesn't accept this home's key: it was started from \
+                     another SLOPMAX_HOME, or before api_key changed",
+                    config.listen
+                ),
+                Some(&format!("stop it from there{end}, then slopmax start")),
             );
         }
-        None => s.add(
-            Level::Warn,
-            "not running",
-            Some("slopmax start (or `slopmax service install` to start at login)"),
-        ),
+        Probe::Absent => match unlistenable(config.listen) {
+            Some(std::io::ErrorKind::PermissionDenied) if !cfg!(windows) => s.add(
+                Level::Fail,
+                format!(
+                    "slopmax may not listen on {}: ports below 1024 need administrator rights",
+                    config.listen
+                ),
+                Some("set `listen` in config.toml to a port above 1023"),
+            ),
+            Some(std::io::ErrorKind::AddrNotAvailable) => s.add(
+                Level::Fail,
+                format!("this machine has no address {}", config.listen.ip()),
+                Some("set `listen` in config.toml to an address of this machine, like 127.0.0.1"),
+            ),
+            Some(_) => {
+                let port = config.listen.port();
+                let holder = server::port_holder(port).unwrap_or_else(|| "another program".into());
+                s.add(
+                    Level::Fail,
+                    format!("port {port} is taken by {holder}"),
+                    Some("set `listen` in config.toml to a free port"),
+                );
+            }
+            None => s.add(
+                Level::Warn,
+                "not running",
+                Some("slopmax start (or `slopmax service install` to start at login)"),
+            ),
+        },
     }
     if !config.listen.ip().is_loopback() {
         let named = config.keys.len();
@@ -194,15 +257,22 @@ async fn proxy(config: &Config, service: Option<Status>) -> Section {
     s
 }
 
-fn port_taken(listen: SocketAddr) -> bool {
-    TcpListener::bind(listen).is_err_and(|e| {
-        // Windows refuses a port another process holds as access denied.
-        e.kind() == std::io::ErrorKind::AddrInUse
-            || cfg!(windows) && e.kind() == std::io::ErrorKind::PermissionDenied
-    })
+/// Why the proxy could not listen on `listen`, if it could not: the port
+/// is taken (Windows calls a port another process holds access denied), a
+/// privileged one, or the address is not this machine's.
+fn unlistenable(listen: SocketAddr) -> Option<std::io::ErrorKind> {
+    use std::io::ErrorKind;
+    let kind = TcpListener::bind(listen).err()?.kind();
+    matches!(
+        kind,
+        ErrorKind::AddrInUse | ErrorKind::PermissionDenied | ErrorKind::AddrNotAvailable
+    )
+    .then_some(kind)
 }
 
-fn accounts_section(accounts: &[Account]) -> Section {
+/// The accounts; `failing` holds, by id, the last error of each account a
+/// running proxy saw fail and not since succeed.
+fn accounts_section(accounts: &[Account], failing: &[(String, String)]) -> Section {
     let mut s = Section::new("Accounts");
     if accounts.is_empty() {
         s.add(
@@ -256,6 +326,14 @@ fn accounts_section(accounts: &[Account]) -> Section {
         }
         if account.disabled {
             s.add(Level::Note, format!("{name} is disabled"), None);
+        } else if account.auth_error.is_none()
+            && let Some((_, error)) = failing.iter().find(|(id, _)| *id == account.id)
+        {
+            s.add(
+                Level::Warn,
+                format!("{name}'s last request failed: {error}"),
+                Some("slopmax logs"),
+            );
         }
     }
     s
@@ -486,6 +564,11 @@ mod tests {
     use crate::config::ClientKey;
     use crate::testkit::{self, Mock, temp_dir};
 
+    /// The proxy section, probing the configured port first.
+    async fn proxy(config: &Config, service: Option<Status>) -> Section {
+        super::proxy(config, Daemon::new(config).probe().await, service)
+    }
+
     fn texts(section: &Section) -> Vec<(Level, &str)> {
         section
             .findings
@@ -573,6 +656,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_proxy_from_another_home_fails_with_how_to_stop_it() {
+        let mock = Mock::start(|seen| match seen.route() {
+            "/healthz" => testkit::json(
+                200,
+                json!({ "service": "slopmax", "version": env!("CARGO_PKG_VERSION"),
+                        "pid": 31337, "owner": false }),
+            ),
+            _ => testkit::reply(401, ""),
+        })
+        .await;
+        let s = proxy(&config_on(port_of(&mock)), None).await;
+        let f = finding(&s, "doesn't accept this home's key");
+        assert_eq!(f.level, Level::Fail);
+        assert_eq!(
+            f.fix.as_deref(),
+            Some("stop it from there (or end pid 31337), then slopmax start")
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_privileged_port_cannot_be_started_on() {
+        // Root may listen anywhere: nothing to check then.
+        if TcpListener::bind("127.0.0.1:1").is_ok() {
+            return;
+        }
+        let s = proxy(&config_on(1), None).await;
+        let f = finding(&s, "ports below 1024 need administrator rights");
+        assert_eq!(f.level, Level::Fail);
+        assert_eq!(
+            f.fix.as_deref(),
+            Some("set `listen` in config.toml to a port above 1023")
+        );
+    }
+
+    #[test]
+    fn an_agent_not_installed_is_installed_first() {
+        let home = Home::at(temp_dir("doctor-install"));
+        let config = config_on(8318);
+        let section = |title: &'static str, setup: &str| Section {
+            title,
+            findings: vec![Finding {
+                level: Level::Note,
+                text: "not wired".into(),
+                fix: Some(setup.into()),
+            }],
+        };
+        let fixes = |accounts: &[Account], installed: bool| {
+            let mut sections = [
+                section("Claude Code", "slopmax setup claude"),
+                section("Codex", "slopmax setup codex"),
+            ];
+            unserved(&mut sections, &config, accounts, &home, &|_| installed);
+            sections.map(|s| s.findings[0].fix.clone().unwrap())
+        };
+        let both = [
+            account(ProviderId::Claude, "c@x.com"),
+            account(ProviderId::Codex, "x@x.com"),
+        ];
+        assert_eq!(
+            fixes(&both, true),
+            ["slopmax setup claude", "slopmax setup codex"]
+        );
+        assert_eq!(
+            fixes(&both, false),
+            [
+                "install Claude Code, then slopmax setup claude",
+                "install Codex, then slopmax setup codex"
+            ]
+        );
+        assert_eq!(
+            fixes(&[], false),
+            [
+                "install Claude Code, then slopmax login claude, then slopmax setup claude",
+                "install Codex, then slopmax login codex, then slopmax setup codex"
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn a_stopped_proxy_says_how_to_start_it() {
         let s = proxy(&config_on(free_port()), None).await;
         let f = finding(&s, "not running");
@@ -624,7 +787,7 @@ mod tests {
 
     #[test]
     fn no_accounts_is_a_failure() {
-        let s = accounts_section(&[]);
+        let s = accounts_section(&[], &[]);
         assert_eq!(texts(&s), [(Level::Fail, "no accounts connected")]);
     }
 
@@ -655,14 +818,25 @@ mod tests {
         let mut off = account(ProviderId::Codex, "off@x.com");
         off.disabled = true;
 
-        let s = accounts_section(&[
-            fine,
-            revoked.clone(),
-            orphan.clone(),
-            stale.clone(),
-            current,
-            off,
-        ]);
+        let failing = [
+            (
+                fine.id.clone(),
+                "couldn't connect to api.anthropic.com (connection refused)".into(),
+            ),
+            // Said already: it needs a new login.
+            (revoked.id.clone(), "refresh token revoked".into()),
+        ];
+        let s = accounts_section(
+            &[
+                fine,
+                revoked.clone(),
+                orphan.clone(),
+                stale.clone(),
+                current,
+                off,
+            ],
+            &failing,
+        );
         let counts = &s.findings[0];
         assert_eq!(counts.level, Level::Ok);
         let claude = ProviderId::Claude.spec().title;
@@ -688,10 +862,17 @@ mod tests {
             ))
         );
         assert_eq!(finding(&s, "is disabled").level, Level::Note);
-        // One count line, four problems: the fresh linked account is fine.
-        assert_eq!(s.findings.len(), 5);
+        let f = finding(&s, "fine@x.com's last request failed");
+        assert_eq!(f.level, Level::Warn);
+        assert_eq!(
+            f.text,
+            "fine@x.com's last request failed: couldn't connect to api.anthropic.com (connection refused)"
+        );
+        assert_eq!(f.fix.as_deref(), Some("slopmax logs"));
+        // One count line, five problems: the fresh linked account is fine.
+        assert_eq!(s.findings.len(), 6);
 
-        let single = accounts_section(&[account(ProviderId::Codex, "one@x.com")]);
+        let single = accounts_section(&[account(ProviderId::Codex, "one@x.com")], &[]);
         assert_eq!(single.findings[0].text, format!("1 {codex} account"));
     }
 

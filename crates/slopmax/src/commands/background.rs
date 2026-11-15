@@ -11,8 +11,17 @@ use slopmax_core::config::Config;
 use slopmax_core::service::Manager;
 
 pub(super) async fn start(config: &Config) -> Result<()> {
-    if Daemon::new(config).is_running().await {
-        println!("slopmax is already running on {}", config.base_url());
+    if let Some(version) = Daemon::new(config).running().await? {
+        let ours = env!("CARGO_PKG_VERSION");
+        if version == ours {
+            println!("slopmax is already running on {}", config.base_url());
+        } else {
+            println!(
+                "slopmax {version} is already running on {}; this is {ours}. \
+                 Restart it with `slopmax stop && slopmax start`.",
+                config.base_url()
+            );
+        }
         return Ok(());
     }
     background::launch(config, super::home(), &background::current_exe()?).await?;

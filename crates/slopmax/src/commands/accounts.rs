@@ -97,7 +97,7 @@ pub(super) async fn login(
             store.get(&probe.id).ok().flatten()
         })
         .flatten();
-    let (name, id, plan, created, endpoint, notices) = match daemon(config).await {
+    let (name, id, plan, created, endpoint, notices) = match daemon(config).await? {
         Some(client) => {
             let (account, created, notices) =
                 login_through(&client, provider, label, options).await?;
@@ -281,7 +281,7 @@ pub(super) async fn import(
         );
     };
     let skipped = |origin: &str, why: &str| println!("  {} {origin}: {why}", ui::dim("skipped"));
-    if let Some(client) = daemon(config).await {
+    if let Some(client) = daemon(config).await? {
         let sources = match source {
             Source::All => None,
             Source::ClaudeCode => Some(vec![ImportSource::ClaudeCode]),
@@ -361,7 +361,7 @@ fn nothing_found(source: Source) {
 
 /// Stops following another tool's copy of an account's tokens.
 pub(super) async fn own(config: &Config, store: &Store, query: &str) -> Result<()> {
-    let client = daemon(config).await;
+    let client = daemon(config).await?;
     let accounts = if query == "all" {
         store
             .list()?
@@ -412,7 +412,7 @@ pub(super) async fn own(config: &Config, store: &Store, query: &str) -> Result<(
 }
 
 pub(super) async fn use_account(config: &Config, store: &Store, query: &str) -> Result<()> {
-    let client = daemon(config).await;
+    let client = daemon(config).await?;
     if query == "auto" {
         match &client {
             Some(client) => drop(client.unpin_all().await?),
@@ -471,7 +471,7 @@ async fn change(
     edit: impl FnOnce(&mut slopmax_core::account::Account),
 ) -> Result<String> {
     let id = store.find(query)?.id;
-    match daemon(config).await {
+    match daemon(config).await? {
         Some(client) => {
             let report = client.update_account(&id, &patch).await?;
             let account = report.accounts.into_iter().find(|a| a.id == id);
@@ -568,7 +568,7 @@ pub(super) async fn order(config: &Config, store: &Store, queries: &[String]) ->
         .collect::<Result<Vec<_>, _>>()?;
     let first: Vec<&str> = ids.iter().map(String::as_str).collect();
     let changes = account::reorder(&accounts, &first).map_err(anyhow::Error::msg)?;
-    let client = daemon(config).await;
+    let client = daemon(config).await?;
     for (id, place) in changes {
         match &client {
             Some(client) => {
@@ -641,7 +641,7 @@ fn strategy_note(config: &Config) {
 
 pub(super) async fn remove(config: &Config, store: &Store, query: &str) -> Result<()> {
     let account = store.find(query)?;
-    match daemon(config).await {
+    match daemon(config).await? {
         Some(client) => drop(client.remove_account(&account.id).await?),
         None => account::forget(store, super::home(), &account)?,
     }
@@ -658,7 +658,7 @@ pub(super) async fn redeem(config: &Config, store: &Store, query: &str, yes: boo
             account.provider.spec().title
         );
     };
-    if let Some(client) = daemon(config).await {
+    if let Some(client) = daemon(config).await? {
         return redeem_through(&client, &account.id, yes).await;
     }
     let http = auth::http_client(Origins::default());

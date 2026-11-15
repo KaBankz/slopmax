@@ -1509,8 +1509,10 @@ fn the_background_proxy_starts_reports_and_stops() {
 
     // The agent is not installed here, so `run` cannot start it, but the
     // proxy keeps running.
-    s.run(&["run", "codex", "exec", "hi"])
-        .fails(1, "could not start codex");
+    s.run(&["run", "codex", "exec", "hi"]).fails(
+        1,
+        "`codex` isn't installed or isn't on PATH. Install Codex, then run `slopmax run codex` again.",
+    );
 
     let out = s.run(&["stop"]).ok();
     assert!(out.stdout.contains("slopmax stopped"), "{out:?}");
@@ -1521,6 +1523,112 @@ fn the_background_proxy_starts_reports_and_stops() {
     assert!(!log.is_empty());
     let state = std::fs::read_to_string(s.slopmax.join("state.toml")).unwrap();
     assert!(state.contains(&format!("anthropic = \"{id}\"")), "{state}");
+}
+
+#[test]
+fn a_broken_config_still_lets_the_proxy_be_stopped_and_diagnosed() {
+    let s = Sandbox::new("broken-config");
+    s.run(&["start"]).ok();
+    let path = s.slopmax.join("config.toml");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, format!("strategy = \"fill_first\"\n{text}")).unwrap();
+
+    // Commands that need the whole config say what is wrong and how to fix it.
+    let out = s.run(&["status"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(
+        out.stderr
+            .contains("config.toml, line 1: unknown variant `fill_first`"),
+        "{out:?}"
+    );
+    assert!(
+        out.stderr
+            .contains("fix it, or delete the line to use the default"),
+        "{out:?}"
+    );
+    assert_eq!(out.stderr.trim().lines().count(), 1, "one line: {out:?}");
+
+    // Doctor reports it, and checks the rest: the proxy still runs.
+    let out = s.run(&["doctor"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stdout.contains("does not read: line 1"), "{out:?}");
+    assert!(
+        out.stdout
+            .contains(&format!("running on http://127.0.0.1:{}", s.port)),
+        "{out:?}"
+    );
+    s.run(&["completions", "bash"]).ok();
+    s.run(&["logs", "-n", "1"]).ok();
+    let out = s.run(&["daemon-info"]).ok();
+    assert!(out.stdout.contains("\"running\":true"), "{out:?}");
+
+    // And it stops, with the config's own key.
+    let out = s.run(&["stop"]).ok();
+    assert!(out.stdout.contains("slopmax stopped"), "{out:?}");
+    assert!(out.stderr.contains("warning: invalid config"), "{out:?}");
+
+    // Setting the broken setting again fixes it.
+    s.run(&["config", "strategy", "fill-first"]).ok();
+    s.run(&["status"]).ok();
+}
+
+#[test]
+fn a_proxy_from_another_home_is_named_not_blamed_on_the_key() {
+    let ours = Sandbox::new("home-a");
+    let mut other = Sandbox::new("home-b");
+    other.port = ours.port;
+    ours.run(&["start"]).ok();
+    let said = "doesn't accept this home's key: it was started from another SLOPMAX_HOME, \
+                or before api_key changed. Stop it from there (or end pid ";
+    for command in [
+        &["status"][..],
+        &["stop"],
+        &["start"],
+        &["key", "add", "x"],
+        &["use", "1"],
+    ] {
+        let out = other.run(command);
+        assert_eq!(out.code, 1, "{command:?}: {out:?}");
+        assert!(out.stderr.contains(said), "{command:?}: {out:?}");
+        assert!(!out.stderr.contains("slopmax env"), "{command:?}: {out:?}");
+    }
+    let doctor = other.run(&["doctor"]).stdout;
+    assert!(doctor.contains("✗ the slopmax on 127.0.0.1:"), "{doctor}");
+    ours.run(&["stop"]).ok();
+}
+
+#[test]
+fn start_says_at_once_why_the_proxy_did_not_start() {
+    let s = Sandbox::new("port-held");
+    // Holds the port, and never answers what connects.
+    let _held = TcpListener::bind(("127.0.0.1", s.port)).unwrap();
+    let started = Instant::now();
+    let out = s.run(&["start"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stderr.contains("the proxy did not start: "), "{out:?}");
+    assert!(
+        out.stderr.contains(&format!(
+            "is using 127.0.0.1:{}. Set `listen` in config.toml to a free port.",
+            s.port
+        )),
+        "{out:?}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn run_without_the_agent_installed_starts_no_proxy() {
+    let s = Sandbox::new("run-missing");
+    s.run(&["run", "claude"]).fails(
+        1,
+        "`claude` isn't installed or isn't on PATH. Install Claude Code, then run `slopmax run claude` again.",
+    );
+    let out = s.run(&["stop"]).ok();
+    assert!(out.stdout.contains("slopmax is not running"), "{out:?}");
 }
 
 #[test]

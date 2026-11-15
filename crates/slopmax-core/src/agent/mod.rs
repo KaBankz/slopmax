@@ -157,6 +157,21 @@ pub fn wiring(agent: &dyn Agent, config: &Config, home: &Home) -> Wiring {
     }
 }
 
+/// Fails, saying what to do, when the agent's program cannot be found:
+/// checked before the proxy is started for it.
+pub fn installed(agent: &dyn Agent, config: &Config) -> Result<()> {
+    let command = agent.command(config, &[]);
+    let program = command.get_program().to_string_lossy();
+    if slopmax_common::which(&program).is_none() {
+        anyhow::bail!(
+            "`{program}` isn't installed or isn't on PATH. Install {}, then run `slopmax run {}` again.",
+            agent.title(),
+            agent.id()
+        );
+    }
+    Ok(())
+}
+
 /// Launches the agent through the proxy and returns its exit status.
 pub fn run(agent: &dyn Agent, config: &Config, args: &[String]) -> Result<i32> {
     let mut command = agent.command(config, args);

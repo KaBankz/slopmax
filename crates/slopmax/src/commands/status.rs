@@ -20,7 +20,7 @@ use slopmax_core::report;
 use slopmax_core::time::Timestamp;
 
 pub(super) async fn run(config: &Config, store: &Store, args: StatusArgs) -> Result<()> {
-    let daemon = super::daemon(config).await;
+    let daemon = super::daemon(config).await?;
     if args.watch {
         return watch(config, store, daemon, args.refresh).await;
     }
@@ -53,8 +53,15 @@ async fn watch(
     mut daemon: Option<slopmax_client::Client>,
     mut refresh: bool,
 ) -> Result<()> {
+    // A terminal is redrawn; a pipe or file gets each report in turn, a
+    // blank line apart.
+    let clear = if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        "\x1b[2J\x1b[H"
+    } else {
+        "\n"
+    };
     let draw = |report: &Report| -> Result<()> {
-        print!("\x1b[2J\x1b[H{}", render(report, Timestamp::now()));
+        print!("{clear}{}", render(report, Timestamp::now()));
         Ok(std::io::stdout().flush()?)
     };
     loop {
@@ -62,7 +69,7 @@ async fn watch(
             draw(&offline(config, store, refresh).await?)?;
             refresh = false;
             tokio::time::sleep(Duration::from_secs(5)).await;
-            daemon = super::daemon(config).await;
+            daemon = super::daemon(config).await?;
             continue;
         };
         if refresh {

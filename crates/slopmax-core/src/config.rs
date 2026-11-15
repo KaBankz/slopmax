@@ -24,11 +24,45 @@ fn write_error(path: &Path) -> impl FnOnce(std::io::Error) -> ConfigError {
     move |source| ConfigError::Write { path, source }
 }
 
-fn invalid<E: std::fmt::Display>(path: &Path) -> impl FnOnce(E) -> ConfigError {
-    let path = path.to_owned();
-    move |e| ConfigError::Invalid {
-        path,
-        message: e.to_string(),
+/// What TOML's errors say, on one line: where, and what is wrong.
+trait Located {
+    fn message(&self) -> &str;
+    fn span(&self) -> Option<std::ops::Range<usize>>;
+}
+
+impl Located for toml_edit::de::Error {
+    fn message(&self) -> &str {
+        toml_edit::de::Error::message(self)
+    }
+    fn span(&self) -> Option<std::ops::Range<usize>> {
+        toml_edit::de::Error::span(self)
+    }
+}
+
+impl Located for toml_edit::TomlError {
+    fn message(&self) -> &str {
+        toml_edit::TomlError::message(self)
+    }
+    fn span(&self) -> Option<std::ops::Range<usize>> {
+        toml_edit::TomlError::span(self)
+    }
+}
+
+/// A config file that does not read as one, naming the line at fault.
+fn invalid<'a, E: Located>(path: &'a Path, text: &'a str) -> impl FnOnce(E) -> ConfigError + 'a {
+    move |e| {
+        let message = e.message().trim().trim_end_matches('.').replace('\n', " ");
+        let message = match e.span() {
+            Some(span) => {
+                let line = text[..span.start.min(text.len())].matches('\n').count() + 1;
+                format!("line {line}: {message}")
+            }
+            None => message,
+        };
+        ConfigError::Invalid {
+            path: path.to_owned(),
+            message,
+        }
     }
 }
 
@@ -213,6 +247,39 @@ impl Config {
         Ok(config)
     }
 
+    /// What can be read of a config [`Config::load`] refuses: `listen` and
+    /// `api_key`, each where it reads, so the commands that stop or inspect
+    /// the proxy still reach it; everything else at its default.
+    pub fn salvage(home: &crate::paths::Home) -> Self {
+        let mut config = Self::default();
+        let text = std::fs::read_to_string(home.config()).unwrap_or_default();
+        // Top-level settings come before the first table; each line is
+        // read on its own, so one broken line spoils only itself.
+        for line in text
+            .lines()
+            .take_while(|l| !l.trim_start().starts_with('['))
+        {
+            let Ok(doc) = line.parse::<DocumentMut>() else {
+                continue;
+            };
+            if let Some(listen) = doc.get("listen").and_then(|v| v.as_str())
+                && let Ok(listen) = listen.parse()
+            {
+                config.listen = listen;
+            }
+            if let Some(key) = doc.get("api_key").and_then(|v| v.as_str()) {
+                config.api_key = key.to_owned();
+            }
+        }
+        if let Some(listen) = std::env::var("SLOPMAX_LISTEN")
+            .ok()
+            .and_then(|l| l.parse().ok())
+        {
+            config.listen = listen;
+        }
+        config
+    }
+
     pub fn load_from(path: &Path) -> Result<Self, ConfigError> {
         let read = || -> Result<(Option<String>, Self), ConfigError> {
             let text = match std::fs::read_to_string(path) {
@@ -221,7 +288,7 @@ impl Config {
                 Err(source) => return Err(read_error(path)(source)),
             };
             let config = match &text {
-                Some(text) => toml_edit::de::from_str::<Self>(text).map_err(invalid(path))?,
+                Some(text) => toml_edit::de::from_str::<Self>(text).map_err(invalid(path, text))?,
                 None => Self::default(),
             };
             config
@@ -251,7 +318,7 @@ impl Config {
             let text = match text {
                 // Add the key without disturbing the user's comments.
                 Some(text) => {
-                    let mut doc: DocumentMut = text.parse().map_err(invalid(path))?;
+                    let mut doc: DocumentMut = text.parse().map_err(invalid(path, &text))?;
                     doc["api_key"] = toml_edit::value(&config.api_key);
                     doc.to_string()
                 }
@@ -333,7 +400,7 @@ impl Config {
 
     fn document(path: &Path) -> Result<DocumentMut, ConfigError> {
         let text = std::fs::read_to_string(path).map_err(read_error(path))?;
-        text.parse().map_err(invalid(path))
+        text.parse().map_err(invalid(path, &text))
     }
 
     /// Base URL agents use to reach the proxy.

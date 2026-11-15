@@ -486,8 +486,30 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
         }
     };
     let m = &matches;
-    let config = Config::load(home())?;
-    config.apply()?;
+    if m.command.name == "completions" {
+        print!("{}", args::completions(&APP, m.get("shell")?));
+        return Ok(0);
+    }
+    // A config.toml that does not read stops every command but those that
+    // inspect or stop the proxy, or set the setting that broke it: they
+    // make do with what of it reads.
+    let (config, broken) = match Config::load(home()) {
+        Ok(config) => (config, None),
+        Err(error)
+            if matches!(m.command.name, "stop" | "logs" | "daemon-info" | "doctor")
+                || m.command.name == "config"
+                    && m.value("value").is_some_and(|v| !v.is_empty()) =>
+        {
+            if m.command.name != "doctor" {
+                eprintln!("{} {error}", ui::yellow("warning:"));
+            }
+            (Config::salvage(home()), Some(error))
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if broken.is_none() {
+        config.apply()?;
+    }
     let store = Store::of(home());
     // A first run at a terminal starts the guided setup instead.
     if bare && init::wanted(&store) {
@@ -586,8 +608,11 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
         "stop" => stop(&config).await?,
         "service" => service(&config, &m.get::<String>("action")?).await?,
         "run" => {
+            let agent = agent_named(m)?;
+            // Before the proxy starts: it would be left running for nothing.
+            agent::installed(agent, &config)?;
             ensure_running(&config).await?;
-            return agent::run(agent_named(m)?, &config, &m.rest);
+            return agent::run(agent, &config, &m.rest);
         }
         "env" => {
             let exe = std::env::current_exe().context("locating the slopmax binary")?;
@@ -644,7 +669,7 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
                 );
             }
         }
-        "doctor" => return doctor::run(&config, &store).await,
+        "doctor" => return doctor::run(&config, &store, broken.as_ref()).await,
         "daemon-info" => {
             // What an app needs to reach the proxy, and to tell a daemon it
             // started (this binary) from one another install runs.
@@ -669,13 +694,13 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
             });
             println!("{info}");
         }
-        "completions" => print!("{}", args::completions(&APP, m.get("shell")?)),
+        "completions" => unreachable!("answered before the config is read"),
         name => unreachable!("`{name}` is in the command table but not dispatched"),
     }
     // Setup imports the logins it finds on disk itself: a daemon already
     // running takes them in now, rather than at its next look at the files.
     if m.command.name == "setup"
-        && let Some(client) = daemon(&config).await
+        && let Ok(Some(client)) = daemon(&config).await
     {
         let _ = client.sync().await;
     }
@@ -688,7 +713,7 @@ async fn key(config: &Config, action: &str, m: &args::Matches) -> Result<()> {
     use slopmax_client::api::{ApiError, requests::MakeKey, settings::KeyInfo};
     let path = home().config();
     let name = m.value("name").filter(|n| !n.is_empty());
-    let client = daemon(config).await;
+    let client = daemon(config).await?;
     match (action, name) {
         ("list", _) => {
             let keys: Vec<KeyInfo> = match &client {
@@ -848,7 +873,7 @@ async fn settings(config: &Config, name: &str, value: &str) -> Result<()> {
         return Ok(());
     }
     let patch = LivePatch::parse(name, value).map_err(anyhow::Error::msg)?;
-    let (now, applied) = match daemon(config).await {
+    let (now, applied) = match daemon(config).await? {
         Some(client) => {
             let view = client.change_settings(&patch).await?;
             let now = view.settings.live.get(name).map(|v| v.text());
@@ -885,9 +910,22 @@ pub(super) fn home() -> &'static slopmax_core::paths::Home {
 /// The daemon serving this home, if one answers at the address config.toml
 /// gives. While it runs it is the only writer of the state, so changes go
 /// through it.
-pub(super) async fn daemon(config: &Config) -> Option<slopmax_client::Client> {
+///
+/// A proxy on that address that refuses this home's key (one started from
+/// another home) is an error: changes made here would never reach it.
+pub(super) async fn daemon(config: &Config) -> Result<Option<slopmax_client::Client>> {
     let client = slopmax_client::Client::new(config.base_url(), &config.api_key);
-    client.health().await.map(|_| client)
+    // One on this machine answers at once.
+    match client
+        .health_within(std::time::Duration::from_secs(1))
+        .await
+    {
+        None => Ok(None),
+        Some(health) if health.owner == Some(false) => {
+            bail!(slopmax_core::background::foreign(config.listen, health.pid))
+        }
+        Some(_) => Ok(Some(client)),
+    }
 }
 
 /// `on` or `off`, as the switch `flag` is given.

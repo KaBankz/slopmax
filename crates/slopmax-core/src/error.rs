@@ -77,7 +77,10 @@ pub enum ConfigError {
         #[source]
         source: std::io::Error,
     },
-    #[error("invalid config {}: {message}", path.display())]
+    #[error(
+        "invalid config {}, {message}; fix it, or delete the line to use the default",
+        path.display()
+    )]
     Invalid { path: PathBuf, message: String },
     /// A value the setting does not take, in words for whoever gave it.
     #[error("{0}")]
@@ -121,12 +124,45 @@ pub enum ProviderError {
 /// The daemon's address, already taken or not available.
 #[derive(Debug, thiserror::Error)]
 pub enum ListenError {
-    #[error("cannot listen on {addr}: {holder} is using that port")]
+    #[error("{holder} is using {addr}. Set `listen` in config.toml to a free port.")]
     Held { addr: SocketAddr, holder: String },
-    #[error("cannot listen on {addr}: {source}")]
+    #[error(
+        "cannot listen on {addr} ({}). Set `listen` in config.toml to {}.",
+        why(.cause),
+        fix(.addr, .cause)
+    )]
     Unavailable {
         addr: SocketAddr,
-        #[source]
-        source: std::io::Error,
+        // In the message already: not a source, which `{:#}` would print
+        // again.
+        cause: std::io::Error,
     },
+}
+
+/// Why the address cannot be listened on, in plain words.
+fn why(error: &std::io::Error) -> String {
+    use std::io::ErrorKind;
+    match error.kind() {
+        ErrorKind::PermissionDenied => "permission denied".into(),
+        ErrorKind::AddrInUse => "another program is using it".into(),
+        ErrorKind::AddrNotAvailable => "this machine has no such address".into(),
+        _ => {
+            let text = error.to_string();
+            match text.rfind(" (os error ") {
+                Some(at) => text[..at].to_owned(),
+                None => text,
+            }
+        }
+    }
+}
+
+/// What to set `listen` to instead.
+fn fix(addr: &SocketAddr, error: &std::io::Error) -> &'static str {
+    match error.kind() {
+        std::io::ErrorKind::PermissionDenied if addr.port() < 1024 => {
+            "a port above 1023 (lower ones need administrator rights)"
+        }
+        std::io::ErrorKind::AddrNotAvailable => "an address of this machine, like 127.0.0.1",
+        _ => "a free port",
+    }
 }

@@ -113,14 +113,18 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<Stopp
     let serving = serve_lock(&home)?;
     let listen = config.listen;
     let listener = TcpListener::bind(listen).await.map_err(|source| {
-        match server::port_holder(listen.port()) {
+        // Windows refuses a port another process holds as access denied;
+        // elsewhere that means a port below 1024, whoever holds it.
+        let taken = source.kind() == std::io::ErrorKind::AddrInUse
+            || cfg!(windows) && source.kind() == std::io::ErrorKind::PermissionDenied;
+        match server::port_holder(listen.port()).filter(|_| taken) {
             Some(holder) => ListenError::Held {
                 addr: listen,
                 holder,
             },
             None => ListenError::Unavailable {
                 addr: listen,
-                source,
+                cause: source,
             },
         }
     })?;

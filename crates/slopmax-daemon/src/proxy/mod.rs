@@ -406,10 +406,7 @@ impl App {
 /// Answers one request: slopmax's own endpoints, else the proxy.
 pub async fn handle(app: Arc<App>, request: Request) -> Response {
     match (request.method(), request.uri().path()) {
-        (&Method::GET, "/healthz") => json_reply(
-            StatusCode::OK,
-            &json!({ "status": "ok", "service": "slopmax", "version": env!("CARGO_PKG_VERSION") }),
-        ),
+        (&Method::GET, "/healthz") => health(&app, request.headers()),
         // Claude Code's unauthenticated connectivity check; HEAD probes alike.
         (_, "/api/hello") | (&Method::HEAD, _) => empty_reply(StatusCode::OK),
         (_, path) if path.starts_with("/slopmax/api/") => api::handle(app, request).await,
@@ -437,6 +434,23 @@ pub async fn handle(app: Arc<App>, request: Request) -> Response {
         }
         _ => proxy(app, request).await,
     }
+}
+
+/// Who serves: the program, its version and process. A request that
+/// carries a key also learns whether it is this proxy's owner key, so a
+/// front end can tell a proxy started from another home (or before the key
+/// changed) from its own; the key itself is never answered.
+fn health(app: &App, headers: &HeaderMap) -> Response {
+    let mut body = json!({
+        "status": "ok",
+        "service": "slopmax",
+        "version": env!("CARGO_PKG_VERSION"),
+        "pid": std::process::id(),
+    });
+    if headers.contains_key(header::AUTHORIZATION) || headers.contains_key("x-api-key") {
+        body["owner"] = json!(authorized(&app.config(), headers));
+    }
+    json_reply(StatusCode::OK, &body)
 }
 
 async fn proxy(app: Arc<App>, request: Request) -> Response {
