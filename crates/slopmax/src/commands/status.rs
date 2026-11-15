@@ -33,16 +33,19 @@ pub(super) async fn run(config: &Config, store: &Store, args: StatusArgs) -> Res
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
         print!("{}", render(&report, Timestamp::now()));
+        // A hub's proxy is the hub's to update; this machine runs none.
         let running = match &daemon {
-            Some(client) => client.health().await.map(|h| h.version),
-            None => None,
+            Some(client) if config.hub.is_none() => client.health().await.map(|h| h.version),
+            _ => None,
         };
         for line in update_notes(running.as_deref()) {
             println!("{}", ui::dim(line));
         }
-        if slopmax_core::service::Manager::detect().is_some_and(|m| {
-            m.status(super::home()).installed && m.outdated(super::home(), config.listen)
-        }) {
+        if config.hub.is_none()
+            && slopmax_core::service::Manager::detect().is_some_and(|m| {
+                m.status(super::home()).installed && m.outdated(super::home(), config.listen)
+            })
+        {
             println!(
                 "{}",
                 ui::dim(
@@ -50,6 +53,9 @@ pub(super) async fn run(config: &Config, store: &Store, args: StatusArgs) -> Res
                      listen address; `slopmax service install` writes it anew."
                 )
             );
+        }
+        if let (Some(url), Some(health)) = (config.hub_url(), super::hub_health()) {
+            println!("{}", ui::dim(hub_footer(url, health)));
         }
     }
     Ok(())
@@ -72,6 +78,25 @@ fn update_notes(running: Option<&str>) -> Vec<String> {
         ));
     }
     notes
+}
+
+/// The line under a client's status: which hub it shows, and what the hub
+/// knows this machine as.
+fn hub_footer(url: &str, health: &slopmax_client::Health) -> String {
+    let machine = health
+        .machine
+        .as_deref()
+        .or(health.login.as_deref())
+        .unwrap_or("unknown");
+    let access = match health.access {
+        Some(access) => slopmax_core::doctor::access_words(access),
+        None => "by its key",
+    };
+    format!(
+        "hub {} (slopmax {}) · this machine: {machine} ({access})",
+        super::remote::host_name(url),
+        health.version
+    )
 }
 
 /// The report read from disk, while no daemon runs.
@@ -587,6 +612,23 @@ mod tests {
                 "1 account follows cliproxyapi, which renews its sign-in: `slopmax own all`"
             ),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn a_clients_status_names_its_hub() {
+        let health = slopmax_client::Health {
+            version: "1.2.3".into(),
+            pid: None,
+            owner: Some(false),
+            access: Some(slopmax_client::api::tailnet::Access::View),
+            via: Some("tailnet".into()),
+            login: Some("me@github".into()),
+            machine: Some("mac".into()),
+        };
+        assert_eq!(
+            hub_footer("https://hub.example.ts.net:7567", &health),
+            "hub hub (slopmax 1.2.3) · this machine: mac (use and view)"
         );
     }
 

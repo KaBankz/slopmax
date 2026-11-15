@@ -12,6 +12,7 @@ use std::io::IsTerminal;
 use anyhow::{Context, Result, bail};
 
 use super::accounts::login;
+use super::remote;
 use crate::term;
 use crate::ui;
 use slopmax_core::account::{Endpoint, Store};
@@ -64,7 +65,19 @@ pub struct Plan {
     pub agents: Option<Vec<&'static dyn Agent>>,
     /// `--no-service`: don't start slopmax at login.
     pub no_service: bool,
+    /// `--hub`: use the slopmax on another machine instead, and set up
+    /// nothing else; empty to look for one (`--find-hub`).
+    pub hub: Option<String>,
+    /// `--key`: with `--hub`, the key the hub takes.
+    pub key: Option<String>,
+    /// `--name`: with `--hub`, the name of a key the hub's owner key makes.
+    pub name: Option<String>,
+    /// A first run: look for a hub on the tailnet before anything else.
+    pub discover: bool,
 }
+
+/// How long a first run looks for hubs on the tailnet.
+const DISCOVERY: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// The environment variable each key provider's key is read from.
 const KEY_ENV: &[(ProviderId, &str)] = &[
@@ -124,15 +137,38 @@ fn names(list: &str) -> impl Iterator<Item = &str> {
         .filter(|n| !n.is_empty() && *n != "none")
 }
 
-/// Whether `slopmax` alone should start the setup: nothing set up yet and
-/// someone at a terminal to answer.
-pub fn wanted(store: &Store) -> bool {
-    std::io::stdin().is_terminal()
+/// Whether `slopmax` alone should start the setup: nothing set up yet, not
+/// even a hub, and someone at a terminal to answer.
+pub fn wanted(config: &Config, store: &Store) -> bool {
+    config.hub.is_none()
+        && std::io::stdin().is_terminal()
         && std::io::stdout().is_terminal()
         && store.list().is_ok_and(|accounts| accounts.is_empty())
 }
 
 pub async fn run(config: &Config, store: &Store, answers: Answers, plan: Plan) -> Result<()> {
+    if let Some(target) = &plan.hub {
+        let args = remote::HubArgs {
+            target: target.clone(),
+            key: plan.key.clone(),
+            name: plan.name.clone(),
+            yes: answers == Answers::Defaults,
+        };
+        return remote::setup(config, args).await;
+    }
+    if let Some(refusal) = config.hub_refusal() {
+        bail!(refusal);
+    }
+    if plan.discover
+        && answers == Answers::Ask
+        && let Some(hub) = offer_hub().await?
+    {
+        let args = remote::HubArgs {
+            target: hub,
+            ..remote::HubArgs::default()
+        };
+        return remote::setup(config, args).await;
+    }
     println!(
         "\n{}\n{}",
         ui::bold("slopmax setup"),
@@ -219,6 +255,30 @@ pub async fn run(config: &Config, store: &Store, answers: Answers, plan: Plan) -
 
 fn step(title: &str) {
     println!("\n{}", ui::bold(title));
+}
+
+/// On a first run with Tailscale here, looks for slopmax on the user's
+/// other machines, briefly, and offers to use the first found. Returns its
+/// address when taken.
+async fn offer_hub() -> Result<Option<String>> {
+    if slopmax_core::tailscale::locate().is_none() {
+        return Ok(None);
+    }
+    let found = match tokio::time::timeout(DISCOVERY, remote::discover()).await {
+        Ok(Ok(found)) => found,
+        _ => return Ok(None),
+    };
+    for hub in found {
+        let question = format!(
+            "slopmax is already running on your tailnet: {} {} {}. Use it for this machine \
+             instead of signing in to accounts here?",
+            hub.name, hub.url, hub.version
+        );
+        if term::confirm(&question, true)? {
+            return Ok(Some(hub.url));
+        }
+    }
+    Ok(None)
 }
 
 /// What each provider is, for choosing which to add.

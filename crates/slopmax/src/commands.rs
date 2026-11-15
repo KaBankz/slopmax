@@ -4,11 +4,15 @@ mod accounts;
 mod background;
 mod doctor;
 mod init;
+mod remote;
 mod status;
+mod tailscale;
 mod update;
 mod usage;
 
 use std::io::IsTerminal;
+use std::sync::OnceLock;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
@@ -145,6 +149,44 @@ const RANGES: &[Choice] = &[
     },
 ];
 
+const TAILSCALE_ACTIONS: &[Choice] = &[
+    Choice {
+        value: "status",
+        help: "Show whether slopmax is published to your tailnet, and who uses it",
+    },
+    Choice {
+        value: "on",
+        help: "Publish slopmax to your own machines with `tailscale serve`",
+    },
+    Choice {
+        value: "off",
+        help: "Stop publishing it",
+    },
+    Choice {
+        value: "users",
+        help: "Tailnet logins whose machines use it without a key",
+    },
+    Choice {
+        value: "admins",
+        help: "Machines that may also manage it",
+    },
+];
+
+const LIST_OPS: &[Choice] = &[
+    Choice {
+        value: "list",
+        help: "Show them",
+    },
+    Choice {
+        value: "add",
+        help: "Add one",
+    },
+    Choice {
+        value: "remove",
+        help: "Remove one",
+    },
+];
+
 const SHELLS: &[Choice] = &[
     Choice {
         value: "bash",
@@ -240,6 +282,26 @@ pub static APP: App = App {
                     "no-service",
                     "Don't start slopmax at login",
                     Kind::Flag(None),
+                ),
+                arg(
+                    "hub",
+                    "Use the slopmax on another of your machines: its name, host[:port], or URL; off goes back",
+                    Kind::Value(None, "HUB"),
+                ),
+                arg(
+                    "find-hub",
+                    "Look for slopmax on your tailnet, and use it",
+                    Kind::Flag(None),
+                ),
+                arg(
+                    "key",
+                    "With --hub: a key from the hub (else $SLOPMAX_HUB_KEY)",
+                    Kind::Value(None, "KEY"),
+                ),
+                arg(
+                    "name",
+                    "With --hub and the hub's owner key: the name of the key made for this machine",
+                    Kind::Value(None, "NAME"),
                 ),
             ],
         },
@@ -425,7 +487,7 @@ pub static APP: App = App {
                 arg("range", "Which period", Kind::Optional(RANGES, "7d")),
                 arg(
                     "by",
-                    "Group by day, model, or account",
+                    "Group by day, model, account, or machine",
                     Kind::Value(Some('b'), "BY"),
                 ),
                 arg("json", "Print machine-readable JSON", Kind::Flag(None)),
@@ -465,6 +527,57 @@ pub static APP: App = App {
                 "Print its address instead of opening a browser",
                 Kind::Flag(None),
             )],
+        ),
+        command(
+            "tailscale",
+            "Share slopmax with your own machines over Tailscale",
+            &[
+                arg(
+                    "action",
+                    "What to do",
+                    Kind::Optional(TAILSCALE_ACTIONS, "status"),
+                ),
+                arg(
+                    "op",
+                    "With users or admins: what to do",
+                    Kind::Optional(LIST_OPS, "list"),
+                ),
+                arg(
+                    "name",
+                    "With users or admins: the login (you@github) or machine, comma-separated",
+                    Kind::Optional(&[], ""),
+                ),
+                arg(
+                    "port",
+                    "With on: the port to serve on (default: the proxy's)",
+                    Kind::Value(None, "N"),
+                ),
+                arg(
+                    "user",
+                    "With on: a tailnet login to let in without a key (repeatable)",
+                    Kind::Value(None, "LOGIN"),
+                ),
+                arg(
+                    "admin",
+                    "With on: a machine that may also manage slopmax (repeatable)",
+                    Kind::Value(None, "MACHINE"),
+                ),
+                arg(
+                    "loopback",
+                    "With on: serve the proxy's port, where every machine needs a key",
+                    Kind::Flag(None),
+                ),
+                arg(
+                    "socket",
+                    "With on: serve the proxy's socket, even from the Tailscale app on a Mac",
+                    Kind::Flag(None),
+                ),
+                arg(
+                    "json",
+                    "With status: print machine-readable JSON",
+                    Kind::Flag(None),
+                ),
+            ],
         ),
         command("doctor", "Check the setup and say how to fix problems", &[]),
         command(
@@ -530,9 +643,36 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
     }
     let store = Store::of(home());
     // A first run at a terminal starts the guided setup instead.
-    if bare && init::wanted(&store) {
-        init::run(&config, &store, init::Answers::Ask, init::Plan::default()).await?;
+    if bare && init::wanted(&config, &store) {
+        let plan = init::Plan {
+            discover: true,
+            ..init::Plan::default()
+        };
+        init::run(&config, &store, init::Answers::Ask, plan).await?;
         return Ok(0);
+    }
+    let result = dispatch(m, config.clone(), &store, broken).await;
+    match (result, config.hub_url()) {
+        (Err(e), Some(url)) => Err(from_hub(e, url, m.command.name)),
+        (result, _) => result,
+    }
+}
+
+/// Runs the command `m` asks for.
+async fn dispatch(
+    m: &args::Matches,
+    config: Config,
+    store: &Store,
+    broken: Option<slopmax_core::error::ConfigError>,
+) -> Result<i32> {
+    let store = store.clone();
+    // What runs or changes this machine's own proxy, which a machine that
+    // uses a hub has none of.
+    let action = m.value("action").unwrap_or_default();
+    let refused = matches!(m.command.name, "start" | "serve" | "import" | "own")
+        || (m.command.name == "service" && action == "install");
+    if refused && let Some(refusal) = config.hub_refusal() {
+        bail!(refusal);
     }
     match m.command.name {
         "setup" if !m.value("agent").unwrap_or_default().is_empty() => {
@@ -566,7 +706,20 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
                     .transpose()?,
                 agents: m.value("agents").map(init::agents).transpose()?,
                 no_service: m.flag("no-service"),
+                hub: if m.flag("find-hub") {
+                    Some(String::new())
+                } else {
+                    m.value("hub").map(str::to_owned)
+                },
+                key: m.value("key").map(str::to_owned),
+                name: m.value("name").map(str::to_owned),
+                discover: false,
             };
+            if plan.hub.is_none() && (plan.key.is_some() || plan.name.is_some()) {
+                bail!(
+                    "--key and --name go with --hub: `slopmax setup --hub <machine> --key <key>`"
+                );
+            }
             init::run(&config, &store, answers, plan).await?;
         }
         "status" => {
@@ -629,7 +782,12 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
             let agent = agent_named(m)?;
             // Before the proxy starts: it would be left running for nothing.
             agent::installed(agent, &config, home())?;
-            ensure_running(&config).await?;
+            if config.hub.is_some() {
+                // The hub must answer; nothing runs here.
+                daemon(&config).await?;
+            } else {
+                ensure_running(&config).await?;
+            }
             return agent::run(agent, &config, home(), &m.rest);
         }
         "env" => {
@@ -643,8 +801,8 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
         }
         "usage" => {
             let by = m.value("by").unwrap_or("day");
-            if !matches!(by, "day" | "model" | "account") {
-                bail!("--by takes day, model, or account");
+            if !matches!(by, "day" | "model" | "account" | "machine") {
+                bail!("--by takes day, model, account, or machine");
             }
             usage::run(
                 &config,
@@ -652,7 +810,14 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
                 &m.get::<String>("range")?,
                 by,
                 m.flag("json"),
-            )?;
+            )
+            .await?;
+        }
+        "notify" if config.hub.is_some() => {
+            if let Some(client) = daemon(&config).await? {
+                client.notify_test().await?;
+            }
+            println!("The hub sent a test notification.");
         }
         "notify" => {
             if !config.notify.is_enabled() {
@@ -668,24 +833,47 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
         }
         "key" => key(&config, m.get::<String>("action")?.as_str(), m).await?,
         "logs" => {
+            if let (Some(refusal), Some(url)) = (config.hub_refusal(), config.hub_url()) {
+                bail!(
+                    "{refusal} The hub's log is on {}: run `slopmax logs` there.",
+                    remote::host_name(url)
+                );
+            }
             let lines = m.whole("lines", "100")?.unwrap_or(40);
             background::logs(lines, m.flag("follow")).await?;
         }
         "dashboard" => {
-            ensure_running(&config).await?;
-            let url = config.dashboard_url();
+            let url = if config.hub.is_some() {
+                // The hub must answer; its dashboard asks for no key.
+                daemon(&config).await?;
+                format!("{}/slopmax/", config.agent_base())
+            } else {
+                ensure_running(&config).await?;
+                config.dashboard_url()
+            };
             if !m.flag("print") && auth::callback::open_browser(&url) {
                 println!("Opened the dashboard in your browser.");
             } else {
                 println!("Open the dashboard at:\n\n  {url}\n");
-                println!(
-                    "{}",
-                    ui::dim(format!(
-                        "On another machine, forward the port first: ssh -L {port}:127.0.0.1:{port} <this host>",
-                        port = config.listen.port()
-                    ))
-                );
+                if config.hub.is_none() {
+                    println!("{}", ui::dim(tailscale::dashboard_hint(&config).await));
+                }
             }
+        }
+        "tailscale" => {
+            let port = m.whole::<u16>("port", "7567")?;
+            let args = tailscale::Args {
+                action: m.value("action").unwrap_or("status"),
+                op: m.value("op").unwrap_or("list"),
+                name: m.value("name").unwrap_or_default(),
+                port,
+                users: m.values("user"),
+                admins: m.values("admin"),
+                loopback: m.flag("loopback"),
+                socket: m.flag("socket"),
+                json: m.flag("json"),
+            };
+            tailscale::run(&config, args).await?;
         }
         "doctor" => return doctor::run(&config, &store, broken.as_ref()).await,
         "daemon-info" => {
@@ -717,13 +905,61 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
     }
     // Setup imports the logins it finds on disk itself: a daemon already
     // running takes them in now, rather than at its next look at the files.
+    let hub_setup = m.flag("find-hub") || m.value("hub").is_some();
     if m.command.name == "setup"
+        && config.hub.is_none()
+        && !hub_setup
         && let Ok(Some(client)) = daemon(&config).await
     {
         let _ = client.sync().await;
     }
     Ok(0)
 }
+
+/// An error from a command run against the hub, as the hub's refusal reads
+/// to this machine's user.
+fn from_hub(e: anyhow::Error, url: &str, command: &str) -> anyhow::Error {
+    use slopmax_client::api::ApiError;
+    let Some(error) = e
+        .chain()
+        .find_map(|c| c.downcast_ref::<slopmax_client::Error>())
+    else {
+        return e;
+    };
+    let url = url.trim_end_matches('/');
+    match error {
+        slopmax_client::Error::Api(ApiError::Unauthorized { message })
+            if !message.contains("hub") =>
+        {
+            anyhow::anyhow!(
+                "the hub at {url} doesn't take this machine: {message}. `slopmax setup --hub {url}` \
+                 sets it up again."
+            )
+        }
+        slopmax_client::Error::Unexpected(message) if message.contains("403") => {
+            let machine = hub_health()
+                .and_then(|h| h.machine.clone())
+                .unwrap_or_else(|| "<this machine>".to_owned());
+            let may = if matches!(command, "status" | "usage") {
+                "may use the hub but not see its accounts"
+            } else {
+                "may use the hub but not change it"
+            };
+            anyhow::anyhow!(
+                "This machine {may}. On the hub: slopmax tailscale admins add {machine}"
+            )
+        }
+        _ => e,
+    }
+}
+
+/// What the hub said of itself and of this machine, once [`daemon`] heard
+/// it.
+pub(super) fn hub_health() -> Option<&'static slopmax_client::Health> {
+    HUB.get()
+}
+
+static HUB: OnceLock<slopmax_client::Health> = OnceLock::new();
 
 /// The agent named by the `agent` argument.
 /// `slopmax key list|add|remove`.
@@ -783,6 +1019,16 @@ async fn key(config: &Config, action: &str, m: &args::Matches) -> Result<()> {
                     "Added the key {name:?}. Clients present it as a bearer token or x-api-key; {applied}."
                 ))
             );
+            if config.hub.is_none()
+                && let Some((url, _)) = tailscale::published_url(config).await
+            {
+                eprintln!(
+                    "{}",
+                    ui::dim(format!(
+                        "On that machine: slopmax setup --hub {url} --key {key}"
+                    ))
+                );
+            }
         }
         ("remove", Some(name)) => {
             let removed = match &client {
@@ -931,7 +1177,22 @@ pub(super) fn home() -> &'static slopmax_core::paths::Home {
 ///
 /// A proxy on that address that refuses this home's key (one started from
 /// another home) is an error: changes made here would never reach it.
+///
+/// A machine that uses a hub goes to the hub instead, and only to it: a hub
+/// that doesn't answer is an error, never a reason to read this machine's
+/// files.
 pub(super) async fn daemon(config: &Config) -> Result<Option<slopmax_client::Client>> {
+    if config.hub.is_some() {
+        let url = config.agent_base();
+        let client = slopmax_client::Client::remote(&url, config.agent_token());
+        return match client.health_within(Duration::from_secs(10)).await {
+            Some(health) => {
+                let _ = HUB.set(health);
+                Ok(Some(client))
+            }
+            None => bail!(remote::unreachable(&url).await),
+        };
+    }
     let client = slopmax_client::Client::new(config.base_url(), &config.api_key);
     // One on this machine answers at once.
     match client
@@ -972,6 +1233,19 @@ async fn setup(config: &Config, store: &Store, agent: &dyn Agent, undo: bool) ->
         return Ok(());
     }
     let path = agent::setup(agent, config, home())?;
+    if let Some(url) = config.hub_url() {
+        println!(
+            "{app} now uses the hub at {} {}",
+            url.trim_end_matches('/'),
+            ui::dim(format!("({})", path.display()))
+        );
+        println!("{}", ui::dim(agent.setup_note()));
+        println!(
+            "{}",
+            ui::dim(format!("Undo with `slopmax setup {} --undo`.", agent.id()))
+        );
+        return Ok(());
+    }
     println!(
         "{app} now uses slopmax {}",
         ui::dim(format!("({})", path.display()))
@@ -1043,8 +1317,20 @@ mod tests {
             "env claude",
             "setup codex --undo",
             "usage 30d --by model",
+            "usage 7d --by machine",
             "config strategy round-robin",
             "setup --yes --import none --strategy fill-first --affinity off --agents none",
+            "setup --hub hub --key sm-x --name laptop --yes",
+            "setup --hub=",
+            "setup --find-hub",
+            "setup --hub off",
+            "tailscale",
+            "tailscale on --port 7600 --user me@github --user you@github --admin mac --loopback",
+            "tailscale on --socket",
+            "tailscale off",
+            "tailscale status --json",
+            "tailscale users add me@github",
+            "tailscale admins remove mac",
             "notify",
             "key add laptop --models gpt-*",
             "logs -f -n 100",

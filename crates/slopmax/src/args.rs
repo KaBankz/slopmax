@@ -108,6 +108,18 @@ impl Matches {
             })
     }
 
+    /// Every value an option given more than once took, in order, each
+    /// split at its commas: `--user a --user b,c` gives `a`, `b`, `c`.
+    pub fn values(&self, name: &str) -> Vec<&str> {
+        self.values
+            .iter()
+            .filter(|(n, _)| *n == name)
+            .flat_map(|(_, v)| v.split(','))
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .collect()
+    }
+
     /// A value converted with [`FromStr`]; required by the caller. The
     /// conversion's error is shown, so it should be in a person's words;
     /// numbers go through [`Matches::whole`].
@@ -715,6 +727,10 @@ mod tests {
         assert_eq!(m.value("label"), Some("front"));
         assert_eq!(run(&["paint", "-l", "x"]).value("label"), Some("x"));
         assert_eq!(run(&["paint", "-lx"]).value("label"), Some("x"));
+        let m = run(&["paint", "--label", "a", "-l", "b, c,", "--label="]);
+        assert_eq!(m.values("label"), ["a", "b", "c"]);
+        assert_eq!(m.value("label"), Some("a"));
+        assert!(run(&["paint"]).values("label").is_empty());
     }
 
     #[test]

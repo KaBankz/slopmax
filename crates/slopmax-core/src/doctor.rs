@@ -10,14 +10,18 @@ use anyhow::Result;
 use serde_json::Value;
 
 use crate::account::{Account, Store};
+use crate::agent::{self, Agent};
 use crate::background::{Daemon, Probe};
 use crate::config::Config;
 use crate::net::{Client, Origins, server};
 use crate::paths::Home;
 use crate::provider::ProviderId;
 use crate::service::{Manager, Status};
+use crate::tailscale::{self, Inspection, Peer, Target, Transport, TsError};
 use crate::time::{SignedDuration, Timestamp};
 use crate::{auth, human};
+use slopmax_client::Health;
+use slopmax_client::api::tailnet::Access;
 
 /// CLIProxyAPI's default port, for spotting it beside slopmax.
 const CLIPROXYAPI_PORT: u16 = 8317;
@@ -66,6 +70,9 @@ impl Section {
 
 /// Runs every check. Sections without findings are left out.
 pub async fn check(config: &Config, store: &Store, home: &Home) -> Result<Vec<Section>> {
+    if config.hub.is_some() {
+        return Ok(client_checks(config, home).await);
+    }
     let accounts = store.list()?;
     let service = Manager::detect().map(|m| m.status(home));
     let http = auth::http_client(Origins::default());
@@ -90,8 +97,19 @@ pub async fn check(config: &Config, store: &Store, home: &Home) -> Result<Vec<Se
             .collect(),
         None => Vec::new(),
     };
+    let running = matches!(probe, Probe::Ours { .. });
+    let tailnet = tailnet_checks(config, home, running, service).await;
+    let mut proxy = proxy(config, probe, service);
+    if tailnet.as_ref().is_some_and(is_published) {
+        // The Tailscale section says these louder: other machines lose
+        // their hub when the proxy stops.
+        let louder = ["slopmax service install", "loginctl enable-linger $USER"];
+        proxy.findings.retain(|f| {
+            f.level != Level::Note || !louder.contains(&f.fix.as_deref().unwrap_or(""))
+        });
+    }
     let sections = [
-        proxy(config, probe, service),
+        proxy,
         accounts_section(&accounts, &failing),
         claude_code(config, home.claude()),
         codex(config, home.codex()),
@@ -107,8 +125,392 @@ pub async fn check(config: &Config, store: &Store, home: &Home) -> Result<Vec<Se
     });
     Ok(sections
         .into_iter()
+        .chain(tailnet)
         .filter(|s| !s.findings.is_empty())
         .collect())
+}
+
+/// Whether a Tailscale section says slopmax is published.
+fn is_published(section: &Section) -> bool {
+    section
+        .findings
+        .iter()
+        .any(|f| f.level == Level::Ok && f.text.starts_with("served to your tailnet"))
+}
+
+/// The checks on a machine that uses a hub: the hub in place of the proxy
+/// and the accounts, then the agents' wiring to it.
+async fn client_checks(config: &Config, home: &Home) -> Vec<Section> {
+    let client = slopmax_client::Client::remote(config.agent_base(), config.agent_token());
+    let daemon = Daemon::new(config);
+    let (health, local) = tokio::join!(
+        client.health_within(Duration::from_secs(10)),
+        daemon.is_running()
+    );
+    let wired: Vec<(&dyn Agent, bool)> = agent::AGENTS
+        .iter()
+        .map(|a| {
+            let wired = agent::wiring(*a, config, home) == agent::Wiring::Slopmax;
+            (*a, wired)
+        })
+        .collect();
+    [
+        hub(config, health.as_ref(), local, &wired),
+        claude_code(config, home.claude()),
+        codex(config, home.codex()),
+        files(&home.accounts()),
+    ]
+    .into_iter()
+    .filter(|s| !s.findings.is_empty())
+    .collect()
+}
+
+/// Reads Tailscale here for the Tailscale section, when there is a
+/// `tailscale` command and the section has something to say.
+async fn tailnet_checks(
+    config: &Config,
+    home: &Home,
+    running: bool,
+    service: Option<Status>,
+) -> Option<Section> {
+    let ts = tailscale::Tailscale::find().ok()?;
+    let port = config.listen.port();
+    let targets = [
+        Target::Socket(home.tailnet_socket()),
+        Target::Loopback(port),
+    ];
+    let inspection = tailscale::inspect(Some(&ts), &targets, port).await;
+    if inspection.published.is_empty() && config.tailscale.is_none() {
+        return None;
+    }
+    let peers = match &inspection.node {
+        Ok(_) => ts.peers().await.ok().map(|(_, peers)| peers),
+        Err(_) => None,
+    };
+    let socket_answers = if cfg!(unix) && running {
+        Some(socket_answers(&home.tailnet_socket(), Duration::from_secs(3)).await)
+    } else {
+        None
+    };
+    let user = std::env::var("USER").ok();
+    let facts = TailnetFacts {
+        inspection: Some(&inspection),
+        peers: peers.as_deref(),
+        socket_answers,
+        linger: service.and_then(|s| s.lingering),
+        service: service.map(|s| s.installed),
+        user: user.as_deref(),
+        root: tailscale::is_root(),
+    };
+    tailnet(config, home, &facts)
+}
+
+/// Whether the proxy answers `/healthz` with 200 on its tailnet socket at
+/// `path` within `within`: the way Tailscale reaches it.
+pub async fn socket_answers(path: &Path, within: Duration) -> bool {
+    #[cfg(unix)]
+    {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let ask = async {
+            let mut stream = tokio::net::UnixStream::connect(path).await.ok()?;
+            stream
+                .write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                .await
+                .ok()?;
+            let mut head = [0u8; 12];
+            stream.read_exact(&mut head).await.ok()?;
+            Some(head.starts_with(b"HTTP/1.1 200"))
+        };
+        tokio::time::timeout(within, ask).await.ok().flatten() == Some(true)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, within);
+        false
+    }
+}
+
+/// What the Tailscale section is made from, as [`check`] gathers it.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TailnetFacts<'a> {
+    /// What [`tailscale::inspect`] read; `None` with no `tailscale`
+    /// command here.
+    pub inspection: Option<&'a Inspection>,
+    /// The other machines on the tailnet, when they could be read.
+    pub peers: Option<&'a [Peer]>,
+    /// Whether the proxy answered on its tailnet socket; `None` when it
+    /// wasn't asked (the proxy isn't running, or the OS has no sockets).
+    pub socket_answers: Option<bool>,
+    /// Whether the login service outlives the user's session; `None` when
+    /// that isn't known.
+    pub linger: Option<bool>,
+    /// Whether the login service is installed; `None` with no service
+    /// manager here.
+    pub service: Option<bool>,
+    /// The user this runs as (`$USER`).
+    pub user: Option<&'a str>,
+    pub root: bool,
+}
+
+/// The hub's own section: slopmax on the tailnet, as `tailscale serve`
+/// publishes it. `None` unless there is a `tailscale` command and slopmax
+/// is published there, or `[tailscale]` is set.
+pub fn tailnet(config: &Config, home: &Home, facts: &TailnetFacts<'_>) -> Option<Section> {
+    let inspection = facts.inspection.filter(|i| i.exe.is_some())?;
+    if inspection.published.is_empty() && config.tailscale.is_none() {
+        return None;
+    }
+    let mut s = Section::new("Tailscale");
+    let failed = |s: &mut Section, e: &TsError| s.add(Level::Fail, e.message(), e.fix().as_deref());
+    let node = match &inspection.node {
+        Ok(node) => node,
+        Err(e) => {
+            failed(&mut s, e);
+            return Some(s);
+        }
+    };
+    if let Some(e) = tailscale::state_error(node) {
+        failed(&mut s, &e);
+        return Some(s);
+    }
+    if node.cert_domains.is_empty() {
+        failed(&mut s, &TsError::NoHttps);
+    }
+    for p in &inspection.published {
+        let to = match &p.target {
+            Target::Socket(path) => home.show(path),
+            Target::Loopback(port) => format!("http://127.0.0.1:{port}"),
+        };
+        s.add(
+            Level::Ok,
+            format!("served to your tailnet at {} (to {to})", p.url),
+            None,
+        );
+        if p.funnel {
+            failed(&mut s, &TsError::Funnel { port: p.port });
+        }
+    }
+    for h in &inspection.stale {
+        s.add(
+            Level::Fail,
+            format!(
+                "port {} serves {} to your tailnet: slopmax from another home or port",
+                h.port, h.target
+            ),
+            Some("slopmax tailscale on"),
+        );
+    }
+    let published = !inspection.published.is_empty();
+    if !published && inspection.stale.is_empty() {
+        s.add(
+            Level::Warn,
+            "[tailscale] is set, but slopmax isn't published to your tailnet",
+            Some("slopmax tailscale on"),
+        );
+    }
+    let socket = home.tailnet_socket();
+    let over = |transport| {
+        inspection
+            .published
+            .iter()
+            .any(|p| p.transport == transport)
+    };
+    if over(Transport::Socket) && facts.socket_answers == Some(false) {
+        s.add(
+            Level::Fail,
+            format!(
+                "the proxy doesn't answer on {}, where Tailscale sends your machines' requests",
+                home.show(&socket)
+            ),
+            Some("slopmax stop && slopmax start"),
+        );
+    }
+    if cfg!(unix) && socket.as_os_str().len() > 100 {
+        s.add(
+            Level::Warn,
+            format!(
+                "{} is too long a path for a socket (over 100 bytes), so Tailscale can't tell \
+                 slopmax who is asking",
+                socket.display()
+            ),
+            Some("move SLOPMAX_HOME to a shorter path"),
+        );
+    }
+    if over(Transport::Loopback) {
+        s.add(
+            Level::Note,
+            "machines need a key; Tailscale here can't tell slopmax who is asking",
+            Some("slopmax key add <name>"),
+        );
+    }
+    let users = config.tailnet_users();
+    if users.is_empty() {
+        s.add(
+            Level::Note,
+            "no tailnet login uses slopmax without a key ([tailscale] users is empty)",
+            Some("slopmax tailscale users add <login>"),
+        );
+    }
+    if let Some(peers) = facts.peers {
+        let known = |login: &str| {
+            node.login
+                .iter()
+                .chain(peers.iter().filter_map(|p| p.login.as_ref()))
+                .any(|known| known.eq_ignore_ascii_case(login))
+        };
+        for user in users.iter().filter(|u| !known(u)) {
+            s.add(
+                Level::Note,
+                format!("no machine on your tailnet is signed in as {user} (a typo?)"),
+                Some(&format!("slopmax tailscale users remove {user}")),
+            );
+        }
+        for admin in config.tailscale.iter().flat_map(|t| &t.admins) {
+            if admin.id != node.id && !peers.iter().any(|p| p.id == admin.id) {
+                s.add(
+                    Level::Warn,
+                    format!(
+                        "the admin machine {} ({}) isn't on your tailnet any more",
+                        admin.machine, admin.id
+                    ),
+                    Some(&format!(
+                        "slopmax tailscale admins remove {}",
+                        admin.machine
+                    )),
+                );
+            }
+        }
+    }
+    if published && !config.listen.ip().is_loopback() {
+        s.add(
+            Level::Note,
+            format!(
+                "the proxy also listens on {}, beyond this machine, where only keys work",
+                config.listen
+            ),
+            Some(&format!(
+                "set `listen` in config.toml to 127.0.0.1:{}",
+                config.listen.port()
+            )),
+        );
+    }
+    if published && facts.linger == Some(false) {
+        s.add(
+            Level::Warn,
+            "the service stops when you log out, and your machines lose their hub with it",
+            Some("loginctl enable-linger $USER"),
+        );
+    }
+    if published && facts.service == Some(false) {
+        s.add(
+            Level::Warn,
+            "slopmax doesn't start at login, so your machines lose their hub when this one restarts",
+            Some("slopmax service install"),
+        );
+    }
+    if cfg!(target_os = "linux") && !facts.root && inspection.operator.as_deref() != facts.user {
+        s.add(
+            Level::Note,
+            "only root may change what Tailscale serves here",
+            Some("sudo tailscale set --operator=$USER"),
+        );
+    }
+    Some(s)
+}
+
+/// What `access` lets a machine do on a hub, in words.
+pub fn access_words(access: Access) -> &'static str {
+    match access {
+        Access::None => "nothing",
+        Access::Use => "use",
+        Access::View => "use and view",
+        Access::Admin => "use, view and manage",
+    }
+}
+
+/// A client's section: the hub its agents use, in place of the proxy and
+/// the accounts. `health` is what the hub's `/healthz` said, if it
+/// answered; `local` whether a proxy of this machine's own still runs;
+/// `wired` each agent and whether it uses the hub.
+pub fn hub(
+    config: &Config,
+    health: Option<&Health>,
+    local: bool,
+    wired: &[(&dyn Agent, bool)],
+) -> Section {
+    let mut s = Section::new("Hub");
+    let url = config.agent_base();
+    match health {
+        None => s.add(
+            Level::Fail,
+            format!("the hub at {url} isn't answering"),
+            Some(
+                "check that Tailscale is connected here (`tailscale status`) and that slopmax \
+                 runs on the hub (`slopmax doctor` there)",
+            ),
+        ),
+        Some(health) => {
+            s.add(
+                Level::Ok,
+                format!("the hub at {url} answers (slopmax {})", health.version),
+                None,
+            );
+            let known = health
+                .machine
+                .as_deref()
+                .map(|m| format!(" as {m}"))
+                .unwrap_or_default();
+            match (health.access, health.owner) {
+                (Some(Access::None), _) => s.add(
+                    Level::Fail,
+                    "the hub doesn't take this machine: it knows neither its key nor its \
+                     tailnet login",
+                    Some(&format!("slopmax setup --hub {url}")),
+                ),
+                (Some(access), _) => s.add(
+                    Level::Ok,
+                    format!("it knows this machine{known}: {}", access_words(access)),
+                    None,
+                ),
+                (None, Some(true)) => {
+                    s.add(Level::Ok, "this machine has the hub's owner key", None);
+                }
+                (None, _) => s.add(
+                    Level::Note,
+                    "the hub's slopmax is older and doesn't say what this machine may do",
+                    None,
+                ),
+            }
+            let ours = env!("CARGO_PKG_VERSION");
+            if health.version != ours {
+                s.add(
+                    Level::Note,
+                    format!(
+                        "the hub runs slopmax {}, and this machine {ours}",
+                        health.version
+                    ),
+                    Some("update the older one, so both run the same version"),
+                );
+            }
+        }
+    }
+    for (agent, wired) in wired {
+        if !wired {
+            s.add(
+                Level::Warn,
+                format!("{} doesn't use the hub", agent.title()),
+                Some(&format!("slopmax setup {}", agent.id())),
+            );
+        }
+    }
+    if local {
+        s.add(
+            Level::Warn,
+            "a proxy of this machine's own still runs, though its agents use the hub",
+            Some("slopmax stop, then slopmax service uninstall"),
+        );
+    }
+    s
 }
 
 /// What each agent's section says to run first: install the agent, when
@@ -354,15 +756,16 @@ fn claude_code(config: &Config, dir: &Path) -> Section {
             .pointer(&format!("/env/{key}"))
             .and_then(Value::as_str)
     };
+    let (ours, key) = (config.agent_base(), config.agent_token());
     match (env("ANTHROPIC_BASE_URL"), env("ANTHROPIC_AUTH_TOKEN")) {
-        (Some(base), Some(token)) if base == config.base_url() && token == config.api_key => {
+        (Some(base), Some(token)) if base == ours && token == key => {
             s.add(
                 Level::Ok,
                 "wired through settings.json, for the CLI and the apps that run it",
                 None,
             );
         }
-        (Some(base), _) if base == config.base_url() => s.add(
+        (Some(base), _) if base == ours => s.add(
             Level::Warn,
             "settings.json points at slopmax with a different key",
             Some("slopmax setup claude"),
@@ -411,12 +814,12 @@ fn codex(config: &Config, dir: &Path) -> Section {
             .as_ref()
             .and_then(|t| t.get(key)?.as_str().map(str::to_owned))
     };
-    let expected = format!("{}/codex", config.base_url());
+    let expected = format!("{}/codex", config.agent_base());
+    let token = config.agent_token();
     match provider.as_deref() {
         Some("slopmax")
             if field("base_url").as_deref() == Some(expected.as_str())
-                && field("experimental_bearer_token").as_deref()
-                    == Some(config.api_key.as_str()) =>
+                && field("experimental_bearer_token").as_deref() == Some(token.as_str()) =>
         {
             s.add(
                 Level::Ok,
@@ -1252,5 +1655,477 @@ mod tests {
     #[test]
     fn levels_order_by_severity() {
         assert!(Level::Ok < Level::Note && Level::Note < Level::Warn && Level::Warn < Level::Fail);
+    }
+
+    mod tailnet {
+        use super::*;
+        use crate::config::{AdminMachine, HubLink, Tailnet};
+        use crate::tailscale::{BackendState, Handler, HandlerTarget, Node, Published};
+
+        fn home() -> Home {
+            Home::sandbox("/home/me")
+        }
+
+        fn node() -> Node {
+            Node {
+                backend_state: BackendState::Running,
+                dns_name: "hub.example.ts.net".into(),
+                name: "hub".into(),
+                ips: Vec::new(),
+                tags: Vec::new(),
+                login: Some("me@github".into()),
+                cert_domains: vec!["hub.example.ts.net".into()],
+                magic_dns_suffix: Some("example.ts.net".into()),
+                version: "1.104.5".into(),
+                id: "nSELF1CNTRL".into(),
+            }
+        }
+
+        fn peer(id: &str, name: &str, login: Option<&str>) -> Peer {
+            Peer {
+                id: id.into(),
+                dns_name: format!("{name}.example.ts.net"),
+                name: name.into(),
+                host_name: name.into(),
+                online: true,
+                tags: Vec::new(),
+                login: login.map(str::to_owned),
+                os: "linux".into(),
+                ips: Vec::new(),
+            }
+        }
+
+        fn served(target: Target) -> Published {
+            Published {
+                url: "https://hub.example.ts.net:7567".into(),
+                port: 7567,
+                transport: target.transport(),
+                target,
+                funnel: false,
+            }
+        }
+
+        fn inspection(node: Result<Node, TsError>, published: Vec<Published>) -> Inspection {
+            Inspection {
+                exe: Some("/usr/bin/tailscale".into()),
+                node,
+                serve: None,
+                published,
+                stale: Vec::new(),
+                operator: Some("me".into()),
+            }
+        }
+
+        fn config(users: &[&str]) -> Config {
+            Config {
+                tailscale: Some(Tailnet {
+                    users: users.iter().map(|u| u.to_string()).collect(),
+                    admins: Vec::new(),
+                }),
+                ..config_on(7567)
+            }
+        }
+
+        /// Everything fine: served over the socket, which answers, by a
+        /// service that outlives the session, with the operator set.
+        fn facts<'a>(inspection: &'a Inspection, peers: &'a [Peer]) -> TailnetFacts<'a> {
+            TailnetFacts {
+                inspection: Some(inspection),
+                peers: Some(peers),
+                socket_answers: Some(true),
+                linger: Some(true),
+                service: Some(true),
+                user: Some("me"),
+                root: false,
+            }
+        }
+
+        fn section(config: &Config, facts: &TailnetFacts<'_>) -> Section {
+            super::super::tailnet(config, &home(), facts).expect("a Tailscale section")
+        }
+
+        #[test]
+        fn is_left_out_where_tailscale_has_nothing_to_do_with_slopmax() {
+            let home = home();
+            let none = TailnetFacts::default();
+            assert!(super::super::tailnet(&config(&["me@github"]), &home, &none).is_none());
+            let mut seen = inspection(Ok(node()), Vec::new());
+            let peers = [];
+            let plain = config_on(7567);
+            assert!(super::super::tailnet(&plain, &home, &facts(&seen, &peers)).is_none());
+            seen.published = vec![served(Target::Socket(home.tailnet_socket()))];
+            seen.exe = None;
+            assert!(super::super::tailnet(&plain, &home, &facts(&seen, &peers)).is_none());
+        }
+
+        #[test]
+        fn a_hub_served_over_its_socket_is_fine() {
+            let seen = inspection(
+                Ok(node()),
+                vec![served(Target::Socket(home().tailnet_socket()))],
+            );
+            let peers = [peer("nMAC1CNTRL", "mac", Some("me@github"))];
+            let s = section(&config(&["me@github"]), &facts(&seen, &peers));
+            assert_eq!(
+                texts(&s),
+                [(
+                    Level::Ok,
+                    "served to your tailnet at https://hub.example.ts.net:7567 (to ~/.slopmax/tailnet.sock)"
+                )]
+            );
+        }
+
+        #[test]
+        fn tailscale_that_cannot_serve_fails_with_its_fix() {
+            let peers = [];
+            let cases = [
+                (
+                    Err(TsError::DaemonDown),
+                    "Tailscale isn't running on this machine",
+                ),
+                (
+                    Ok(Node {
+                        backend_state: BackendState::NeedsLogin,
+                        ..node()
+                    }),
+                    "signed out",
+                ),
+                (
+                    Ok(Node {
+                        backend_state: BackendState::Stopped,
+                        ..node()
+                    }),
+                    "turned off",
+                ),
+                (
+                    Ok(Node {
+                        backend_state: BackendState::NeedsMachineAuth,
+                        ..node()
+                    }),
+                    "waits for approval",
+                ),
+            ];
+            for (node, says) in cases {
+                let seen = inspection(node, Vec::new());
+                let s = section(&config(&["me@github"]), &facts(&seen, &peers));
+                assert_eq!(s.findings.len(), 1, "{s:#?}");
+                let f = finding(&s, says);
+                assert_eq!(f.level, Level::Fail);
+                assert!(f.fix.is_some(), "{f:?}");
+            }
+            let seen = inspection(
+                Ok(Node {
+                    cert_domains: Vec::new(),
+                    ..node()
+                }),
+                Vec::new(),
+            );
+            let s = section(&config(&["me@github"]), &facts(&seen, &peers));
+            let f = finding(&s, "HTTPS certificates turned off");
+            assert_eq!(f.level, Level::Fail);
+            assert!(f.fix.as_deref().unwrap().contains("admin/dns"));
+        }
+
+        #[test]
+        fn funnel_a_stale_target_and_a_silent_socket_fail() {
+            let home = home();
+            let mut open = served(Target::Socket(home.tailnet_socket()));
+            open.funnel = true;
+            let mut seen = inspection(Ok(node()), vec![open]);
+            seen.stale = vec![Handler {
+                port: 7567,
+                https: true,
+                host: "hub.example.ts.net".into(),
+                path: "/".into(),
+                target: HandlerTarget::Proxy("unix:/home/old/.slopmax/tailnet.sock".into()),
+                foreground: false,
+            }];
+            let peers = [];
+            let mut facts = facts(&seen, &peers);
+            facts.socket_answers = Some(false);
+            let s = section(&config(&["me@github"]), &facts);
+            let f = finding(&s, "open to the internet through Tailscale Funnel");
+            assert_eq!(
+                (f.level, f.fix.as_deref()),
+                (Level::Fail, Some("tailscale funnel --https=7567 off"))
+            );
+            let f = finding(&s, "serves unix:/home/old/.slopmax/tailnet.sock");
+            assert_eq!(
+                (f.level, f.fix.as_deref()),
+                (Level::Fail, Some("slopmax tailscale on"))
+            );
+            let f = finding(&s, "the proxy doesn't answer on ~/.slopmax/tailnet.sock");
+            assert_eq!(
+                (f.level, f.fix.as_deref()),
+                (Level::Fail, Some("slopmax stop && slopmax start"))
+            );
+        }
+
+        #[test]
+        fn set_up_but_not_published_says_how_to_publish() {
+            let seen = inspection(Ok(node()), Vec::new());
+            let peers = [];
+            let s = section(&config(&["me@github"]), &facts(&seen, &peers));
+            let f = finding(&s, "isn't published to your tailnet");
+            assert_eq!(
+                (f.level, f.fix.as_deref()),
+                (Level::Warn, Some("slopmax tailscale on"))
+            );
+        }
+
+        #[test]
+        fn loopback_and_no_users_are_notes() {
+            let seen = inspection(Ok(node()), vec![served(Target::Loopback(7567))]);
+            let peers = [];
+            let s = section(&config(&[]), &facts(&seen, &peers));
+            let f = finding(&s, "machines need a key");
+            assert_eq!(f.level, Level::Note);
+            let f = finding(&s, "[tailscale] users is empty");
+            assert_eq!(
+                (f.level, f.fix.as_deref()),
+                (Level::Note, Some("slopmax tailscale users add <login>"))
+            );
+            assert!(
+                finding(&s, "served to your tailnet")
+                    .text
+                    .contains("http://127.0.0.1:7567")
+            );
+        }
+
+        #[test]
+        fn unknown_users_and_admins_gone_from_the_tailnet_are_named() {
+            let seen = inspection(
+                Ok(node()),
+                vec![served(Target::Socket(home().tailnet_socket()))],
+            );
+            let peers = [peer("nMAC1CNTRL", "mac", Some("me@github"))];
+            let mut config = config(&["me@github", "Me@GitHub", "mee@github"]);
+            config.tailscale.as_mut().unwrap().admins = vec![
+                AdminMachine {
+                    machine: "mac".into(),
+                    id: "nMAC1CNTRL".into(),
+                },
+                AdminMachine {
+                    machine: "old".into(),
+                    id: "nOLD1CNTRL".into(),
+                },
+            ];
+            let s = section(&config, &facts(&seen, &peers));
+            let f = finding(&s, "signed in as mee@github (a typo?)");
+            assert_eq!(f.level, Level::Note);
+            assert!(!s.findings.iter().any(|f| f.text.contains("as Me@GitHub")));
+            let f = finding(&s, "the admin machine old (nOLD1CNTRL)");
+            assert_eq!(
+                (f.level, f.fix.as_deref()),
+                (Level::Warn, Some("slopmax tailscale admins remove old"))
+            );
+            assert!(!s.findings.iter().any(|f| f.text.contains("machine mac")));
+            // Peers that couldn't be read prove nothing.
+            let mut unread = facts(&seen, &peers);
+            unread.peers = None;
+            let s = section(&config, &unread);
+            assert!(!s.findings.iter().any(|f| f.text.contains("a typo")));
+        }
+
+        #[test]
+        fn a_published_hub_must_outlive_the_session_and_listen_here() {
+            let seen = inspection(
+                Ok(node()),
+                vec![served(Target::Socket(home().tailnet_socket()))],
+            );
+            let peers = [];
+            let mut config = config(&["me@github"]);
+            config.listen.set_ip([0, 0, 0, 0].into());
+            let mut facts = facts(&seen, &peers);
+            facts.linger = Some(false);
+            facts.service = Some(false);
+            let s = section(&config, &facts);
+            assert_eq!(
+                finding(&s, "beyond this machine, where only keys work").level,
+                Level::Note
+            );
+            let f = finding(&s, "stops when you log out");
+            assert_eq!(
+                (f.level, f.fix.as_deref()),
+                (Level::Warn, Some("loginctl enable-linger $USER"))
+            );
+            let f = finding(&s, "doesn't start at login");
+            assert_eq!(
+                (f.level, f.fix.as_deref()),
+                (Level::Warn, Some("slopmax service install"))
+            );
+        }
+
+        #[test]
+        fn without_operator_rights_linux_says_how_to_get_them() {
+            let mut seen = inspection(
+                Ok(node()),
+                vec![served(Target::Socket(home().tailnet_socket()))],
+            );
+            seen.operator = None;
+            let peers = [];
+            let s = section(&config(&["me@github"]), &facts(&seen, &peers));
+            let found = s.findings.iter().find(|f| f.text.contains("only root"));
+            if cfg!(target_os = "linux") {
+                let f = found.expect("the operator note");
+                assert_eq!(f.level, Level::Note);
+                assert_eq!(
+                    f.fix.as_deref(),
+                    Some("sudo tailscale set --operator=$USER")
+                );
+            } else {
+                assert!(found.is_none());
+            }
+            let mut root = facts(&seen, &peers);
+            root.root = true;
+            let s = section(&config(&["me@github"]), &root);
+            assert!(!s.findings.iter().any(|f| f.text.contains("only root")));
+        }
+
+        fn health(access: Option<Access>, version: &str) -> Health {
+            Health {
+                version: version.into(),
+                pid: None,
+                owner: Some(false),
+                access,
+                via: Some("tailnet".into()),
+                login: Some("me@github".into()),
+                machine: Some("mac".into()),
+            }
+        }
+
+        fn client() -> Config {
+            Config {
+                hub: Some(HubLink {
+                    url: "https://hub.example.ts.net:7567/".into(),
+                    key: None,
+                }),
+                ..config_on(7567)
+            }
+        }
+
+        #[test]
+        fn a_client_reports_its_hub() {
+            let ours = env!("CARGO_PKG_VERSION");
+            let wired: Vec<(&dyn Agent, bool)> = agent::AGENTS.iter().map(|a| (*a, true)).collect();
+            let s = hub(
+                &client(),
+                Some(&health(Some(Access::View), ours)),
+                false,
+                &wired,
+            );
+            assert_eq!(
+                texts(&s),
+                [
+                    (
+                        Level::Ok,
+                        format!(
+                            "the hub at https://hub.example.ts.net:7567 answers (slopmax {ours})"
+                        )
+                        .as_str()
+                    ),
+                    (Level::Ok, "it knows this machine as mac: use and view"),
+                ]
+            );
+
+            let s = hub(&client(), None, false, &wired);
+            let f = finding(&s, "isn't answering");
+            assert_eq!(f.level, Level::Fail);
+            assert!(f.fix.as_deref().unwrap().contains("tailscale status"));
+
+            let s = hub(
+                &client(),
+                Some(&health(Some(Access::None), ours)),
+                false,
+                &wired,
+            );
+            assert_eq!(finding(&s, "doesn't take this machine").level, Level::Fail);
+
+            let s = hub(&client(), Some(&health(None, "0.0.1")), false, &wired);
+            assert_eq!(finding(&s, "is older").level, Level::Note);
+            let f = finding(&s, "the hub runs slopmax 0.0.1");
+            assert_eq!(f.level, Level::Note);
+
+            let unwired: Vec<(&dyn Agent, bool)> =
+                agent::AGENTS.iter().map(|a| (*a, false)).collect();
+            let s = hub(
+                &client(),
+                Some(&health(Some(Access::Use), ours)),
+                true,
+                &unwired,
+            );
+            let f = finding(&s, "Claude Code doesn't use the hub");
+            assert_eq!(
+                (f.level, f.fix.as_deref()),
+                (Level::Warn, Some("slopmax setup claude"))
+            );
+            let f = finding(&s, "a proxy of this machine's own still runs");
+            assert_eq!(
+                (f.level, f.fix.as_deref()),
+                (
+                    Level::Warn,
+                    Some("slopmax stop, then slopmax service uninstall")
+                )
+            );
+        }
+
+        #[test]
+        fn a_clients_agents_are_checked_against_the_hub() {
+            let config = Config {
+                hub: Some(HubLink {
+                    url: "https://hub.example.ts.net:7567".into(),
+                    key: Some("sm-client".into()),
+                }),
+                ..config_on(8318)
+            };
+            let dir = temp_dir("doctor-hub-claude");
+            let settings = json!({ "env": {
+                "ANTHROPIC_BASE_URL": "https://hub.example.ts.net:7567",
+                "ANTHROPIC_AUTH_TOKEN": "sm-client"
+            } });
+            std::fs::write(dir.join("settings.json"), settings.to_string()).unwrap();
+            assert_eq!(wiring(&claude_code(&config, &dir)).0, Level::Ok);
+            assert_eq!(wiring(&claude_code(&config_on(8318), &dir)).0, Level::Warn);
+
+            let dir = temp_dir("doctor-hub-codex");
+            std::fs::write(
+                dir.join("config.toml"),
+                "model_provider = \"slopmax\"\n[model_providers.slopmax]\n\
+                 base_url = \"https://hub.example.ts.net:7567/codex\"\n\
+                 experimental_bearer_token = \"sm-client\"\n",
+            )
+            .unwrap();
+            let s = codex(&config, &dir);
+            assert!(s.findings.iter().any(|f| f.level == Level::Ok), "{s:#?}");
+        }
+
+        #[cfg(unix)]
+        #[tokio::test]
+        async fn the_socket_answers_only_with_a_200() {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let dir = temp_dir("doctor-socket");
+            let path = dir.join("t.sock");
+            assert!(!socket_answers(&path, Duration::from_millis(200)).await);
+            let listener = tokio::net::UnixListener::bind(&path).unwrap();
+            let serve = |status: &'static str| {
+                let listener = &listener;
+                async move {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let mut buf = [0u8; 256];
+                    let _ = stream.read(&mut buf).await;
+                    stream.write_all(status.as_bytes()).await.unwrap();
+                }
+            };
+            let (answered, ()) = tokio::join!(
+                socket_answers(&path, Duration::from_secs(2)),
+                serve("HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+            );
+            assert!(answered);
+            let (answered, ()) = tokio::join!(
+                socket_answers(&path, Duration::from_secs(2)),
+                serve("HTTP/1.1 502 Bad Gateway\r\ncontent-length: 0\r\n\r\n")
+            );
+            assert!(!answered);
+        }
     }
 }
