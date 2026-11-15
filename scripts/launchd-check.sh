@@ -1,9 +1,22 @@
 #!/bin/bash
-# Exercises the launchd agent end to end: the socket launchd keeps, a crash,
-# a handoff (and launchd's process taking over after it), stop and start.
+# The login agent under this Mac's launchd, end to end: launchd holds the
+# proxy's socket, and nothing is refused through a crash, or through a
+# handoff and launchd's next process taking over from the process the proxy
+# moved to; `slopmax stop` unloads the agent and `slopmax start` loads it.
+#
+# It installs and removes the user's own login agent (dev.slopmax), so it
+# runs only on a CI runner: `mise run launchd`.
 set -uo pipefail
+if [ "${CI:-}" != true ]; then
+  echo "launchd-check.sh replaces this user's slopmax login agent; it runs on CI only" >&2
+  exit 2
+fi
+if [ -e ~/Library/LaunchAgents/dev.slopmax.plist ]; then
+  echo "a slopmax login agent is already installed here" >&2
+  exit 2
+fi
 B=$PWD/target/debug/slopmax
-H=$RUNNER_TEMP/sm
+H=$(mktemp -d)
 mkdir -p "$H/home"
 export SLOPMAX_HOME=$H/home
 printf 'listen = "127.0.0.1:7599"\ncheck_updates = false\n' > "$H/home/config.toml"

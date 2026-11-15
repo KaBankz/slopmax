@@ -36,6 +36,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: mise run check
 
+  launchd:
+    name: Login agent (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - uses: Swatinem/rust-cache@v2
+      - run: mise run launchd
+
   msrv:
     name: Minimum Rust version
     runs-on: ubuntu-latest
