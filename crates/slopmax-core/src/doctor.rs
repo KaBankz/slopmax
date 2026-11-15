@@ -301,10 +301,13 @@ pub fn tailnet(config: &Config, home: &Home, facts: &TailnetFacts<'_>) -> Option
         s.add(
             Level::Fail,
             format!(
-                "port {} serves {} to your tailnet: slopmax from another home or port",
+                "port {} serves {} to your tailnet: likely slopmax from another home or port",
                 h.port, h.target
             ),
-            Some("slopmax tailscale on"),
+            Some(&format!(
+                "{}, then slopmax tailscale on",
+                tailscale::serve_off(h.port)
+            )),
         );
     }
     let published = !inspection.published.is_empty();
@@ -1856,10 +1859,15 @@ mod tests {
                 (f.level, f.fix.as_deref()),
                 (Level::Fail, Some("tailscale funnel --https=7567 off"))
             );
+            // `slopmax tailscale on` leaves a target it doesn't serve alone,
+            // so the fix turns the old one off first.
             let f = finding(&s, "serves unix:/home/old/.slopmax/tailnet.sock");
             assert_eq!(
                 (f.level, f.fix.as_deref()),
-                (Level::Fail, Some("slopmax tailscale on"))
+                (
+                    Level::Fail,
+                    Some("tailscale serve --https=7567 off, then slopmax tailscale on")
+                )
             );
             let f = finding(&s, "the proxy doesn't answer on ~/.slopmax/tailnet.sock");
             assert_eq!(

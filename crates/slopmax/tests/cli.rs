@@ -2564,7 +2564,8 @@ fn tailscale_on_publishes_the_socket_and_off_takes_it_down() {
     s.ts_marker("access-denied", false);
     s.clear_stub_log();
 
-    let out = s.ts(&["tailscale", "on"]).ok();
+    // `--user` adds a login to the hub's own.
+    let out = s.ts(&["tailscale", "on", "--user", "you@github"]).ok();
     assert_eq!(
         s.serve_changes(),
         [format!(
@@ -2576,12 +2577,13 @@ fn tailscale_on_publishes_the_socket_and_off_takes_it_down() {
     assert!(out.stdout.contains(&url), "{out:?}");
     assert!(
         out.stdout
-            .contains("Machines signed in as me@github use it without a key"),
+            .contains("Machines signed in as me@github or you@github use it without a key"),
         "{out:?}"
     );
+    // Not on the port `setup --hub <name>` looks on: the whole address.
     assert!(
         out.stdout
-            .contains("On another machine: slopmax setup --hub hub"),
+            .contains(&format!("On another machine: slopmax setup --hub {url}\n")),
         "{out:?}"
     );
     // The fake address doesn't resolve from here: a note, not a failure.
@@ -2598,7 +2600,7 @@ fn tailscale_on_publishes_the_socket_and_off_takes_it_down() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(users, ["me@github"], "{config}");
+    assert_eq!(users, ["me@github", "you@github"], "{config}");
 
     // The dashboard says where the other machines find it.
     let out = s.ts(&["dashboard", "--print"]).ok();
@@ -2626,7 +2628,7 @@ fn tailscale_on_publishes_the_socket_and_off_takes_it_down() {
     let view: slopmax_client::api::tailnet::TailnetView =
         serde_json::from_str(&s.ts(&["tailscale", "status", "--json"]).ok().stdout).unwrap();
     assert_eq!(view.url.as_deref(), Some(url.as_str()));
-    assert_eq!(view.users, ["me@github"]);
+    assert_eq!(view.users, ["me@github", "you@github"]);
     assert_eq!(
         view.tailscale,
         slopmax_client::api::tailnet::TailscaleState::Running
@@ -2637,7 +2639,18 @@ fn tailscale_on_publishes_the_socket_and_off_takes_it_down() {
         "{table}"
     );
     assert!(table.contains(&format!("{url} -> ")), "{table}");
-    assert!(table.contains("me@github (use and view)"), "{table}");
+    assert!(
+        table.contains("me@github, you@github (use and view)"),
+        "{table}"
+    );
+
+    // On the usual port, other machines find it by name.
+    let out = s.ts(&["tailscale", "on", "--port", "7567"]).ok();
+    assert!(
+        out.stdout
+            .contains("On another machine: slopmax setup --hub hub\n"),
+        "{out:?}"
+    );
 
     // On again changes nothing but what serve publishes.
     s.ts(&["tailscale", "on"]).ok();
@@ -2705,6 +2718,21 @@ fn tailscale_on_says_what_stops_it() {
          slopmax tailscale on --port {}",
         port + 1
     ));
+    // slopmax published from another home: `on` leaves it, and says how to
+    // turn it off, as status does.
+    let old = "unix:/home/old/.slopmax/tailnet.sock";
+    s.ts_file("serve.json", &s.serving(old));
+    refused(&format!(
+        "If that is slopmax from before, turn it off first: tailscale serve --https={port} off"
+    ));
+    let table = s.ts(&["tailscale"]).ok().stdout;
+    assert!(
+        table.contains(&format!(
+            "port {port} serves {old}, likely slopmax from before: `tailscale serve \
+             --https={port} off`, then `slopmax tailscale on`"
+        )),
+        "{table}"
+    );
     s.ts_file(
         "serve.json",
         &json!({ "TCP": { port.to_string(): { "TCPForward": "127.0.0.1:22" } } }).to_string(),
@@ -2968,6 +2996,9 @@ fn a_machine_uses_another_as_its_hub() {
             .contains(&format!("This machine uses the hub at {at}.")),
         "{out:?}"
     );
+    let json: Value =
+        serde_json::from_str(&client.run(&["tailscale", "status", "--json"]).ok().stdout).unwrap();
+    assert_eq!(json, json!({ "hub": at }));
     let doctor = client.run(&["doctor"]).stdout;
     assert!(
         doctor.contains(&format!("the hub at {at} answers")),

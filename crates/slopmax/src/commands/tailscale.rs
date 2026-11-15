@@ -37,11 +37,14 @@ pub struct Args<'a> {
 
 pub async fn run(config: &Config, args: Args<'_>) -> Result<()> {
     if let Some(url) = config.hub_url() {
+        let url = url.trim_end_matches('/');
+        if args.action == "status" && args.json {
+            let hub = serde_json::json!({ "hub": url });
+            println!("{}", serde_json::to_string_pretty(&hub)?);
+            return Ok(());
+        }
         if args.action == "status" {
-            println!(
-                "This machine uses the hub at {}.",
-                url.trim_end_matches('/')
-            );
+            println!("This machine uses the hub at {url}.");
             return Ok(());
         }
         bail!(config.hub_refusal().unwrap_or_default());
@@ -140,7 +143,19 @@ async fn on(config: &Config, args: &Args<'_>) -> Result<()> {
     let port = args.port.unwrap_or(config.listen.port());
     let serve = ts.serve_state().await.map_err(fail)?;
     if let Port::Taken { by } = tailscale::port_use(&serve, port, &targets(config)) {
-        return Err(fail(TsError::PortTaken { port, by }));
+        let e = TsError::PortTaken { port, by };
+        if !tailscale::stale(&serve, port, &targets(config)).is_empty() {
+            // Something on this machine, perhaps slopmax from another home
+            // or port, which is turned off by hand: slopmax turns off only
+            // what serves this home.
+            bail!(
+                "{}\n{}\nIf that is slopmax from before, turn it off first: {}",
+                e.message(),
+                e.fix().unwrap_or_default(),
+                tailscale::serve_off(port)
+            );
+        }
+        return Err(fail(e));
     }
     if serve.funnel_ports.contains(&port) {
         return Err(fail(TsError::Funnel { port }));
@@ -158,8 +173,8 @@ async fn on(config: &Config, args: &Args<'_>) -> Result<()> {
 
     let mut tailnet = config.tailscale.clone().unwrap_or_default();
     let tagged = !node.tags.is_empty();
+    // An untagged hub lets its own login in first; `--user` adds more.
     if tailnet.users.is_empty()
-        && args.users.is_empty()
         && !tagged
         && let Some(login) = &node.login
     {
@@ -210,11 +225,13 @@ async fn on(config: &Config, args: &Args<'_>) -> Result<()> {
                     .into(),
             );
         }
+        // Over the proxy's port, slopmax can't tell that the tailnet
+        // asked, but it answered.
+        Reached::Elsewhere if matches!(target, Target::Loopback(_)) => {}
         _ => {
             note = Some(format!(
-                "couldn't check the address from this machine; check it from another: slopmax \
-                 setup --hub {}",
-                node.name
+                "couldn't check the address from this machine; check it from another: {}",
+                setup_command(&node.name, &url, port)
             ));
         }
     }
@@ -254,12 +271,26 @@ async fn on(config: &Config, args: &Args<'_>) -> Result<()> {
             );
         }
     }
-    println!("On another machine: slopmax setup --hub {}", node.name);
+    println!(
+        "On another machine: {}",
+        setup_command(&node.name, &url, port)
+    );
     println!("Dashboard from your phone or laptop: {url}/slopmax/");
     if let Some(note) = note {
         println!("{}", ui::dim(note));
     }
     Ok(())
+}
+
+/// The command that points another machine at this hub: by the hub's
+/// name, which `setup --hub` looks up on the usual port, else by its whole
+/// address.
+fn setup_command(name: &str, url: &str, port: u16) -> String {
+    if port == super::remote::HUB_PORT && !name.is_empty() {
+        format!("slopmax setup --hub {name}")
+    } else {
+        format!("slopmax setup --hub {url}")
+    }
 }
 
 /// Publishes `target` on `port`, an `Access denied` said as how to get
@@ -367,10 +398,7 @@ async fn off(config: &Config) -> Result<()> {
         match ts.unpublish(port).await {
             Ok(()) => {}
             Err(TsError::AccessDenied) => {
-                return Err(access_denied(
-                    "off",
-                    &format!("tailscale serve --https={port} off"),
-                ));
+                return Err(access_denied("off", &tailscale::serve_off(port)));
             }
             Err(e) => return Err(fail(e)),
         }
@@ -448,8 +476,11 @@ async fn status(config: &Config, json: bool) -> Result<()> {
         row(
             "Stale",
             ui::yellow(format!(
-                "port {} serves {}: `slopmax tailscale on` fixes it",
-                h.port, h.target
+                "port {} serves {}, likely slopmax from before: `{}`, then `slopmax \
+                 tailscale on`",
+                h.port,
+                h.target,
+                tailscale::serve_off(h.port)
             )),
         );
     }
@@ -798,6 +829,17 @@ mod tests {
         assert!(
             missing.contains("no machine on your tailnet is called phone"),
             "{missing}"
+        );
+    }
+
+    #[test]
+    fn other_machines_find_the_hub_by_name_only_on_the_usual_port() {
+        let url = "https://hub.example.ts.net:7567";
+        assert_eq!(setup_command("hub", url, 7567), "slopmax setup --hub hub");
+        let url = "https://hub.example.ts.net:7568";
+        assert_eq!(
+            setup_command("hub", url, 7568),
+            format!("slopmax setup --hub {url}")
         );
     }
 

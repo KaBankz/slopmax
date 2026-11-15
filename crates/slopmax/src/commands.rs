@@ -715,6 +715,18 @@ async fn dispatch(
                 name: m.value("name").map(str::to_owned),
                 discover: false,
             };
+            // A new machine set up at a terminal, with nothing else asked
+            // for, is offered a hub on the tailnet first.
+            let plan = init::Plan {
+                discover: plan.hub.is_none()
+                    && plan.import.is_none()
+                    && plan.login.is_none()
+                    && plan.agents.is_none()
+                    && !plan.keys_from_env
+                    && !plan.own
+                    && init::wanted(&config, &store),
+                ..plan
+            };
             if plan.hub.is_none() && (plan.key.is_some() || plan.name.is_some()) {
                 bail!(
                     "--key and --name go with --hub: `slopmax setup --hub <machine> --key <key>`"
@@ -928,6 +940,27 @@ fn from_hub(e: anyhow::Error, url: &str, command: &str) -> anyhow::Error {
     };
     let url = url.trim_end_matches('/');
     match error {
+        // The daemon's 403 to a machine allowed less than the command
+        // needs, naming the machine.
+        slopmax_client::Error::Api(ApiError::Unauthorized { message })
+            if message.starts_with("this machine may ") =>
+        {
+            let machine = message
+                .rsplit_once("admins add ")
+                .map(|(_, machine)| machine.trim())
+                .filter(|m| !m.is_empty() && *m != "<machine>")
+                .map(str::to_owned)
+                .or_else(|| hub_health().and_then(|h| h.machine.clone()))
+                .unwrap_or_else(|| "<this machine>".to_owned());
+            let may = if message.contains("may not change") {
+                "may use the hub but not change it"
+            } else {
+                "may use the hub but not see its accounts"
+            };
+            anyhow::anyhow!(
+                "This machine {may}. On the hub: slopmax tailscale admins add {machine}"
+            )
+        }
         // The daemon's 403 to a client key, which reaches its proxy only.
         slopmax_client::Error::Api(ApiError::Unauthorized { message })
             if message.contains("reaches the proxy only") =>
@@ -943,19 +976,6 @@ fn from_hub(e: anyhow::Error, url: &str, command: &str) -> anyhow::Error {
             anyhow::anyhow!(
                 "the hub at {url} doesn't take this machine: {message}. `slopmax setup --hub {url}` \
                  sets it up again."
-            )
-        }
-        slopmax_client::Error::Unexpected(message) if message.contains("403") => {
-            let machine = hub_health()
-                .and_then(|h| h.machine.clone())
-                .unwrap_or_else(|| "<this machine>".to_owned());
-            let may = if matches!(command, "status" | "usage") {
-                "may use the hub but not see its accounts"
-            } else {
-                "may use the hub but not change it"
-            };
-            anyhow::anyhow!(
-                "This machine {may}. On the hub: slopmax tailscale admins add {machine}"
             )
         }
         _ => e,
@@ -1382,5 +1402,32 @@ mod tests {
                 command.name
             );
         }
+    }
+
+    #[test]
+    fn the_hub_s_refusals_say_what_this_machine_may_do() {
+        use slopmax_client::api::ApiError;
+        let refused = |message: &str, command: &str| {
+            let e = anyhow::Error::new(slopmax_client::Error::Api(ApiError::Unauthorized {
+                message: message.to_owned(),
+            }));
+            from_hub(e, "https://hub.example.ts.net:7567/", command).to_string()
+        };
+        assert_eq!(
+            refused(
+                "this machine may not change slopmax; on the hub: slopmax tailscale admins add mac",
+                "use"
+            ),
+            "This machine may use the hub but not change it. On the hub: slopmax tailscale admins \
+             add mac"
+        );
+        assert_eq!(
+            refused(
+                "the key \"ci\" reaches the proxy only, not slopmax's own API",
+                "status"
+            ),
+            "the hub at https://hub.example.ts.net:7567 takes this machine's key for its agents \
+             only, not for `slopmax status`; run it on the hub"
+        );
     }
 }

@@ -90,12 +90,22 @@ fn installed() -> Vec<PathBuf> {
     }
 }
 
-/// Whether `exe` is the command inside the Tailscale app on macOS, whose
+/// Where the Tailscale app on macOS keeps its command.
+const APP_BUNDLE: &str = "Tailscale.app/Contents/MacOS";
+
+/// Whether `exe` runs the command inside the Tailscale app on macOS, whose
 /// tailscaled runs sandboxed and can't reach a unix socket in the user's
-/// home.
+/// home: the command itself, a link to it, or the small script that runs
+/// it, which the app's "Install CLI" puts at `/usr/local/bin/tailscale`.
 pub fn in_app_bundle(exe: &Path) -> bool {
-    exe.to_string_lossy()
-        .contains("Tailscale.app/Contents/MacOS")
+    /// Larger than any script that only runs the app's command.
+    const SCRIPT_MAX: u64 = 4096;
+    let in_bundle = |path: &Path| path.to_string_lossy().contains(APP_BUNDLE);
+    if in_bundle(exe) || std::fs::canonicalize(exe).is_ok_and(|real| in_bundle(&real)) {
+        return true;
+    }
+    std::fs::metadata(exe).is_ok_and(|m| m.is_file() && m.len() <= SCRIPT_MAX)
+        && std::fs::read(exe).is_ok_and(|text| String::from_utf8_lossy(&text).contains(APP_BUNDLE))
 }
 
 /// What a run of the `tailscale` command printed, and how it exited.
@@ -917,6 +927,12 @@ pub fn stale(state: &ServeState, port: u16, targets: &[Target]) -> Vec<Handler> 
         .filter(|h| matches!(&h.target, HandlerTarget::Proxy(proxy) if local(proxy).is_some()))
         .cloned()
         .collect()
+}
+
+/// The command that stops publishing `port`: what turns off a [`stale`]
+/// handler, which slopmax leaves alone since it doesn't serve this home.
+pub fn serve_off(port: u16) -> String {
+    format!("tailscale serve --https={port} off")
 }
 
 /// Everything slopmax reads about Tailscale on this machine at once, for
@@ -1977,6 +1993,34 @@ mod tests {
             "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
         )));
         assert!(!in_app_bundle(Path::new("/opt/homebrew/bin/tailscale")));
+
+        // The app's "Install CLI" puts a link, or a script, on PATH.
+        let dir = crate::testkit::temp_dir("tailscale-app");
+        let bundle = dir.join("Tailscale.app/Contents/MacOS");
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::fs::write(bundle.join("Tailscale"), "the app's own command").unwrap();
+        let script = dir.join("tailscale");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nexec /Applications/Tailscale.app/Contents/MacOS/Tailscale \"$@\"\n",
+        )
+        .unwrap();
+        assert!(in_app_bundle(&script));
+        #[cfg(unix)]
+        {
+            let link = dir.join("linked");
+            std::os::unix::fs::symlink(bundle.join("Tailscale"), &link).unwrap();
+            assert!(in_app_bundle(&link));
+        }
+        // Homebrew's command, which runs its own tailscaled.
+        let brew = dir.join("brew-tailscale");
+        std::fs::write(
+            &brew,
+            "#!/bin/sh\nexec /opt/homebrew/Cellar/tailscale/bin/tailscale\n",
+        )
+        .unwrap();
+        assert!(!in_app_bundle(&brew));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// Run in a child by `locate_honours_the_variable`, with
