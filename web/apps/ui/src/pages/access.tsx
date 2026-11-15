@@ -213,7 +213,10 @@ function AddAccount() {
   return (
     <Section title="Add an account">
       <Panel>
-        <SettingRow title="Sign in" detail="With your browser, as the agent's own sign-in does. SuperGrok signs in with a code.">
+        <SettingRow
+          title="Sign in"
+          detail="With your browser, as the agent's own sign-in does. SuperGrok signs in with a code."
+        >
           <Button disabled={!canChange} onClick={() => start({ provider: "claude" })}>
             Claude
           </Button>
@@ -227,7 +230,10 @@ function AddAccount() {
             SuperGrok
           </Button>
         </SettingRow>
-        <SettingRow title="Import" detail="Logins Claude Code, Codex, or CLIProxyAPI (Claude, ChatGPT, and SuperGrok) already have.">
+        <SettingRow
+          title="Import"
+          detail="Logins Claude Code, Codex, or CLIProxyAPI (Claude, ChatGPT, and SuperGrok) already have."
+        >
           <Button disabled={!canChange || importing} onClick={runImport}>
             {importing ? "Importing…" : "Import"}
           </Button>
