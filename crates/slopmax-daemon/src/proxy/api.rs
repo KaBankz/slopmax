@@ -807,7 +807,12 @@ async fn usage(app: &App, query: &str) -> Answer {
         SummaryRange::Week,
         "range is today, 7d, 30d, or all",
     )?;
-    let by = param(query, "by", SummaryBy::Day, "by is day, model, or account")?;
+    let by = param(
+        query,
+        "by",
+        SummaryBy::Day,
+        "by is day, model, account, or machine",
+    )?;
     let range_text = match range {
         SummaryRange::Today => "today",
         SummaryRange::Week => "7d",
@@ -818,12 +823,21 @@ async fn usage(app: &App, query: &str) -> Answer {
         SummaryBy::Day => "day",
         SummaryBy::Model => "model",
         SummaryBy::Account => "account",
+        SummaryBy::Machine => "machine",
     };
     let since = summary::since(range_text, Timestamp::now()).expect("every range has a start");
     let (dir, config, names) = (app.home.usage(), app.config(), names(app));
-    let built =
-        crate::blocking::run(move || summary::build(&dir, since, by_text, &config.prices, &names))
-            .await;
+    let built = crate::blocking::run(move || {
+        summary::build(
+            &dir,
+            since,
+            by_text,
+            &config.prices,
+            &names,
+            summary::HERE_LOCAL,
+        )
+    })
+    .await;
     ok(&api::summary(&built, range, by))
 }
 

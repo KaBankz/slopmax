@@ -17,6 +17,7 @@ pub mod ledger;
 pub mod report;
 pub mod requests;
 pub mod settings;
+pub mod tailnet;
 
 mod error;
 mod ids;

@@ -40,7 +40,7 @@ const SESSION_COMMANDS: [&str; 5] = ["exec", "e", "review", "resume", "fork"];
 /// compaction; `env_key` sends the slopmax key as a bearer token, and
 /// `supports_websockets` lets Codex use the faster WebSocket transport.
 fn overrides(config: &Config) -> Vec<String> {
-    let base = format!("{}/codex", config.base_url());
+    let base = format!("{}/codex", config.agent_base());
     let set = |key: &str, val: &str| ["-c".to_owned(), format!("{key}={}", toml_string(val))];
     let mut args = Vec::new();
     args.extend(set("model_provider", PROVIDER));
@@ -127,7 +127,7 @@ impl Agent for Codex {
     fn command(&self, config: &Config, _home: &Home, args: &[String]) -> Command {
         let mut command = Command::new("codex");
         command
-            .env(KEY_ENV, &config.api_key)
+            .env(KEY_ENV, config.agent_token())
             .args(argv(config, args));
         command
     }
@@ -165,9 +165,9 @@ impl Agent for Codex {
             .context("`model_providers` in config.toml is not a table")?;
         let mut table = Table::new();
         table["name"] = value("OpenAI");
-        table["base_url"] = value(format!("{}/codex", config.base_url()));
+        table["base_url"] = value(format!("{}/codex", config.agent_base()));
         table["wire_api"] = value("responses");
-        table["experimental_bearer_token"] = value(config.api_key.as_str());
+        table["experimental_bearer_token"] = value(config.agent_token());
         if config.websockets {
             table["supports_websockets"] = value(true);
         }
@@ -298,6 +298,51 @@ mod tests {
 
     fn strings(args: &[&str]) -> Vec<String> {
         args.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn hub(key: Option<&str>) -> Config {
+        Config {
+            hub: Some(crate::config::HubLink {
+                url: "https://hub.example.ts.net:7567".into(),
+                key: key.map(str::to_owned),
+            }),
+            ..config()
+        }
+    }
+
+    #[test]
+    fn with_a_hub_codex_uses_it() {
+        let args = overrides(&hub(None)).join(" ");
+        assert!(
+            args.contains(
+                r#"model_providers.slopmax.base_url="https://hub.example.ts.net:7567/codex""#
+            ),
+            "{args}"
+        );
+        let token = |config: &Config| {
+            Codex
+                .command(config, &[])
+                .get_envs()
+                .find(|(k, _)| *k == KEY_ENV)
+                .and_then(|(_, v)| v.map(|v| v.to_string_lossy().into_owned()))
+        };
+        assert_eq!(token(&hub(None)).as_deref(), Some("tailnet"));
+        assert_eq!(token(&hub(Some("sm-x"))).as_deref(), Some("sm-x"));
+        assert_eq!(token(&config()).as_deref(), Some("sm-test"));
+
+        let dir = crate::testkit::temp_dir("codex-hub");
+        let file = dir.join("config.toml");
+        Codex.setup(&hub(None), &file, &mut None).unwrap();
+        let wired = std::fs::read_to_string(&file).unwrap();
+        assert!(
+            wired.contains(r#"base_url = "https://hub.example.ts.net:7567/codex""#),
+            "{wired}"
+        );
+        assert!(wired.contains(r#"experimental_bearer_token = "tailnet""#));
+        Codex.setup(&hub(Some("sm-x")), &file, &mut None).unwrap();
+        let wired = std::fs::read_to_string(&file).unwrap();
+        assert!(wired.contains(r#"experimental_bearer_token = "sm-x""#));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

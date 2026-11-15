@@ -1,6 +1,6 @@
 //! Usage summaries from the ledger: token totals and what they would cost
-//! on the API, by day, model, or account. `slopmax usage` prints them and
-//! the dashboard charts them.
+//! on the API, by day, model, account, or machine. `slopmax usage` prints
+//! them and the dashboard charts them.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -17,7 +17,13 @@ pub const RANGES: &[&str] = &["today", "7d", "30d", "all"];
 pub const NO_ACCOUNT: &str = "(no account free)";
 
 /// How a summary groups requests.
-pub const GROUPS: &[&str] = &["day", "model", "account"];
+pub const GROUPS: &[&str] = &["day", "model", "account", "machine"];
+
+/// The machine, by machine, of the requests sent with the owner key, read
+/// on the machine that sent them.
+pub const HERE_LOCAL: &str = "this machine";
+/// The same, read by another machine through the hub's API.
+pub const HERE_HUB: &str = "hub";
 
 /// Totals for one row.
 #[derive(Debug, Default, Clone, Serialize)]
@@ -130,18 +136,33 @@ pub fn since(range: &str, now: Timestamp) -> Option<Timestamp> {
 }
 
 /// Summarizes the ledger in `dir` from `since`, grouped `by` one of
-/// [`GROUPS`]. `names` gives accounts their display names.
+/// [`GROUPS`]. `names` gives accounts their display names; `here` names
+/// the machine of requests sent with the owner key, by machine: one of
+/// [`HERE_LOCAL`] and [`HERE_HUB`].
 pub fn build(
     dir: &Path,
     since: Timestamp,
     by: &str,
     prices: &BTreeMap<String, Custom>,
     names: &HashMap<String, String>,
+    here: &str,
 ) -> Summary {
     let entries = ledger::read(dir, since);
+    summarize(&entries, since, by, prices, names, here)
+}
+
+fn summarize(
+    entries: &[Entry],
+    since: Timestamp,
+    by: &str,
+    prices: &BTreeMap<String, Custom>,
+    names: &HashMap<String, String>,
+    here: &str,
+) -> Summary {
     let key = |entry: &Entry| -> String {
         match by {
             "model" => entry.model.clone().unwrap_or_else(|| "-".into()),
+            "machine" => entry.machine.clone().unwrap_or_else(|| here.to_owned()),
             // Failures that reached no account: every one was limited.
             "account" if entry.account.is_empty() => NO_ACCOUNT.to_owned(),
             "account" => names
@@ -192,6 +213,7 @@ mod tests {
             agent: None,
             session: None,
             end: None,
+            machine: None,
         }
     }
 
@@ -242,6 +264,76 @@ mod tests {
         let mut one = Totals::default();
         one.add(&long, &prices);
         assert!((one.cost - (100_000. * 0.50 + 0.05) / 1e6).abs() < 1e-12);
+    }
+
+    #[test]
+    fn by_machine_the_owner_keys_requests_are_here() {
+        let prices = BTreeMap::new();
+        let from = |machine: Option<&str>| Entry {
+            machine: machine.map(str::to_owned),
+            ..entry("claude-opus-5-5", 100)
+        };
+        let entries = [
+            from(None),
+            from(Some("laptop")),
+            from(Some("laptop")),
+            from(Some("ci")),
+        ];
+        let rows = |here| {
+            summarize(
+                &entries,
+                Timestamp::UNIX_EPOCH,
+                "machine",
+                &prices,
+                &HashMap::new(),
+                here,
+            )
+            .rows
+            .into_iter()
+            .map(|(key, totals)| (key, totals.requests))
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            rows(HERE_LOCAL),
+            [
+                ("ci".to_owned(), 1),
+                ("laptop".to_owned(), 2),
+                ("this machine".to_owned(), 1)
+            ]
+        );
+        assert_eq!(
+            rows(HERE_HUB),
+            [
+                ("ci".to_owned(), 1),
+                ("hub".to_owned(), 1),
+                ("laptop".to_owned(), 2)
+            ]
+        );
+        assert!(GROUPS.contains(&"machine"));
+    }
+
+    #[test]
+    fn by_machine_reads_the_ledger() {
+        let dir = crate::testkit::temp_dir("summary-machine");
+        let ledger = ledger::Ledger::at(dir.clone());
+        ledger.record(&Entry {
+            machine: Some("laptop".into()),
+            ..entry("claude-opus-5-5", 100)
+        });
+        ledger.record(&entry("claude-opus-5-5", 100));
+        drop(ledger);
+        let summary = build(
+            &dir,
+            Timestamp::UNIX_EPOCH,
+            "machine",
+            &BTreeMap::new(),
+            &HashMap::new(),
+            HERE_LOCAL,
+        );
+        let keys: Vec<&str> = summary.rows.keys().map(String::as_str).collect();
+        assert_eq!(keys, ["laptop", "this machine"]);
+        assert_eq!(summary.total.requests, 2);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

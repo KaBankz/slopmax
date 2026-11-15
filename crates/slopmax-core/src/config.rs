@@ -133,6 +133,49 @@ pub struct Config {
     /// models. Only `api_key` reaches slopmax's own API.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub keys: Vec<ClientKey>,
+    /// Who on the user's tailnet uses slopmax without a key, and which
+    /// machines may also manage it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tailscale: Option<Tailnet>,
+    /// The machine whose slopmax this one uses, instead of running its
+    /// own proxy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hub: Option<HubLink>,
+}
+
+/// The token agents send a hub that knows their machine by its tailnet
+/// login: a placeholder, since the identity is Tailscale's.
+pub const TAILNET_TOKEN: &str = "tailnet";
+
+/// `[tailscale]`: who may use slopmax over the tailnet.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Tailnet {
+    /// Tailnet logins (`you@github`) whose machines use slopmax without a
+    /// key and see its status.
+    pub users: Vec<String>,
+    /// Machines that may also manage slopmax.
+    pub admins: Vec<AdminMachine>,
+}
+
+/// A machine that may manage slopmax, matched by Tailscale's stable node
+/// id; the name is for people.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdminMachine {
+    pub machine: String,
+    pub id: String,
+}
+
+/// `[hub]`: the slopmax this machine's agents use.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HubLink {
+    pub url: String,
+    /// A client key, for a hub that can't tell this machine by its tailnet
+    /// login.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }
 
 /// A key a client presents instead of `api_key`.
@@ -180,6 +223,8 @@ impl Default for Config {
             plan_prices: BTreeMap::new(),
             notify: notify::Settings::default(),
             keys: Vec::new(),
+            tailscale: None,
+            hub: None,
         }
     }
 }
@@ -298,6 +343,7 @@ impl Config {
             config
                 .notify
                 .check()
+                .and_then(|()| config.check_tailnet(text.as_deref()))
                 .map_err(|message| ConfigError::Invalid {
                     path: path.to_owned(),
                     message,
@@ -402,9 +448,218 @@ impl Config {
         Ok(config)
     }
 
+    /// Writes `[tailscale]` in the config at `path`, keeping the file's
+    /// comments, and returns the config it makes. Nothing is written if the
+    /// result is not a valid config.
+    pub fn set_tailnet(path: &Path, tailnet: &Tailnet) -> Result<Self, ConfigError> {
+        let mut doc = Self::document_or_new(path)?;
+        let table = Self::table_mut(&mut doc, "tailscale");
+        let users: toml_edit::Array = tailnet.users.iter().map(String::as_str).collect();
+        let admins: toml_edit::Array = tailnet
+            .admins
+            .iter()
+            .map(|admin| {
+                let mut entry = toml_edit::InlineTable::new();
+                entry.insert("machine", admin.machine.as_str().into());
+                entry.insert("id", admin.id.as_str().into());
+                toml_edit::Value::InlineTable(entry)
+            })
+            .collect();
+        Self::put(table, "users", users.into());
+        Self::put(table, "admins", admins.into());
+        Self::write_checked(path, doc)
+    }
+
+    /// Writes `[hub]` in the config at `path`, keeping the file's comments,
+    /// or removes it for `None`, and returns the config it makes. Nothing is
+    /// written if the result is not a valid config.
+    pub fn set_hub(path: &Path, hub: Option<&HubLink>) -> Result<Self, ConfigError> {
+        let mut doc = Self::document_or_new(path)?;
+        match hub {
+            None => {
+                doc.remove("hub");
+            }
+            Some(hub) => {
+                let table = Self::table_mut(&mut doc, "hub");
+                Self::put(table, "url", hub.url.as_str().into());
+                match &hub.key {
+                    Some(key) => Self::put(table, "key", key.as_str().into()),
+                    None => {
+                        table.remove("key");
+                    }
+                }
+            }
+        }
+        Self::write_checked(path, doc)
+    }
+
+    /// The config at `path` to edit, or an empty one when there is none.
+    fn document_or_new(path: &Path) -> Result<DocumentMut, ConfigError> {
+        match std::fs::read_to_string(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(DocumentMut::new()),
+            _ => Self::document(path),
+        }
+    }
+
+    /// The table `name`, made (or made a table again) when it is not one.
+    fn table_mut<'a>(doc: &'a mut DocumentMut, name: &str) -> &'a mut toml_edit::Table {
+        if !doc.get(name).is_some_and(toml_edit::Item::is_table) {
+            doc[name] = toml_edit::Item::Table(toml_edit::Table::new());
+        }
+        doc[name]
+            .as_table_mut()
+            .expect("the item was just made a table")
+    }
+
+    /// Sets `key` in `table`; a comment beside the old value stays beside
+    /// the new one.
+    fn put(table: &mut toml_edit::Table, key: &str, mut value: toml_edit::Value) {
+        if let Some(old) = table.get(key).and_then(toml_edit::Item::as_value) {
+            *value.decor_mut() = old.decor().clone();
+        }
+        table[key] = toml_edit::Item::Value(value);
+    }
+
+    /// Writes `doc` to `path` once it reads as a valid config.
+    fn write_checked(path: &Path, doc: DocumentMut) -> Result<Self, ConfigError> {
+        let text = doc.to_string();
+        let config = toml_edit::de::from_str::<Self>(&text)
+            .map_err(|e| ConfigError::Rejected(format!("invalid setting: {e}")))?;
+        config.check_tailnet(None).map_err(ConfigError::Rejected)?;
+        fsx::write_private(path, text.as_bytes()).map_err(write_error(path))?;
+        Ok(config)
+    }
+
     fn document(path: &Path) -> Result<DocumentMut, ConfigError> {
         let text = std::fs::read_to_string(path).map_err(read_error(path))?;
         text.parse().map_err(invalid(path, &text))
+    }
+
+    /// What is wrong with `[tailscale]` and `[hub]`, if anything, naming
+    /// the line at fault when `text`, the file they were read from, is
+    /// given.
+    fn check_tailnet(&self, text: Option<&str>) -> Result<(), String> {
+        let doc = text.and_then(|text| toml_edit::Document::parse(text).ok());
+        // "line N: " for the item at `table.key[nth]` in the file, when it
+        // is there.
+        let line = |table: &str, key: &str, nth: Option<usize>| -> String {
+            let (Some(text), Some(doc)) = (text, &doc) else {
+                return String::new();
+            };
+            let item = doc.as_item().get(table).and_then(|t| t.get(key));
+            let item = match nth {
+                Some(n) => item.and_then(|list| list.get(n)),
+                None => item,
+            };
+            match item.and_then(toml_edit::Item::span) {
+                Some(span) => {
+                    let line = text[..span.start.min(text.len())].matches('\n').count() + 1;
+                    format!("line {line}: ")
+                }
+                None => String::new(),
+            }
+        };
+        if let Some(hub) = &self.hub {
+            let uri = hub.url.parse::<http::Uri>().ok().filter(|uri| {
+                matches!(uri.scheme_str(), Some("http" | "https"))
+                    && uri.host().is_some_and(|h| !h.is_empty())
+            });
+            let Some(uri) = uri else {
+                return Err(format!(
+                    "{}[hub] url = {:?} is not a web address; give the whole URL, starting with https://",
+                    line("hub", "url", None),
+                    hub.url
+                ));
+            };
+            if uri.scheme_str() == Some("http") && hub.key.is_none() && !is_loopback(&uri) {
+                return Err(format!(
+                    "{}[hub] url must be https unless it is on this machine or [hub] key is set",
+                    line("hub", "url", None)
+                ));
+            }
+        }
+        if let Some(tailnet) = &self.tailscale {
+            for (n, user) in tailnet.users.iter().enumerate() {
+                let login = !user.is_empty()
+                    && user.is_ascii()
+                    && user.contains('@')
+                    && !user.contains("=?");
+                if !login {
+                    return Err(format!(
+                        "{}[tailscale] users: {user:?} is not a tailnet login, such as you@github",
+                        line("tailscale", "users", Some(n))
+                    ));
+                }
+            }
+            for (n, admin) in tailnet.admins.iter().enumerate() {
+                if admin.machine.trim().is_empty() || admin.id.trim().is_empty() {
+                    return Err(format!(
+                        "{}[tailscale] admins: each needs a machine and its id; `slopmax tailscale admins add <machine>` fills them in",
+                        line("tailscale", "admins", Some(n))
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The base URL this machine's agents use: the hub's, when it uses one,
+    /// else this machine's proxy.
+    pub fn agent_base(&self) -> String {
+        match &self.hub {
+            Some(hub) => hub.url.trim_end_matches('/').to_owned(),
+            None => self.base_url(),
+        }
+    }
+
+    /// The token this machine's agents send: the hub's key, or the
+    /// placeholder [`TAILNET_TOKEN`] for a hub that knows this machine by
+    /// its tailnet login, else this machine's own `api_key`.
+    pub fn agent_token(&self) -> String {
+        match &self.hub {
+            Some(HubLink { key: Some(key), .. }) => key.clone(),
+            Some(_) => TAILNET_TOKEN.to_owned(),
+            None => self.api_key.clone(),
+        }
+    }
+
+    /// The hub this machine uses, if any.
+    pub fn hub_url(&self) -> Option<&str> {
+        self.hub.as_ref().map(|hub| hub.url.as_str())
+    }
+
+    /// The tailnet logins taken without a key.
+    pub fn tailnet_users(&self) -> &[String] {
+        self.tailscale.as_ref().map_or(&[], |t| &t.users)
+    }
+
+    /// Whether the tailnet login `login` is taken without a key, matched
+    /// without regard to ASCII case. An encoded word (`=?utf-8?q?…?=`) is
+    /// never a login.
+    pub fn allows_login(&self, login: &str) -> bool {
+        !login.contains("=?")
+            && self
+                .tailnet_users()
+                .iter()
+                .any(|user| user.eq_ignore_ascii_case(login))
+    }
+
+    /// The stable node ids of the machines that may manage slopmax.
+    pub fn admin_ids(&self) -> impl Iterator<Item = &str> {
+        self.tailscale
+            .iter()
+            .flat_map(|t| t.admins.iter().map(|admin| admin.id.as_str()))
+    }
+
+    /// Why a command that runs or changes this machine's own proxy does
+    /// not, when it uses a hub instead.
+    pub fn hub_refusal(&self) -> Option<String> {
+        self.hub.as_ref().map(|hub| {
+            format!(
+                "This machine uses the hub at {} and runs no proxy of its own. `slopmax setup --hub off` goes back to its own accounts.",
+                hub.url.trim_end_matches('/')
+            )
+        })
     }
 
     /// Base URL agents use to reach the proxy.
@@ -435,6 +690,18 @@ impl Config {
     pub fn dashboard_url(&self) -> String {
         format!("{}/slopmax/#key={}", self.base_url(), self.api_key)
     }
+}
+
+/// Whether `uri` names this machine: `localhost` or a loopback address.
+fn is_loopback(uri: &http::Uri) -> bool {
+    let Some(host) = uri.host() else {
+        return false;
+    };
+    let ip = host.trim_start_matches('[').trim_end_matches(']');
+    host.eq_ignore_ascii_case("localhost")
+        || ip
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// The config written on first run: the generated key, then every other
@@ -534,6 +801,21 @@ api_key = "{api_key}"
 #   name = "laptop"
 #   key = "sm-..."
 #   models = ["gpt-*"]
+
+# Your other machines over Tailscale, once `slopmax tailscale on` publishes
+# slopmax to your tailnet:
+#   [tailscale]
+#   # Tailnet logins whose machines use slopmax without a key and see its
+#   # status. List only your own.
+#   users = ["you@github"]
+#   # Machines that may also manage slopmax. `slopmax tailscale admins add
+#   # <machine>` fills this in.
+#   admins = []
+
+# On a machine that uses another machine's slopmax: `slopmax setup --hub
+# <machine>` writes this.
+#   [hub]
+#   url = "https://hub.example.ts.net:7567"
 
 # What each subscription costs a month, for what unused quota is worth.
 # List prices are built in (Claude Pro $20, Max 5x $100, Max 20x $200;
@@ -685,5 +967,279 @@ mod tests {
     #[test]
     fn rejects_unknown_keys() {
         assert!(toml_edit::de::from_str::<Config>("lisen = \"x\"").is_err());
+        assert!(toml_edit::de::from_str::<Config>("[tailscale]\non = true\n").is_err());
+        assert!(
+            toml_edit::de::from_str::<Config>("[hub]\nurl = \"https://h\"\nport = 1\n").is_err()
+        );
+    }
+
+    /// A config at a fresh path holding `text`.
+    fn config_with(text: &str) -> std::path::PathBuf {
+        let path = temp_config();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    fn admin(machine: &str, id: &str) -> AdminMachine {
+        AdminMachine {
+            machine: machine.into(),
+            id: id.into(),
+        }
+    }
+
+    #[test]
+    fn tailscale_and_hub_round_trip() {
+        let text = r#"api_key = "sm-key"
+
+[tailscale]
+users = ["you@github"]
+admins = [{ machine = "laptop", id = "nAbC1CNTRL" }]
+
+[hub]
+url = "https://hub.example.ts.net:7567"
+key = "sm-client"
+"#;
+        let path = config_with(text);
+        let config = Config::load_from(&path).unwrap();
+        let tailnet = Tailnet {
+            users: vec!["you@github".into()],
+            admins: vec![admin("laptop", "nAbC1CNTRL")],
+        };
+        let hub = HubLink {
+            url: "https://hub.example.ts.net:7567".into(),
+            key: Some("sm-client".into()),
+        };
+        assert_eq!(config.tailscale.as_ref(), Some(&tailnet));
+        assert_eq!(config.hub.as_ref(), Some(&hub));
+        let again: Config =
+            toml_edit::de::from_str(&toml_edit::ser::to_string(&config).unwrap()).unwrap();
+        assert_eq!(again, config);
+        // Either table alone, and empty lists, read too.
+        let bare: Config = toml_edit::de::from_str("[tailscale]\n").unwrap();
+        assert_eq!(bare.tailscale, Some(Tailnet::default()));
+        assert_eq!(bare.hub, None);
+        // Without them, nothing is written of them.
+        let plain = toml_edit::ser::to_string(&Config::default()).unwrap();
+        assert!(
+            !plain.contains("tailscale") && !plain.contains("hub"),
+            "{plain}"
+        );
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn tailscale_and_hub_are_checked_naming_the_line() {
+        let refused = |text: &str| -> String {
+            let path = config_with(&format!("api_key = \"sm-key\"\n{text}"));
+            let error = Config::load_from(&path).unwrap_err().to_string();
+            std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+            error
+        };
+        let error = refused("[hub]\nurl = \"hub.example.ts.net\"\n");
+        assert!(
+            error.contains(
+                r#"line 3: [hub] url = "hub.example.ts.net" is not a web address; give the whole URL, starting with https://"#
+            ),
+            "{error}"
+        );
+        assert!(refused("[hub]\nurl = \"ftp://hub\"\n").contains("is not a web address"));
+        assert!(refused("[hub]\nurl = \"https://\"\n").contains("is not a web address"));
+        let error = refused("\n[hub]\nurl = \"http://hub.example.ts.net:7567\"\n");
+        assert!(
+            error.contains(
+                "line 4: [hub] url must be https unless it is on this machine or [hub] key is set"
+            ),
+            "{error}"
+        );
+        let error = refused("[tailscale]\nusers = [\"you@github\",\n  \"nobody\"]\n");
+        assert!(
+            error.contains(
+                r#"line 4: [tailscale] users: "nobody" is not a tailnet login, such as you@github"#
+            ),
+            "{error}"
+        );
+        for bad in ["", "=?utf-8?q?you?=@github", "yöu@github"] {
+            let error = refused(&format!("[tailscale]\nusers = [{bad:?}]\n"));
+            assert!(error.contains("is not a tailnet login"), "{bad}: {error}");
+        }
+        let error = refused("[tailscale]\nadmins = [{ machine = \"laptop\", id = \"\" }]\n");
+        assert!(
+            error.contains("line 3: [tailscale] admins: each needs a machine and its id"),
+            "{error}"
+        );
+        assert!(
+            refused("[tailscale]\nadmins = [{ machine = \" \", id = \"n1\" }]\n")
+                .contains("each needs a machine and its id")
+        );
+
+        // Plain HTTP is fine on this machine, or with a key.
+        for ok in [
+            "[hub]\nurl = \"http://127.0.0.1:7567\"\n",
+            "[hub]\nurl = \"http://localhost:7567/\"\n",
+            "[hub]\nurl = \"http://[::1]:7567\"\n",
+            "[hub]\nurl = \"http://192.168.1.20:7567\"\nkey = \"sm-x\"\n",
+            "[hub]\nurl = \"https://hub.example.ts.net:7567\"\n",
+        ] {
+            let path = config_with(&format!("api_key = \"sm-key\"\n{ok}"));
+            assert!(Config::load_from(&path).is_ok(), "{ok}");
+            std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn agents_use_the_hub_when_there_is_one() {
+        let local = Config {
+            api_key: "sm-owner".into(),
+            ..Config::default()
+        };
+        assert_eq!(local.agent_base(), "http://127.0.0.1:7567");
+        assert_eq!(local.agent_token(), "sm-owner");
+        assert_eq!(local.hub_url(), None);
+        assert_eq!(local.hub_refusal(), None);
+
+        let hub = Config {
+            hub: Some(HubLink {
+                url: "https://hub.example.ts.net:7567/".into(),
+                key: None,
+            }),
+            ..local.clone()
+        };
+        assert_eq!(hub.agent_base(), "https://hub.example.ts.net:7567");
+        assert_eq!(hub.agent_token(), TAILNET_TOKEN);
+        assert_eq!(hub.hub_url(), Some("https://hub.example.ts.net:7567/"));
+        // The proxy this machine would run stays local.
+        assert_eq!(hub.base_url(), "http://127.0.0.1:7567");
+        assert_eq!(
+            hub.hub_refusal().unwrap(),
+            "This machine uses the hub at https://hub.example.ts.net:7567 and runs no proxy of its own. `slopmax setup --hub off` goes back to its own accounts."
+        );
+
+        let keyed = Config {
+            hub: Some(HubLink {
+                url: "https://hub.example.ts.net:7567".into(),
+                key: Some("sm-x".into()),
+            }),
+            ..local
+        };
+        assert_eq!(keyed.agent_base(), "https://hub.example.ts.net:7567");
+        assert_eq!(keyed.agent_token(), "sm-x");
+    }
+
+    #[test]
+    fn logins_are_matched_without_case_and_never_encoded() {
+        let config = Config {
+            tailscale: Some(Tailnet {
+                users: vec!["You@GitHub".into()],
+                admins: vec![admin("laptop", "n1"), admin("desk", "n2")],
+            }),
+            ..Config::default()
+        };
+        assert!(config.allows_login("you@github"));
+        assert!(config.allows_login("YOU@GITHUB"));
+        assert!(!config.allows_login("other@github"));
+        assert!(!config.allows_login("=?utf-8?q?You@GitHub?="));
+        assert_eq!(config.tailnet_users(), ["You@GitHub"]);
+        assert_eq!(config.admin_ids().collect::<Vec<_>>(), ["n1", "n2"]);
+
+        let none = Config::default();
+        assert!(none.tailnet_users().is_empty());
+        assert!(!none.allows_login("you@github"));
+        assert_eq!(none.admin_ids().count(), 0);
+    }
+
+    #[test]
+    fn tailscale_is_written_in_place_keeping_comments() {
+        let path = config_with(
+            "# my setup\napi_key = \"sm-key\" # the owner's\n\n[tailscale]\n# only mine\nusers = [\"old@github\"] # me\n",
+        );
+        let tailnet = Tailnet {
+            users: vec!["you@github".into(), "work@github".into()],
+            admins: vec![admin("laptop", "nAbC1CNTRL")],
+        };
+        let config = Config::set_tailnet(&path, &tailnet).unwrap();
+        assert_eq!(config.tailscale.as_ref(), Some(&tailnet));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.starts_with("# my setup\napi_key = \"sm-key\" # the owner's\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("# only mine\nusers = [\"you@github\", \"work@github\"] # me\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains(r#"admins = [{ machine = "laptop", id = "nAbC1CNTRL" }]"#),
+            "{text}"
+        );
+        assert_eq!(Config::load_from(&path).unwrap(), config);
+
+        // A fresh table goes at the end, and the template's comments stay.
+        let fresh = temp_config();
+        let first = Config::load_from(&fresh).unwrap();
+        let config = Config::set_tailnet(&fresh, &Tailnet::default()).unwrap();
+        assert_eq!(config.api_key, first.api_key);
+        assert_eq!(config.tailscale, Some(Tailnet::default()));
+        let text = std::fs::read_to_string(&fresh).unwrap();
+        assert!(text.starts_with("# slopmax settings."), "{text}");
+
+        // Nothing is written when the result is not a valid config.
+        let bad = Tailnet {
+            users: vec!["nobody".into()],
+            admins: vec![],
+        };
+        let error = Config::set_tailnet(&path, &bad).unwrap_err().to_string();
+        assert!(error.contains("is not a tailnet login"), "{error}");
+        assert_eq!(Config::load_from(&path).unwrap().tailscale, Some(tailnet));
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::remove_dir_all(fresh.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn the_hub_is_set_and_removed_in_place_keeping_comments() {
+        let path = config_with("# my setup\napi_key = \"sm-key\" # the owner's\n");
+        let hub = HubLink {
+            url: "https://hub.example.ts.net:7567".into(),
+            key: Some("sm-client".into()),
+        };
+        let config = Config::set_hub(&path, Some(&hub)).unwrap();
+        assert_eq!(config.hub.as_ref(), Some(&hub));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.starts_with("# my setup\napi_key = \"sm-key\" # the owner's\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "[hub]\nurl = \"https://hub.example.ts.net:7567\"\nkey = \"sm-client\"\n"
+            ),
+            "{text}"
+        );
+
+        // Setting it again without a key drops the key.
+        let tailnet_only = HubLink { key: None, ..hub };
+        let config = Config::set_hub(&path, Some(&tailnet_only)).unwrap();
+        assert_eq!(config.hub, Some(tailnet_only));
+        assert!(
+            !std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("sm-client")
+        );
+
+        // Plain HTTP to another machine without a key is refused unwritten.
+        let insecure = HubLink {
+            url: "http://hub.example.ts.net:7567".into(),
+            key: None,
+        };
+        let error = Config::set_hub(&path, Some(&insecure))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("must be https"), "{error}");
+
+        let config = Config::set_hub(&path, None).unwrap();
+        assert_eq!(config.hub, None);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text, "# my setup\napi_key = \"sm-key\" # the owner's\n");
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 }

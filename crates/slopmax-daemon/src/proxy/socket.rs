@@ -674,6 +674,7 @@ fn record(
         agent: origin.agent.map(str::to_owned),
         session: origin.session.clone(),
         end,
+        machine: None,
     };
     app.record(&entry);
 }

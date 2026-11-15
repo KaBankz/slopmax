@@ -261,10 +261,11 @@ impl Service<Uri> for Connector {
     }
 }
 
-/// Bounds a whole connection setup, the TLS handshake included, to twice
-/// the connect timeout. The dial's own timeout ends with the TCP connection, so a server that accepts it
-/// and then says nothing would otherwise hold a request until the read
-/// timeout, minutes later.
+/// Bounds a whole connection setup, the TLS handshake included, to the
+/// handshake timeout (twice the connect timeout unless set). The dial's own
+/// timeout ends with the TCP connection, so a server that accepts it and
+/// then says nothing would otherwise hold a request until the read timeout,
+/// minutes later.
 #[derive(Clone)]
 struct Bounded<C> {
     inner: C,
@@ -371,6 +372,7 @@ pub struct Builder {
     connect_timeout: Option<Duration>,
     timeout: Option<Duration>,
     read_timeout: Option<Duration>,
+    handshake_timeout: Option<Duration>,
     proxy: Option<Proxy>,
     origins: Origins,
     plain: bool,
@@ -396,6 +398,14 @@ impl Builder {
     /// Longest wait for the response headers and between body chunks.
     pub fn read_timeout(mut self, timeout: Duration) -> Self {
         self.read_timeout = Some(timeout);
+        self
+    }
+
+    /// Longest wait for a whole connection setup, the TLS handshake
+    /// included: twice the connect timeout unless set. A server that makes
+    /// its certificate on the first handshake (Tailscale's) needs longer.
+    pub fn handshake_timeout(mut self, timeout: Duration) -> Self {
+        self.handshake_timeout = Some(timeout);
         self
     }
 
@@ -463,7 +473,7 @@ impl Builder {
             .wrap_connector(connector);
         let bounded = Bounded {
             inner: https,
-            limit: connect_timeout * 2,
+            limit: self.handshake_timeout.unwrap_or(connect_timeout * 2),
         };
         Client {
             pool: Arc::new(Pool::new(bounded)),

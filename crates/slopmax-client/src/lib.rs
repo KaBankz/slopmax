@@ -9,6 +9,7 @@
 //! progress, so nothing polls.
 
 use std::fmt;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::{Buf, BytesMut};
@@ -25,6 +26,7 @@ use slopmax_api::requests::{
     Stopping,
 };
 use slopmax_api::settings::{KeyInfo, LivePatch, NewKey, SettingsView};
+use slopmax_api::tailnet::{Access, TailnetPatch, TailnetView};
 use slopmax_api::{AgentId, ApiError, PREFIX};
 
 pub use slopmax_api as api;
@@ -72,7 +74,8 @@ impl std::error::Error for Error {}
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-/// A daemon at `base`, reached with the owner key.
+/// A daemon at `base`, reached with the owner key, or a hub on another
+/// machine, reached with this machine's token.
 #[derive(Clone)]
 pub struct Client {
     base: String,
@@ -81,18 +84,36 @@ pub struct Client {
     /// For the event stream: no deadline, but a stall longer than the
     /// pings' interval ends it.
     stream: slopmax_net::Client,
+    /// For a hub on another machine: the version its `/healthz` last gave,
+    /// which an answer this client can't read is put down to.
+    hub: Option<Arc<Mutex<Option<String>>>>,
 }
 
 /// What `/healthz` says of the program serving.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct Health {
     pub version: String,
-    /// The proxy's process (older proxies leave it out).
+    /// The proxy's process (older proxies leave it out, as does a hub
+    /// reached over the tailnet).
     pub pid: Option<u32>,
     /// Whether it takes this client's key (older proxies leave it out):
     /// `Some(false)` for a proxy started from another home, or before the
     /// key changed.
     pub owner: Option<bool>,
+    /// What this client may do there, by its key or its tailnet identity
+    /// (older proxies leave it out).
+    #[serde(default)]
+    pub access: Option<Access>,
+    /// `tailnet` when the request came over the tailnet.
+    #[serde(default)]
+    pub via: Option<String>,
+    /// The tailnet login it knows this machine by.
+    #[serde(default)]
+    pub login: Option<String>,
+    /// The name it knows this machine by: a client key's, or its tailnet
+    /// machine name.
+    #[serde(default)]
+    pub machine: Option<String>,
 }
 
 impl Client {
@@ -115,7 +136,46 @@ impl Client {
             key: key.into(),
             http,
             stream,
+            hub: None,
         }
+    }
+
+    /// A client of a hub on another machine (`https://hub.example.ts.net:7567`),
+    /// reached with `token`: a client key, or the placeholder a hub that
+    /// knows this machine by its tailnet login takes. HTTPS is checked
+    /// against the system's trusted roots.
+    pub fn remote(base: impl Into<String>, token: impl Into<String>) -> Self {
+        // The first TLS connection to a new tailnet name waits while the
+        // hub's Tailscale makes its certificate, up to half a minute.
+        let handshake = Duration::from_secs(30);
+        let http = slopmax_net::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .handshake_timeout(handshake)
+            .timeout(Duration::from_secs(120))
+            .build();
+        let stream = slopmax_net::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .handshake_timeout(handshake)
+            .read_timeout(Duration::from_secs(45))
+            .build();
+        Self {
+            base: base.into().trim_end_matches('/').to_owned(),
+            key: token.into(),
+            http,
+            stream,
+            hub: Some(Arc::default()),
+        }
+    }
+
+    /// The hub's version, when this client is a hub's and has heard it.
+    fn hub_version(&self) -> Option<String> {
+        self.hub
+            .as_ref()
+            .and_then(|hub| hub.lock().unwrap_or_else(|p| p.into_inner()).clone())
+    }
+
+    fn unexpected(&self, what: String) -> Error {
+        unexpected(what, self.hub_version().as_deref())
     }
 
     pub fn base(&self) -> &str {
@@ -127,18 +187,11 @@ impl Client {
         self.health_within(Duration::from_secs(3)).await
     }
 
-    /// [`Client::health`], waiting at most `timeout` for the answer.
+    /// [`Client::health`], waiting at most `timeout` for the answer. A hub
+    /// reached over HTTPS for the first time can take up to 30 seconds,
+    /// while its Tailscale makes its certificate.
     pub async fn health_within(&self, timeout: Duration) -> Option<Health> {
-        #[derive(serde::Deserialize)]
-        struct Answer {
-            service: String,
-            version: String,
-            #[serde(default)]
-            pid: Option<u32>,
-            #[serde(default)]
-            owner: Option<bool>,
-        }
-        let answer: Answer = self
+        let bytes = self
             .http
             .get(format!("{}/healthz", self.base))
             .bearer_auth(&self.key)
@@ -146,14 +199,14 @@ impl Client {
             .send()
             .await
             .ok()?
-            .json()
+            .bytes()
             .await
             .ok()?;
-        (answer.service == "slopmax").then_some(Health {
-            version: answer.version,
-            pid: answer.pid,
-            owner: answer.owner,
-        })
+        let health = health(&bytes)?;
+        if let Some(hub) = &self.hub {
+            *hub.lock().unwrap_or_else(|p| p.into_inner()) = Some(health.version.clone());
+        }
+        Some(health)
     }
 
     async fn call<T: DeserializeOwned>(
@@ -164,7 +217,7 @@ impl Client {
     ) -> Result<T> {
         let bytes = self.send(method, path, body).await?;
         serde_json::from_slice(&bytes)
-            .map_err(|e| Error::Unexpected(format!("reading {path}'s answer: {e}")))
+            .map_err(|e| self.unexpected(format!("reading {path}'s answer: {e}")))
     }
 
     /// A call answered with no body.
@@ -202,7 +255,7 @@ impl Client {
         }
         Err(match serde_json::from_slice::<ApiError>(&bytes) {
             Ok(error) => Error::Api(error),
-            Err(_) => Error::Unexpected(format!("{path} answered {status}")),
+            Err(_) => self.unexpected(format!("{path} answered {status}")),
         })
     }
 
@@ -402,6 +455,18 @@ impl Client {
         self.call(Method::GET, &query, Self::NONE).await
     }
 
+    /// slopmax on the tailnet: whether and where it is published, and who
+    /// may use it.
+    pub async fn tailnet(&self) -> Result<TailnetView> {
+        self.call(Method::GET, "tailnet", Self::NONE).await
+    }
+
+    /// Changes who may use slopmax over the tailnet, written to
+    /// config.toml.
+    pub async fn change_tailnet(&self, patch: &TailnetPatch) -> Result<TailnetView> {
+        self.call(Method::PATCH, "tailnet", Some(patch)).await
+    }
+
     /// Sends a test notification to the configured webhook or command.
     pub async fn notify_test(&self) -> Result<()> {
         self.act(Method::POST, "notify/test", Self::NONE).await
@@ -423,14 +488,55 @@ impl Client {
             let bytes = response.bytes().await.unwrap_or_default();
             return Err(match serde_json::from_slice::<ApiError>(&bytes) {
                 Ok(error) => Error::Api(error),
-                Err(_) => Error::Unexpected(format!("events answered {status}")),
+                Err(_) => self.unexpected(format!("events answered {status}")),
             });
         }
         Ok(Events {
             body: response.into_body(),
             buffer: BytesMut::new(),
+            hub_version: self.hub_version(),
         })
     }
+}
+
+/// An answer this client can't read, put down to the hub's version when
+/// it is known.
+fn unexpected(what: String, hub_version: Option<&str>) -> Error {
+    Error::Unexpected(match hub_version {
+        Some(version) => format!("{what} (the hub runs slopmax {version})"),
+        None => what,
+    })
+}
+
+/// What a `/healthz` answer says, when slopmax gave it.
+fn health(bytes: &[u8]) -> Option<Health> {
+    #[derive(serde::Deserialize)]
+    struct Answer {
+        service: String,
+        version: String,
+        #[serde(default)]
+        pid: Option<u32>,
+        #[serde(default)]
+        owner: Option<bool>,
+        #[serde(default)]
+        access: Option<Access>,
+        #[serde(default)]
+        via: Option<String>,
+        #[serde(default)]
+        login: Option<String>,
+        #[serde(default)]
+        machine: Option<String>,
+    }
+    let answer: Answer = serde_json::from_slice(bytes).ok()?;
+    (answer.service == "slopmax").then_some(Health {
+        version: answer.version,
+        pid: answer.pid,
+        owner: answer.owner,
+        access: answer.access,
+        via: answer.via,
+        login: answer.login,
+        machine: answer.machine,
+    })
 }
 
 /// A name as the API spells it in a path or query: its serde form.
@@ -463,6 +569,8 @@ fn escape(segment: &str) -> String {
 pub struct Events {
     body: slopmax_net::body::Body,
     buffer: BytesMut,
+    /// The hub's version, for events this client can't read.
+    hub_version: Option<String>,
 }
 
 impl Events {
@@ -504,10 +612,12 @@ impl Events {
             if data.is_empty() {
                 continue;
             }
-            return Some(
-                serde_json::from_slice(&data)
-                    .map_err(|e| Error::Unexpected(format!("reading an event: {e}"))),
-            );
+            return Some(serde_json::from_slice(&data).map_err(|e| {
+                unexpected(
+                    format!("reading an event: {e}"),
+                    self.hub_version.as_deref(),
+                )
+            }));
         }
     }
 }
@@ -543,6 +653,7 @@ mod tests {
         let mut events = Events {
             body: slopmax_net::body::empty(),
             buffer: BytesMut::new(),
+            hub_version: None,
         };
         events.buffer.extend_from_slice(
             b": a comment\n\ndata: {\"_tag\":\"Ping\"}\r\n\r\ndata: {\"_tag\":\"Hello\",\n",
@@ -559,6 +670,114 @@ mod tests {
                 version: "1.0".into(),
                 exe: None
             }
+        );
+    }
+
+    #[test]
+    fn health_reads_with_and_without_what_hubs_add() {
+        let old =
+            health(br#"{"service":"slopmax","version":"0.9.0","pid":42,"owner":true}"#).unwrap();
+        assert_eq!(
+            old,
+            Health {
+                version: "0.9.0".into(),
+                pid: Some(42),
+                owner: Some(true),
+                access: None,
+                via: None,
+                login: None,
+                machine: None,
+            }
+        );
+        let hub = health(
+            br#"{"service":"slopmax","version":"0.10.0","owner":false,"via":"tailnet",
+                "access":"view","login":"you@github","machine":"laptop","later":1}"#,
+        )
+        .unwrap();
+        assert_eq!(hub.pid, None);
+        assert_eq!(hub.access, Some(Access::View));
+        assert_eq!(hub.via.as_deref(), Some("tailnet"));
+        assert_eq!(hub.login.as_deref(), Some("you@github"));
+        assert_eq!(hub.machine.as_deref(), Some("laptop"));
+        assert_eq!(health(br#"{"service":"other","version":"1"}"#), None);
+        assert_eq!(health(b"not json"), None);
+    }
+
+    #[test]
+    fn answers_it_cannot_read_name_the_hubs_version() {
+        assert_eq!(
+            unexpected("reading tailnet's answer: oops".into(), Some("0.10.0")),
+            Error::Unexpected(
+                "reading tailnet's answer: oops (the hub runs slopmax 0.10.0)".into()
+            )
+        );
+        assert_eq!(
+            unexpected("status answered 502".into(), None).message(),
+            "status answered 502"
+        );
+        let local = Client::new("http://127.0.0.1:1", "sm-key");
+        assert_eq!(local.hub_version(), None);
+        let remote = Client::remote("https://hub.example.ts.net:7567/", "tailnet");
+        assert_eq!(remote.base(), "https://hub.example.ts.net:7567");
+        assert_eq!(remote.hub_version(), None);
+    }
+
+    /// A stand-in hub on 127.0.0.1 that answers `/healthz` and nothing
+    /// this client reads.
+    async fn hub() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(slopmax_net::server::serve(
+            listener,
+            |request: slopmax_net::server::Request| async move {
+                let (status, body) = match request.uri().path() {
+                    "/healthz" => (
+                        200,
+                        r#"{"service":"slopmax","version":"9.9.9","owner":false,"access":"admin"}"#,
+                    ),
+                    "/slopmax/api/tailnet" => (200, r#"{"tailscale":"sideways"}"#),
+                    _ => (502, "bad gateway"),
+                };
+                http::Response::builder()
+                    .status(status)
+                    .header("content-type", "application/json")
+                    .body(slopmax_net::body::full(body))
+                    .unwrap()
+            },
+            std::future::pending(),
+        ));
+        base
+    }
+
+    #[tokio::test]
+    async fn a_remote_client_reads_the_hub_and_puts_what_it_cannot_read_down_to_its_version() {
+        let base = hub().await;
+        let client = Client::remote(&base, "tailnet");
+        // Before it has heard the version, an error says only what failed.
+        let error = client.tailnet().await.unwrap_err();
+        assert!(!error.message().contains("the hub runs"), "{error}");
+
+        let health = client.health_within(Duration::from_secs(5)).await.unwrap();
+        assert_eq!(health.access, Some(Access::Admin));
+        let error = client.tailnet().await.unwrap_err();
+        assert!(
+            error.message().starts_with("reading tailnet's answer: ")
+                && error.message().ends_with(" (the hub runs slopmax 9.9.9)"),
+            "{error}"
+        );
+        let error = client.status().await.unwrap_err();
+        assert_eq!(
+            error,
+            Error::Unexpected(
+                "status answered 502 Bad Gateway (the hub runs slopmax 9.9.9)".into()
+            )
+        );
+        // A client of this machine's own daemon says no more than before.
+        let local = Client::new(&base, "sm-key");
+        assert!(local.health().await.is_some());
+        assert_eq!(
+            local.status().await.unwrap_err(),
+            Error::Unexpected("status answered 502 Bad Gateway".into())
         );
     }
 }

@@ -610,6 +610,7 @@ fn entry(at: Timestamp, account: &str, model: &str, status: u16) -> Entry {
         agent: Some("claude".into()),
         session: None,
         end: None,
+        machine: None,
     }
 }
 

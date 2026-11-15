@@ -37,8 +37,8 @@ const MANAGED: [&str; 4] = [
 /// variables in `~/.claude/settings.json`.
 fn env(config: &Config) -> Vec<(&'static str, String)> {
     vec![
-        ("ANTHROPIC_BASE_URL", config.base_url()),
-        ("ANTHROPIC_AUTH_TOKEN", config.api_key.clone()),
+        ("ANTHROPIC_BASE_URL", config.agent_base()),
+        ("ANTHROPIC_AUTH_TOKEN", config.agent_token()),
         ("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1".into()),
         ("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1".into()),
     ]
@@ -122,8 +122,8 @@ impl Agent for ClaudeCode {
                 .collect();
             *saved = Some(Value::Object(previous));
         }
-        env.insert("ANTHROPIC_BASE_URL".into(), config.base_url().into());
-        env.insert("ANTHROPIC_AUTH_TOKEN".into(), config.api_key.clone().into());
+        env.insert("ANTHROPIC_BASE_URL".into(), config.agent_base().into());
+        env.insert("ANTHROPIC_AUTH_TOKEN".into(), config.agent_token().into());
         env.insert(
             "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY".into(),
             "1".into(),
@@ -311,6 +311,40 @@ mod tests {
         assert!(ClaudeCode.detect(&ua("claude-code/2.1.287")));
         assert!(!ClaudeCode.detect(&ua("OpenAI/Python 2.4.0")));
         assert!(!ClaudeCode.detect(&HeaderMap::new()));
+    }
+
+    fn hub(key: Option<&str>) -> Config {
+        Config {
+            hub: Some(crate::config::HubLink {
+                url: "https://hub.example.ts.net:7567".into(),
+                key: key.map(str::to_owned),
+            }),
+            ..config()
+        }
+    }
+
+    #[test]
+    fn with_a_hub_claude_code_uses_it() {
+        let dir = crate::testkit::temp_dir("claude-code-hub");
+        let file = dir.join("settings.json");
+        ClaudeCode.setup(&hub(None), &file, &mut None).unwrap();
+        let wired: Value = fsx::read_json(&file).unwrap().unwrap();
+        assert_eq!(
+            wired["env"]["ANTHROPIC_BASE_URL"],
+            "https://hub.example.ts.net:7567"
+        );
+        assert_eq!(wired["env"]["ANTHROPIC_AUTH_TOKEN"], "tailnet");
+
+        ClaudeCode
+            .setup(&hub(Some("sm-x")), &file, &mut None)
+            .unwrap();
+        let wired: Value = fsx::read_json(&file).unwrap().unwrap();
+        assert_eq!(wired["env"]["ANTHROPIC_AUTH_TOKEN"], "sm-x");
+
+        let script = ClaudeCode.env(&hub(None), Path::new("slopmax"));
+        assert!(script.contains("export ANTHROPIC_BASE_URL=https://hub.example.ts.net:7567"));
+        assert!(script.contains("export ANTHROPIC_AUTH_TOKEN=tailnet"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

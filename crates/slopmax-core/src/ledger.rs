@@ -48,6 +48,10 @@ pub struct Entry {
     /// How a streamed answer ended, when not by completing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub end: Option<End>,
+    /// The machine that sent it: a client key's name or a tailnet machine;
+    /// None for the owner key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
 }
 
 /// How a streamed answer ended.
@@ -330,6 +334,7 @@ mod tests {
             agent: None,
             session: None,
             end: None,
+            machine: None,
         }
     }
 
@@ -393,6 +398,23 @@ mod tests {
             .collect();
         assert_eq!(models, ["a", "b", "c"]);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_machine_is_read_when_there_and_written_only_when_known() {
+        // A line from before entries named their machine.
+        let old = r#"{"at":"2026-10-02T00:00:00Z","account":"claude-1","provider":"claude","status":200,"ms":5}"#;
+        let read: Entry = serde_json::from_str(old).unwrap();
+        assert_eq!(read.machine, None);
+        let owner = entry("2026-10-02T00:00:00Z", "a");
+        assert!(!serde_json::to_string(&owner).unwrap().contains("machine"));
+        let laptop = Entry {
+            machine: Some("laptop".into()),
+            ..owner
+        };
+        let line = serde_json::to_string(&laptop).unwrap();
+        assert!(line.contains(r#""machine":"laptop""#), "{line}");
+        assert_eq!(serde_json::from_str::<Entry>(&line).unwrap(), laptop);
     }
 
     #[cfg(unix)]

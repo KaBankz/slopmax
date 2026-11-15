@@ -204,6 +204,7 @@ async fn start() -> (Arc<App>, String, Vec<String>, TempHome) {
             agent: Some("claude".into()),
             session: Some("session-1".into()),
             end: None,
+            machine: None,
         });
     }
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -641,6 +642,7 @@ async fn every_endpoint_answers_as_its_fixture_says() {
                 agent: Some("claude".into()),
                 session: None,
                 end: None,
+                machine: None,
             });
         }
     }

@@ -24,7 +24,14 @@ pub fn run(config: &Config, store: &Store, range: &str, by: &str, json: bool) ->
         .into_iter()
         .map(|a| (a.id.clone(), a.name()))
         .collect();
-    let report = summary::build(&super::home().usage(), since, by, &config.prices, &names);
+    let report = summary::build(
+        &super::home().usage(),
+        since,
+        by,
+        &config.prices,
+        &names,
+        summary::HERE_LOCAL,
+    );
     let (rows, total) = (&report.rows, &report.total);
     let lapsed = waste::read_home(super::home(), since);
     let left = waste::left(&lapsed, &config.plan_prices, &names);

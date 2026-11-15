@@ -602,6 +602,7 @@ fn failed(
         agent: inbound.agent.map(|a| a.id().to_owned()),
         session: inbound.session.clone(),
         end: None,
+        machine: None,
     };
     app.record(&entry);
 }

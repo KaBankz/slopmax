@@ -89,6 +89,7 @@ impl Settle {
             agent: served.agent.map(str::to_owned),
             session: served.session,
             end: (end != End::Complete).then_some(end),
+            machine: None,
         };
         app.record(&entry);
     }
