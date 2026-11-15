@@ -76,7 +76,13 @@ const KEY_ENV: &[(ProviderId, &str)] = &[
 /// `claude-code,codex` → sources; `none` → none.
 pub fn sources(list: &str) -> Result<Vec<Source>> {
     names(list)
-        .map(|name| name.parse().map_err(anyhow::Error::msg))
+        .map(|name| {
+            name.parse().map_err(|_| {
+                anyhow::anyhow!(
+                    "--import takes claude-code, codex, cliproxyapi, all, or none (comma-separated), got {name:?}"
+                )
+            })
+        })
         .collect()
 }
 
@@ -84,7 +90,9 @@ pub fn sources(list: &str) -> Result<Vec<Source>> {
 pub fn subscriptions(list: &str) -> Result<Vec<ProviderId>> {
     names(list)
         .map(|name| {
-            let provider: ProviderId = name.parse().map_err(anyhow::Error::msg)?;
+            let Ok(provider) = name.parse::<ProviderId>() else {
+                bail!("--login takes claude, codex, or both (comma-separated), got {name:?}");
+            };
             if !provider.spec().is_subscription() {
                 bail!(
                     "--login signs in to subscriptions (claude, codex); add {name} keys with --keys-from-env or `slopmax login {name}`"
@@ -98,7 +106,15 @@ pub fn subscriptions(list: &str) -> Result<Vec<ProviderId>> {
 /// `claude,codex` → agents; `none` → none.
 pub fn agents(list: &str) -> Result<Vec<&'static dyn Agent>> {
     names(list)
-        .map(|name| agent::find(name).with_context(|| format!("unknown agent {name:?}")))
+        .map(|name| {
+            agent::find(name).with_context(|| {
+                let ids: Vec<&str> = agent::AGENTS.iter().map(|a| a.id()).collect();
+                format!(
+                    "--agents takes {}, or none (comma-separated), got {name:?}",
+                    ids.join(", ")
+                )
+            })
+        })
         .collect()
 }
 
@@ -369,7 +385,7 @@ async fn offer_imports(
                     let (account, _) = store.upsert(account)?;
                     println!("    {} {}", ui::green("+"), ui::bold(account.name()));
                 }
-                Err(e) => println!("    {} {e:#}", ui::dim("skipped:")),
+                Err(e) => println!("    {} {}: {e:#}", ui::dim("skipped"), item.origin),
             }
         }
     }
@@ -385,7 +401,7 @@ fn report_saved(saved: Vec<import::Saved>) -> usize {
                 added += 1;
                 println!("    {} {}", ui::green("+"), ui::bold(account.name()));
             }
-            Err(e) => println!("    {} {e:#}", ui::dim("skipped:")),
+            Err(e) => println!("    {} {}: {e:#}", ui::dim("skipped"), item.origin),
         }
     }
     added

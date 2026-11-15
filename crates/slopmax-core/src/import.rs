@@ -43,7 +43,11 @@ impl std::str::FromStr for Source {
             "claude-code" => Self::ClaudeCode,
             "codex" => Self::Codex,
             "cliproxyapi" => Self::Cliproxyapi,
-            _ => return Err(format!("unknown source {s:?}")),
+            _ => {
+                return Err(format!(
+                    "unknown source {s:?}; use all, claude-code, codex, or cliproxyapi"
+                ));
+            }
         })
     }
 }
@@ -94,9 +98,33 @@ pub async fn discover(http: &Client, source: Source, home: &Home) -> Vec<Found> 
         }
     }
     if wants(Source::Cliproxyapi) {
-        found.extend(from_cliproxyapi(http, &home.cliproxyapi()).await);
+        found.extend(from_cliproxyapi(http, home).await);
     }
     found
+}
+
+/// Where [`discover`] looks for `source`'s logins, as a person reads it.
+pub fn places(source: Source, home: &Home) -> Vec<String> {
+    let wants = |s: Source| source == Source::All || source == s;
+    let mut places = Vec::new();
+    if wants(Source::ClaudeCode) {
+        places.push(home.show(&home.claude().join(".credentials.json")));
+        if cfg!(target_os = "macos") {
+            places.push("the macOS keychain".into());
+        }
+    }
+    if wants(Source::Codex) {
+        places.push(home.show(&home.codex().join("auth.json")));
+    }
+    if wants(Source::Cliproxyapi) {
+        let dir = home.cliproxyapi();
+        places.push(format!(
+            "{}{}*.json",
+            home.show(&dir),
+            std::path::MAIN_SEPARATOR
+        ));
+    }
+    places
 }
 
 /// A CLIProxyAPI credential file. Only the fields slopmax uses are read.
@@ -121,8 +149,9 @@ struct CliProxyFile {
     priority: Option<Value>,
 }
 
-async fn from_cliproxyapi(http: &Client, dir: &Path) -> Vec<Found> {
-    let Ok(entries) = fs::read_dir(dir) else {
+async fn from_cliproxyapi(http: &Client, home: &Home) -> Vec<Found> {
+    let dir = home.cliproxyapi();
+    let Ok(entries) = fs::read_dir(&dir) else {
         return Vec::new();
     };
     let mut paths: Vec<_> = entries
@@ -133,26 +162,54 @@ async fn from_cliproxyapi(http: &Client, dir: &Path) -> Vec<Found> {
 
     let mut found = Vec::new();
     for path in paths {
-        let file = fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| serde_json::from_str::<CliProxyFile>(&text).ok());
-        let Some(file) = file else { continue };
+        let origin = home.show(&path);
+        let file = match cliproxy_file(&path) {
+            Ok(Some(file)) => file,
+            // Another provider's login, which slopmax does not take.
+            Ok(None) => continue,
+            Err(e) => {
+                found.push(Found {
+                    origin,
+                    account: Err(e),
+                });
+                continue;
+            }
+        };
         let provider = match file.kind.as_str() {
             "claude" => ProviderId::Claude,
-            "codex" => ProviderId::Codex,
-            _ => continue,
+            _ => ProviderId::Codex,
         };
         found.push(Found {
-            origin: path.display().to_string(),
+            origin,
             account: from_cliproxy_file(http, provider, file, &path).await,
         });
     }
     found
 }
 
+/// A CLIProxyAPI file of a kind slopmax imports, None for another kind, or
+/// why it can't be read, in a person's words.
+fn cliproxy_file(path: &Path) -> Result<Option<CliProxyFile>> {
+    let text = fs::read_to_string(path).map_err(|e| anyhow::anyhow!("can't be read ({e})"))?;
+    let value: Value = serde_json::from_str(&text)
+        .ok()
+        .filter(|v: &Value| v.get("type").is_some_and(Value::is_string))
+        .context("not a CLIProxyAPI login file")?;
+    if !matches!(value["type"].as_str(), Some("claude" | "codex")) {
+        return Ok(None);
+    }
+    serde_json::from_value(value)
+        .map(Some)
+        .context("a CLIProxyAPI login with fields slopmax can't read; sign in again in CLIProxyAPI, then import again")
+}
+
 fn cliproxy_tokens(file: &CliProxyFile) -> Result<Tokens> {
     let parse_time = |s: &Option<String>| s.as_deref().and_then(|t| t.parse::<Timestamp>().ok());
-    let access_token = file.access_token.clone().context("no access token")?;
+    let access_token = file
+        .access_token
+        .clone()
+        .filter(|t| !t.is_empty())
+        .context("it holds no access token; sign in again in CLIProxyAPI, then import again")?;
     Ok(Tokens {
         expires_at: jwt::expiry(&access_token).or_else(|| parse_time(&file.expired)),
         refreshed_at: parse_time(&file.last_refresh),
@@ -189,8 +246,8 @@ async fn from_cliproxy_file(
         tool: "cliproxyapi".into(),
         path: path.to_owned(),
     });
-    account.email = file.email;
-    account.label = file.label;
+    account.email = file.email.filter(|e| !e.is_empty());
+    account.label = file.label.filter(|l| !l.is_empty());
     account.disabled = file.disabled;
     account.priority = file
         .priority
@@ -234,7 +291,10 @@ mod tests {
 
     #[tokio::test]
     async fn reads_cliproxyapi_files() {
-        let dir = temp_dir("cpa");
+        let root = temp_dir("cpa");
+        let home = Home::sandbox(&root);
+        let dir = home.cliproxyapi();
+        fs::create_dir_all(&dir).unwrap();
         let claude = json!({
             "type": "claude", "access_token": "sk-ant-oat01-x", "refresh_token": "sk-ant-ort01-y",
             "expired": "2000-01-01T00:00:00Z", "email": "me@x.dev",
@@ -249,12 +309,27 @@ mod tests {
         fs::write(dir.join("codex-b.json"), codex.to_string()).unwrap();
         fs::write(dir.join("xai-c.json"), r#"{"type":"xai"}"#).unwrap();
         fs::write(dir.join("config.yaml"), "port: 1").unwrap();
+        fs::write(dir.join("zz-garbage.json"), "not json").unwrap();
 
-        let found = from_cliproxyapi(
+        let mut found = from_cliproxyapi(
             &crate::auth::http_client(crate::net::Origins::default()),
-            &dir,
+            &home,
         )
         .await;
+        // A file that is not a login is reported, once and plainly; another
+        // provider's is passed over.
+        let garbage = found.pop().unwrap();
+        assert_eq!(
+            garbage.origin,
+            format!(
+                "~{0}.cli-proxy-api{0}zz-garbage.json",
+                std::path::MAIN_SEPARATOR
+            )
+        );
+        assert_eq!(
+            format!("{:#}", garbage.account.err().unwrap()),
+            "not a CLIProxyAPI login file"
+        );
         let accounts: Vec<Account> = found.into_iter().map(|f| f.account.unwrap()).collect();
         assert_eq!(accounts.len(), 2);
         let claude = &accounts[0];
@@ -267,6 +342,6 @@ mod tests {
         assert_eq!(codex.account_id.as_deref(), Some("ws-9"));
         assert_eq!(codex.plan.as_deref(), Some("pro"));
         assert!(codex.tokens.is_expired(Timestamp::now()));
-        fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 }

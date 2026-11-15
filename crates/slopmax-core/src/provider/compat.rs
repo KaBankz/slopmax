@@ -46,7 +46,7 @@ impl Provider for Compat {
         &'a self,
         http: &'a Client,
         options: LoginOptions,
-        _prompt: Prompt,
+        prompt: Prompt,
     ) -> BoxFuture<'a, Result<Account>> {
         Box::pin(async move {
             let Some(mut endpoint) = options.endpoint else {
@@ -54,15 +54,27 @@ impl Provider for Compat {
             };
             let key = options.key.unwrap_or_default();
             let header = KeyHeader::for_dialect(endpoint.dialect);
-            let listed = keys::check(http, &models_url(&endpoint), header, &key).await?;
+            let checked = keys::probe(http, &models_url(&endpoint), header, &key).await?;
+            let (problem, notice) = (
+                checked.problem(&endpoint.base_url),
+                checked.notice(&endpoint.base_url),
+            );
             if endpoint.models.is_empty() {
-                endpoint.models = listed.unwrap_or_default();
+                endpoint.models = checked.models().unwrap_or_default();
             }
             if endpoint.models.is_empty() {
-                bail!(
-                    "could not list the models at {}; name them with --models",
-                    endpoint.base_url
-                );
+                match problem {
+                    Some(problem) => bail!(
+                        "could not list the models: {problem}; name them with --models, or try again once it answers"
+                    ),
+                    None => bail!(
+                        "could not list the models at {}; name them with --models",
+                        endpoint.base_url
+                    ),
+                }
+            }
+            if let Some(notice) = notice {
+                prompt.tell(crate::auth::LoginEvent::Notice(notice));
             }
             let tokens = Tokens {
                 access_token: key,
@@ -256,22 +268,39 @@ mod tests {
     async fn named_models_survive_an_endpoint_that_cannot_list() {
         let mock = server().await;
         let base = format!("{}/v1", mock.url);
-        let named = login(options(
-            base.clone(),
-            Dialect::Responses,
-            &["m-*", "m-1"],
-            "flaky",
-        ))
-        .await
-        .unwrap();
+        // Saved, and the person told the key went unchecked.
+        let told = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let heard = told.clone();
+        let prompt = Prompt::new(move |event| {
+            if let crate::auth::LoginEvent::Notice(text) = event {
+                heard.lock().unwrap().push(text);
+            }
+        });
+        let http = Client::builder().plain_http().build();
+        let named = Compat
+            .login(
+                &http,
+                options(base.clone(), Dialect::Responses, &["m-*", "m-1"], "flaky"),
+                prompt,
+            )
+            .await
+            .unwrap();
         assert_eq!(named.endpoint.as_ref().unwrap().models, ["m-*", "m-1"]);
+        assert_eq!(
+            *told.lock().unwrap(),
+            [format!(
+                "Saved, but {base} answered 500 Internal Server Error when asked for its models, so the key is unchecked."
+            )]
+        );
 
         let err = login(options(base.clone(), Dialect::Chat, &[], "flaky"))
             .await
             .unwrap_err();
         assert_eq!(
             err.to_string(),
-            format!("could not list the models at {base}; name them with --models")
+            format!(
+                "could not list the models: {base} answered 500 Internal Server Error when asked for its models; name them with --models, or try again once it answers"
+            )
         );
         let err = login(options(base, Dialect::Chat, &[], "wrong"))
             .await

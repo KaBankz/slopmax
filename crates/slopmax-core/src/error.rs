@@ -14,8 +14,16 @@ use std::path::PathBuf;
 pub enum StoreError {
     #[error("no account matches {0:?} (see `slopmax status`)")]
     NotFound(String),
-    #[error("{query:?} is ambiguous: {}", ids.join(", "))]
-    Ambiguous { query: String, ids: Vec<String> },
+    #[error(
+        "{query:?} matches {} accounts: {}. Use the number from `slopmax status`, e.g. `slopmax use {}`.",
+        matches.len(),
+        matches.iter().map(|m| format!("#{} {} ({})", m.number, m.name, m.id)).collect::<Vec<_>>().join(", "),
+        matches.first().map_or(1, |m| m.number)
+    )]
+    Ambiguous { query: String, matches: Vec<Match> },
+    /// Another account already goes by the label asked for.
+    #[error(transparent)]
+    LabelTaken(#[from] LabelTaken),
     /// It was there and is not now: removed while being changed.
     #[error("account {0} no longer exists")]
     Gone(String),
@@ -26,6 +34,31 @@ pub enum StoreError {
         #[source]
         source: std::io::Error,
     },
+}
+
+/// A label another account already goes by, so it would no longer name
+/// one account.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "{label:?} is already the {by} of #{number} {name} ({id}); choose another label, or rename that one first (`slopmax label {number} <name>`)"
+)]
+pub struct LabelTaken {
+    pub label: String,
+    /// Whether the other account has it as its `label` or its `email`.
+    pub by: &'static str,
+    /// The account that has it: its place in `slopmax status`, from 1.
+    pub number: usize,
+    pub name: String,
+    pub id: String,
+}
+
+/// One of the accounts an ambiguous query matched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Match {
+    /// Its place in `slopmax status`, from 1.
+    pub number: usize,
+    pub name: String,
+    pub id: String,
 }
 
 impl StoreError {

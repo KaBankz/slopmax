@@ -170,14 +170,15 @@ async fn login_via(
         let redirect = MANUAL_REDIRECT_URI.to_owned();
         let url = authorize_url(&pkce, &state, &redirect);
         (
-            auth::code_login("Claude", &url, &state, prompt).await?,
+            auth::code_login(ProviderId::Claude, &url, &state, prompt).await?,
             redirect,
         )
     } else {
         let redirect = redirect_uri();
         let url = authorize_url(&pkce, &state, &redirect);
         let listen = (CALLBACK_PORT, CALLBACK_PATH);
-        let callback = auth::browser_login("Claude", &url, listen, &state, options, prompt).await?;
+        let callback =
+            auth::browser_login(ProviderId::Claude, &url, listen, &state, options, prompt).await?;
         (callback, redirect)
     };
     let state = callback.state.as_deref().unwrap_or(&state);

@@ -39,13 +39,21 @@ struct Params {
 impl Params {
     fn into_callback(self) -> Result<Callback> {
         if let Some(error) = self.error {
-            let detail = self.error_description.unwrap_or_default();
-            bail!("authorization failed: {error} {detail}");
+            match self.error_description.filter(|d| !d.trim().is_empty()) {
+                Some(detail) => {
+                    bail!(
+                        "authorization failed ({error}: {}); try again",
+                        detail.trim()
+                    )
+                }
+                None => bail!("authorization failed ({error}); try again"),
+            }
         }
-        let code = self
-            .code
-            .filter(|c| !c.is_empty())
-            .ok_or_else(|| anyhow!("no code"))?;
+        let code = self.code.filter(|c| !c.is_empty()).ok_or_else(|| {
+            anyhow!(
+                "that isn't the code; paste the whole code the page shows, or the address from the browser bar"
+            )
+        })?;
         // Anthropic's manual flow shows `code#state` as a single value.
         match (code.split_once('#'), self.state) {
             (Some((code, state)), None) => Ok(Callback {
@@ -100,10 +108,14 @@ fn parse_query(query: &str) -> Params {
 
 /// Waits for the authorization code, from either the loopback redirect or an
 /// address pasted into `prompt`, and checks the CSRF `state`.
+///
+/// `again` is the command that starts the sign-in over, for the errors that
+/// end it.
 pub async fn receive(
     port: u16,
     path: &'static str,
     expected_state: &str,
+    again: &str,
     prompt: &mut Prompt,
 ) -> Result<Callback> {
     let (tx, redirects) = mpsc::channel::<Result<Callback>>(4);
@@ -119,21 +131,29 @@ pub async fn receive(
         }
     };
     let busy = format!("port {port} is busy and no redirect address can be pasted");
-    let result = wait(redirects, prompt, &busy).await;
+    let result = wait(redirects, prompt, &busy, again).await;
     if let Some(server) = server {
         server.abort();
     }
-    checked(result?, expected_state)
+    checked(result?, expected_state, again)
 }
 
 /// Waits for a code pasted into `prompt` (or an address carrying one), and
 /// checks the CSRF `state` when it comes with one.
-pub async fn receive_pasted(expected_state: &str, prompt: &mut Prompt) -> Result<Callback> {
+pub async fn receive_pasted(
+    expected_state: &str,
+    again: &str,
+    prompt: &mut Prompt,
+) -> Result<Callback> {
     // No redirect comes: the channel closes as its sender drops.
     let (_, redirects) = mpsc::channel::<Result<Callback>>(1);
+    let stuck = format!(
+        "nothing can be pasted into this sign-in, so it can't finish; run `{again}` in an interactive shell"
+    );
     checked(
-        wait(redirects, prompt, "nothing can be pasted into this sign-in").await?,
+        wait(redirects, prompt, &stuck, again).await?,
         expected_state,
+        again,
     )
 }
 
@@ -142,6 +162,7 @@ async fn wait(
     mut redirects: mpsc::Receiver<Result<Callback>>,
     prompt: &mut Prompt,
     stuck: &str,
+    again: &str,
 ) -> Result<Callback> {
     tokio::time::timeout(LOGIN_TIMEOUT, async {
         loop {
@@ -155,19 +176,27 @@ async fn wait(
                 }
                 else => bail!("{stuck}"),
             };
+            // Each says what to do next.
             match attempt {
                 Ok(callback) => return Ok(callback),
-                Err(e) => prompt.tell(LoginEvent::Notice(format!("{e:#}; try again"))),
+                Err(e) => prompt.tell(LoginEvent::Notice(format!("{e:#}"))),
             }
         }
     })
     .await
-    .map_err(|_| anyhow!("timed out waiting for authorization"))?
+    .map_err(|_| {
+        anyhow!(
+            "the sign-in wasn't finished within {} minutes; run `{again}` to start again",
+            LOGIN_TIMEOUT.as_secs() / 60
+        )
+    })?
 }
 
-fn checked(callback: Callback, expected_state: &str) -> Result<Callback> {
+fn checked(callback: Callback, expected_state: &str, again: &str) -> Result<Callback> {
     match callback.state.as_deref() {
-        Some(state) if state != expected_state => bail!("OAuth state mismatch; start over"),
+        Some(state) if state != expected_state => bail!(
+            "that code belongs to an earlier sign-in; run `{again}` again and use the newest link"
+        ),
         _ => Ok(callback),
     }
 }
@@ -242,6 +271,8 @@ const FAILURE_PAGE: &str = "<!doctype html><title>slopmax</title>\
 mod tests {
     use super::*;
 
+    const NOT_THE_CODE: &str = "that isn't the code; paste the whole code the page shows, or the address from the browser bar";
+
     #[test]
     fn parses_full_redirect_url() {
         let cb = parse_pasted("http://localhost:1455/auth/callback?code=abc&state=xyz").unwrap();
@@ -266,13 +297,21 @@ mod tests {
     fn surfaces_provider_errors() {
         let err =
             parse_pasted("http://x/cb?error=access_denied&error_description=nope").unwrap_err();
-        assert!(err.to_string().contains("access_denied"));
+        assert_eq!(
+            err.to_string(),
+            "authorization failed (access_denied: nope); try again"
+        );
+        let err = parse_pasted("http://x/cb?error=access_denied").unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "authorization failed (access_denied); try again"
+        );
     }
 
     #[test]
     fn empty_codes_and_fragments_are_handled() {
         let err = parse_pasted("http://x/cb?code=&state=s").unwrap_err();
-        assert_eq!(err.to_string(), "no code");
+        assert_eq!(err.to_string(), NOT_THE_CODE);
         let cb = parse_pasted("http://x/cb?code=a&state=s#fragment").unwrap();
         assert_eq!((cb.code.as_str(), cb.state.as_deref()), ("a", Some("s")));
         // A `#` inside the code stays when the state comes separately.
@@ -338,7 +377,9 @@ mod tests {
     async fn the_redirect_delivers_the_code_and_a_page() {
         let port = free_port();
         let (mut prompt, events) = recording();
-        let waiting = tokio::spawn(async move { receive(port, "/cb", "st", &mut prompt).await });
+        let waiting = tokio::spawn(async move {
+            receive(port, "/cb", "st", "slopmax login claude", &mut prompt).await
+        });
         let base = format!("http://127.0.0.1:{port}");
 
         let (status, _) = get(&format!("{base}/elsewhere")).await;
@@ -354,8 +395,10 @@ mod tests {
         assert_eq!(callback.state.as_deref(), Some("st"));
         let notices = notices(&events);
         assert_eq!(notices.len(), 1);
-        assert!(notices[0].contains("access_denied"), "{notices:?}");
-        assert!(notices[0].ends_with("; try again"));
+        assert_eq!(
+            notices[0],
+            "authorization failed (access_denied); try again"
+        );
     }
 
     #[tokio::test]
@@ -372,13 +415,15 @@ mod tests {
         ] {
             tx.send(line.to_owned()).unwrap();
         }
-        let callback = receive(port, "/cb", "st", &mut prompt).await.unwrap();
+        let callback = receive(port, "/cb", "st", "slopmax login claude", &mut prompt)
+            .await
+            .unwrap();
         // No state came back with the paste, which is accepted.
         assert_eq!(callback.code, "pasted");
         assert_eq!(callback.state, None);
         let notices = notices(&events);
         assert!(notices[0].starts_with(&format!("port {port} is busy")));
-        assert_eq!(notices[1], "no code; try again");
+        assert_eq!(notices[1], NOT_THE_CODE);
         assert_eq!(notices.len(), 2);
     }
 
@@ -389,8 +434,13 @@ mod tests {
         let (tx, rx) = mpsc::unbounded_channel();
         let mut prompt = Prompt::new(|_| {}).with_pasted(rx);
         tx.send("code=abc&state=evil".into()).unwrap();
-        let err = receive(port, "/cb", "st", &mut prompt).await.unwrap_err();
-        assert_eq!(err.to_string(), "OAuth state mismatch; start over");
+        let err = receive(port, "/cb", "st", "slopmax login claude", &mut prompt)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "that code belongs to an earlier sign-in; run `slopmax login claude` again and use the newest link"
+        );
     }
 
     #[tokio::test]
@@ -398,7 +448,9 @@ mod tests {
         let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = held.local_addr().unwrap().port();
         let (mut prompt, _) = recording();
-        let err = receive(port, "/cb", "st", &mut prompt).await.unwrap_err();
+        let err = receive(port, "/cb", "st", "slopmax login claude", &mut prompt)
+            .await
+            .unwrap_err();
         assert_eq!(
             err.to_string(),
             format!("port {port} is busy and no redirect address can be pasted")

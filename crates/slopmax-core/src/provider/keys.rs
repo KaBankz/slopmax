@@ -114,7 +114,7 @@ impl Provider for KeyProvider {
         &'a self,
         http: &'a Client,
         options: LoginOptions,
-        _prompt: Prompt,
+        prompt: Prompt,
     ) -> BoxFuture<'a, Result<Account>> {
         Box::pin(async move {
             let key = options
@@ -122,7 +122,11 @@ impl Provider for KeyProvider {
                 .filter(|key| !key.is_empty())
                 .with_context(|| format!("no {} key entered", self.spec.title))?;
             let header = KeyHeader::for_dialect(self.spec.dialects[0]);
-            check(http, self.models_url, header, &key).await?;
+            let checked = probe(http, self.models_url, header, &key).await?;
+            let address = self.models_url.trim_end_matches("/models");
+            if let Some(notice) = checked.notice(address) {
+                prompt.tell(crate::auth::LoginEvent::Notice(notice));
+            }
             let tokens = Tokens {
                 access_token: key,
                 ..Tokens::default()
@@ -177,6 +181,65 @@ pub fn with_key(client: &HeaderMap, header: KeyHeader, key: &str) -> HeaderMap {
     headers
 }
 
+/// What asking an API for its models with a key showed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Checked {
+    /// It answered, with these models if its list could be read.
+    Listed(Option<Vec<String>>),
+    /// It didn't answer: why, in a few words ("connection refused").
+    Unreachable(String),
+    /// It answered with this status instead of a list.
+    Answered(StatusCode),
+}
+
+impl Checked {
+    /// The models it listed, if any.
+    pub fn models(self) -> Option<Vec<String>> {
+        match self {
+            Self::Listed(models) => models,
+            _ => None,
+        }
+    }
+
+    /// Why the key at `address` could not be checked; None when it was.
+    pub fn problem(&self, address: &str) -> Option<String> {
+        match self {
+            Self::Listed(_) => None,
+            Self::Unreachable(why) => Some(format!("{address} didn't answer ({why})")),
+            Self::Answered(status) => Some(format!(
+                "{address} answered {status} when asked for its models"
+            )),
+        }
+    }
+
+    /// What to tell the person adding an account at `address` that was
+    /// saved though the key could not be checked; None when it was.
+    pub fn notice(&self, address: &str) -> Option<String> {
+        let problem = self.problem(address)?;
+        Some(match self {
+            Self::Unreachable(_) => {
+                format!("Saved, but {problem}; requests will fail until it does.")
+            }
+            _ => format!("Saved, but {problem}, so the key is unchecked."),
+        })
+    }
+}
+
+/// A network error's cause in a person's words: `connection refused`.
+pub(crate) fn plain(error: &impl std::fmt::Display) -> String {
+    let text = error.to_string();
+    let cause = text.rsplit(": ").next().unwrap_or(&text);
+    let cause = match cause.find(" (os error") {
+        Some(at) => &cause[..at],
+        None => cause,
+    };
+    let mut chars = cause.chars();
+    match chars.next() {
+        Some(first) => first.to_lowercase().chain(chars).collect(),
+        None => text,
+    }
+}
+
 /// Lists models at `url` with `key`, so a mistyped or revoked key fails now
 /// rather than on the first request. Returns the model ids when the list
 /// could be read; a network failure is only a warning.
@@ -186,6 +249,11 @@ pub async fn check(
     header: KeyHeader,
     key: &str,
 ) -> Result<Option<Vec<String>>> {
+    Ok(probe(http, url, header, key).await?.models())
+}
+
+/// As [`check`], also saying why the key could not be checked.
+pub async fn probe(http: &Client, url: &str, header: KeyHeader, key: &str) -> Result<Checked> {
     let mut request = http.get(url);
     if !key.is_empty() {
         request = match header {
@@ -198,21 +266,27 @@ pub async fn check(
     let response = match request.send().await {
         Ok(response) => response,
         Err(e) => {
-            log::warn!("could not check the key against {url}: {e}");
-            return Ok(None);
+            // The person adding the key is told; the log keeps the detail.
+            log::info!("could not check the key against {url}: {e}");
+            let why = if e.is_timeout() {
+                "it timed out".to_owned()
+            } else {
+                plain(&e)
+            };
+            return Ok(Checked::Unreachable(why));
         }
     };
     match response.status() {
         status if status.is_success() => {
             let list: Option<Value> = response.json().await.ok();
-            Ok(list.map(|list| model_ids(&list)))
+            Ok(Checked::Listed(list.map(|list| model_ids(&list))))
         }
         status @ (StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) => {
             bail!("{url} rejected the key ({status})")
         }
         status => {
-            log::warn!("could not check the key: {url} answered {status}");
-            Ok(None)
+            log::info!("could not check the key: {url} answered {status}");
+            Ok(Checked::Answered(status))
         }
     }
 }
@@ -443,6 +517,18 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(down, None);
+        let down = probe(
+            &http,
+            "http://127.0.0.1:9/v1/models",
+            KeyHeader::Bearer,
+            "k",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            down.notice("http://127.0.0.1:9/v1").unwrap(),
+            "Saved, but http://127.0.0.1:9/v1 didn't answer (connection refused); requests will fail until it does."
+        );
         let forbidden = Mock::start(|_| testkit::reply(403, "")).await;
         let url = format!("{}/models", forbidden.url);
         let err = check(&http, &url, KeyHeader::Bearer, "k")

@@ -188,49 +188,62 @@ impl LivePatch {
             let live = live(name).expect("checked above");
             let fits = match live.kind {
                 LiveKind::Switch => value.is_boolean(),
-                LiveKind::Minutes => value.as_u64().is_some_and(|n| n >= live.least),
+                LiveKind::Minutes => value
+                    .as_i64()
+                    .is_some_and(|n| n >= 0 && n.unsigned_abs() >= live.least),
                 LiveKind::Choice => serde_json::from_value::<Strategy>(value.clone()).is_ok(),
             };
             if !fits {
-                return Err(expects(live));
+                return Err(expects(live, live.name));
             }
         }
         serde_json::from_value(Value::Object(fields)).map_err(|e| e.to_string())
     }
 
     /// One setting from text, as `slopmax config <name> <value>` gives it.
+    /// The name may be the API's or the TOML's; what is wrong is said with
+    /// the name as given, and other settings by their TOML names, since
+    /// those are what a person types.
     pub fn parse(name: &str, text: &str) -> Result<Self, String> {
-        let live = live(name).ok_or_else(|| not_live(name))?;
+        let Some(live) = live(name) else {
+            let names: Vec<&str> = LIVE.iter().map(|l| l.toml).collect();
+            return Err(format!(
+                "{name} is not a setting slopmax changes while it runs; those are {}",
+                names.join(", ")
+            ));
+        };
         let text = text.trim();
         let value = match live.kind {
             LiveKind::Switch => match text {
                 "true" | "on" | "1" | "yes" => Value::Bool(true),
                 "false" | "off" | "0" | "no" => Value::Bool(false),
-                _ => return Err(expects(live)),
+                _ => return Err(expects(live, name)),
             },
-            LiveKind::Minutes => match text.parse::<u64>() {
-                Ok(n) => Value::from(n),
-                Err(_) => return Err(expects(live)),
+            // As many minutes as config.toml can hold.
+            LiveKind::Minutes => match text.parse::<i64>() {
+                Ok(n) if n >= 0 && n.unsigned_abs() >= live.least => Value::from(n),
+                _ => return Err(expects(live, name)),
             },
-            LiveKind::Choice => Value::from(text),
+            LiveKind::Choice => match serde_json::from_value::<Strategy>(Value::from(text)) {
+                Ok(_) => Value::from(text),
+                Err(_) => return Err(expects(live, name)),
+            },
         };
         let body = serde_json::json!({ live.name: value });
         Self::from_json(body.to_string().as_bytes())
     }
 }
 
-fn expects(live: &Live) -> String {
+/// What `live` takes, naming it `name`.
+fn expects(live: &Live, name: &str) -> String {
     match live.kind {
-        LiveKind::Switch => format!("{} is on or off", live.name),
+        LiveKind::Switch => format!("{name} is on or off"),
         LiveKind::Minutes if live.least > 0 => {
-            format!(
-                "{} is a number of minutes, at least {}",
-                live.name, live.least
-            )
+            format!("{name} is a number of minutes, at least {}", live.least)
         }
-        LiveKind::Minutes => format!("{} is a number of minutes", live.name),
+        LiveKind::Minutes => format!("{name} is a number of minutes"),
         LiveKind::Choice => {
-            "strategy is one of reset-first, fill-first, least-used, round-robin".into()
+            format!("{name} is one of reset-first, fill-first, least-used, round-robin")
         }
     }
 }
@@ -421,5 +434,31 @@ mod tests {
             Some(false)
         );
         assert!(LivePatch::parse("warmWindows", "maybe").is_err());
+        // Errors name the setting as it was typed.
+        assert_eq!(
+            LivePatch::parse("poll_mins", "99999999999999999999").unwrap_err(),
+            "poll_mins is a number of minutes"
+        );
+        assert_eq!(
+            LivePatch::parse("session_ttl_mins", "0").unwrap_err(),
+            "session_ttl_mins is a number of minutes, at least 1"
+        );
+        assert_eq!(
+            LivePatch::parse("sessionMinutes", "-3").unwrap_err(),
+            "sessionMinutes is a number of minutes, at least 1"
+        );
+        assert_eq!(
+            LivePatch::parse("strategy", "fastest").unwrap_err(),
+            "strategy is one of reset-first, fill-first, least-used, round-robin"
+        );
+        let other = LivePatch::parse("listen", "1.2.3.4:9").unwrap_err();
+        assert!(
+            other.starts_with("listen is not a setting slopmax changes while it runs; those are strategy, session_affinity, session_ttl_mins,"),
+            "{other}"
+        );
+        assert!(other.ends_with("refresh_tokens, websockets"), "{other}");
+        // Every minute count config.toml can hold, and no more.
+        assert!(LivePatch::parse("poll_mins", &i64::MAX.to_string()).is_ok());
+        assert!(LivePatch::parse("poll_mins", &u64::MAX.to_string()).is_err());
     }
 }

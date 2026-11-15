@@ -192,8 +192,10 @@ pub async fn connect(
         .login(&http, options, prompt)
         .await
         .map_err(crate::error::LoginError::Failed)?;
-    if label.is_some() {
-        account.label = label;
+    if let Some(label) = label {
+        account.assign_id();
+        store.check_label(&label, &account.id)?;
+        account.label = Some(label);
     }
     Ok(store.upsert(account)?)
 }
@@ -202,7 +204,7 @@ pub async fn connect(
 /// told not to), then waits for the redirect to `(port, path)` or a pasted
 /// address.
 pub async fn browser_login(
-    title: &'static str,
+    provider: ProviderId,
     url: &str,
     (port, path): (u16, &'static str),
     state: &str,
@@ -211,30 +213,32 @@ pub async fn browser_login(
 ) -> Result<callback::Callback> {
     let opened = !options.no_browser && callback::open_browser(url);
     prompt.tell(LoginEvent::Authorize {
-        title,
+        title: provider.spec().title,
         url: url.to_owned(),
         opened,
         port,
     });
-    callback::receive(port, path, state, &mut prompt).await
+    let again = format!("slopmax login {provider}");
+    callback::receive(port, path, state, &again, &mut prompt).await
 }
 
 /// The sign-in for a browser on another machine: the provider's own page
 /// shows the code, which is pasted here. Nothing listens on this machine, so
 /// the [`LoginEvent::Authorize`] it sends has port 0.
 pub async fn code_login(
-    title: &'static str,
+    provider: ProviderId,
     url: &str,
     state: &str,
     mut prompt: Prompt,
 ) -> Result<callback::Callback> {
     prompt.tell(LoginEvent::Authorize {
-        title,
+        title: provider.spec().title,
         url: url.to_owned(),
         opened: false,
         port: 0,
     });
-    callback::receive_pasted(state, &mut prompt).await
+    let again = format!("slopmax login {provider}");
+    callback::receive_pasted(state, &again, &mut prompt).await
 }
 
 /// Returns `account` with a usable access token, refreshing it when it is

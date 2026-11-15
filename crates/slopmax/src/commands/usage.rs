@@ -44,9 +44,23 @@ pub fn run(config: &Config, store: &Store, range: &str, by: &str, json: bool) ->
         println!("No requests recorded for {title}.");
         return Ok(());
     }
+    if total.requests == 0 {
+        let when = match range {
+            "today" => "today".to_owned(),
+            "all" => "yet".to_owned(),
+            _ => format!("in {title}"),
+        };
+        println!(
+            "No successful requests {when}; {} failed (see `slopmax logs`).",
+            total.failed
+        );
+        return Ok(());
+    }
+    // Rows of only failed requests are all zeros; the note counts them.
+    let rows: Vec<_> = rows.iter().filter(|(_, t)| t.requests > 0).collect();
     let width = rows
-        .keys()
-        .map(|k| ui::visible_width(k))
+        .iter()
+        .map(|(k, _)| ui::visible_width(k))
         .max()
         .unwrap_or(0)
         .max(5);

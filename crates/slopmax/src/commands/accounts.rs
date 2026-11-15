@@ -3,6 +3,8 @@
 //! and the dashboard's do, since it is the only writer while it runs; with
 //! none, the CLI makes the change on disk itself.
 
+use std::io::IsTerminal;
+
 use anyhow::{Context, Result, bail};
 use slopmax_client::Client;
 use slopmax_client::api::events::{Event, LoginEvent};
@@ -39,11 +41,37 @@ pub(super) async fn login(
             spec.title
         );
     }
+    // A label another provider's account has is refused before signing in;
+    // one of this provider's may be the account being signed in again,
+    // which the sign-in tells.
+    if let Some(label) = &label {
+        let held_elsewhere = store.list()?.iter().any(|a| {
+            a.provider != provider
+                && (a.label.as_deref() == Some(label) || a.email.as_deref() == Some(label))
+        });
+        if held_elsewhere {
+            store.check_label(label, "")?;
+        }
+    }
     if spec.is_subscription() && !callback::has_browser() {
         // Decided here rather than by the proxy, which may run where a
         // browser would open on a screen nobody at this terminal sees.
         // With none to open, the sign-ins take codes.
         options.no_browser = true;
+    }
+    // Without a browser here, a sign-in with no device code takes the code
+    // its page shows, pasted at this terminal: refused before a link is
+    // shown when nothing can be pasted.
+    let pastes = spec.is_subscription() && options.no_browser && !spec.device_login();
+    if pastes && !std::io::stdin().is_terminal() {
+        let source = match provider {
+            ProviderId::Claude => "claude-code",
+            other => other.as_str(),
+        };
+        bail!(
+            "slopmax login {provider} needs a terminal to paste the code into; run it in an \
+             interactive shell, or bring an existing login over with `slopmax import {source}`"
+        );
     }
     if let Credential::Key { optional } = spec.credential {
         let prompt = if optional {
@@ -53,29 +81,86 @@ pub(super) async fn login(
         };
         options.key = Some(term::read_secret(&prompt)?);
     }
-    let (name, id, plan, created, endpoint) = match daemon(config).await {
+    // A key or an endpoint is the account's identity, so whether it is one
+    // already connected is known before it is checked.
+    let earlier = (!spec.is_subscription())
+        .then(|| {
+            let mut probe = account::Account::new(
+                provider,
+                account::Tokens {
+                    access_token: options.key.clone().unwrap_or_default(),
+                    ..account::Tokens::default()
+                },
+            );
+            probe.endpoint.clone_from(&options.endpoint);
+            probe.assign_id();
+            store.get(&probe.id).ok().flatten()
+        })
+        .flatten();
+    let (name, id, plan, created, endpoint, notices) = match daemon(config).await {
         Some(client) => {
-            let (account, created) = login_through(&client, provider, label, options).await?;
+            let (account, created, notices) =
+                login_through(&client, provider, label, options).await?;
             let endpoint = (!account.models.is_empty()).then(|| account.models.clone());
-            (account.name, account.id, account.plan, created, endpoint)
+            (
+                account.name,
+                account.id,
+                account.plan,
+                created,
+                endpoint,
+                notices,
+            )
         }
         None => {
-            let (account, created) =
-                auth::connect(store, provider, label, options, term::sign_in()).await?;
+            let notices = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            // A key's check speaks after the account is shown; a sign-in's
+            // prompts at once, at the terminal.
+            let prompt = if spec.is_subscription() {
+                term::sign_in()
+            } else {
+                let told = notices.clone();
+                auth::Prompt::new(move |event| {
+                    if let auth::LoginEvent::Notice(text) = event {
+                        told.lock().unwrap_or_else(|e| e.into_inner()).push(text);
+                    }
+                })
+            };
+            let (account, created) = auth::connect(store, provider, label, options, prompt).await?;
             let endpoint = account.endpoint.as_ref().map(|e| e.models.clone());
-            (account.name(), account.id, account.plan, created, endpoint)
+            let notices = std::mem::take(&mut *notices.lock().unwrap_or_else(|e| e.into_inner()));
+            (
+                account.name(),
+                account.id,
+                account.plan,
+                created,
+                endpoint,
+                notices,
+            )
         }
     };
+    let created = created && earlier.is_none();
     let plan = plan
         .as_deref()
         .map(|p| format!(" ({p})"))
         .unwrap_or_default();
-    println!(
-        "{} {provider} account {}{plan} as {}",
-        if created { "Connected" } else { "Updated" },
-        ui::bold(name),
-        ui::dim(&id)
-    );
+    match (&earlier, &endpoint) {
+        (None, _) => println!(
+            "{} {provider} account {}{plan} as {}",
+            if created { "Connected" } else { "Updated" },
+            ui::bold(&name),
+            ui::dim(&id)
+        ),
+        (Some(_), Some(models)) if provider == ProviderId::Compat => println!(
+            "Updated {} {}: now serves {}",
+            ui::bold(&name),
+            ui::dim("(same endpoint and key)"),
+            models.join(", ")
+        ),
+        (Some(_), _) => println!("Updated {} {}", ui::bold(&name), ui::dim("(same key)")),
+    }
+    for notice in &notices {
+        println!("{}", ui::yellow(notice));
+    }
     if !created {
         return Ok(());
     }
@@ -114,7 +199,7 @@ async fn login_through(
     provider: ProviderId,
     label: Option<String>,
     options: LoginOptions,
-) -> Result<(AccountView, bool)> {
+) -> Result<(AccountView, bool, Vec<String>)> {
     if !provider.spec().is_subscription() {
         let asked = match options.endpoint {
             Some(endpoint) => AddAccount::Endpoint {
@@ -131,7 +216,7 @@ async fn login_through(
             },
         };
         let added = client.add_account(&asked).await?;
-        return Ok((added.account, true));
+        return Ok((added.account, true, added.notices));
     }
     // Following first, so no progress is missed.
     let mut events = client.events().await?;
@@ -154,7 +239,9 @@ async fn login_through(
                     }
                     LoginEvent::DeviceCode { url, code } => term::device_code(&url, &code),
                     LoginEvent::Note { text } => eprintln!("  {text}"),
-                    LoginEvent::Done { account, is_new } => return Ok((*account, is_new)),
+                    LoginEvent::Done { account, is_new } => {
+                        return Ok((*account, is_new, Vec::new()));
+                    }
                     LoginEvent::Failed { message } => bail!("{message}"),
                 },
                 Some(Ok(_)) => {}
@@ -203,7 +290,7 @@ pub(super) async fn import(
         };
         let result = client.import(&ImportRequest { sources, own }).await?;
         if result.outcomes.is_empty() {
-            println!("No logins found to import.");
+            nothing_found(source);
             return Ok(());
         }
         for outcome in &result.outcomes {
@@ -229,7 +316,7 @@ pub(super) async fn import(
         let http = auth::http_client(Origins::default());
         let found = import::discover(&http, source, super::home()).await;
         if found.is_empty() {
-            println!("No logins found to import.");
+            nothing_found(source);
             return Ok(());
         }
         for result in import::save(store, found, own) {
@@ -264,6 +351,14 @@ pub(super) async fn import(
     Ok(())
 }
 
+/// Says that `source` had no logins, and where it looked.
+fn nothing_found(source: Source) {
+    println!(
+        "No logins found to import. Looked in {}.",
+        import::places(source, super::home()).join(", ")
+    );
+}
+
 /// Stops following another tool's copy of an account's tokens.
 pub(super) async fn own(config: &Config, store: &Store, query: &str) -> Result<()> {
     let client = daemon(config).await;
@@ -280,11 +375,20 @@ pub(super) async fn own(config: &Config, store: &Store, query: &str) -> Result<(
         println!("No accounts follow another tool.");
         return Ok(());
     }
+    let mut took = 0;
     for account in accounts {
         let Some(link) = &account.link else {
-            println!("{} already refreshes here.", ui::bold(account.name()));
+            if account.provider.spec().is_subscription() {
+                println!("{} already refreshes here.", ui::bold(account.name()));
+            } else {
+                println!(
+                    "{} uses an API key; there's nothing to take over.",
+                    ui::bold(account.name())
+                );
+            }
             continue;
         };
+        took += 1;
         match &client {
             Some(client) => drop(client.own(&account.id).await?),
             None => drop(store.update(&account.id, |a| a.link = None)?),
@@ -295,10 +399,15 @@ pub(super) async fn own(config: &Config, store: &Store, query: &str) -> Result<(
             ui::dim(format!("(was following {})", link.tool))
         );
     }
-    println!(
-        "{}",
-        ui::dim("Its first refresh signs the old copy out, so keep the other tool stopped.")
-    );
+    if took > 0 {
+        let whose = if took == 1 { "Its" } else { "Each one's" };
+        println!(
+            "{}",
+            ui::dim(format!(
+                "{whose} first refresh signs the old copy out, so keep the other tool stopped."
+            ))
+        );
+    }
     Ok(())
 }
 
@@ -313,16 +422,43 @@ pub(super) async fn use_account(config: &Config, store: &Store, query: &str) -> 
         return Ok(());
     }
     let account = store.find(query)?;
+    let name = account.name();
+    if account.disabled {
+        bail!(
+            "{name} is disabled, so it won't be used; run `slopmax enable {}` first",
+            handle(store, &account)
+        );
+    }
     match &client {
         Some(client) => drop(client.pin(&account.id).await?),
         None => account::pin(super::home(), &account)?,
     }
+    let spec = account.provider.spec();
+    let quota = if spec.is_subscription() {
+        " while it has quota"
+    } else {
+        ""
+    };
     println!(
-        "New {} sessions will use {} while it has quota.",
-        account.provider,
-        ui::bold(account.name())
+        "New {} sessions will use {}{quota}.",
+        spec.title,
+        ui::bold(&name)
     );
     Ok(())
+}
+
+/// How to name `account` on the command line: its name when that finds
+/// it and needs no quoting, else its id.
+fn handle(store: &Store, account: &account::Account) -> String {
+    let name = account.name();
+    let plain = name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || "@._+-".contains(c));
+    if plain && store.find(&name).is_ok_and(|found| found.id == account.id) {
+        name
+    } else {
+        account.id.clone()
+    }
 }
 
 /// Changes an account through the daemon, or on disk while none runs, and
@@ -368,6 +504,7 @@ pub(super) async fn rename(
     label: String,
 ) -> Result<()> {
     let id = store.find(query)?.id;
+    store.check_label(&label, &id)?;
     let patch = AccountPatch {
         label: Some(Some(label.clone())),
         ..AccountPatch::default()

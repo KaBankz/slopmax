@@ -209,12 +209,17 @@ impl Account {
     }
 
     /// The provider-side key that distinguishes accounts with separate limits.
+    ///
+    /// An empty value is no identity: it would give every account that
+    /// lacks one the same id. The first non-empty of these is used, in an
+    /// order that keeps every id made from a non-empty value as it was.
     pub fn identity_key(&self) -> String {
-        self.provider
-            .get()
-            .identity(self)
-            .or_else(|| self.email.clone())
-            .unwrap_or_else(|| self.tokens.refresh_token.clone().unwrap_or_default())
+        let given = |s: Option<String>| s.filter(|s| !s.is_empty());
+        given(self.provider.get().identity(self))
+            .or_else(|| given(self.email.clone()))
+            .or_else(|| given(self.tokens.refresh_token.clone()))
+            .or_else(|| self.link.as_ref().map(|l| l.path.display().to_string()))
+            .unwrap_or_else(|| self.tokens.access_token.clone())
     }
 
     /// Recomputes `id` from the identity; call after identity fields change.
@@ -239,7 +244,11 @@ impl Account {
             let tail = key.get(key.len().saturating_sub(4)..).unwrap_or_default();
             return format!("{} key …{tail}", self.provider.spec().title);
         }
-        let email = self.email.as_deref().unwrap_or(&self.id);
+        let email = self
+            .email
+            .as_deref()
+            .filter(|e| !e.is_empty())
+            .unwrap_or(&self.id);
         match &self.org_name {
             Some(org) if !org.contains(email) => format!("{email} ({org})"),
             _ => email.to_string(),
@@ -441,6 +450,30 @@ impl Store {
         fsx::lock(&self.lock_path(id)).map_err(StoreError::io("locking", id))
     }
 
+    /// Refuses `label` for the account `id` (which may not exist yet) when
+    /// another account already goes by it, as its label or its email, so
+    /// that it would no longer name one account.
+    pub fn check_label(&self, label: &str, id: &str) -> Result<(), StoreError> {
+        let accounts = self.list()?;
+        let taken = accounts.iter().enumerate().find(|(_, a)| {
+            a.id != id && (a.label.as_deref() == Some(label) || a.email.as_deref() == Some(label))
+        });
+        match taken {
+            Some((i, a)) => Err(StoreError::LabelTaken(crate::error::LabelTaken {
+                label: label.to_owned(),
+                by: if a.label.as_deref() == Some(label) {
+                    "label"
+                } else {
+                    "email"
+                },
+                number: i + 1,
+                name: a.name(),
+                id: a.id.clone(),
+            })),
+            None => Ok(()),
+        }
+    }
+
     /// Resolves a user-supplied reference: an id, id prefix, label, email,
     /// or 1-based position in [`Store::list`].
     pub fn find(&self, query: &str) -> Result<Account, StoreError> {
@@ -450,9 +483,10 @@ impl Store {
         {
             return Ok(account.clone());
         }
-        let exact: Vec<&Account> = accounts
+        let exact: Vec<(usize, &Account)> = accounts
             .iter()
-            .filter(|a| {
+            .enumerate()
+            .filter(|(_, a)| {
                 a.id == query
                     || a.label.as_deref() == Some(query)
                     || a.email.as_deref() == Some(query)
@@ -461,21 +495,26 @@ impl Store {
         let matches = if exact.is_empty() {
             accounts
                 .iter()
-                .filter(|a| a.id.starts_with(query))
+                .enumerate()
+                .filter(|(_, a)| a.id.starts_with(query))
                 .collect()
         } else {
             exact
         };
         match matches.as_slice() {
-            [account] => Ok((*account).clone()),
+            [(_, account)] => Ok((*account).clone()),
             [] => Err(StoreError::NotFound(query.to_owned())),
-            many => {
-                let ids: Vec<&str> = many.iter().map(|a| a.id.as_str()).collect();
-                Err(StoreError::Ambiguous {
-                    query: query.to_owned(),
-                    ids: ids.into_iter().map(str::to_owned).collect(),
-                })
-            }
+            many => Err(StoreError::Ambiguous {
+                query: query.to_owned(),
+                matches: many
+                    .iter()
+                    .map(|(i, a)| crate::error::Match {
+                        number: i + 1,
+                        name: a.name(),
+                        id: a.id.clone(),
+                    })
+                    .collect(),
+            }),
         }
     }
 }
@@ -523,6 +562,64 @@ mod tests {
         codex.account_id = Some("ws-9".into());
         codex.assign_id();
         assert_eq!(codex.id, "codex-372c403d");
+        let mut bare = Account::new(
+            ProviderId::Claude,
+            Tokens {
+                access_token: "at".into(),
+                refresh_token: Some("rt-1".into()),
+                ..Tokens::default()
+            },
+        );
+        bare.assign_id();
+        assert_eq!(bare.id, "claude-a33d8c62");
+    }
+
+    #[test]
+    fn an_empty_identity_never_becomes_the_id() {
+        // sha256("") would name every such account `claude-e3b0c442`.
+        let made = |email: &str, refresh: Option<&str>, access: &str| {
+            let mut account = Account::new(
+                ProviderId::Claude,
+                Tokens {
+                    access_token: access.into(),
+                    refresh_token: refresh.map(Into::into),
+                    ..Tokens::default()
+                },
+            );
+            account.email = Some(email.into());
+            account.org_id = Some(String::new());
+            account.assign_id();
+            account.id
+        };
+        let ids = [
+            made("", Some("rt-1"), "a"),
+            made("", Some("rt-2"), "a"),
+            made("", None, "at-1"),
+            made("", None, "at-2"),
+        ];
+        assert!(ids.iter().all(|id| id != "claude-e3b0c442"), "{ids:?}");
+        for (i, id) in ids.iter().enumerate() {
+            assert!(!ids[..i].contains(id), "{ids:?}");
+        }
+        // Neither an empty org nor an empty email hides the next one.
+        assert_eq!(made("me@x.dev", None, "a"), {
+            let mut a = Account::new(ProviderId::Claude, Tokens::default());
+            a.email = Some("me@x.dev".into());
+            a.assign_id();
+            a.id
+        });
+        // A linked login with no other identity is named by its file.
+        let linked = |path: &str| {
+            let mut a = Account::new(ProviderId::Claude, Tokens::default());
+            a.link = Some(Link {
+                tool: "cliproxyapi".into(),
+                path: path.into(),
+            });
+            a.assign_id();
+            a.id
+        };
+        assert_ne!(linked("/a.json"), linked("/b.json"));
+        assert_eq!(linked("/a.json"), linked("/a.json"));
     }
 
     fn claude(org: &str, email: &str) -> Account {
@@ -656,9 +753,20 @@ mod tests {
         assert_eq!(store.find("home@x.dev").unwrap().id, home.id);
         assert_eq!(store.find(&work.id[..10]).unwrap().id, work.id);
         assert!(store.find("1").is_ok());
-        assert!(
-            store.find("claude-").is_err(),
-            "prefix shared by both is ambiguous"
+        // A prefix shared by both is ambiguous: each is named with its
+        // number, which finds it.
+        let ambiguous = store.find("claude-").unwrap_err().to_string();
+        let numbers = store.list().unwrap();
+        let (one, two) = (&numbers[0], &numbers[1]);
+        assert_eq!(
+            ambiguous,
+            format!(
+                "\"claude-\" matches 2 accounts: #1 {} ({}), #2 {} ({}). Use the number from `slopmax status`, e.g. `slopmax use 1`.",
+                one.name(),
+                one.id,
+                two.name(),
+                two.id
+            )
         );
         assert!(store.find("nope").is_err());
         fs::remove_dir_all(store.dir()).unwrap();

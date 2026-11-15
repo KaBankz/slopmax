@@ -520,7 +520,10 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
                         })
                     })
                     .transpose()?,
-                affinity: m.value("affinity").map(on_off).transpose()?,
+                affinity: m
+                    .value("affinity")
+                    .map(|v| on_off("--affinity", v))
+                    .transpose()?,
                 agents: m.value("agents").map(init::agents).transpose()?,
                 no_service: m.flag("no-service"),
             };
@@ -566,7 +569,7 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
             rename(&config, &store, &m.get::<String>("account")?, label).await?;
         }
         "priority" => {
-            let priority: i32 = m.get("priority")?;
+            let priority: i32 = m.whole("priority", "2 or -1")?.unwrap_or_default();
             set_priority(&config, &store, &m.get::<String>("account")?, priority).await?;
         }
         "order" => order(&config, &store, &m.rest).await?,
@@ -622,10 +625,7 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
         }
         "key" => key(&config, m.get::<String>("action")?.as_str(), m).await?,
         "logs" => {
-            let lines = match m.value("lines") {
-                Some(n) => n.parse().context("--lines takes a number")?,
-                None => 40,
-            };
+            let lines = m.whole("lines", "100")?.unwrap_or(40);
             background::logs(lines, m.flag("follow")).await?;
         }
         "dashboard" => {
@@ -787,49 +787,84 @@ fn endpoint(url: &str, dialect: Option<&str>, models: Option<&str>) -> Result<En
 }
 
 /// `slopmax config [name [value]]`: shows the live settings, or one, or
-/// sets one and has the running proxy apply it at once.
+/// sets one and has the running proxy apply it at once. Settings go by
+/// their config.toml names (the API's names work too), and messages use
+/// the name as typed.
 async fn settings(config: &Config, name: &str, value: &str) -> Result<()> {
-    use slopmax_core::config::{LIVE, live_value};
+    use slopmax_client::api::settings::{LIVE, LivePatch};
+    let path = home().config();
+    let current = |config: &Config, name: &str| {
+        slopmax_core::api::settings(config)
+            .live
+            .get(name)
+            .map(|v| v.text())
+            .unwrap_or_default()
+    };
     if name.is_empty() {
-        let width = LIVE.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
-        for (name, about) in LIVE {
-            let current = config.live(name).unwrap_or_default();
+        let width = LIVE.iter().map(|l| l.toml.len()).max().unwrap_or(0);
+        for live in LIVE {
             println!(
                 "{}  {}  {}",
-                ui::pad(name, width),
-                ui::bold(ui::pad(&current, 11)),
-                ui::dim(about)
+                ui::pad(live.toml, width),
+                ui::bold(ui::pad(&current(config, live.toml), 11)),
+                ui::dim(live.summary)
             );
         }
         println!(
             "\n{}",
             ui::dim(format!(
                 "`slopmax config <name> <value>` changes one; the rest live in {}.",
-                home().config().display()
+                path.display()
             ))
         );
         return Ok(());
     }
+    // Where the proxy listens is read once, as it starts.
+    if name == "listen" {
+        let from = if std::env::var_os("SLOPMAX_LISTEN").is_some_and(|v| !v.is_empty()) {
+            "set by SLOPMAX_LISTEN".to_owned()
+        } else {
+            format!("set in {}", path.display())
+        };
+        if value.is_empty() {
+            println!(
+                "listen = {} {}",
+                ui::bold(config.listen.to_string()),
+                ui::dim(format!("({from}; restart the proxy after changing it)"))
+            );
+            return Ok(());
+        }
+        bail!(
+            "`slopmax config` can't change listen: set it in {}, then restart the proxy (`slopmax stop`, then `slopmax start`)",
+            path.display()
+        );
+    }
     if value.is_empty() {
-        let current = config
-            .live(name)
-            .with_context(|| live_value(name, "").err().unwrap_or_default())?;
-        println!("{current}");
+        // Checks the name, with the same message a change would give.
+        if slopmax_client::api::settings::live(name).is_none() {
+            LivePatch::parse(name, "").map_err(anyhow::Error::msg)?;
+        }
+        println!("{}", current(config, name));
         return Ok(());
     }
+    let patch = LivePatch::parse(name, value).map_err(anyhow::Error::msg)?;
     let (now, applied) = match daemon(config).await {
         Some(client) => {
-            let patch = slopmax_client::api::settings::LivePatch::parse(name, value)
-                .map_err(anyhow::Error::msg)?;
             let view = client.change_settings(&patch).await?;
             let now = view.settings.live.get(name).map(|v| v.text());
             (now.unwrap_or_default(), "applied now")
         }
         None => {
-            let setting = live_value(name, value).map_err(anyhow::Error::msg)?;
-            let changed = Config::set(&home().config(), &[setting])?;
-            let now = changed.live(name).unwrap_or_default();
-            (now, "the proxy applies it when it starts")
+            let values: Vec<_> = patch
+                .changes()
+                .into_iter()
+                .map(|(live, value)| (live.toml, slopmax_core::api::toml_value(value)))
+                .collect();
+            let changed = Config::set(&path, &values)?;
+            (
+                current(&changed, name),
+                "the proxy applies it when it starts",
+            )
         }
     };
     println!(
@@ -855,12 +890,12 @@ pub(super) async fn daemon(config: &Config) -> Option<slopmax_client::Client> {
     client.health().await.map(|_| client)
 }
 
-/// `on` or `off`, as switches are given.
-fn on_off(value: &str) -> Result<bool> {
+/// `on` or `off`, as the switch `flag` is given.
+fn on_off(flag: &str, value: &str) -> Result<bool> {
     match value {
         "on" | "true" | "yes" => Ok(true),
         "off" | "false" | "no" => Ok(false),
-        _ => bail!("expected on or off, got {value:?}"),
+        _ => bail!("{flag} takes on or off, got {value:?}"),
     }
 }
 
@@ -890,18 +925,19 @@ async fn setup(config: &Config, store: &Store, agent: &dyn Agent, undo: bool) ->
         let provider = agent.provider();
         println!(
             "{} no {} account is connected to serve it; until one is, its requests fail. \
-             Add one with `slopmax login {provider}`, or undo with `--undo`.",
+             Add one with `slopmax login {provider}`.",
             ui::yellow("Note:"),
             provider.spec().title,
         );
     }
+    let undo = format!("Undo with `slopmax setup {} --undo`.", agent.id());
     let next = if slopmax_core::background::Daemon::new(config)
         .is_running()
         .await
     {
-        "Undo with `--undo`."
+        undo
     } else {
-        "Start the proxy with `slopmax start` (or `slopmax service install`). Undo with `--undo`."
+        format!("Start the proxy with `slopmax start` (or `slopmax service install`). {undo}")
     };
     println!("{}", ui::dim(next));
     Ok(())

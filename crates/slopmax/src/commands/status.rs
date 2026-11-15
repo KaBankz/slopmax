@@ -342,7 +342,17 @@ fn window_cell(window: Option<&Window>, now: Timestamp) -> String {
 
 fn status_cell(account: &AccountView, now: Timestamp) -> String {
     let condition = account.condition.at(now);
-    let parts: Vec<String> = std::iter::once(ui::toned(condition.tone(), condition.describe(now)))
+    // What went wrong stays in `--json` and `slopmax doctor`; here, the fix.
+    let text = match &condition {
+        Condition::SignInNeeded { .. } => {
+            format!(
+                "signed out: run `slopmax login {}`",
+                account.provider.as_str()
+            )
+        }
+        other => other.describe(now),
+    };
+    let parts: Vec<String> = std::iter::once(ui::toned(condition.tone(), text))
         .chain(
             account
                 .notes

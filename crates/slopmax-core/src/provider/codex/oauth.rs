@@ -86,7 +86,8 @@ async fn login_via(
     let state = ids::token();
     let url = authorize_url(&pkce, &state);
     let redirect = (CALLBACK_PORT, CALLBACK_PATH);
-    let callback = auth::browser_login("ChatGPT", &url, redirect, &state, options, prompt).await?;
+    let callback =
+        auth::browser_login(ProviderId::Codex, &url, redirect, &state, options, prompt).await?;
     exchange(http, &callback.code, &pkce.verifier, &redirect_uri()).await
 }
 

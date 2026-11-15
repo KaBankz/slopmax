@@ -402,8 +402,16 @@ async fn add_account(app: &App, add: AddAccount) -> Answer {
         ..crate::auth::LoginOptions::default()
     };
     let label = label.map(|l| l.trim().to_owned()).filter(|l| !l.is_empty());
-    let prompt = crate::auth::Prompt::new(|_| {});
+    // What the check of the key says, for the answer.
+    let notices = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let told = notices.clone();
+    let prompt = crate::auth::Prompt::new(move |event| {
+        if let crate::auth::LoginEvent::Notice(text) = event {
+            told.lock().unwrap_or_else(|e| e.into_inner()).push(text);
+        }
+    });
     let (account, _) = crate::auth::connect(&app.store, provider, label, options, prompt).await?;
+    let notices = std::mem::take(&mut *notices.lock().unwrap_or_else(|e| e.into_inner()));
     app.sync()
         .map_err(|e| ApiError::internal(format!("{e:#}")))?;
     let report = app.api_report();
@@ -413,11 +421,20 @@ async fn add_account(app: &App, add: AddAccount) -> Answer {
         .find(|a| a.id == account.id)
         .cloned()
         .ok_or_else(|| ApiError::internal("the account was saved but is not listed"))?;
-    ok(&AccountAdded { account, report })
+    ok(&AccountAdded {
+        account,
+        report,
+        notices,
+    })
 }
 
 async fn update_account(app: &App, id: &str, patch: AccountPatch) -> Answer {
     let id = find(app, id)?.id.clone();
+    if let Some(Some(label)) = &patch.label
+        && !label.trim().is_empty()
+    {
+        app.store.check_label(label.trim(), &id)?;
+    }
     let store = app.store.clone();
     let updated = crate::blocking::run(move || {
         store

@@ -467,6 +467,7 @@ impl From<crate::error::StoreError> for api::ApiError {
         match &error {
             StoreError::NotFound(_) | StoreError::Gone(_) => Self::not_found("account"),
             StoreError::Ambiguous { .. } => Self::bad_request(error.to_string()),
+            StoreError::LabelTaken(_) => Self::conflict(error.to_string()),
             StoreError::Io { .. } => Self::internal(error.to_string()),
         }
     }
@@ -536,9 +537,20 @@ mod tests {
         assert_eq!(status(StoreError::Gone("x".into()).into()), 404);
         let ambiguous = StoreError::Ambiguous {
             query: "a".into(),
-            ids: vec!["a1".into(), "a2".into()],
+            matches: ["a1", "a2"]
+                .iter()
+                .enumerate()
+                .map(|(i, id)| crate::error::Match {
+                    number: i + 1,
+                    name: "a".into(),
+                    id: (*id).into(),
+                })
+                .collect(),
         };
-        assert_eq!(ambiguous.to_string(), "\"a\" is ambiguous: a1, a2");
+        assert_eq!(
+            ambiguous.to_string(),
+            "\"a\" matches 2 accounts: #1 a (a1), #2 a (a2). Use the number from `slopmax status`, e.g. `slopmax use 1`."
+        );
         assert_eq!(status(ambiguous.into()), 400);
         assert_eq!(status(ConfigError::KeyExists("laptop".into()).into()), 409);
         assert_eq!(status(ConfigError::Rejected("no".into()).into()), 400);

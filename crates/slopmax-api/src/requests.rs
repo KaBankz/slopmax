@@ -40,6 +40,10 @@ fn chat() -> Dialect {
 pub struct AccountAdded {
     pub account: AccountView,
     pub report: Report,
+    /// What to know about it though it was saved, such as an endpoint that
+    /// didn't answer when its key was checked.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notices: Vec<String>,
 }
 
 /// Changes to an account. A `null` or blank label clears it, so the email

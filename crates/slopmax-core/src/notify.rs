@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::account::Account;
@@ -126,6 +126,23 @@ impl Settings {
         *self == Self::default()
     }
 
+    /// What is wrong with the settings, naming the one at fault, so a
+    /// mistake shows when the config loads rather than when something
+    /// needs saying.
+    pub fn check(&self) -> Result<(), String> {
+        if let Some(url) = &self.webhook {
+            let web = url.parse::<http::Uri>().is_ok_and(|uri| {
+                matches!(uri.scheme_str(), Some("http" | "https")) && uri.host().is_some()
+            });
+            if !web {
+                return Err(format!(
+                    "[notify] webhook = {url:?} is not a web address; give the whole URL, starting with https://"
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn wants(&self, kind: Kind) -> bool {
         let events = if self.events.is_empty() {
             DEFAULT_EVENTS
@@ -144,12 +161,12 @@ impl Settings {
         if let Some(url) = &self.webhook
             && let Err(e) = post(http, url, event).await
         {
-            failures.push(format!("webhook: {e:#}"));
+            failures.push(format!("{e:#}"));
         }
         if let Some(command) = &self.command
             && let Err(e) = run(command, event).await
         {
-            failures.push(format!("command: {e:#}"));
+            failures.push(format!("{e:#}"));
         }
         if !failures.is_empty() {
             bail!("{}", failures.join("; "));
@@ -164,11 +181,14 @@ async fn post(http: &Client, url: &str, event: &Event) -> Result<()> {
     let mut body = serde_json::to_value(event)?;
     body["text"] = event.message.clone().into();
     body["content"] = event.message.clone().into();
-    http.post(url)
-        .json(&body)
-        .send()
-        .await?
-        .error_for_status()?;
+    let response = http.post(url).json(&body).send().await.map_err(|e| {
+        let why = crate::provider::keys::plain(&e);
+        anyhow::anyhow!("the notify webhook didn't answer ({why})")
+    })?;
+    let status = response.status();
+    if !status.is_success() {
+        bail!("the notify webhook answered {status}");
+    }
     Ok(())
 }
 
@@ -199,13 +219,28 @@ async fn run(command: &str, event: &Event) -> Result<()> {
         .kill_on_drop(true);
     let output = tokio::time::timeout(COMMAND_TIMEOUT, shell.output())
         .await
-        .context("timed out")?
-        .context("could not start it")?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("{}: {}", output.status, stderr.trim());
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "the notify command didn't finish within {} seconds, so it was stopped",
+                COMMAND_TIMEOUT.as_secs()
+            )
+        })?
+        .map_err(|e| anyhow::anyhow!("the notify command couldn't start ({e})"))?;
+    if output.status.success() {
+        return Ok(());
     }
-    Ok(())
+    let ended = match output.status.code() {
+        Some(code) => format!("exited with {code}"),
+        None => "was stopped by a signal".to_owned(),
+    };
+    let said = [&output.stderr, &output.stdout]
+        .into_iter()
+        .map(|out| String::from_utf8_lossy(out).trim().to_owned())
+        .find(|out| !out.is_empty());
+    match said {
+        Some(said) => bail!("the notify command {ended}: {said}"),
+        None => bail!("the notify command {ended} (no output)"),
+    }
 }
 
 /// How long before it lapses a limit reset is worth a nudge, and a week's
@@ -637,8 +672,53 @@ mod tests {
             ..Settings::default()
         };
         let error = failing.send(&http, &event).await.unwrap_err().to_string();
-        assert!(error.contains("nope"), "{error}");
+        assert_eq!(error, "the notify command exited with 3: nope");
+        let silent = Settings {
+            command: Some("exit 3".into()),
+            ..Settings::default()
+        };
+        let error = silent.send(&http, &event).await.unwrap_err().to_string();
+        assert_eq!(error, "the notify command exited with 3 (no output)");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn webhook_failures_say_what_happened() {
+        let http = Client::builder().plain_http().build();
+        let event = Event::test(Timestamp::now());
+        let refused = Settings {
+            webhook: Some("http://127.0.0.1:9/hook".into()),
+            ..Settings::default()
+        };
+        let error = refused.send(&http, &event).await.unwrap_err().to_string();
+        assert!(
+            error == "the notify webhook didn't answer (connection refused)",
+            "{error}"
+        );
+        let mock = crate::testkit::Mock::start(|_| crate::testkit::reply(404, "")).await;
+        let missing = Settings {
+            webhook: Some(format!("{}/hook", mock.url)),
+            ..Settings::default()
+        };
+        let error = missing.send(&http, &event).await.unwrap_err().to_string();
+        assert_eq!(error, "the notify webhook answered 404 Not Found");
+    }
+
+    #[test]
+    fn webhooks_must_be_web_addresses() {
+        let with = |url: &str| Settings {
+            webhook: Some(url.into()),
+            ..Settings::default()
+        };
+        assert!(with("https://hooks.example/x").check().is_ok());
+        assert!(with("http://127.0.0.1:9/hook").check().is_ok());
+        for bad in ["not a url", "hooks.example/x", "ftp://x/y", "https://"] {
+            let error = with(bad).check().unwrap_err();
+            assert!(
+                error.starts_with(&format!("[notify] webhook = {bad:?} is not a web address")),
+                "{error}"
+            );
+        }
     }
 
     #[test]

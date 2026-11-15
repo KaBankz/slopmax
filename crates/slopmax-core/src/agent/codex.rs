@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use http::HeaderMap;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -229,7 +229,7 @@ impl Agent for Codex {
     fn import<'a>(&'a self, _http: &'a Client, home: &'a Home) -> BoxFuture<'a, Option<Found>> {
         let file = home.codex().join("auth.json");
         let found = file.exists().then(|| Found {
-            origin: file.display().to_string(),
+            origin: home.show(&file),
             account: account_from(&file),
         });
         Box::pin(std::future::ready(found))
@@ -261,10 +261,14 @@ struct AuthTokens {
 
 /// The Codex CLI's login in `~/.codex/auth.json`.
 fn account_from(path: &Path) -> Result<Account> {
-    let file: AuthFile = serde_json::from_str(&fs::read_to_string(path)?)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let text = fs::read_to_string(path).map_err(|e| anyhow!("can't be read ({e})"))?;
+    let file: AuthFile = serde_json::from_str(&text).map_err(|_| {
+        anyhow!("not a signed-in Codex login. Run `codex login`, then import again.")
+    })?;
     let Some(tokens) = file.tokens else {
-        bail!("not a ChatGPT login (API key or proxy auth)");
+        bail!(
+            "Codex uses an API key here, not a ChatGPT sign-in; add the key with `slopmax login openai`, or run `codex login` with ChatGPT, then import again"
+        );
     };
     let mut account = Account::new(
         ProviderId::Codex,
@@ -381,7 +385,15 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("auth.json");
         std::fs::write(&path, r#"{"OPENAI_API_KEY":"sk-local"}"#).unwrap();
-        assert!(account_from(&path).is_err());
+        let error = account_from(&path).unwrap_err().to_string();
+        assert!(error.contains("slopmax login openai"), "{error}");
+        // A file that is not a login says so once, without the parser's
+        // words.
+        std::fs::write(&path, r#"{"tokens":{"id_token":"x"}}"#).unwrap();
+        assert_eq!(
+            format!("{:#}", account_from(&path).unwrap_err()),
+            "not a signed-in Codex login. Run `codex login`, then import again."
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 

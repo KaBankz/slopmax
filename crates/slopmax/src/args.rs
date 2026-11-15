@@ -108,7 +108,9 @@ impl Matches {
             })
     }
 
-    /// A value converted with [`FromStr`]; required by the caller.
+    /// A value converted with [`FromStr`]; required by the caller. The
+    /// conversion's error is shown, so it should be in a person's words;
+    /// numbers go through [`Matches::whole`].
     pub fn get<T>(&self, name: &str) -> Result<T>
     where
         T: FromStr,
@@ -120,6 +122,24 @@ impl Matches {
         value
             .parse()
             .map_err(|e| anyhow!("invalid <{}> {value:?}: {e}", name.to_ascii_uppercase()))
+    }
+
+    /// A whole number, or an error that says so with an example (`like`),
+    /// rather than the parser's words. Options are named as typed
+    /// (`--lines`), positionals plainly (`priority`).
+    pub fn whole<T: FromStr>(&self, name: &str, like: &str) -> Result<Option<T>> {
+        let Some(value) = self.value(name) else {
+            return Ok(None);
+        };
+        let shown = match self.command.args.iter().find(|a| a.name == name) {
+            Some(arg) if !arg.is_positional() => format!("--{name}"),
+            _ => name.to_owned(),
+        };
+        value
+            .trim()
+            .parse()
+            .map(Some)
+            .map_err(|_| anyhow!("{shown} must be a whole number, like {like}; got {value:?}"))
     }
 }
 
@@ -701,6 +721,18 @@ mod tests {
     fn negative_numbers_are_values_and_rest_is_verbatim() {
         let m = run(&["shift", "box", "-1"]);
         assert_eq!(m.get::<i32>("by").unwrap(), -1);
+        assert_eq!(m.whole::<i32>("by", "2").unwrap(), Some(-1));
+        let m = run(&["shift", "box", "x"]);
+        assert_eq!(
+            m.whole::<i32>("by", "2 or -1").unwrap_err().to_string(),
+            "by must be a whole number, like 2 or -1; got \"x\""
+        );
+        let m = run(&["paint", "--label", "x"]);
+        assert_eq!(
+            m.whole::<u32>("label", "3").unwrap_err().to_string(),
+            "--label must be a whole number, like 3; got \"x\""
+        );
+        assert_eq!(m.whole::<u32>("color", "3").ok(), None);
         let m = run(&["exec", "red", "exec", "-c", "model=\"m\"", "--help"]);
         assert_eq!(m.value("program"), Some("red"));
         assert_eq!(m.rest, ["exec", "-c", "model=\"m\"", "--help"]);

@@ -198,90 +198,7 @@ impl fmt::Display for Strategy {
     }
 }
 
-/// The settings that apply while the proxy runs, which `slopmax config`,
-/// the dashboard, and the app change: each name and what it does.
-pub const LIVE: &[(&str, &str)] = &[
-    (
-        "strategy",
-        "reset-first, fill-first, least-used, or round-robin",
-    ),
-    (
-        "session_affinity",
-        "keep a session on its account, for the prompt cache",
-    ),
-    (
-        "session_ttl_mins",
-        "idle minutes before a session's account is forgotten",
-    ),
-    (
-        "redeem_expiring_credits",
-        "redeem a limit reset before it expires unused",
-    ),
-    (
-        "redeem_when_exhausted",
-        "redeem one when every account is spent",
-    ),
-    (
-        "warm_windows",
-        "start idle ChatGPT accounts' windows as they reset",
-    ),
-    (
-        "paid_overflow",
-        "let API keys take over once subscriptions are limited",
-    ),
-    (
-        "poll_mins",
-        "minutes between usage polls (0 turns them off)",
-    ),
-];
-
-/// `value` as the setting `name` takes it, or why not.
-pub fn live_value(name: &str, value: &str) -> Result<(&'static str, toml_edit::Value), String> {
-    let Some((name, _)) = LIVE.iter().find(|(n, _)| *n == name) else {
-        let names: Vec<&str> = LIVE.iter().map(|(n, _)| *n).collect();
-        return Err(format!(
-            "{name} is not a setting slopmax changes while it runs; those are {}",
-            names.join(", ")
-        ));
-    };
-    let value = value.trim();
-    let parsed = match *name {
-        "strategy" => match Strategy::parse(value) {
-            Some(strategy) => toml_edit::Value::from(strategy.to_string()),
-            None => {
-                let names: Vec<String> = Strategy::ALL.iter().map(|s| s.to_string()).collect();
-                return Err(format!("strategy is one of {}", names.join(", ")));
-            }
-        },
-        "session_ttl_mins" | "poll_mins" => match value.parse::<i64>() {
-            Ok(mins) if mins > 0 || (*name == "poll_mins" && mins == 0) => mins.into(),
-            _ => return Err(format!("{name} is a number of minutes")),
-        },
-        _ => match value {
-            "true" | "on" | "1" | "yes" => true.into(),
-            "false" | "off" | "0" | "no" => false.into(),
-            _ => return Err(format!("{name} is on or off")),
-        },
-    };
-    Ok((name, parsed))
-}
-
 impl Config {
-    /// A live setting's value as config.toml writes it.
-    pub fn live(&self, name: &str) -> Option<String> {
-        Some(match name {
-            "strategy" => self.strategy.to_string(),
-            "session_affinity" => self.session_affinity.to_string(),
-            "session_ttl_mins" => self.session_ttl_mins.to_string(),
-            "redeem_expiring_credits" => self.redeem_expiring_credits.to_string(),
-            "redeem_when_exhausted" => self.redeem_when_exhausted.to_string(),
-            "warm_windows" => self.warm_windows.to_string(),
-            "paid_overflow" => self.paid_overflow.to_string(),
-            "poll_mins" => self.poll_mins.to_string(),
-            _ => return None,
-        })
-    }
-
     /// Loads the config, creating it (with a fresh API key) on first use.
     /// `SLOPMAX_LISTEN` overrides `listen`, for containers.
     pub fn load(home: &crate::paths::Home) -> Result<Self, ConfigError> {
@@ -307,6 +224,13 @@ impl Config {
                 Some(text) => toml_edit::de::from_str::<Self>(text).map_err(invalid(path))?,
                 None => Self::default(),
             };
+            config
+                .notify
+                .check()
+                .map_err(|message| ConfigError::Invalid {
+                    path: path.to_owned(),
+                    message,
+                })?;
             Ok((text, config))
         };
         let (text, config) = read()?;
@@ -586,40 +510,6 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert_eq!(text, format!("{mine}api_key = \"{}\"\n", config.api_key));
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
-    }
-
-    #[test]
-    fn live_settings_are_checked_before_they_are_written() {
-        assert_eq!(
-            live_value("strategy", "round-robin").unwrap().1.as_str(),
-            Some("round-robin")
-        );
-        assert_eq!(
-            live_value("session_affinity", "off").unwrap().1.as_bool(),
-            Some(false)
-        );
-        assert_eq!(
-            live_value("poll_mins", "0").unwrap().1.as_integer(),
-            Some(0)
-        );
-        assert!(live_value("session_ttl_mins", "0").is_err());
-        assert!(
-            live_value("strategy", "fastest")
-                .unwrap_err()
-                .contains("round-robin")
-        );
-        assert!(
-            live_value("listen", "0.0.0.0:1")
-                .unwrap_err()
-                .contains("not a setting")
-        );
-        assert!(live_value("warm_windows", "maybe").is_err());
-        let config = Config::default();
-        for (name, _) in LIVE {
-            let value = config.live(name).unwrap();
-            assert!(live_value(name, &value).is_ok(), "{name} = {value}");
-        }
-        assert!(config.live("api_key").is_none());
     }
 
     #[test]

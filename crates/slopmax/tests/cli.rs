@@ -331,8 +331,10 @@ fn mistakes_explain_themselves_and_fail() {
     s.run(&["usage", "--by", "week"])
         .fails(1, "--by takes day, model, or account");
     s.run(&["usage", "fortnight"]).fails(2, "fortnight");
-    s.run(&["logs", "-n", "many"])
-        .fails(1, "--lines takes a number");
+    let out = s
+        .run(&["logs", "-n", "many"])
+        .fails(1, "--lines must be a whole number, like 100; got \"many\"");
+    assert!(!out.stderr.contains("digit"), "{out:?}");
     s.run(&["key", "add"]).fails(1, "needs the key's name");
     s.run(&["key", "remove", "ghost"])
         .fails(1, "no key named \"ghost\"");
@@ -355,7 +357,8 @@ fn mistakes_explain_themselves_and_fail() {
     s.run(&["notify"]).fails(1, "notifications are off");
     s.run(&["label", "1", "work"])
         .fails(1, "no account matches \"1\"");
-    s.run(&["priority", "x", "high"]).fails(1, "");
+    s.run(&["priority", "x", "high"])
+        .fails(1, "priority must be a whole number, like 2 or -1");
     s.run(&["setup", "claude", "--undo"])
         .fails(1, "no Claude Code setup to undo");
     s.run(&["import", "nowhere"]).fails(2, "nowhere");
@@ -458,7 +461,8 @@ fn account_commands_change_the_store() {
     };
     let out = s.run(&["use", "b@x.dev"]).ok();
     assert!(
-        out.stdout.contains("New claude sessions will use"),
+        out.stdout
+            .contains("New Claude sessions will use b@x.dev while it has quota."),
         "{out:?}"
     );
     assert_eq!(pins(&state)["claude"].as_str(), Some(b.id.as_str()));
@@ -473,10 +477,45 @@ fn account_commands_change_the_store() {
     assert!(s.store().get(&b.id).unwrap().is_none());
     assert!(pins(&state).get("claude").is_none());
 
-    // Ambiguous and missing references are refused.
+    // Ambiguous and missing references are refused; the ambiguous ones
+    // are named by the numbers `status` shows.
     s.add(&claude("c@x.dev"));
-    s.run(&["remove", "claude-"]).fails(1, "ambiguous");
+    let numbered = s.store().list().unwrap();
+    let out = s
+        .run(&["remove", "claude-"])
+        .fails(1, "\"claude-\" matches 2 accounts: #1 ");
+    for (n, account) in numbered.iter().enumerate() {
+        let named = format!("#{} {} ({})", n + 1, account.name(), account.id);
+        assert!(out.stderr.contains(&named), "{named}: {out:?}");
+    }
+    assert!(out.stderr.contains("e.g. `slopmax use 1`"), "{out:?}");
     s.run(&["disable", "nobody"]).fails(1, "no account matches");
+
+    // A label another account goes by would name two; it is refused.
+    s.run(&["label", "c@x.dev", "work"])
+        .fails(1, "\"work\" is already the label of #");
+    s.run(&["label", "c@x.dev", "a@x.dev"])
+        .fails(1, "\"a@x.dev\" is already the email of #");
+    assert_eq!(s.account("c@x.dev").label, None);
+    // Giving an account its own label again is fine.
+    s.run(&["label", "work", "work"]).ok();
+
+    // A disabled account is not used, so `use` says so instead.
+    s.run(&["disable", "c@x.dev"]).ok();
+    s.run(&["use", "c@x.dev"]).fails(
+        1,
+        "c@x.dev is disabled, so it won't be used; run `slopmax enable c@x.dev` first",
+    );
+    assert!(pins(&state).get("claude").is_none());
+    // A key has no quota to run out of.
+    let openai = key(ProviderId::OpenAI, "sk-openai-1234");
+    s.add(&openai);
+    let out = s.run(&["use", &openai.id]).ok();
+    assert!(
+        out.stdout
+            .contains("New OpenAI API sessions will use OpenAI API key …1234.\n"),
+        "{out:?}"
+    );
 }
 
 #[test]
@@ -498,12 +537,22 @@ fn own_takes_over_linked_accounts() {
 
     let out = s.run(&["own", "m@x.dev"]).ok();
     assert!(out.stdout.contains("already refreshes here"), "{out:?}");
+    // Nothing changed hands, so there is nothing to warn about.
+    assert!(!out.stdout.contains("first refresh"), "{out:?}");
+    let openai = key(ProviderId::OpenAI, "sk-openai-1234");
+    s.add(&openai);
+    let out = s.run(&["own", &openai.id]).ok();
+    assert_eq!(
+        out.stdout,
+        "OpenAI API key …1234 uses an API key; there's nothing to take over.\n"
+    );
     let out = s.run(&["own", "all"]).ok();
     assert!(
         out.stdout.contains("slopmax now refreshes l@x.dev"),
         "{out:?}"
     );
     assert!(out.stdout.contains("was following cliproxyapi"), "{out:?}");
+    assert!(out.stdout.contains("first refresh signs the old copy out"));
     assert!(s.account(&linked.id).link.is_none());
 }
 
@@ -634,6 +683,39 @@ fn usage_totals_the_ledger() {
     assert_eq!(json["total"]["failed"], 1, "{json:#}");
     let week: Value = serde_json::from_str(&s.run(&["usage", "--json"]).ok().stdout).unwrap();
     assert_eq!(week["total"]["requests"], 3, "{week:#}");
+    // A row of only failed requests would be all zeros, so it is left out.
+    write_ledger(&s, &[entry(now, "", "claude-sonnet-4-6", 503)]);
+    let accounts = s.run(&["usage", "today", "--by", "account"]).ok().stdout;
+    assert!(accounts.contains("a@x.dev"), "{accounts}");
+    assert!(accounts.contains("2 requests failed"), "{accounts}");
+    let rows: Vec<&str> = accounts
+        .lines()
+        .skip_while(|l| !l.contains("ACCOUNT"))
+        .skip(1)
+        .take_while(|l| !l.starts_with("total"))
+        .collect();
+    assert_eq!(rows.len(), 1, "{accounts}");
+
+    // With nothing but failures, it says so rather than show zeros.
+    let s = Sandbox::new("usage-failed");
+    let now = Timestamp::now();
+    write_ledger(
+        &s,
+        &[
+            entry(now, "", "claude-sonnet-4-6", 503),
+            entry(now, "", "claude-sonnet-4-6", 529),
+        ],
+    );
+    let out = s.run(&["usage"]).ok();
+    assert_eq!(
+        out.stdout,
+        "No successful requests in the last 7 days; 2 failed (see `slopmax logs`).\n"
+    );
+    let out = s.run(&["usage", "today"]).ok();
+    assert!(
+        out.stdout.starts_with("No successful requests today;"),
+        "{out:?}"
+    );
 }
 
 #[test]
@@ -650,6 +732,13 @@ fn setup_wires_the_agents_and_undo_restores_their_files_exactly() {
     let out = s.run(&["setup", "claude"]).ok();
     assert!(
         out.stdout.contains("Claude Code now uses slopmax"),
+        "{out:?}"
+    );
+    // How to undo it, once, as a command that runs.
+    assert_eq!(out.stdout.matches("--undo").count(), 1, "{out:?}");
+    assert!(
+        out.stdout
+            .contains("Undo with `slopmax setup claude --undo`."),
         "{out:?}"
     );
     let wired: Value = serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
@@ -797,7 +886,21 @@ fn write(path: &Path, text: &str) {
 fn import_brings_over_codex_and_cliproxyapi_logins() {
     let s = Sandbox::new("import");
     let out = s.run(&["import"]).ok();
-    assert!(out.stdout.contains("No logins found"), "{out:?}");
+    // Where it looked, so a login kept elsewhere can be found.
+    assert!(
+        out.stdout.contains("No logins found to import. Looked in "),
+        "{out:?}"
+    );
+    assert!(out.stdout.contains("auth.json"), "{out:?}");
+    assert!(out.stdout.contains(".cli-proxy-api"), "{out:?}");
+    let out = s.run(&["import", "codex"]).ok();
+    assert_eq!(
+        out.stdout,
+        format!(
+            "No logins found to import. Looked in {}.\n",
+            s.codex.join("auth.json").display()
+        )
+    );
     // Without a credentials file, Claude Code's login is looked up in the
     // keychain on macOS (a stub here).
     if cfg!(target_os = "macos") {
@@ -845,8 +948,15 @@ fn import_brings_over_codex_and_cliproxyapi_logins() {
     let out = s.run(&["import"]).ok();
     let text = &out.stdout;
     assert!(text.contains("skipped"), "{text}");
-    assert!(text.contains("login expired"), "{text}");
+    assert!(text.contains("login has expired"), "{text}");
     assert!(text.contains("no access token"), "{text}");
+    // A file that is no login is reported, once, by where it is.
+    let broken = format!(
+        "skipped ~{0}.cli-proxy-api{0}broken.json: not a CLIProxyAPI login file\n",
+        std::path::MAIN_SEPARATOR
+    );
+    assert!(text.contains(&broken), "{text}");
+    assert!(!text.contains("gemini"), "{text}");
     assert!(text.contains("cpa-a"), "{text}");
     assert!(text.contains("b@x.dev"), "{text}");
     assert!(text.contains("linked:"), "{text}");
@@ -872,6 +982,42 @@ fn import_brings_over_codex_and_cliproxyapi_logins() {
         "the keychain was consulted: {}",
         s.stub_calls()
     );
+
+    // Unreadable logins say what they are not and what to run, without
+    // the parser's words or the path twice.
+    write(
+        &s.codex.join("auth.json"),
+        r#"{"tokens": {"id_token": "x"}}"#,
+    );
+    write(&s.claude.join(".credentials.json"), "{bad");
+    let out = s.run(&["import", "codex"]).ok();
+    let codex_file = s.codex.join("auth.json").display().to_string();
+    assert_eq!(
+        out.stdout,
+        format!(
+            "  skipped {codex_file}: not a signed-in Codex login. Run `codex login`, then import again.\n"
+        )
+    );
+    let out = s.run(&["import", "claude-code"]).ok();
+    assert!(
+        out.stdout
+            .contains(".credentials.json: not a signed-in Claude Code login."),
+        "{out:?}"
+    );
+
+    // Logins with no email are still told apart.
+    for name in ["x", "y"] {
+        write(
+            &cpa.join(format!("claude-{name}.json")),
+            &json!({"type": "claude", "access_token": format!("tok-{name}"), "email": ""})
+                .to_string(),
+        );
+    }
+    let before = s.store().list().unwrap().len();
+    s.run(&["import", "cliproxyapi"]).ok();
+    let accounts = s.store().list().unwrap();
+    assert_eq!(accounts.len(), before + 2, "{accounts:#?}");
+    assert!(accounts.iter().all(|a| a.id != "claude-e3b0c442"));
 }
 
 /// A compatible endpoint that lists two models for one key.
@@ -940,7 +1086,53 @@ async fn login_with_keys_reads_them_from_stdin() {
     .await
     .unwrap()
     .ok();
-    assert!(out.stdout.contains("Updated compat account box"), "{out:?}");
+    assert_eq!(
+        out.stdout,
+        "Updated box (same endpoint and key): now serves qwen3\n"
+    );
+
+    // An endpoint that doesn't answer is kept, and the person is told.
+    let out = run(
+        vec![
+            "login".into(),
+            "compat".into(),
+            "--url".into(),
+            "http://127.0.0.1:9/v1".into(),
+            "--models".into(),
+            "m3".into(),
+        ],
+        "",
+    )
+    .await
+    .unwrap()
+    .ok();
+    assert!(
+        out.stdout.contains(
+            "Saved, but http://127.0.0.1:9/v1 didn't answer (connection refused); requests will fail until it does."
+        ),
+        "{out:?}"
+    );
+    // A label another account has is refused.
+    let out = run(
+        vec![
+            "login".into(),
+            "compat".into(),
+            "--url".into(),
+            "http://127.0.0.1:9/v2".into(),
+            "--models".into(),
+            "m3".into(),
+            "--label".into(),
+            "box".into(),
+        ],
+        "",
+    )
+    .await
+    .unwrap();
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(
+        out.stderr.contains("\"box\" is already the label of #"),
+        "{out:?}"
+    );
 
     let out = run(
         vec!["login".into(), "compat".into(), "--url".into(), v1.clone()],
@@ -1028,6 +1220,96 @@ fn notify_sends_a_test_event_through_the_command() {
     let out = s.run(&["notify"]).ok();
     assert!(out.stdout.contains("Sent a test notification"), "{out:?}");
     assert_eq!(std::fs::read_to_string(&sent).unwrap(), "test");
+}
+
+// The commands run in a POSIX shell.
+#[cfg(unix)]
+#[test]
+fn notify_failures_say_what_happened() {
+    let s = Sandbox::new("notify-fails");
+    s.run(&["key", "list"]).ok();
+    let base = std::fs::read_to_string(s.config()).unwrap();
+    let with =
+        |notify: &str| std::fs::write(s.config(), format!("{base}\n[notify]\n{notify}\n")).unwrap();
+    with("command = 'exit 3'");
+    s.run(&["notify"])
+        .fails(1, "error: the notify command exited with 3 (no output)\n");
+    with("command = 'nonexistent-cmd-xyz'");
+    let out = s
+        .run(&["notify"])
+        .fails(1, "error: the notify command exited with 127: ");
+    assert!(out.stderr.contains("nonexistent-cmd-xyz"), "{out:?}");
+    // A webhook that is no address is a config error, named, at once.
+    with("webhook = 'not a url'");
+    s.run(&["status"]).fails(
+        1,
+        "[notify] webhook = \"not a url\" is not a web address; give the whole URL, starting with https://",
+    );
+}
+
+#[test]
+fn config_speaks_in_the_names_it_takes() {
+    let s = Sandbox::new("config");
+    s.run(&["config", "poll_mins", "99999999999999999999"])
+        .fails(1, "error: poll_mins is a number of minutes\n");
+    s.run(&["config", "session_ttl_mins", "0"]).fails(
+        1,
+        "error: session_ttl_mins is a number of minutes, at least 1\n",
+    );
+    let out = s
+        .run(&["config", "bogus", "1"])
+        .fails(1, "bogus is not a setting slopmax changes while it runs; those are strategy, session_affinity, session_ttl_mins,");
+    assert!(out.stderr.contains("websockets"), "{out:?}");
+    // Every live setting, whether or not the proxy runs.
+    let out = s.run(&["config", "websockets", "off"]).ok();
+    assert!(out.stdout.contains("websockets = false"), "{out:?}");
+    assert_eq!(s.run(&["config", "websockets"]).ok().stdout, "false\n");
+    assert!(s.run(&["config"]).ok().stdout.contains("refresh_tokens"));
+    // `listen` is shown with how to change it.
+    let out = s.run(&["config", "listen"]).ok();
+    assert!(
+        out.stdout
+            .contains(&format!("listen = 127.0.0.1:{}", s.port)),
+        "{out:?}"
+    );
+    assert!(
+        out.stdout.contains("restart the proxy after changing it"),
+        "{out:?}"
+    );
+    s.run(&["config", "listen", "1.2.3.4:9"])
+        .fails(1, "`slopmax config` can't change listen");
+}
+
+#[test]
+fn a_sign_in_that_needs_a_paste_needs_a_terminal() {
+    let s = Sandbox::new("no-terminal");
+    let out = s.run(&["login", "claude", "--no-browser"]).fails(
+        1,
+        "slopmax login claude needs a terminal to paste the code into; run it in an interactive shell, or bring an existing login over with `slopmax import claude-code`",
+    );
+    // Refused before any link is shown.
+    assert!(!out.stdout.contains("http"), "{out:?}");
+    assert!(!out.stderr.contains("https://"), "{out:?}");
+}
+
+#[test]
+fn signed_out_accounts_say_how_to_sign_in() {
+    let s = Sandbox::new("signed-out");
+    let mut a = claude("a@x.dev");
+    a.auth_error = Some("refresh token rejected (401 Unauthorized)".into());
+    s.add(&a);
+    let table = s.run(&["status"]).ok().stdout;
+    assert!(
+        table.contains("signed out: run `slopmax login claude`"),
+        "{table}"
+    );
+    assert!(!table.contains("(401"), "{table}");
+    // The detail stays in the JSON and the doctor.
+    let json = s.run(&["status", "--json"]).ok().stdout;
+    assert!(
+        json.contains("refresh token rejected (401 Unauthorized)"),
+        "{json}"
+    );
 }
 
 #[test]
@@ -1125,6 +1407,64 @@ fn the_background_proxy_starts_reports_and_stops() {
     assert!(out.stdout.contains("work"), "{out:?}");
     let out = s.run(&["config", "session_ttl_mins", "45"]).ok();
     assert!(out.stdout.contains("applied now"), "{out:?}");
+    // Through the proxy too, settings are named as they were typed.
+    let out = s
+        .run(&["config", "poll_mins", "99999999999999999999"])
+        .fails(1, "poll_mins is a number of minutes");
+    assert!(!out.stderr.contains("pollMinutes"), "{out:?}");
+    s.run(&["config", "session_ttl_mins", "0"])
+        .fails(1, "session_ttl_mins is a number of minutes, at least 1");
+    let out = s
+        .run(&["config", "listen", "1.2.3.4:9"])
+        .fails(1, "`slopmax config` can't change listen");
+    assert!(!out.stderr.contains("sessionAffinity"), "{out:?}");
+    let out = s.run(&["config", "websockets", "off"]).ok();
+    assert!(out.stdout.contains("websockets = false"), "{out:?}");
+    // An endpoint added through the proxy that doesn't answer says so.
+    let out = s
+        .run_with(
+            &[
+                "login",
+                "compat",
+                "--url",
+                "http://127.0.0.1:9/v1",
+                "--models",
+                "m3",
+            ],
+            "",
+        )
+        .ok();
+    assert!(
+        out.stdout
+            .contains("Saved, but http://127.0.0.1:9/v1 didn't answer"),
+        "{out:?}"
+    );
+    let out = s
+        .run_with(
+            &[
+                "login",
+                "compat",
+                "--url",
+                "http://127.0.0.1:9/v1",
+                "--models",
+                "m4",
+            ],
+            "",
+        )
+        .ok();
+    assert!(
+        out.stdout
+            .contains("(same endpoint and key): now serves m4"),
+        "{out:?}"
+    );
+    let compat = s
+        .store()
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|a| a.provider == ProviderId::Compat)
+        .unwrap();
+    s.run(&["remove", &compat.id]).ok();
     let key = s.run(&["key", "add", "laptop"]).ok().stdout;
     assert!(key.trim().starts_with("sm-"), "{key}");
     let json: Value = serde_json::from_str(&s.run(&["status", "--json"]).ok().stdout).unwrap();
@@ -1132,7 +1472,8 @@ fn the_background_proxy_starts_reports_and_stops() {
     assert_eq!(account["name"], "work", "{json:#}");
     assert_eq!(account["pinned"], true, "{json:#}");
     // The order too, which the daemon saves and the next status shows.
-    s.run(&["order", "anthropic-"]).fails(1, "ambiguous");
+    s.run(&["order", "anthropic-"])
+        .fails(1, "\"anthropic-\" matches 2 accounts: #1 work");
     let second = s.store().list().unwrap()[1].id.clone();
     s.run(&["order", &second]).ok();
     let json: Value = serde_json::from_str(&s.run(&["status", "--json"]).ok().stdout).unwrap();
@@ -1310,13 +1651,21 @@ fn setup_flags_that_make_no_sense_are_refused() {
         "--strategy takes reset-first, fill-first, least-used, or round-robin",
     );
     s.run(&["setup", "--affinity", "maybe"])
-        .fails(1, "expected on or off, got \"maybe\"");
+        .fails(1, "--affinity takes on or off, got \"maybe\"");
     s.run(&["setup", "--login", "xai"])
         .fails(1, "--login signs in to subscriptions (claude, codex)");
-    s.run(&["setup", "--agents", "grok"])
-        .fails(1, "unknown agent \"grok\"");
-    s.run(&["setup", "--import", "dropbox"])
-        .fails(1, "unknown source \"dropbox\"");
+    s.run(&["setup", "--login", "bogus"]).fails(
+        1,
+        "--login takes claude, codex, or both (comma-separated), got \"bogus\"",
+    );
+    s.run(&["setup", "--agents", "grok"]).fails(
+        1,
+        "--agents takes claude, codex, or none (comma-separated), got \"grok\"",
+    );
+    s.run(&["setup", "--import", "dropbox"]).fails(
+        1,
+        "--import takes claude-code, codex, cliproxyapi, all, or none (comma-separated), got \"dropbox\"",
+    );
     assert!(s.store().list().unwrap().is_empty());
     assert_eq!(s.stub_calls(), "");
 }

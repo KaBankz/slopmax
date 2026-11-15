@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use http::HeaderMap;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -156,7 +156,7 @@ impl Agent for ClaudeCode {
     }
 
     fn has_login(&self, home: &Home) -> bool {
-        credentials(home).is_some()
+        credentials(home).is_some_and(|(_, login)| login.is_ok())
     }
 
     fn wired_to(&self, home: &Home) -> Option<String> {
@@ -167,11 +167,12 @@ impl Agent for ClaudeCode {
 
     fn import<'a>(&'a self, http: &'a Client, home: &'a Home) -> BoxFuture<'a, Option<Found>> {
         Box::pin(async move {
-            let oauth = credentials(home)?;
-            Some(Found {
-                origin: "claude code".into(),
-                account: account_from(http, oauth).await,
-            })
+            let (origin, login) = credentials(home)?;
+            let account = match login {
+                Ok(login) => account_from(http, login).await,
+                Err(e) => Err(e),
+            };
+            Some(Found { origin, account })
         })
     }
 }
@@ -193,14 +194,25 @@ struct SavedLogin {
     expires_at: Option<i64>,
 }
 
-/// Claude Code's login: `~/.claude/.credentials.json`, or the keychain on
-/// macOS.
-fn credentials(home: &Home) -> Option<SavedLogin> {
-    let text = fs::read_to_string(home.claude().join(".credentials.json"))
+/// Claude Code's login, from `~/.claude/.credentials.json` or the keychain
+/// on macOS: where it was found, and the login or why it can't be used.
+/// None when there is none to find.
+fn credentials(home: &Home) -> Option<(String, Result<SavedLogin>)> {
+    let path = home.claude().join(".credentials.json");
+    let (origin, text) = match fs::read_to_string(&path) {
+        Ok(text) => (home.show(&path), text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            ("the macOS keychain".to_owned(), keychain_credentials()?)
+        }
+        Err(e) => return Some((home.show(&path), Err(anyhow!("can't be read ({e})")))),
+    };
+    let login = serde_json::from_str::<Value>(&text)
         .ok()
-        .or_else(keychain_credentials)?;
-    let value: Value = serde_json::from_str(&text).ok()?;
-    serde_json::from_value(value.get("claudeAiOauth")?.clone()).ok()
+        .and_then(|value| serde_json::from_value(value.get("claudeAiOauth")?.clone()).ok())
+        .context(
+            "not a signed-in Claude Code login. Sign in to Claude Code (run `claude`, then /login), then import again.",
+        );
+    Some((origin, login))
 }
 
 fn keychain_credentials() -> Option<String> {
@@ -236,7 +248,7 @@ async fn account_from(http: &Client, login: SavedLogin) -> Result<Account> {
         let refresh = tokens
             .refresh_token
             .clone()
-            .context("login expired; log in again")?;
+            .context("the login has expired and can't be renewed; sign in to Claude Code again (run `claude`, then /login), then import again")?;
         let grant = oauth::refresh(http, &refresh).await?;
         tokens = grant.into_tokens(now);
         tokens.refresh_token = tokens.refresh_token.or(Some(refresh));
@@ -480,7 +492,10 @@ mod tests {
         let error = account_from(&http, login("old", None, -60))
             .await
             .unwrap_err();
-        assert_eq!(error.to_string(), "login expired; log in again");
+        assert!(
+            error.to_string().starts_with("the login has expired"),
+            "{error}"
+        );
         let error = account_from(&http, login("rejected", None, 3600))
             .await
             .unwrap_err();

@@ -1871,10 +1871,7 @@ mod tests {
     #[test]
     fn routing_reads_as_a_line() {
         let mut config = Settings::default();
-        assert_eq!(
-            routing(&config),
-            "Fill first · sessions keep their account"
-        );
+        assert_eq!(routing(&config), "Fill first · sessions keep their account");
         config.strategy = Strategy::RoundRobin;
         config.session_affinity = false;
         assert_eq!(

@@ -63,6 +63,16 @@ impl Home {
         &self.user
     }
 
+    /// `path` as a person reads it: under the user's home as `~/…`.
+    pub fn show(&self, path: &Path) -> String {
+        match path.strip_prefix(&self.user) {
+            Ok(rest) if !self.user.as_os_str().is_empty() => {
+                format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display())
+            }
+            _ => path.display().to_string(),
+        }
+    }
+
     /// Claude Code's config directory.
     pub fn claude(&self) -> &Path {
         &self.claude
