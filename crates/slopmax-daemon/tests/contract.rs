@@ -32,7 +32,7 @@ use slopmax_core::provider::credits::Credit;
 use slopmax_core::summary;
 use slopmax_core::time::{SignedDuration, Timestamp};
 use slopmax_core::wire::Dialect;
-use slopmax_daemon::proxy::{self, App};
+use slopmax_daemon::proxy::{self, App, Tailnet};
 use tokio::net::TcpListener;
 
 const KEY: &str = "sm-contract-owner";
@@ -126,6 +126,11 @@ async fn start() -> (Arc<App>, String, Vec<String>, TempHome) {
         Origins::new([]),
     );
     app.sync().unwrap();
+    // No Tailscale here, whatever the machine the tests run on has.
+    app.set_tailnet(Tailnet {
+        cli: Arc::new(|| None),
+        ..Tailnet::default()
+    });
     let now = Timestamp::now();
     let window = |span: &str, model: Option<&str>, used: f64, hours: i64| Window {
         span: span.into(),
@@ -204,7 +209,8 @@ async fn start() -> (Arc<App>, String, Vec<String>, TempHome) {
             agent: Some("claude".into()),
             session: Some("session-1".into()),
             end: None,
-            machine: None,
+            // One from another machine, by its key's name.
+            machine: (i == 1).then(|| "laptop".to_owned()),
         });
     }
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -591,6 +597,51 @@ async fn every_endpoint_answers_as_its_fixture_says() {
         )
         .await;
     assert_eq!(history["total"]["requests"], 3);
+    // The owner key's requests are this machine's own, read here.
+    let machines = call
+        .send(
+            "usage.summary.machine.ok",
+            Method::GET,
+            "/usage?range=30d&by=machine",
+            None,
+            StatusCode::OK,
+        )
+        .await
+        .to_string();
+    assert!(
+        machines.contains("\"laptop\"") && machines.contains("\"this machine\""),
+        "{machines}"
+    );
+
+    // The tailnet: no Tailscale here.
+    let view = call
+        .send(
+            "tailnet.view.ok",
+            Method::GET,
+            "/tailnet",
+            None,
+            StatusCode::OK,
+        )
+        .await;
+    assert_eq!(view["tailscale"], "missing");
+    let changed = call
+        .send(
+            "tailnet.change.ok",
+            Method::PATCH,
+            "/tailnet",
+            Some(
+                r#"{"users":["you@github"],"admins":[{"machine":"laptop","id":"nLAPTOP1CNTRL"}]}"#,
+            ),
+            StatusCode::OK,
+        )
+        .await;
+    assert_eq!(changed["users"][0], "you@github");
+    assert_eq!(app.config().tailnet_users(), ["you@github"]);
+    assert!(
+        std::fs::read_to_string(home.dir.join("config.toml"))
+            .unwrap()
+            .contains("nLAPTOP1CNTRL")
+    );
 
     // Notifications.
     call.send(
@@ -642,7 +693,7 @@ async fn every_endpoint_answers_as_its_fixture_says() {
                 agent: Some("claude".into()),
                 session: None,
                 end: None,
-                machine: None,
+                machine: Some("laptop".into()),
             });
         }
     }

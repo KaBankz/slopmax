@@ -271,7 +271,8 @@
         "firstByteMs": 300,
         "attempts": 1,
         "agent": "claude-code",
-        "via": "http"
+        "via": "http",
+        "machine": "laptop"
       }
     }
   ]

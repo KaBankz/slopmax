@@ -1,9 +1,10 @@
 //! The local HTTP proxy that agents talk to.
 //!
 //! Claude Code reaches it through `ANTHROPIC_BASE_URL` and Codex through a
-//! custom model provider. Each request is authenticated with the slopmax
-//! key, assigned an account by the [`Pool`], and forwarded upstream with
-//! that account's credentials.
+//! custom model provider. Each request is authenticated with a slopmax key,
+//! or, from the user's other machines on their tailnet, by the login
+//! tailscaled names; it is then assigned an account by the [`Pool`] and
+//! forwarded upstream with that account's credentials.
 
 mod api;
 mod forward;
@@ -12,6 +13,7 @@ mod models;
 mod relay;
 mod socket;
 mod start;
+mod tailnet;
 mod transcode;
 mod ui;
 pub mod warm;
@@ -25,6 +27,7 @@ use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use serde::Serialize;
 use serde_json::json;
+use slopmax_api::tailnet::{Access, TailnetView};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -35,15 +38,17 @@ use crate::config::{ClientKey, Config};
 use crate::ledger::Ledger;
 use crate::log;
 use crate::net::body;
-use crate::net::server::{Request, Response};
+use crate::net::server::{Channel, Request, Response};
 use crate::net::{Client, Origins};
 use crate::paths::Home;
 use crate::pool::{Pool, Routing, State as PoolState};
 use crate::provider::ProviderId;
 use crate::provider::credits::Outcome;
 use crate::report::{self, Report};
+use crate::tailscale::{LazyWhois, Tailscale, Whois};
 use crate::time::{SignedDuration, Timestamp};
 use crate::wire::Dialect;
+use tailnet::Seen;
 
 /// A background task, boxed to share one task type.
 pub type BoxedTask = std::pin::Pin<Box<dyn Future<Output = ()> + Send>>;
@@ -122,6 +127,34 @@ pub struct App {
     pub running: Option<crate::handoff::Running>,
     /// What looking for a newer install has seen.
     pub install_seen: tokio::sync::Mutex<crate::handoff::Seen>,
+    /// The machines behind the tailnet addresses requests came from.
+    pub(crate) peers: tailnet::Peers,
+    /// How Tailscale is asked who is at an address, and what it publishes.
+    tailscale: RwLock<Tailnet>,
+    /// `/slopmax/api/tailnet` as last read from Tailscale, and when.
+    pub(crate) tailnet_view: Mutex<Option<(Instant, TailnetView)>>,
+}
+
+/// How the daemon asks Tailscale what it needs to know: which machine is
+/// at a tailnet address, and what the hub publishes. By default the real
+/// `tailscale` command, found when first needed; tests give fakes, so no
+/// test runs it.
+#[derive(Clone)]
+pub struct Tailnet {
+    /// Which machine is at a tailnet address.
+    pub whois: Arc<dyn Whois>,
+    /// The `tailscale` command, looked for each time slopmax reads what it
+    /// publishes; `None` when there is none.
+    pub cli: Arc<dyn Fn() -> Option<Tailscale> + Send + Sync>,
+}
+
+impl Default for Tailnet {
+    fn default() -> Self {
+        Self {
+            whois: Arc::new(LazyWhois::default()),
+            cli: Arc::new(|| Tailscale::find().ok()),
+        }
+    }
 }
 
 impl App {
@@ -174,7 +207,43 @@ impl App {
             successor_exit: Mutex::default(),
             running: crate::handoff::Running::now(),
             install_seen: Default::default(),
+            peers: tailnet::Peers::default(),
+            tailscale: RwLock::new(Tailnet::default()),
+            tailnet_view: Mutex::default(),
         })
+    }
+
+    /// Asks Tailscale through `tailnet` from now on.
+    pub fn set_tailnet(&self, tailnet: Tailnet) {
+        *self.tailscale.write().unwrap_or_else(|p| p.into_inner()) = tailnet;
+    }
+
+    /// Asks `whois` from now on which machine is at a tailnet address.
+    pub fn set_whois(&self, whois: Arc<dyn Whois>) {
+        self.tailscale
+            .write()
+            .unwrap_or_else(|p| p.into_inner())
+            .whois = whois;
+    }
+
+    /// What answers which machine is at a tailnet address.
+    pub(crate) fn whois(&self) -> Arc<dyn Whois> {
+        self.tailscale
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .whois
+            .clone()
+    }
+
+    /// The `tailscale` command, if there is one.
+    pub(crate) fn tailscale_cli(&self) -> Option<Tailscale> {
+        let find = self
+            .tailscale
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .cli
+            .clone();
+        find()
     }
 
     /// Runs `task` in the background, as work the daemon finishes before it
@@ -507,12 +576,18 @@ impl App {
 }
 
 /// Answers one request: slopmax's own endpoints, else the proxy.
-pub async fn handle(app: Arc<App>, request: Request) -> Response {
+pub async fn handle(app: Arc<App>, mut request: Request) -> Response {
+    let seen = tailnet::take(&mut request);
+    // Funnel opens the port to the internet, and slopmax serves the user's
+    // own machines only: nothing is answered, not even the page.
+    if seen.funnel {
+        return refuse(&Denied::Funnel(funnel_port(&seen, &app.config())), None);
+    }
     match (request.method(), request.uri().path()) {
-        (&Method::GET, "/healthz") => health(&app, request.headers()),
+        (&Method::GET, "/healthz") => health(&app, request.headers(), &seen).await,
         // Claude Code's unauthenticated connectivity check; HEAD probes alike.
         (_, "/api/hello") | (&Method::HEAD, _) => empty_reply(StatusCode::OK),
-        (_, path) if path.starts_with("/slopmax/api/") => api::handle(app, request).await,
+        (_, path) if path.starts_with("/slopmax/api/") => api::handle(app, request, &seen).await,
         (&Method::GET, "/slopmax" | "/slopmax/dashboard") => ui::to_page(),
         (&Method::GET, path) if path.strip_prefix("/slopmax/").is_some_and(ui::serves) => {
             ui::answer(&path["/slopmax/".len()..], request.headers())
@@ -522,41 +597,63 @@ pub async fn handle(app: Arc<App>, request: Request) -> Response {
             StatusCode::NOT_FOUND,
             "no such slopmax endpoint; slopmax's API is under /slopmax/api",
         ),
-        (_, path) if path.starts_with("/v0/management/") => hub::handle(app, request).await,
+        (_, path) if path.starts_with("/v0/management/") => hub::handle(app, request, &seen).await,
         (&Method::GET, "/v1/models")
             if models::wants_list(request.headers(), request.uri().query().unwrap_or("")) =>
         {
-            match caller(&app.config(), request.headers()) {
-                Some(Caller::Owner) => models::list(&app, None).await,
-                Some(Caller::Client(key)) => {
-                    let key = key.clone();
-                    models::list(&app, Some(&key)).await
-                }
-                None => unauthorized(Some(Dialect::Chat)),
+            let config = app.config();
+            let headers = request.headers();
+            match caller(&app, &config, headers, &seen, Access::Use).await {
+                Ok(caller) => models::list(&app, caller.who().key.as_ref()).await,
+                Err(denied) => refuse(&denied, Some(Dialect::Chat)),
             }
         }
-        _ => proxy(app, request).await,
+        _ => proxy(app, request, &seen).await,
     }
 }
 
-/// Who serves: the program, its version and process. A request that
-/// carries a key also learns whether it is this proxy's owner key, so a
-/// front end can tell a proxy started from another home (or before the key
-/// changed) from its own; the key itself is never answered.
-fn health(app: &App, headers: &HeaderMap) -> Response {
+/// Who serves: the program, its version and, to programs on this machine,
+/// its process. A request that carries a key or a token also learns what it
+/// may do (`access`), who slopmax takes it for (`login`, `machine`), and
+/// whether its key is this proxy's owner key, so a front end can tell a
+/// proxy started from another home (or before the key changed) from its
+/// own; the key itself is never answered.
+async fn health(app: &Arc<App>, headers: &HeaderMap, seen: &Seen) -> Response {
     let mut body = json!({
         "status": "ok",
         "service": "slopmax",
         "version": env!("CARGO_PKG_VERSION"),
-        "pid": std::process::id(),
     });
-    if headers.contains_key(header::AUTHORIZATION) || headers.contains_key("x-api-key") {
-        body["owner"] = json!(authorized(&app.config(), headers));
+    let local = seen.channel == Channel::Tcp;
+    if local {
+        body["pid"] = json!(std::process::id());
+    }
+    body["via"] = json!(if local { "local" } else { "tailnet" });
+    if has_credential(headers) {
+        let config = app.config();
+        body["owner"] = json!(matches!(by_key(&config, headers), Some(Caller::Owner)));
+        // Asked of whois now: this is where a machine learns what it may do.
+        match identify(app, &config, headers, seen, true).await {
+            Ok(caller) => {
+                body["access"] = json!(caller.access());
+                match &caller {
+                    Caller::Member { login, machine, .. } => {
+                        body["login"] = json!(login);
+                        if let Some(machine) = machine {
+                            body["machine"] = json!(machine);
+                        }
+                    }
+                    Caller::Client(key) => body["machine"] = json!(key.name),
+                    Caller::Owner => {}
+                }
+            }
+            Err(_) => body["access"] = json!(Access::None),
+        }
     }
     json_reply(StatusCode::OK, &body)
 }
 
-async fn proxy(app: Arc<App>, request: Request) -> Response {
+async fn proxy(app: Arc<App>, request: Request, seen: &Seen) -> Response {
     let path_and_query = request.uri().path_and_query().map_or("/", |pq| pq.as_str());
     let Some(target) = route(path_and_query, request.headers()) else {
         return error(
@@ -566,10 +663,13 @@ async fn proxy(app: Arc<App>, request: Request) -> Response {
         );
     };
     let dialect = target.dialect;
-    let client = match caller(&app.config(), request.headers()) {
-        Some(Caller::Owner) => None,
-        Some(Caller::Client(key)) => Some(key.clone()),
-        None => return unauthorized(Some(dialect)),
+    let who = {
+        let config = app.config();
+        let headers = request.headers();
+        match caller(&app, &config, headers, seen, Access::Use).await {
+            Ok(caller) => caller.who(),
+            Err(denied) => return refuse(&denied, Some(dialect)),
+        }
     };
     if let Some(version) = crate::provider::codex::wire::client_version(request.headers()) {
         app.pool.saw_codex_version(&version);
@@ -580,9 +680,9 @@ async fn proxy(app: Arc<App>, request: Request) -> Response {
     // Codex's sockets are relayed when they can be; refusing a handshake
     // with 426 makes Codex stream over HTTP at once instead of retrying.
     if is_websocket(request.headers()) {
-        return socket::accept(app, target, request, client.as_ref()).await;
+        return socket::accept(app, target, request, &who).await;
     }
-    forward::forward(app, target, request, client).await
+    forward::forward(app, target, request, who).await
 }
 
 /// Where a request goes, judged from its path.
@@ -693,17 +793,63 @@ fn route(path_and_query: &str, headers: &HeaderMap) -> Option<Target> {
     })
 }
 
-/// Who a request comes from, by the key it presents.
-#[derive(Debug, Clone, Copy)]
-enum Caller<'a> {
+/// Who a request comes from: a key it presents, or the tailnet login
+/// tailscaled named.
+#[derive(Debug, Clone)]
+pub(crate) enum Caller<'a> {
     /// The owner's `api_key`.
     Owner,
     /// One of the config's client keys.
     Client(&'a ClientKey),
+    /// A machine of a login in `[tailscale] users`, over the tailnet.
+    Member {
+        login: String,
+        /// The machine's name, once whois has told it.
+        machine: Option<String>,
+        access: Access,
+    },
+}
+
+impl Caller<'_> {
+    /// What it may do.
+    pub fn access(&self) -> Access {
+        match self {
+            Self::Owner => Access::Admin,
+            Self::Client(_) => Access::Use,
+            Self::Member { access, .. } => *access,
+        }
+    }
+
+    /// What its requests are recorded under, and the key that holds it to
+    /// some models.
+    pub fn who(&self) -> Who {
+        match self {
+            Self::Owner => Who::default(),
+            Self::Client(key) => Who {
+                label: Some(key.name.clone()),
+                key: Some((*key).clone()),
+            },
+            Self::Member { login, machine, .. } => Who {
+                label: Some(machine.clone().unwrap_or_else(|| login.clone())),
+                key: None,
+            },
+        }
+    }
+}
+
+/// Who sent a request the proxy serves.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Who {
+    /// What the ledger records as its machine: the client key's name, else
+    /// the tailnet machine's, else the login; `None` for the owner key,
+    /// which is this machine's own.
+    pub label: Option<String>,
+    /// The client key it came with, if any.
+    pub key: Option<ClientKey>,
 }
 
 /// The key a request presents, as a bearer token or `x-api-key`.
-fn caller<'a>(config: &'a Config, headers: &HeaderMap) -> Option<Caller<'a>> {
+fn by_key<'a>(config: &'a Config, headers: &HeaderMap) -> Option<Caller<'a>> {
     let bearer = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -725,22 +871,222 @@ fn caller<'a>(config: &'a Config, headers: &HeaderMap) -> Option<Caller<'a>> {
         .map(Caller::Client)
 }
 
-/// Whether the request carries the owner's key, which slopmax's own API
-/// requires.
-fn authorized(config: &Config, headers: &HeaderMap) -> bool {
-    matches!(caller(config, headers), Some(Caller::Owner))
+/// Whether the request carries a key or token of any kind, as agents and
+/// slopmax's page send, and another site's script cannot without asking.
+fn has_credential(headers: &HeaderMap) -> bool {
+    headers.contains_key(header::AUTHORIZATION) || headers.contains_key("x-api-key")
+}
+
+/// Why a request is refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Denied {
+    /// It came through Tailscale Funnel, on this port.
+    Funnel(u16),
+    /// A tailnet login, with no token at all.
+    NoCredential,
+    /// A tailnet login, from another site's page.
+    CrossSite,
+    /// A tailnet login not in `[tailscale] users`.
+    NotAllowed(String),
+    /// A tagged machine, with no key.
+    Tagged,
+    /// No key, or a wrong one.
+    NoKey,
+    /// A caller allowed less than the request needs.
+    Needs {
+        need: Access,
+        /// The machine's name, when known.
+        machine: Option<String>,
+        /// The client key it came with, which reaches the proxy only.
+        key: Option<String>,
+    },
+}
+
+impl Denied {
+    /// The status and message it goes out with.
+    pub fn answer(&self) -> (StatusCode, String) {
+        match self {
+            Self::Funnel(port) => (
+                StatusCode::FORBIDDEN,
+                format!(
+                    "slopmax serves your tailnet only; turn Funnel off: tailscale funnel --https={port} off"
+                ),
+            ),
+            Self::NoCredential => (
+                StatusCode::UNAUTHORIZED,
+                "send a token with the request (any value, e.g. Authorization: Bearer tailnet); \
+                 agents set up with `slopmax setup --hub` send one"
+                    .to_owned(),
+            ),
+            Self::CrossSite => (
+                StatusCode::FORBIDDEN,
+                "requests from other sites can't use your tailnet identity".to_owned(),
+            ),
+            Self::NotAllowed(login) => (
+                StatusCode::UNAUTHORIZED,
+                format!(
+                    "{login} isn't allowed on this slopmax; on the hub: slopmax tailscale users add {login}"
+                ),
+            ),
+            Self::Tagged => (
+                StatusCode::UNAUTHORIZED,
+                "tagged machines need a key: on the hub, run slopmax key add <name>".to_owned(),
+            ),
+            Self::NoKey => (
+                StatusCode::UNAUTHORIZED,
+                "missing or invalid slopmax key; see `slopmax env`".to_owned(),
+            ),
+            Self::Needs { key: Some(key), .. } => (
+                StatusCode::FORBIDDEN,
+                format!("the key {key:?} reaches the proxy only, not slopmax's own API"),
+            ),
+            Self::Needs { need, machine, .. } => {
+                let what = match need {
+                    Access::Admin => "this machine may not change slopmax",
+                    _ => "this machine may use slopmax but not see its accounts",
+                };
+                let machine = machine.as_deref().unwrap_or("<machine>");
+                (
+                    StatusCode::FORBIDDEN,
+                    format!("{what}; on the hub: slopmax tailscale admins add {machine}"),
+                )
+            }
+        }
+    }
+}
+
+/// The port Funnel reaches slopmax on, as the request was addressed: what
+/// `tailscale funnel --https=<port> off` needs.
+fn funnel_port(seen: &Seen, config: &Config) -> u16 {
+    let addressed = seen.origin_host.as_deref().map(|host| {
+        match host
+            .rsplit_once(':')
+            .and_then(|(_, port)| port.parse().ok())
+        {
+            Some(port) => port,
+            None if seen.proto.as_deref() == Some("http") => 80,
+            None => 443,
+        }
+    });
+    addressed.unwrap_or(config.listen.port())
+}
+
+/// Who sent a request, as far as is told without asking Tailscale.
+enum Known<'a, 's> {
+    /// A key.
+    Key(Caller<'a>),
+    /// A tailnet login slopmax takes.
+    Login(&'s str),
+}
+
+/// The part of [`caller`] that asks nothing of Tailscale, which an open
+/// event stream runs again as the config changes.
+fn known<'a, 's>(
+    config: &'a Config,
+    headers: &HeaderMap,
+    seen: &'s Seen,
+) -> Result<Known<'a, 's>, Denied> {
+    if seen.funnel {
+        return Err(Denied::Funnel(funnel_port(seen, config)));
+    }
+    // A key is not ambient, so it needs no browser check: a page cannot
+    // send one it doesn't have.
+    if let Some(caller) = by_key(config, headers) {
+        return Ok(Known::Key(caller));
+    }
+    let on_tailnet = seen.channel == Channel::Tailnet;
+    if on_tailnet
+        && !config.tailnet_users().is_empty()
+        && let Some(login) = seen.login.as_deref()
+    {
+        if !has_credential(headers) {
+            return Err(Denied::NoCredential);
+        }
+        if !tailnet::browser_ok(headers, seen) {
+            return Err(Denied::CrossSite);
+        }
+        if !config.allows_login(login) {
+            return Err(Denied::NotAllowed(login.to_owned()));
+        }
+        return Ok(Known::Login(login));
+    }
+    Err(match on_tailnet && seen.login.is_none() {
+        true => Denied::Tagged,
+        false => Denied::NoKey,
+    })
+}
+
+/// Who sent a request. A tailnet login may use and see slopmax; its
+/// machine may also manage it when whois says the machine is untagged,
+/// signed in as that login, and in `[tailscale] admins`. With `resolve`,
+/// whois is asked now (for at most two seconds); otherwise the machine is
+/// read from what is known and looked up in the background, for the next
+/// request. A lookup that fails leaves the machine able to see, not manage.
+async fn identify<'a>(
+    app: &Arc<App>,
+    config: &'a Config,
+    headers: &HeaderMap,
+    seen: &Seen,
+    resolve: bool,
+) -> Result<Caller<'a>, Denied> {
+    let login = match known(config, headers, seen)? {
+        Known::Key(caller) => return Ok(caller),
+        Known::Login(login) => login,
+    };
+    let machine = match seen.peer {
+        Some(peer) if resolve => app.peers.resolve(app, peer, login).await.filter(|m| {
+            m.login
+                .as_deref()
+                .is_some_and(|own| own.eq_ignore_ascii_case(login))
+        }),
+        Some(peer) => {
+            app.peers.warm(app, peer, login);
+            app.peers.cached(peer, login)
+        }
+        None => None,
+    };
+    let admin = machine
+        .as_ref()
+        .is_some_and(|m| !m.tagged && config.admin_ids().any(|id| id == m.id));
+    Ok(Caller::Member {
+        login: login.to_owned(),
+        machine: machine.map(|m| m.name),
+        access: if admin { Access::Admin } else { Access::View },
+    })
+}
+
+/// Who sent a request, if they may do what it `need`s.
+pub(crate) async fn caller<'a>(
+    app: &Arc<App>,
+    config: &'a Config,
+    headers: &HeaderMap,
+    seen: &Seen,
+    need: Access,
+) -> Result<Caller<'a>, Denied> {
+    // Only managing waits for whois, and only when some machine may.
+    let resolve = need == Access::Admin && config.admin_ids().next().is_some();
+    let caller = identify(app, config, headers, seen, resolve).await?;
+    if caller.access() < need {
+        return Err(Denied::Needs {
+            need,
+            key: caller.who().key.map(|k| k.name),
+            machine: match caller {
+                Caller::Member { machine, .. } => machine,
+                _ => None,
+            },
+        });
+    }
+    Ok(caller)
+}
+
+/// A refusal in the shape the agent understands.
+fn refuse(denied: &Denied, dialect: Option<Dialect>) -> Response {
+    let (status, message) = denied.answer();
+    error(dialect, status, &message)
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
-}
-
-fn unauthorized(dialect: Option<Dialect>) -> Response {
-    error(
-        dialect,
-        StatusCode::UNAUTHORIZED,
-        "missing or invalid slopmax key; see `slopmax env`",
-    )
 }
 
 /// An error in the shape the agent understands (Messages when unknown).
@@ -880,6 +1226,12 @@ mod tests {
         assert_eq!(at("/other"), None);
     }
 
+    fn keyed(value: &'static str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", HeaderValue::from_static(value));
+        headers
+    }
+
     #[test]
     fn client_keys_reach_the_proxy_but_not_the_admin_api() {
         let config = Config {
@@ -891,17 +1243,17 @@ mod tests {
             }],
             ..Config::default()
         };
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "authorization",
-            HeaderValue::from_static("Bearer sm-laptop"),
-        );
-        assert!(matches!(caller(&config, &headers), Some(Caller::Client(k)) if k.name == "laptop"));
-        assert!(!authorized(&config, &headers));
-        headers.insert("authorization", HeaderValue::from_static("Bearer sm-owner"));
-        assert!(matches!(caller(&config, &headers), Some(Caller::Owner)));
-        headers.insert("authorization", HeaderValue::from_static("Bearer sm-other"));
-        assert!(caller(&config, &headers).is_none());
+        let laptop = by_key(&config, &keyed("Bearer sm-laptop"));
+        assert!(matches!(laptop, Some(Caller::Client(k)) if k.name == "laptop"));
+        let laptop = laptop.unwrap();
+        assert_eq!(laptop.access(), Access::Use);
+        let who = laptop.who();
+        assert_eq!(who.label.as_deref(), Some("laptop"));
+        assert_eq!(who.key.map(|k| k.models), Some(vec!["gpt-*".to_owned()]));
+        let owner = by_key(&config, &keyed("Bearer sm-owner"));
+        assert!(matches!(owner, Some(Caller::Owner)));
+        assert_eq!(owner.unwrap().access(), Access::Admin);
+        assert!(by_key(&config, &keyed("Bearer sm-other")).is_none());
     }
 
     #[test]
@@ -910,14 +1262,293 @@ mod tests {
             api_key: "sm-key".into(),
             ..Config::default()
         };
-        let mut headers = HeaderMap::new();
-        assert!(!authorized(&config, &headers));
-        headers.insert("authorization", HeaderValue::from_static("Bearer sm-key"));
-        assert!(authorized(&config, &headers));
-        headers.insert("authorization", HeaderValue::from_static("Bearer nope"));
-        assert!(!authorized(&config, &headers));
+        let owner = |headers: &HeaderMap| matches!(by_key(&config, headers), Some(Caller::Owner));
+        assert!(!owner(&HeaderMap::new()));
+        assert!(owner(&keyed("Bearer sm-key")));
+        assert!(owner(&keyed("bearer sm-key")));
+        assert!(!owner(&keyed("Bearer nope")));
         let mut headers = HeaderMap::new();
         headers.insert("x-api-key", HeaderValue::from_static("sm-key"));
-        assert!(authorized(&config, &headers));
+        assert!(owner(&headers));
+    }
+
+    /// Answers whois from a fixed list.
+    struct Whoami(
+        Vec<(
+            &'static str,
+            &'static str,
+            &'static str,
+            Option<&'static str>,
+        )>,
+    );
+
+    impl Whois for Whoami {
+        fn whois<'a>(
+            &'a self,
+            ip: std::net::IpAddr,
+        ) -> crate::tailscale::BoxFuture<
+            'a,
+            Result<crate::tailscale::Machine, crate::tailscale::TsError>,
+        > {
+            let found = self
+                .0
+                .iter()
+                .find(|(at, ..)| at.parse::<std::net::IpAddr>().ok() == Some(ip))
+                .map(|&(_, id, name, login)| crate::tailscale::Machine {
+                    id: id.into(),
+                    name: name.into(),
+                    login: login.map(str::to_owned),
+                    tags: match login {
+                        Some(_) => vec![],
+                        None => vec!["tag:ci".into()],
+                    },
+                })
+                .ok_or(crate::tailscale::TsError::Failed {
+                    line: "no machine has that address".into(),
+                });
+            Box::pin(async move { found })
+        }
+    }
+
+    /// A proxy whose tailnet has `me@test` on `mac` (an admin), `phone`
+    /// and `lent` (the same id as `mac`, but signed in as someone else),
+    /// and a tagged machine.
+    fn tailnet_app() -> (Arc<App>, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("slopmax-caller-{}", crate::ids::token()));
+        let config = Config {
+            api_key: "sm-owner".into(),
+            keys: vec![ClientKey {
+                name: "laptop".into(),
+                key: "sm-laptop".into(),
+                models: vec![],
+            }],
+            tailscale: Some(crate::config::Tailnet {
+                users: vec!["me@test".into()],
+                admins: vec![crate::config::AdminMachine {
+                    machine: "mac".into(),
+                    id: "nADMIN".into(),
+                }],
+            }),
+            ..Config::default()
+        };
+        let app = App::new(
+            config,
+            Home::at(&dir),
+            PoolState::default(),
+            Origins::new([]),
+        );
+        app.set_whois(Arc::new(Whoami(vec![
+            ("100.64.0.1", "nADMIN", "mac", Some("me@test")),
+            ("100.64.0.2", "nOTHER", "phone", Some("me@test")),
+            ("100.64.0.3", "nADMIN", "ci", None),
+            ("100.64.0.4", "nADMIN", "lent", Some("else@test")),
+        ])));
+        (app, dir)
+    }
+
+    fn from(peer: &str, login: Option<&str>) -> Seen {
+        Seen {
+            channel: Channel::Tailnet,
+            login: login.map(str::to_owned),
+            peer: Some(peer.parse().unwrap()),
+            funnel: false,
+            origin_host: Some("hub.example.ts.net".into()),
+            proto: Some("https".into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn callers_are_told_apart_in_order() {
+        let (app, dir) = tailnet_app();
+        let config = app.config();
+        let token = keyed("Bearer tailnet");
+        let ask = |headers: HeaderMap, seen: Seen, need: Access| {
+            let (app, config) = (app.clone(), config.clone());
+            async move {
+                caller(&app, &config, &headers, &seen, need)
+                    .await
+                    .map(|c| (c.access(), c.who().label))
+            }
+        };
+        let me = from("100.64.0.2", Some("me@test"));
+
+        // Funnel first, even with the owner key.
+        let funneled = Seen {
+            funnel: true,
+            origin_host: Some("hub.example.ts.net:8443".into()),
+            ..me.clone()
+        };
+        assert_eq!(
+            ask(keyed("Bearer sm-owner"), funneled, Access::Use).await,
+            Err(Denied::Funnel(8443))
+        );
+        // A key wins over an identity, and needs no browser check.
+        let mut owner = keyed("Bearer sm-owner");
+        owner.insert("sec-fetch-site", HeaderValue::from_static("cross-site"));
+        assert_eq!(
+            ask(owner, me.clone(), Access::Admin).await,
+            Ok((Access::Admin, None))
+        );
+        // An identity needs a token of some kind, from no other site.
+        assert_eq!(
+            ask(HeaderMap::new(), me.clone(), Access::Use).await,
+            Err(Denied::NoCredential)
+        );
+        let mut same_site = token.clone();
+        same_site.insert("sec-fetch-site", HeaderValue::from_static("same-site"));
+        assert_eq!(
+            ask(same_site, me.clone(), Access::Use).await,
+            Err(Denied::CrossSite)
+        );
+        let mut foreign = token.clone();
+        foreign.insert(
+            "origin",
+            HeaderValue::from_static("https://dev.example.ts.net"),
+        );
+        assert_eq!(
+            ask(foreign, me.clone(), Access::Use).await,
+            Err(Denied::CrossSite)
+        );
+        assert_eq!(
+            ask(
+                token.clone(),
+                from("100.64.0.2", Some("you@test")),
+                Access::Use
+            )
+            .await,
+            Err(Denied::NotAllowed("you@test".into()))
+        );
+        // Tagged machines, and requests with no key anywhere else.
+        assert_eq!(
+            ask(token.clone(), from("100.64.0.3", None), Access::Use).await,
+            Err(Denied::Tagged)
+        );
+        assert_eq!(
+            ask(token.clone(), Seen::tcp(), Access::Use).await,
+            Err(Denied::NoKey)
+        );
+
+        // A login may see; whois says which machine may manage.
+        assert_eq!(
+            ask(token.clone(), me.clone(), Access::View).await,
+            Ok((Access::View, Some("me@test".into())))
+        );
+        assert_eq!(
+            ask(token.clone(), me.clone(), Access::Admin).await,
+            Err(Denied::Needs {
+                need: Access::Admin,
+                machine: Some("phone".into()),
+                key: None,
+            })
+        );
+        // Once looked up, the machine is known without waiting.
+        assert_eq!(
+            ask(token.clone(), me.clone(), Access::Use).await,
+            Ok((Access::View, Some("phone".into())))
+        );
+        let mac = from("100.64.0.1", Some("ME@test"));
+        assert_eq!(
+            ask(token.clone(), mac, Access::Admin).await,
+            Ok((Access::Admin, Some("mac".into())))
+        );
+        // An admin's id behind another login, or on a tagged machine, is
+        // no admin; nor is an address whois doesn't know.
+        for peer in ["100.64.0.4", "100.64.0.9"] {
+            let seen = from(peer, Some("me@test"));
+            assert!(matches!(
+                ask(token.clone(), seen, Access::Admin).await,
+                Err(Denied::Needs {
+                    need: Access::Admin,
+                    machine: None,
+                    ..
+                })
+            ));
+        }
+        // A client key reaches the proxy only.
+        assert_eq!(
+            ask(keyed("Bearer sm-laptop"), me.clone(), Access::View).await,
+            Err(Denied::Needs {
+                need: Access::View,
+                machine: None,
+                key: Some("laptop".into()),
+            })
+        );
+        drop(config);
+        // Without users, a login is no one.
+        app.set_config(Config {
+            api_key: "sm-owner".into(),
+            ..Config::default()
+        });
+        let config = app.config();
+        let headers = token.clone();
+        assert_eq!(
+            caller(&app, &config, &headers, &me, Access::Use)
+                .await
+                .map(|c| c.access()),
+            Err(Denied::NoKey)
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn refusals_say_what_to_do() {
+        let text = |denied: Denied| denied.answer();
+        assert_eq!(
+            text(Denied::Funnel(7567)),
+            (
+                StatusCode::FORBIDDEN,
+                "slopmax serves your tailnet only; turn Funnel off: tailscale funnel --https=7567 off"
+                    .into()
+            )
+        );
+        assert_eq!(
+            text(Denied::NotAllowed("you@test".into())),
+            (
+                StatusCode::UNAUTHORIZED,
+                "you@test isn't allowed on this slopmax; on the hub: slopmax tailscale users add you@test"
+                    .into()
+            )
+        );
+        assert_eq!(
+            text(Denied::Needs {
+                need: Access::Admin,
+                machine: Some("phone".into()),
+                key: None
+            }),
+            (
+                StatusCode::FORBIDDEN,
+                "this machine may not change slopmax; on the hub: slopmax tailscale admins add phone"
+                    .into()
+            )
+        );
+        assert_eq!(
+            text(Denied::Needs {
+                need: Access::View,
+                machine: None,
+                key: None
+            })
+            .1,
+            "this machine may use slopmax but not see its accounts; on the hub: slopmax tailscale admins add <machine>"
+        );
+        assert_eq!(text(Denied::Tagged).0, StatusCode::UNAUTHORIZED);
+        assert_eq!(text(Denied::NoCredential).0, StatusCode::UNAUTHORIZED);
+        assert_eq!(text(Denied::CrossSite).0, StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn funnel_is_turned_off_on_the_port_it_was_reached_on() {
+        let config = Config::default();
+        let at = |host: Option<&str>, proto: Option<&str>| {
+            let seen = Seen {
+                origin_host: host.map(str::to_owned),
+                proto: proto.map(str::to_owned),
+                ..Seen::tcp()
+            };
+            funnel_port(&seen, &config)
+        };
+        assert_eq!(at(Some("hub.example.ts.net:8443"), None), 8443);
+        assert_eq!(at(Some("hub.example.ts.net"), Some("https")), 443);
+        assert_eq!(at(Some("hub.example.ts.net"), Some("http")), 80);
+        assert_eq!(at(None, None), config.listen.port());
     }
 }

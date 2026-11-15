@@ -23,11 +23,11 @@ use tokio::time::Instant;
 use super::relay::{self, Relay, Served, Settle};
 use super::start::{self, Start};
 use super::transcode::{self, Transcode, Watch};
-use super::{App, Target, error, json_reply};
+use super::{App, Target, Who, error, json_reply};
 use crate::account::Account;
 use crate::agent::{self, Agent};
 use crate::auth;
-use crate::config::{ClientKey, Config};
+use crate::config::Config;
 use crate::ledger::{End, Entry};
 use crate::log;
 use crate::net::body;
@@ -76,10 +76,12 @@ struct Inbound {
     /// The request in common form, decoded the first time a step needs
     /// translation.
     decoded: OnceLock<Result<Arc<ir::Request>, String>>,
+    /// What the ledger records as the machine it came from.
+    machine: Option<String>,
 }
 
 impl Inbound {
-    fn new(target: Target, parts: Parts, body: Bytes) -> Self {
+    fn new(target: Target, parts: Parts, body: Bytes, machine: Option<String>) -> Self {
         let encoded = parts
             .headers
             .get("content-encoding")
@@ -107,6 +109,7 @@ impl Inbound {
             affinity,
             model,
             decoded: OnceLock::new(),
+            machine,
         }
     }
 
@@ -417,14 +420,9 @@ enum Attempt {
     Unreachable,
 }
 
-/// Serves a request; `client` is the client key it came with, if not the
-/// owner's.
-pub(super) async fn forward(
-    app: Arc<App>,
-    target: Target,
-    request: Request,
-    client: Option<ClientKey>,
-) -> Response {
+/// Serves a request from `who`: a client key holds it to the key's
+/// models, and the ledger records it under who sent it.
+pub(super) async fn forward(app: Arc<App>, target: Target, request: Request, who: Who) -> Response {
     let dialect = target.dialect;
     let (parts, body) = request.into_parts();
     let body = match body::read(body, MAX_BODY).await {
@@ -441,7 +439,8 @@ pub(super) async fn forward(
             return error(Some(dialect), StatusCode::BAD_REQUEST, &message);
         }
     };
-    let inbound = Inbound::new(target, parts, body);
+    let Who { label, key: client } = who;
+    let inbound = Inbound::new(target, parts, body, label);
     if let Some(key) = client.as_ref().filter(|k| !k.models.is_empty()) {
         // A key held to some models must have its model read exactly.
         let model = inbound
@@ -602,7 +601,7 @@ fn failed(
         agent: inbound.agent.map(|a| a.id().to_owned()),
         session: inbound.session.clone(),
         end: None,
-        machine: None,
+        machine: inbound.machine.clone(),
     };
     app.record(&entry);
 }
@@ -723,6 +722,7 @@ async fn attempt(
                 attempts: attempts as u32,
                 agent: inbound.agent.map(|a| a.id()),
                 session: inbound.session.clone(),
+                machine: inbound.machine.clone(),
             };
             let settle = Settle::new(Arc::clone(app), served);
             let response = match lane {

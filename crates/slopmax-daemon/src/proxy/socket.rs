@@ -17,10 +17,9 @@ use hyper_util::rt::TokioIo;
 use serde_json::Value;
 use tokio::time::Instant;
 
-use super::{App, Target, error};
+use super::{App, Target, Who, error};
 use crate::account::Account;
 use crate::agent;
-use crate::config::ClientKey;
 use crate::ledger::{End, Entry};
 use crate::limits::Refusal;
 use crate::log;
@@ -48,7 +47,7 @@ pub(super) async fn accept(
     app: Arc<App>,
     target: Target,
     mut request: Request,
-    client: Option<&ClientKey>,
+    who: &Who,
 ) -> Response {
     let headers = request.headers().clone();
     let refuse = |why: &str| {
@@ -63,7 +62,7 @@ pub(super) async fn accept(
     }
     // A socket carries many requests, each naming its own model; a key
     // held to some models is checked request by request, over HTTP.
-    if client.is_some_and(|key| !key.models.is_empty()) {
+    if who.key.as_ref().is_some_and(|key| !key.models.is_empty()) {
         return refuse("the key is held to some models");
     }
     let Some(key) = text(&headers, "sec-websocket-key").map(str::to_owned) else {
@@ -154,6 +153,7 @@ pub(super) async fn accept(
     let origin = Origin {
         agent: agent.map(|a| a.id()),
         session,
+        machine: who.label.clone(),
     };
     // Tracked, so a stop closes the socket and records its turn.
     app.clone().spawn(async move {
@@ -259,6 +259,8 @@ struct Turn {
 struct Origin {
     agent: Option<&'static str>,
     session: Option<String>,
+    /// What the ledger records as the machine it came from.
+    machine: Option<String>,
 }
 
 /// How long a socket may carry nothing either way before it is closed.
@@ -674,7 +676,7 @@ fn record(
         agent: origin.agent.map(str::to_owned),
         session: origin.session.clone(),
         end,
-        machine: None,
+        machine: origin.machine.clone(),
     };
     app.record(&entry);
 }

@@ -4,11 +4,13 @@
 //! every endpoint is listed in one place. Handlers return the API's types
 //! or an [`ApiError`], which goes out as its `_tag`ged body and status.
 //! Bodies are capped at 64 KiB and read strictly: a key the API does not
-//! know is refused. Everything needs the owner key.
+//! know is refused. Each endpoint names the access it needs: the owner key
+//! and admin machines may do everything, the tailnet's other machines of
+//! the user may look, and client keys reach none of it.
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use http::{HeaderValue, Method, StatusCode, header};
@@ -23,15 +25,18 @@ use slopmax_api::requests::{
     Shutdown, StartLogin, Stopping, StoppingStatus,
 };
 use slopmax_api::settings::{LivePatch, NewKey, SettingsView};
+use slopmax_api::tailnet::{Access, TailnetPatch, TailnetView};
 use slopmax_api::{AgentId, ApiError};
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use super::{App, RedeemError, authorized};
+use super::tailnet::Seen;
+use super::{App, Caller, Denied, RedeemError};
 use crate::config::Config;
 use crate::net::body;
-use crate::net::server::{Request, Response};
+use crate::net::server::{Channel, Request, Response};
 use crate::provider::credits::Outcome;
+use crate::tailscale::{self, Target};
 use crate::time::Timestamp;
 use crate::{api, doctor, log, summary};
 
@@ -75,6 +80,8 @@ enum Route<'a> {
     History,
     Events,
     NotifyTest,
+    Tailnet,
+    ChangeTailnet,
 }
 
 impl<'a> Route<'a> {
@@ -113,16 +120,61 @@ impl<'a> Route<'a> {
             (&Method::GET, ["history"]) => Self::History,
             (&Method::GET, ["events"]) => Self::Events,
             (&Method::POST, ["notify", "test"]) => Self::NotifyTest,
+            (&Method::GET, ["tailnet"]) => Self::Tailnet,
+            (&Method::PATCH, ["tailnet"]) => Self::ChangeTailnet,
             _ => return None,
         })
     }
+
+    /// What a caller may do to use it: look, or manage.
+    fn needs(&self) -> Access {
+        match self {
+            Self::Status | Self::Usage | Self::History | Self::Events | Self::Tailnet => {
+                Access::View
+            }
+            Self::Refresh
+            | Self::Sync
+            | Self::Shutdown
+            | Self::Doctor
+            | Self::AddAccount
+            | Self::UpdateAccount(_)
+            | Self::Pin(_)
+            | Self::UnpinAll
+            | Self::Own(_)
+            | Self::RemoveAccount(_)
+            | Self::Redeem(_)
+            | Self::Import
+            | Self::StartLogin
+            | Self::PasteLogin(_)
+            | Self::CancelLogin(_)
+            | Self::Settings
+            | Self::ChangeSettings
+            | Self::Keys
+            | Self::MakeKey
+            | Self::RemoveKey(_)
+            | Self::Agents
+            | Self::Connect(_)
+            | Self::Disconnect(_)
+            | Self::NotifyTest
+            | Self::ChangeTailnet => Access::Admin,
+        }
+    }
+}
+
+/// Who asked, as far as the answer depends on it.
+struct Asker {
+    /// What they may do.
+    access: Access,
+    /// Whether they are this machine's own: the owner key, over TCP.
+    here: bool,
+    /// The request's headers and what it said about where it came from,
+    /// for an event stream to check them again as the config changes.
+    headers: http::HeaderMap,
+    seen: Seen,
 }
 
 /// Answers a request under `/slopmax/api/`.
-pub(super) async fn handle(app: Arc<App>, request: Request) -> Response {
-    if !authorized(&app.config(), request.headers()) {
-        return fail(&ApiError::unauthorized());
-    }
+pub(super) async fn handle(app: Arc<App>, request: Request, seen: &Seen) -> Response {
     let (parts, incoming) = request.into_parts();
     let path = parts
         .uri
@@ -130,20 +182,48 @@ pub(super) async fn handle(app: Arc<App>, request: Request) -> Response {
         .trim_start_matches(slopmax_api::PREFIX)
         .to_owned();
     let query = parts.uri.query().unwrap_or("").to_owned();
+    let config = app.config();
     let Some(route) = Route::parse(&parts.method, &path) else {
-        return fail(&ApiError::not_found("slopmax endpoint"));
+        // Only a caller slopmax knows learns which endpoints there are.
+        return match super::caller(&app, &config, &parts.headers, seen, Access::Use).await {
+            Ok(_) => fail(&ApiError::not_found("slopmax endpoint")),
+            Err(denied) => refuse(&denied),
+        };
     };
+    let asker = match super::caller(&app, &config, &parts.headers, seen, route.needs()).await {
+        Ok(caller) => Asker {
+            access: caller.access(),
+            here: matches!(caller, Caller::Owner) && seen.channel == Channel::Tcp,
+            headers: parts.headers.clone(),
+            seen: seen.clone(),
+        },
+        Err(denied) => return refuse(&denied),
+    };
+    drop(config);
     let body = match body::read(incoming, MAX_BODY).await {
         Ok(body) => body,
         Err(e) => return fail(&ApiError::bad_request(format!("reading the body: {e}"))),
     };
-    match answer(&app, route, &query, &body).await {
+    match answer(&app, route, &query, &body, asker).await {
         Ok(response) => response,
         Err(error) => fail(&error),
     }
 }
 
-async fn answer(app: &Arc<App>, route: Route<'_>, query: &str, body: &[u8]) -> Answer {
+/// A refusal, as the API's error: `Unauthorized`, with 401 or 403 as the
+/// reason has it.
+fn refuse(denied: &Denied) -> Response {
+    let (status, message) = denied.answer();
+    json(status, &ApiError::Unauthorized { message })
+}
+
+async fn answer(
+    app: &Arc<App>,
+    route: Route<'_>,
+    query: &str,
+    body: &[u8],
+    asker: Asker,
+) -> Answer {
     match route {
         Route::Status => ok(&app.api_report()),
         Route::Refresh => {
@@ -259,10 +339,12 @@ async fn answer(app: &Arc<App>, route: Route<'_>, query: &str, body: &[u8]) -> A
         Route::Agents => ok(&agents(&app.config(), &app.home)),
         Route::Connect(id) => connect_agent(app, id).await,
         Route::Disconnect(id) => disconnect_agent(app, id).await,
-        Route::Usage => usage(app, query).await,
+        Route::Usage => usage(app, query, asker.here).await,
         Route::History => history(app, query).await,
-        Route::Events => Ok(events(app)),
+        Route::Events => Ok(events(app, asker)),
         Route::NotifyTest => notify_test(app).await,
+        Route::Tailnet => ok(&tailnet_view(app).await),
+        Route::ChangeTailnet => change_tailnet(app, strict(body)?).await,
     }
 }
 
@@ -800,7 +882,9 @@ fn names(app: &App) -> HashMap<String, String> {
         .collect()
 }
 
-async fn usage(app: &App, query: &str) -> Answer {
+/// Usage over a range. Requests the owner key sent are this machine's own:
+/// `this machine` to this machine's own tools, `hub` to other machines.
+async fn usage(app: &App, query: &str, here: bool) -> Answer {
     let range = param(
         query,
         "range",
@@ -834,7 +918,10 @@ async fn usage(app: &App, query: &str) -> Answer {
             by_text,
             &config.prices,
             &names,
-            summary::HERE_LOCAL,
+            match here {
+                true => summary::HERE_LOCAL,
+                false => summary::HERE_HUB,
+            },
         )
     })
     .await;
@@ -873,9 +960,13 @@ async fn notify_test(app: &App) -> Answer {
 /// The event stream: `Hello`, the report, then each request answered, each
 /// sign-in's progress, and the report again whenever it changes. The report
 /// is built only while someone watches; the stream ends when the daemon
-/// stops.
-fn events(app: &Arc<App>) -> Response {
+/// stops, or when the config no longer lets the asker look.
+///
+/// Sign-in progress carries the addresses and codes that finish a sign-in,
+/// so only those who may manage slopmax see it.
+fn events(app: &Arc<App>, asker: Asker) -> Response {
     let mut feed = app.api_events.subscribe();
+    let sign_ins = asker.access >= Access::Admin;
     let (app, stop) = (Arc::clone(app), app.stop.clone());
     let (tx, rx) = mpsc::channel::<Bytes>(64);
     app.clone().spawn(async move {
@@ -896,11 +987,15 @@ fn events(app: &Arc<App>) -> Response {
         loop {
             let frame = tokio::select! {
                 event = feed.recv() => match event {
+                    Ok(frame) if !sign_ins && frame.starts_with(LOGIN_FRAME) => continue,
                     Ok(frame) => frame,
                     Err(broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(broadcast::error::RecvError::Closed) => break,
                 },
                 _ = check.tick() => {
+                    if !may_look(&app, &asker) {
+                        break;
+                    }
                     let (seen, frame) = status(&app);
                     if seen == last {
                         continue;
@@ -924,6 +1019,163 @@ fn events(app: &Arc<App>) -> Response {
     );
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     response
+}
+
+/// How a sign-in's progress starts on the event stream.
+const LOGIN_FRAME: &[u8] = br#"data: {"_tag":"Login""#;
+
+/// Whether the config as it stands still lets `asker` look: its key still
+/// matches, or its login is still allowed. Whois is not asked again.
+fn may_look(app: &App, asker: &Asker) -> bool {
+    let config = app.config();
+    match super::known(&config, &asker.headers, &asker.seen) {
+        Ok(super::Known::Key(caller)) => caller.access() >= Access::View,
+        Ok(super::Known::Login(_)) => true,
+        Err(_) => false,
+    }
+}
+
+/// How long what Tailscale said about publishing is reused.
+const TAILNET_FRESH: Duration = Duration::from_secs(30);
+
+/// slopmax on the tailnet: as Tailscale last told it (within
+/// [`TAILNET_FRESH`]), and who may use it as the config says now.
+async fn tailnet_view(app: &App) -> TailnetView {
+    let config = app.config();
+    let kept = app
+        .tailnet_view
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_ref()
+        .filter(|(at, _)| at.elapsed() < TAILNET_FRESH)
+        .map(|(_, view)| view.clone());
+    let view = match kept {
+        Some(view) => view,
+        None => {
+            let port = config.listen.port();
+            let targets = [
+                Target::Socket(app.home.tailnet_socket()),
+                Target::Loopback(port),
+            ];
+            let cli = app.tailscale_cli();
+            let inspection = tailscale::inspect(cli.as_ref(), &targets, port).await;
+            let view = view_of(&inspection);
+            *app.tailnet_view.lock().unwrap_or_else(|p| p.into_inner()) =
+                Some((Instant::now(), view.clone()));
+            view
+        }
+    };
+    with_config(view, &config)
+}
+
+/// What Tailscale says about slopmax on the tailnet, before the config's
+/// say on who may use it.
+fn view_of(inspection: &tailscale::Inspection) -> TailnetView {
+    use slopmax_api::tailnet::{Problem, TailscaleState as State, Transport};
+    use tailscale::{BackendState, TsError};
+    let state = match &inspection.node {
+        Ok(node) => match node.backend_state {
+            BackendState::Running => State::Running,
+            BackendState::NeedsLogin => State::SignedOut,
+            BackendState::Stopped => State::Off,
+            BackendState::NeedsMachineAuth => State::NeedsApproval,
+            BackendState::NoState => State::Down,
+            BackendState::Starting | BackendState::Other(_) => State::Unknown,
+        },
+        Err(TsError::Missing) => State::Missing,
+        Err(TsError::DaemonDown) => State::Down,
+        Err(TsError::LoggedOut) => State::SignedOut,
+        Err(TsError::Off) => State::Off,
+        Err(TsError::NeedsApproval) => State::NeedsApproval,
+        Err(_) => State::Unknown,
+    };
+    let published = inspection.published.first();
+    let funnel = inspection.published.iter().find(|p| p.funnel);
+    let problem = match &inspection.node {
+        Err(e) => Some(e.clone()),
+        Ok(node) => tailscale::state_error(node)
+            .or_else(|| {
+                let https_off =
+                    node.backend_state == BackendState::Running && node.cert_domains.is_empty();
+                https_off.then_some(TsError::NoHttps)
+            })
+            .or_else(|| funnel.map(|p| TsError::Funnel { port: p.port })),
+    };
+    TailnetView {
+        tailscale: state,
+        url: published.map(|p| p.url.clone()),
+        transport: published.map(|p| match p.transport {
+            tailscale::Transport::Socket => Transport::Socket,
+            tailscale::Transport::Loopback => Transport::Loopback,
+        }),
+        identity: false,
+        host: inspection
+            .node
+            .as_ref()
+            .ok()
+            .map(|node| node.name.clone())
+            .filter(|name| !name.is_empty()),
+        users: Vec::new(),
+        admins: Vec::new(),
+        funnel: funnel.is_some(),
+        problem: problem.map(|e| Problem {
+            text: e.message(),
+            fix: e.fix(),
+        }),
+    }
+}
+
+/// `view` with who may use slopmax as `config` says. Logins are taken
+/// without a key when tailscaled reaches slopmax through its socket, which
+/// names them, and some login is listed.
+fn with_config(mut view: TailnetView, config: &Config) -> TailnetView {
+    let tailnet = config.tailscale.clone().unwrap_or_default();
+    view.identity = cfg!(unix)
+        && view.transport == Some(slopmax_api::tailnet::Transport::Socket)
+        && !tailnet.users.is_empty();
+    view.users = tailnet.users;
+    view.admins = tailnet
+        .admins
+        .into_iter()
+        .map(|admin| slopmax_api::tailnet::AdminMachine {
+            machine: admin.machine,
+            id: admin.id,
+        })
+        .collect();
+    view
+}
+
+/// Changes who may use slopmax over the tailnet: checked as config.toml is,
+/// written there, and in force at once. A login or a machine named twice is
+/// kept once.
+async fn change_tailnet(app: &App, patch: TailnetPatch) -> Answer {
+    let mut tailnet = app.config().tailscale.clone().unwrap_or_default();
+    if let Some(users) = patch.users {
+        tailnet.users = Vec::new();
+        for user in users.iter().map(|u| u.trim()) {
+            if !tailnet.users.iter().any(|u| u.eq_ignore_ascii_case(user)) {
+                tailnet.users.push(user.to_owned());
+            }
+        }
+    }
+    if let Some(admins) = patch.admins {
+        tailnet.admins = Vec::new();
+        for admin in admins {
+            let (machine, id) = (admin.machine.trim(), admin.id.trim());
+            if !tailnet.admins.iter().any(|a| a.id == id) {
+                tailnet.admins.push(crate::config::AdminMachine {
+                    machine: machine.to_owned(),
+                    id: id.to_owned(),
+                });
+            }
+        }
+    }
+    let path = app.home.config();
+    crate::blocking::run(move || Config::set_tailnet(&path, &tailnet)).await?;
+    app.reload_config();
+    log::info!("who may use slopmax over the tailnet changed from the API");
+    *app.tailnet_view.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    ok(&tailnet_view(app).await)
 }
 
 /// The report as a `Status` event, and what tells it apart from the last:
@@ -989,5 +1241,163 @@ mod tests {
         assert_eq!(at(Method::POST, "/agents/vim/connect"), None);
         assert_eq!(at(Method::GET, "/accounts/a"), None);
         assert_eq!(at(Method::POST, "/status"), None);
+        assert_eq!(at(Method::GET, "/tailnet"), Some(Route::Tailnet));
+        assert_eq!(at(Method::PATCH, "/tailnet"), Some(Route::ChangeTailnet));
+    }
+
+    #[test]
+    fn looking_needs_view_and_everything_else_admin() {
+        let needs =
+            |method: Method, path: &'static str| Route::parse(&method, path).unwrap().needs();
+        for (method, path) in [
+            (Method::GET, "/status"),
+            (Method::GET, "/usage"),
+            (Method::GET, "/history"),
+            (Method::GET, "/events"),
+            (Method::GET, "/tailnet"),
+        ] {
+            assert_eq!(needs(method, path), Access::View, "{path}");
+        }
+        for (method, path) in [
+            (Method::GET, "/settings"),
+            (Method::GET, "/keys"),
+            (Method::GET, "/doctor"),
+            (Method::GET, "/agents"),
+            (Method::POST, "/logins"),
+            (Method::POST, "/refresh"),
+            (Method::POST, "/shutdown"),
+            (Method::PATCH, "/settings"),
+            (Method::PATCH, "/tailnet"),
+            (Method::DELETE, "/keys/x"),
+        ] {
+            assert_eq!(needs(method, path), Access::Admin, "{path}");
+        }
+    }
+
+    #[test]
+    fn sign_in_progress_is_told_from_other_events() {
+        let login = Event::Login {
+            id: "x".into(),
+            event: LoginEvent::Note { text: "hi".into() },
+        };
+        assert!(login.frame().starts_with(LOGIN_FRAME));
+        for other in [
+            Event::Ping {},
+            Event::Hello {
+                version: "1".into(),
+                exe: None,
+            },
+        ] {
+            assert!(!other.frame().starts_with(LOGIN_FRAME));
+        }
+    }
+
+    macro_rules! fixture {
+        ($name:literal) => {
+            include_str!(concat!(
+                "../../../slopmax-core/tests-data/tailscale/",
+                $name
+            ))
+        };
+    }
+
+    /// What `inspect` would find with these answers from Tailscale, for
+    /// slopmax at the socket of `/home/me/.slopmax` or port 7567.
+    fn inspected(status: &str, serve: &str) -> tailscale::Inspection {
+        let targets = [
+            Target::Socket("/home/me/.slopmax/tailnet.sock".into()),
+            Target::Loopback(7567),
+        ];
+        let node = tailscale::parse_status(status).map(|(node, _)| node);
+        let serve = tailscale::parse_serve(serve).unwrap();
+        tailscale::Inspection {
+            exe: Some("/usr/bin/tailscale".into()),
+            published: match &node {
+                Ok(node) => tailscale::published(&serve, node, &targets),
+                Err(_) => Vec::new(),
+            },
+            stale: tailscale::stale(&serve, 7567, &targets),
+            serve: Some(serve),
+            node,
+            operator: None,
+        }
+    }
+
+    #[test]
+    fn the_tailnet_view_reads_tailscale_and_the_config() {
+        use slopmax_api::tailnet::{TailscaleState, Transport};
+        let missing = view_of(&tailscale::Inspection {
+            exe: None,
+            node: Err(tailscale::TsError::Missing),
+            serve: None,
+            published: Vec::new(),
+            stale: Vec::new(),
+            operator: None,
+        });
+        assert_eq!(missing.tailscale, TailscaleState::Missing);
+        assert_eq!(
+            (missing.url, missing.transport, missing.host),
+            (None, None, None)
+        );
+        let problem = missing.problem.unwrap();
+        assert_eq!(problem.text, "Tailscale isn't installed here");
+        assert!(problem.fix.unwrap().contains("tailscale.com/download"));
+
+        let ours = view_of(&inspected(
+            fixture!("status-running.json"),
+            fixture!("serve-ours-socket.json"),
+        ));
+        assert_eq!(ours.tailscale, TailscaleState::Running);
+        assert_eq!(ours.url.as_deref(), Some("https://hub.example.ts.net:7567"));
+        assert_eq!(ours.transport, Some(Transport::Socket));
+        assert_eq!(ours.host.as_deref(), Some("hub"));
+        assert!(!ours.funnel && ours.problem.is_none());
+        // Identity needs a login to take, as well as the socket.
+        assert!(!with_config(ours.clone(), &Config::default()).identity);
+        let config = Config {
+            tailscale: Some(crate::config::Tailnet {
+                users: vec!["me@github".into()],
+                admins: vec![crate::config::AdminMachine {
+                    machine: "mac".into(),
+                    id: "nMAC".into(),
+                }],
+            }),
+            ..Config::default()
+        };
+        let told = with_config(ours, &config);
+        assert_eq!(told.identity, cfg!(unix));
+        assert_eq!(told.users, ["me@github"]);
+        assert_eq!(told.admins[0].id, "nMAC");
+
+        let funnel = view_of(&inspected(
+            fixture!("status-running.json"),
+            fixture!("serve-funnel.json"),
+        ));
+        assert!(funnel.funnel);
+        assert_eq!(funnel.transport, Some(Transport::Loopback));
+        assert_eq!(funnel.url.as_deref(), Some("https://hub.example.ts.net"));
+        assert!(!with_config(funnel.clone(), &config).identity);
+        let problem = funnel.problem.unwrap();
+        assert!(problem.text.contains("Funnel"), "{}", problem.text);
+        assert_eq!(
+            problem.fix.as_deref(),
+            Some("tailscale funnel --https=443 off")
+        );
+
+        let signed_out = view_of(&inspected(
+            fixture!("status-needslogin.json"),
+            fixture!("serve-empty.json"),
+        ));
+        assert_eq!(signed_out.tailscale, TailscaleState::SignedOut);
+        assert!(signed_out.problem.is_some() && signed_out.url.is_none());
+
+        let no_certs = view_of(&inspected(
+            fixture!("status-nocerts.json"),
+            fixture!("serve-empty.json"),
+        ));
+        assert_eq!(
+            no_certs.problem.unwrap().text,
+            tailscale::TsError::NoHttps.message()
+        );
     }
 }

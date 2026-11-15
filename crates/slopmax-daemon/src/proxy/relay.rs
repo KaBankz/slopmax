@@ -41,6 +41,8 @@ pub(crate) struct Served {
     pub attempts: u32,
     pub agent: Option<&'static str>,
     pub session: Option<String>,
+    /// What the ledger records as the machine it came from.
+    pub machine: Option<String>,
 }
 
 /// Records one served request: in the pool (usage, and a block when the
@@ -89,7 +91,7 @@ impl Settle {
             agent: served.agent.map(str::to_owned),
             session: served.session,
             end: (end != End::Complete).then_some(end),
-            machine: None,
+            machine: served.machine,
         };
         app.record(&entry);
     }
@@ -346,6 +348,7 @@ mod tests {
             attempts: 1,
             agent: Some("claude"),
             session: None,
+            machine: Some("laptop".into()),
         };
         let held = held
             .iter()
@@ -391,6 +394,7 @@ mod tests {
             (200, 10, 7, None)
         );
         assert!(entry.first_byte_ms.is_some() && !entry.failed());
+        assert_eq!(entry.machine.as_deref(), Some("laptop"));
     }
 
     #[tokio::test]

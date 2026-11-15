@@ -12,7 +12,8 @@ pub mod supervisor;
 // The engine's modules, under the names the daemon's code uses.
 pub(crate) use slopmax_core::{
     account, agent, api, auth, blocking, config, doctor, error, fsx, history, import, ledger,
-    limits, notify, paths, pool, provider, report, route, state, summary, update, usage, waste,
+    limits, notify, paths, pool, provider, report, route, state, summary, tailscale, update, usage,
+    waste,
 };
 pub(crate) use slopmax_core::{ids, log, net, time, wire};
 
@@ -30,6 +31,7 @@ use crate::paths::Home;
 use crate::pool::State;
 use crate::provider::credits::Outcome;
 use crate::proxy::App;
+pub use crate::proxy::Tailnet;
 use crate::time::{SignedDuration, Timestamp};
 
 /// How often blocked accounts are re-checked, in case quota frees up early.
@@ -130,6 +132,22 @@ const SETTLE: Duration = Duration::from_secs(5);
 /// finishes, refreshes in flight save their tokens, and state is saved
 /// last, by the only writer left.
 pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<Stopped> {
+    serve_with(config, home, origins, Tailnet::default()).await
+}
+
+/// [`serve`], asking Tailscale through `tailnet`: tests give fakes, so no
+/// test runs the real `tailscale` command.
+///
+/// On unix the proxy also listens on the home's tailnet socket, which
+/// `tailscale serve` passes the tailnet's requests to with who sent each.
+/// Only root (tailscaled) and this user may connect to it. A socket that
+/// can't be made is logged, and the proxy runs on TCP alone.
+pub async fn serve_with(
+    config: Config,
+    home: Home,
+    origins: Origins,
+    tailnet: Tailnet,
+) -> Result<Stopped> {
     let mut launchd = false;
     let mut launchd_socket = false;
     let (serving, listener, ready) = match handoff::Inherited::take() {
@@ -180,6 +198,7 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<Stopp
     let listener = TcpListener::from_std(listener)?;
     let state = read_state(&home);
     let app = App::new(config, home, state, origins);
+    app.set_tailnet(tailnet);
     app.sync()?;
     app.launchd
         .store(launchd, std::sync::atomic::Ordering::SeqCst);
@@ -289,9 +308,17 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<Stopp
     }
     // After a handoff, draining ends early if the new process stops, or
     // this one is told to: what it still holds is cut.
+    #[cfg(unix)]
+    let socket = tailnet_socket::listen(&app, handler.clone());
     tokio::select! {
         () = server::serve_until(listener, handler, shutdown(app.clone())) => {}
         () = app.cut.cancelled() => log::info!("ending what this proxy still had"),
+    }
+    // Both listeners stop together; the socket goes once it has drained.
+    app.stop.cancel();
+    #[cfg(unix)]
+    if let Some(socket) = socket {
+        socket.close(&app.cut).await;
     }
     let successor = *app.successor.lock().unwrap_or_else(|p| p.into_inner());
     let handed_over = app.handed_over.load(std::sync::atomic::Ordering::SeqCst);
@@ -403,6 +430,123 @@ fn bind(listen: std::net::SocketAddr) -> Result<std::net::TcpListener> {
 /// How often the account files are checked for changes the daemon was not
 /// told about.
 const RESCAN: Duration = Duration::from_secs(30);
+
+/// The socket `tailscale serve` passes the tailnet's requests to.
+#[cfg(unix)]
+mod tailnet_socket {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use tokio_util::sync::CancellationToken;
+
+    use crate::log;
+    use crate::net::server::{self, Request, Response};
+    use crate::proxy::App;
+
+    /// The longest socket path taken: macOS holds 104 bytes, Linux 108.
+    const LONGEST: usize = 100;
+
+    /// The socket being served.
+    pub(crate) struct Socket {
+        path: PathBuf,
+        /// The socket file this process made, as (device, inode): after a
+        /// handoff the path holds the new process's, which stays.
+        made: (u64, u64),
+        serving: tokio::task::JoinHandle<()>,
+    }
+
+    impl Socket {
+        /// Waits for its connections to drain, once the daemon stops, or
+        /// until `cut`, and removes it if the path is still this one's.
+        pub async fn close(self, cut: &CancellationToken) {
+            tokio::select! {
+                _ = self.serving => {}
+                () = cut.cancelled() => {}
+            }
+            match std::fs::symlink_metadata(&self.path) {
+                Ok(meta) if (meta.dev(), meta.ino()) == self.made => {}
+                _ => return,
+            }
+            if let Err(e) = std::fs::remove_file(&self.path)
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                log::warn!("removing {}: {e}", self.path.display());
+            }
+        }
+    }
+
+    /// Serves `handler` on the home's tailnet socket until the daemon
+    /// stops: open to this user and root (tailscaled) only. Anything in
+    /// the way but an old socket is left alone, and the proxy runs without
+    /// it. The serve lock says no other daemon owns an old one, but for
+    /// one this process took over from: it keeps what it has, and new
+    /// connections come here.
+    pub(crate) fn listen<H, F>(app: &Arc<App>, handler: H) -> Option<Socket>
+    where
+        H: Fn(Request) -> F + Clone + Send + Sync + 'static,
+        F: Future<Output = Response> + Send + 'static,
+    {
+        let path = app.home.tailnet_socket();
+        let not_listening = |why: &dyn std::fmt::Display| {
+            log::warn!(
+                "not listening on {}: {why}; Tailscale can't reach slopmax there",
+                path.display()
+            );
+        };
+        if path.as_os_str().len() > LONGEST {
+            not_listening(
+                &"the path is too long for a socket (move SLOPMAX_HOME somewhere shorter)",
+            );
+            return None;
+        }
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) if meta.file_type().is_socket() => {
+                if let Err(e) = std::fs::remove_file(&path) {
+                    not_listening(&format_args!("removing the old socket: {e}"));
+                    return None;
+                }
+            }
+            Ok(_) => {
+                not_listening(&"something else is there");
+                return None;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                not_listening(&e);
+                return None;
+            }
+        }
+        let listener = match tokio::net::UnixListener::bind(&path) {
+            Ok(listener) => listener,
+            Err(e) => {
+                not_listening(&e);
+                return None;
+            }
+        };
+        let made = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .and_then(|()| std::fs::symlink_metadata(&path));
+        let (owner, made) = match made {
+            Ok(meta) => (meta.uid(), (meta.dev(), meta.ino())),
+            Err(e) => {
+                not_listening(&format_args!("making it private: {e}"));
+                drop(listener);
+                let _ = std::fs::remove_file(&path);
+                return None;
+            }
+        };
+        let serving = tokio::spawn(server::serve_until(
+            server::tailnet(listener, owner),
+            handler,
+            crate::shutdown(Arc::clone(app)),
+        ));
+        Some(Socket {
+            path,
+            made,
+            serving,
+        })
+    }
+}
 
 /// Takes the home's serve lock, held while the daemon runs, so a second
 /// daemon on the same home fails to start instead of racing the first for

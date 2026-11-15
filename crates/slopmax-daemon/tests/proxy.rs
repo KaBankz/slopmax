@@ -2330,7 +2330,16 @@ async fn client_keys_are_held_to_their_models() {
         .send()
         .await
         .unwrap();
-    assert_eq!(status.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(status.status(), StatusCode::FORBIDDEN);
+    let refusal: Value = status.json().await.unwrap();
+    assert_eq!(refusal["_tag"], "Unauthorized");
+    assert!(
+        refusal["message"]
+            .as_str()
+            .unwrap()
+            .contains("reaches the proxy only"),
+        "{refusal}"
+    );
 }
 
 #[tokio::test]

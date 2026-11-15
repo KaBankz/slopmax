@@ -15,8 +15,10 @@ use hyper::body::Incoming;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use slopmax_api::tailnet::Access;
 
-use super::{App, RedeemError, authorized, constant_time_eq, json_reply};
+use super::tailnet::Seen;
+use super::{App, RedeemError, caller, constant_time_eq, json_reply};
 use crate as daemon;
 use crate::account::Account;
 use crate::config::Config;
@@ -41,10 +43,12 @@ const CREDITS_FRESH: SignedDuration = SignedDuration::from_mins(5);
 type Answer = Result<Value, (StatusCode, String)>;
 
 /// Answers a request under `/v0/management/`.
-pub(super) async fn handle(app: Arc<App>, request: Request) -> Response {
-    if !authorized(&app.config(), request.headers())
-        && !has_management_key(&app.config(), request.headers())
-    {
+pub(super) async fn handle(app: Arc<App>, request: Request, seen: &Seen) -> Response {
+    let config = app.config();
+    let admitted = caller(&app, &config, request.headers(), seen, Access::Admin)
+        .await
+        .is_ok();
+    if !admitted && !has_management_key(&config, request.headers()) {
         return fail(
             StatusCode::UNAUTHORIZED,
             "missing or invalid management key; use slopmax's api_key",

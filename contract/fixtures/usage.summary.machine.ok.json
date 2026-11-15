@@ -1,0 +1,46 @@
+{
+  "status": 200,
+  "body": {
+    "range": "30d",
+    "by": "machine",
+    "since": "2026-11-01T12:00:00Z",
+    "rows": [
+      {
+        "key": "laptop",
+        "totals": {
+          "requests": 1,
+          "input": 1200,
+          "output": 640,
+          "cacheRead": 48000,
+          "cacheWrite": 900,
+          "cost": 0.02065,
+          "unpriced": 0,
+          "failed": 0
+        }
+      },
+      {
+        "key": "this machine",
+        "totals": {
+          "requests": 2,
+          "input": 2400,
+          "output": 1280,
+          "cacheRead": 96000,
+          "cacheWrite": 1800,
+          "cost": 0.09895,
+          "unpriced": 0,
+          "failed": 0
+        }
+      }
+    ],
+    "total": {
+      "requests": 3,
+      "input": 3600,
+      "output": 1920,
+      "cacheRead": 144000,
+      "cacheWrite": 2700,
+      "cost": 0.1196,
+      "unpriced": 0,
+      "failed": 0
+    }
+  }
+}
