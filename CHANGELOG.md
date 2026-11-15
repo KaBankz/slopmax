@@ -4,20 +4,43 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-15
+
+New sessions now fill accounts in an order you set, and limit resets are no longer redeemed by themselves. Both are new defaults: a config that names its own keeps it. Errors and empty states across the CLI, the proxy and the dashboard now say what happened and what to run.
+
 ### Added
 
 - `slopmax order` shows the order new sessions use accounts in, and `slopmax order 3 1` puts accounts 3 and 1 first, in that order, the rest following as they were. Priority tiers still come first.
 
 ### Changed
 
-- New sessions now fill accounts in order (`fill-first`), moving to the next only when one is limited, instead of spending the quota that resets soonest. A config that names a strategy keeps it; `strategy = "reset-first"` brings back the old default.
+- New sessions now fill accounts in order (`fill-first`), moving to the next only when one is limited, instead of spending the quota that resets soonest. `strategy = "reset-first"` brings back the old default.
 - Limit resets are no longer redeemed by themselves before they expire; the `reset-expiring` notification says when one is about to lapse, and `slopmax redeem` spends it. `redeem_expiring_credits = true` brings back the old default.
+- When no account is connected for what a request asks for, the agent gets a 503 that names the command adding one, such as `slopmax has no Claude account connected yet; run `slopmax login claude` (or `slopmax import`)`, instead of a 404 that Claude Code reads as an unknown model.
+- When every account fails a request, the agent hears why: `every Claude account failed: couldn't connect to api.anthropic.com (connection refused). Check your network, or run `slopmax logs`.` When every account is disabled or signed out, it names them and the command that fixes each.
+- Network errors read plainly in `slopmax status`, the log, notifications and the agent's errors: `couldn't connect to api.anthropic.com (connection refused)`, `couldn't find api.anthropic.com (DNS lookup failed)`, `api.anthropic.com closed the connection before it answered`. A new connection the server closes before the request goes out is tried once more.
 - When every kept connection to a provider is busy, a request takes the first to come free if that is sooner than making a new one.
-- A request whose connection fails now says which server and what happened, such as `api.anthropic.com closed the connection before it answered` or `connecting to api.openai.com: Connection refused`, instead of `connection closed before message completed`. A new connection the server closes before the request goes out is tried once more.
+- `slopmax config` names settings as you type them (`poll_mins`, not `pollMinutes`), whether or not the proxy runs, and takes `refresh_tokens` and `websockets` with the proxy stopped too. `slopmax config listen` shows the address and how to change it.
+- `slopmax login compat` for an endpoint and key already connected says it updated that account. An endpoint or key check that doesn't answer is still saved, and you're told so, in the CLI and the dashboard.
+- A reference that matches several accounts lists them by their `slopmax status` numbers. `slopmax label` and `login --label` refuse a label another account already goes by. `slopmax use` refuses a disabled account.
+- `slopmax status` shows a signed-out account as `signed out: run `slopmax login claude``; the detail stays in `--json` and `slopmax doctor`.
+- `slopmax usage` leaves out rows with no successful requests, and when every request failed it says so instead of showing zeros.
+- `slopmax start` with an older version running says so, and how to restart it. `slopmax doctor` warns about accounts whose last request failed, and says to install Claude Code or Codex first when it is not on PATH.
+- Notification failures say what happened (`the notify command exited with 3 (no output)`), and a `[notify] webhook` that isn't a web address is a config error when the config loads.
+- Signing in without a terminal, when the sign-in needs a pasted code, is refused before the link is shown; pasted codes that don't fit, codes from an earlier sign-in and the time limit each say what to do next. Argument mistakes say what's expected (`priority must be a whole number, like 2 or -1`), and `--import`, `--agents` and `--login` list the values they take.
+- The dashboard says which action failed (`Could not rename ana@studio.dev: …`), shows progress while it adds a key or an endpoint, imports, makes a client key or refreshes usage, and those buttons can't be pressed twice. A page that couldn't read something offers Try again, and after slopmax answers again the dashboard reads everything again. Quiet pages link to Agents, and its key gate checks a key before opening.
 
 ### Fixed
 
-- A change through the proxy to an account saved while it ran, as by a script writing the account files, failed with `no such account`; the proxy now reads its accounts again first.
+- A config.toml with a mistake stopped every command, even `slopmax stop`. The error names the line and how to fix it; `stop`, `logs`, `daemon-info`, `config <name> <value>` and `completions` work anyway, and `doctor` reports it beside its other checks.
+- A proxy started from another `SLOPMAX_HOME` (or before `api_key` changed) on the same port made commands fail with `missing or invalid slopmax key; see `slopmax env``. They now name it, with its pid, and say how to stop it.
+- `slopmax start` took several seconds (over a minute if the port's holder never answered) and then pointed at the log. It now says at once why the proxy did not start, such as `python3 (pid 3836776) is using 127.0.0.1:7567. Set `listen` in config.toml to a free port.` A port below 1024 is reported as needing administrator rights.
+- `slopmax run claude` without Claude Code installed left a proxy running and said `No such file or directory`. It now checks first and says to install it (the same for Codex).
+- Importing CLIProxyAPI logins with no email gave every one the same id, so each replaced the last; they are now told apart. Ids of other accounts are unchanged. `slopmax import` names each login file it couldn't read, and says where it looked when it found nothing.
+- A change through the proxy to an account saved while it ran failed with `no such account`; the proxy now reads its accounts again first.
+- `slopmax own` on an account that already refreshes in slopmax, or on an API key, no longer warns about signing out the other tool's copy. `slopmax setup claude` says how to undo once, as a command that runs.
+- A minute setting too large for config.toml was written as -1; it is now refused. A token refresh refused with an HTML error page no longer puts the whole page in `last error`. `slopmax status --watch` into a pipe no longer writes screen-clearing codes.
+- The dashboard showed raw request errors such as `Transport: Failed to fetch (POST http://…)`; it now says slopmax is not answering. A subscription account signed in moments ago was missing from the Overview until its usage was read; it now shows, with `Limits not read yet`. While slopmax wasn't answering, Agents and Client keys pulsed forever. An import that saved nothing read as a success. Set priority closed and did nothing on anything but a whole number, and Create key cleared the form before slopmax answered.
 
 ## [0.8.1] - 2026-11-15
 
@@ -281,7 +304,11 @@ The first version.
 - `slopmax run`, `env`, and `setup` (with `--undo`) connect Claude Code and Codex.
 - Adapted Claude requests to the serving account (`metadata.user_id` and the billing-header checksum). 0.2.0 removed this.
 
-[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/KaBankz/slopmax/compare/v0.8.1...v0.9.0
+[0.8.1]: https://github.com/KaBankz/slopmax/compare/v0.8.0...v0.8.1
+[0.8.0]: https://github.com/KaBankz/slopmax/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/KaBankz/slopmax/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/KaBankz/slopmax/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/KaBankz/slopmax/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/KaBankz/slopmax/compare/v0.4.4...v0.5.0
