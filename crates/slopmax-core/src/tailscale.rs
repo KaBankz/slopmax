@@ -1250,6 +1250,18 @@ pub fn discovery_candidates(peers: &[Peer], port: u16) -> Vec<(String, String)> 
 /// The machine of `peers` that `query` names: by its full DNS name, by that
 /// name's first label, or by its host name in any case, in that order. When
 /// none or several match, the error says which machines there are.
+/// Whether `query` names `node`, this machine, as [`resolve_machine`]
+/// matches a peer: by its MagicDNS name or that name's first label. This
+/// machine is never among the peers.
+pub fn names_node(node: &Node, query: &str) -> bool {
+    let query = query.trim();
+    let query = query.strip_suffix('.').unwrap_or(query);
+    let dns = node.dns_name.strip_suffix('.').unwrap_or(&node.dns_name);
+    [dns, node.name.as_str()]
+        .iter()
+        .any(|name| !name.is_empty() && name.eq_ignore_ascii_case(query))
+}
+
 pub fn resolve_machine<'a>(peers: &'a [Peer], query: &str) -> Result<&'a Peer, String> {
     let query = query.trim();
     let query = query.strip_suffix('.').unwrap_or(query);
@@ -1961,6 +1973,16 @@ mod tests {
                 .unwrap_err()
                 .contains("sees no others")
         );
+    }
+
+    #[test]
+    fn this_machine_answers_to_its_names() {
+        let (node, _) = parse_status(fixture!("status-running.json")).unwrap();
+        assert!(names_node(&node, &node.name));
+        assert!(names_node(&node, &node.name.to_uppercase()));
+        assert!(names_node(&node, &format!("{}.", node.dns_name)));
+        assert!(!names_node(&node, "me-macbook-pro"));
+        assert!(!names_node(&node, ""));
     }
 
     #[test]

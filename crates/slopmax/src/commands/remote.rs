@@ -205,29 +205,37 @@ fn knows(health: &Health) -> String {
 }
 
 /// The URL `target` names: a URL as given, `host[:port]` over HTTPS, or a
-/// machine on the tailnet by name. Plain HTTP reaches only this machine,
-/// unless a key is used (a hub on a LAN without Tailscale).
+/// machine on the tailnet by name, with or without a port. A name is looked
+/// up in full, as Tailscale's certificate names it. Plain HTTP reaches only
+/// this machine, unless a key is used (a hub on a LAN without Tailscale).
 async fn resolve(target: &str, keyed: bool) -> Result<String> {
     let url = if target.starts_with("http://") || target.starts_with("https://") {
         target.trim_end_matches('/').to_owned()
-    } else if target.contains('.') || target.contains(':') {
-        let target = target.trim_end_matches('/');
-        if has_port(target) {
-            format!("https://{target}")
-        } else {
-            format!("https://{target}:{HUB_PORT}")
-        }
     } else {
-        let ts = Tailscale::find().map_err(|e| {
-            anyhow::anyhow!(
-                "{}, so the machine {target} can't be looked up; pass its address: \
-                 slopmax setup --hub https://<host>:{HUB_PORT}",
-                e.message()
-            )
-        })?;
-        let (_, peers) = ts.peers().await.map_err(super::tailscale::fail)?;
-        let peer = tailscale::resolve_machine(&peers, target).map_err(anyhow::Error::msg)?;
-        format!("https://{}:{HUB_PORT}", peer.dns_name)
+        let target = target.trim_end_matches('/');
+        let (host, port) = match target.rsplit_once(':') {
+            Some((host, port)) if has_port(target) => (host, port.to_owned()),
+            _ => (target, HUB_PORT.to_string()),
+        };
+        if !is_machine_name(host) {
+            format!("https://{host}:{port}")
+        } else {
+            let ts = Tailscale::find().map_err(|e| {
+                anyhow::anyhow!(
+                    "{}, so the machine {host} can't be looked up; pass its address: \
+                     slopmax setup --hub https://<host>:{HUB_PORT}",
+                    e.message()
+                )
+            })?;
+            let (here, peers) = ts.peers().await.map_err(super::tailscale::fail)?;
+            let dns = if tailscale::names_node(&here, host) {
+                here.dns_name.clone()
+            } else {
+                let peer = tailscale::resolve_machine(&peers, host).map_err(anyhow::Error::msg)?;
+                peer.dns_name.clone()
+            };
+            format!("https://{}:{port}", dns.trim_end_matches('.'))
+        }
     };
     let host = host_of(&url);
     if host.is_empty() {
@@ -240,6 +248,12 @@ async fn resolve(target: &str, keyed: bool) -> Result<String> {
         );
     }
     Ok(url)
+}
+
+/// Whether `host` is a bare tailnet machine name, which Tailscale looks up:
+/// no dots, not an address, not `localhost`.
+fn is_machine_name(host: &str) -> bool {
+    !host.is_empty() && !host.contains(['.', ':', '[']) && !host.eq_ignore_ascii_case("localhost")
 }
 
 /// Whether `host[:port]` gives a port.
@@ -554,6 +568,10 @@ mod tests {
             "https://hub.example.ts.net:8443"
         );
         assert_eq!(
+            resolved("localhost:7600", false).await.unwrap(),
+            "https://localhost:7600"
+        );
+        assert_eq!(
             resolved("http://127.0.0.1:7600", false).await.unwrap(),
             "http://127.0.0.1:7600"
         );
@@ -575,6 +593,9 @@ mod tests {
         assert_eq!(host_name("https://hub.example.ts.net:7567"), "hub");
         assert_eq!(host_name("http://127.0.0.1:7567"), "127.0.0.1");
         assert!(has_port("hub.example.ts.net:1"));
+        assert!(has_port("hub:7600") && is_machine_name("hub"));
+        assert!(!is_machine_name("hub.example.ts.net") && !is_machine_name("localhost"));
+        assert!(!is_machine_name("[::1]") && !is_machine_name("100.64.0.1"));
         assert!(!has_port("hub.example.ts.net"));
         assert!(is_loopback("localhost") && is_loopback("::1") && !is_loopback("hub"));
     }

@@ -2889,6 +2889,9 @@ fn looking_for_a_hub_with_no_other_machines_says_how_to_name_one() {
     s.ts(&["setup", "--hub="]).fails(1, says);
     s.ts(&["setup", "--hub", "phone"])
         .fails(1, "no machine on your tailnet is called phone");
+    // A name with a port is still looked up, not dialed as it stands.
+    s.ts(&["setup", "--hub", "phone:7600"])
+        .fails(1, "no machine on your tailnet is called phone");
     assert!(!has_hub(&s));
     s.assert_no_mutating_tailscale();
 }

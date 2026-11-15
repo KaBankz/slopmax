@@ -561,7 +561,7 @@ fn add_admin(admins: &mut Vec<AdminMachine>, admin: AdminMachine) {
 /// hub checks both whenever it asks. The hub itself, `here`, is not among
 /// `peers`: it manages slopmax with its own key.
 fn admin_of(here: &Node, peers: &[Peer], query: &str, users: &[String]) -> Result<AdminMachine> {
-    if is_here(here, query) {
+    if tailscale::names_node(here, query) {
         bail!(
             "{} is this machine, the hub; it manages slopmax with its own key, so it needs no \
              admin entry. Open the dashboard here with `slopmax dashboard`",
@@ -590,16 +590,6 @@ fn admin_of(here: &Node, peers: &[Peer], query: &str, users: &[String]) -> Resul
         machine: peer.name.clone(),
         id: peer.id.clone(),
     })
-}
-
-/// Whether `query` names this machine, as `resolve_machine` would a peer.
-fn is_here(here: &Node, query: &str) -> bool {
-    let query = query.trim();
-    let query = query.strip_suffix('.').unwrap_or(query);
-    let dns = here.dns_name.strip_suffix('.').unwrap_or(&here.dns_name);
-    [dns, here.name.as_str()]
-        .iter()
-        .any(|name| !name.is_empty() && name.eq_ignore_ascii_case(query))
 }
 
 /// Writes `[tailscale]`: through the proxy while it runs, as it is the
