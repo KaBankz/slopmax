@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-15
+
 ### Changed
 
 - The proxy allocates about a third less for each request it forwards (180 allocations for a Claude Code request, from 265), and keeps its connections to the providers itself: one task watches them while any is open, and an idle proxy wakes for none. The dashboard's 30-day history answers in about 0.3 ms, from 2.5.
