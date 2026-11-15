@@ -1,4 +1,5 @@
-//! Imports existing logins from Claude Code, Codex, and CLIProxyAPI.
+//! Imports existing logins from Claude Code, Codex, and CLIProxyAPI
+//! (whose xAI logins are SuperGrok accounts).
 //!
 //! Refresh tokens are single-use, so an imported login and its source share
 //! one token chain: whichever refreshes first invalidates the other's copy.
@@ -20,6 +21,7 @@ use crate::paths::Home;
 use crate::provider::ProviderId;
 use crate::provider::claude::oauth as claude;
 use crate::provider::codex::oauth as codex;
+use crate::provider::grok::oauth as grok;
 use crate::time::Timestamp;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +179,7 @@ async fn from_cliproxyapi(http: &Client, home: &Home) -> Vec<Found> {
         };
         let provider = match file.kind.as_str() {
             "claude" => ProviderId::Claude,
+            "xai" => ProviderId::Grok,
             _ => ProviderId::Codex,
         };
         found.push(Found {
@@ -195,7 +198,13 @@ fn cliproxy_file(path: &Path) -> Result<Option<CliProxyFile>> {
         .ok()
         .filter(|v: &Value| v.get("type").is_some_and(Value::is_string))
         .context("not a CLIProxyAPI login file")?;
-    if !matches!(value["type"].as_str(), Some("claude" | "codex")) {
+    // An xAI file is a SuperGrok sign-in only when it holds OAuth tokens;
+    // otherwise it is an API key.
+    let kind = (value["type"].as_str(), value["auth_kind"].as_str());
+    if !matches!(
+        kind,
+        (Some("claude" | "codex"), _) | (Some("xai"), Some("oauth"))
+    ) {
         return Ok(None);
     }
     serde_json::from_value(value)
@@ -269,6 +278,7 @@ async fn from_cliproxy_file(
             account.plan = file.plan_type;
             codex::apply_claims(&mut account);
         }
+        ProviderId::Grok => grok::apply_claims(&mut account),
         // Only subscription logins are imported.
         _ => {}
     }
@@ -307,7 +317,15 @@ mod tests {
         });
         fs::write(dir.join("claude-a.json"), claude.to_string()).unwrap();
         fs::write(dir.join("codex-b.json"), codex.to_string()).unwrap();
+        // An xAI API key is not a SuperGrok login; an OAuth sign-in is.
         fs::write(dir.join("xai-c.json"), r#"{"type":"xai"}"#).unwrap();
+        let grok = json!({
+            "type": "xai", "auth_kind": "oauth", "email": "g@x.dev",
+            "access_token": jwt::encode_unsigned(&json!({ "exp": 1_900_000_000, "sub": "user-7" })),
+            "refresh_token": "rt", "expired": "2030-01-01T00:00:00Z",
+            "base_url": "https://api.x.ai/v1", "token_endpoint": "https://auth.x.ai/oauth2/token"
+        });
+        fs::write(dir.join("xai-d.json"), grok.to_string()).unwrap();
         fs::write(dir.join("config.yaml"), "port: 1").unwrap();
         fs::write(dir.join("zz-garbage.json"), "not json").unwrap();
 
@@ -331,7 +349,13 @@ mod tests {
             "not a CLIProxyAPI login file"
         );
         let accounts: Vec<Account> = found.into_iter().map(|f| f.account.unwrap()).collect();
-        assert_eq!(accounts.len(), 2);
+        assert_eq!(accounts.len(), 3);
+        let grok = &accounts[2];
+        assert_eq!(grok.provider, ProviderId::Grok);
+        assert_eq!(grok.account_id.as_deref(), Some("user-7"));
+        assert_eq!(grok.email.as_deref(), Some("g@x.dev"));
+        assert!(grok.id.starts_with("grok-"));
+        assert!(grok.link.is_some());
         let claude = &accounts[0];
         assert_eq!(claude.org_id.as_deref(), Some("org-1"));
         let link = claude.link.as_ref().expect("CLIProxyAPI logins are linked");

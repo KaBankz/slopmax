@@ -6,7 +6,7 @@
 //! through this trait; the [`providers!`] rows are the one place that lists
 //! them.
 //!
-//! Subscriptions (Claude, ChatGPT) sign in with OAuth and have usage
+//! Subscriptions (Claude, ChatGPT, SuperGrok) sign in with OAuth and have usage
 //! windows. Metered providers (API keys, compatible endpoints) take a key
 //! and bill per token, so by default they never quietly absorb traffic a
 //! subscription would serve.
@@ -15,6 +15,7 @@ pub mod claude;
 pub mod codex;
 pub mod compat;
 pub mod credits;
+pub mod grok;
 pub mod keys;
 
 use std::fmt;
@@ -86,6 +87,8 @@ providers! {
     Claude => claude::Claude, api: Claude;
     /// ChatGPT Plus/Pro/Team, used by Codex.
     Codex => codex::Codex, api: Codex;
+    /// SuperGrok, used by Grok Build.
+    Grok => grok::Grok, api: Grok;
     /// Anthropic API keys.
     Anthropic => keys::ANTHROPIC, api: Anthropic;
     /// OpenAI API keys.
@@ -458,9 +461,9 @@ mod tests {
     #[test]
     fn unknown_ids_list_the_known_ones() {
         assert_eq!(
-            "grok".parse::<ProviderId>(),
+            "gemini".parse::<ProviderId>(),
             Err(
-                r#"expected one of claude, codex, anthropic, openai, xai, compat, got "grok""#
+                r#"expected one of claude, codex, grok, anthropic, openai, xai, compat, got "gemini""#
                     .into()
             )
         );

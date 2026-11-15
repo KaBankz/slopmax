@@ -2,7 +2,7 @@
 
 # slopmax
 
-slopmax pools your Claude and ChatGPT subscriptions behind one local proxy, so Claude Code and Codex keep working when an account runs out. Each session stays on one account until that account is spent, then moves to the next. New sessions go to the quota that resets soonest, so less of it goes unused; or fill accounts in order, balance them, or take turns.
+slopmax pools your Claude, ChatGPT, and SuperGrok subscriptions behind one local proxy, so Claude Code, Codex, and Grok Build keep working when an account runs out. Each session stays on one account until that account is spent, then moves to the next. New sessions go to the quota that resets soonest, so less of it goes unused; or fill accounts in order, balance them, or take turns.
 
 - One Rust binary under 6 MB. No runtime, database, or browser extension.
 - Signs in with each provider's own OAuth flow, or takes over logins from Claude Code, Codex, and CLIProxyAPI. A guided `slopmax setup` does it all, or runs unattended for a script or an agent, and `slopmax doctor` says what to fix.
@@ -65,8 +65,10 @@ Or by hand:
 ```sh
 slopmax login claude    # opens the sign-in page; repeat for each account
 slopmax login codex     # with no browser here, it shows a code to enter on any device
+slopmax login grok      # SuperGrok, with a code approved at accounts.x.ai
 slopmax setup claude    # point Claude Code (and every app that runs it) at slopmax
 slopmax setup codex
+slopmax setup grok
 slopmax service install # keep the proxy running
 slopmax                 # every account's usage and status
 ```
@@ -94,16 +96,17 @@ Each window shows how much is used and when it resets. The pool row is the provi
 
 ## Connecting agents
 
-|                                 | Claude Code                                         | Codex                                                      |
-| ------------------------------- | --------------------------------------------------- | ---------------------------------------------------------- |
-| `slopmax run <agent> [args…]`   | runs `claude` with the proxy's environment          | runs `codex` with `-c` overrides for a slopmax provider    |
-| `eval "$(slopmax env <agent>)"` | exports that environment in the current shell       | defines a `codex` function that goes through `slopmax run` |
-| `slopmax setup <agent>`         | writes the `env` block of `~/.claude/settings.json` | adds and selects a provider in `~/.codex/config.toml`      |
+|                                 | Claude Code                                         | Codex                                                      | Grok Build                                               |
+| ------------------------------- | --------------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------- |
+| `slopmax run <agent> [args…]`   | runs `claude` with the proxy's environment          | runs `codex` with `-c` overrides for a slopmax provider    | runs `grok` with the proxy's environment                 |
+| `eval "$(slopmax env <agent>)"` | exports that environment in the current shell       | defines a `codex` function that goes through `slopmax run` | exports that environment in the current shell            |
+| `slopmax setup <agent>`         | writes the `env` block of `~/.claude/settings.json` | adds and selects a provider in `~/.codex/config.toml`      | sets the chat proxy and auth command in `~/.grok/config.toml` |
 
 `slopmax setup <agent> --undo` puts back exactly what setup replaced. The edited file then holds the slopmax key, so setup keeps it private (mode 0600).
 
 - **Claude Code** gets `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`, the slopmax key. Every app that runs Claude Code reads `~/.claude/settings.json`, so `setup` covers the CLI, the Agent SDK, IDE extensions, and GUI wrappers such as T3 Code, Conductor, Orca, and Superset. The Claude desktop app is the exception: it starts its bundled Claude Code with its own environment, so it cannot be pointed at a proxy.
 - **Codex** gets a model provider at `http://127.0.0.1:7567/codex` with `wire_api = "responses"` and `supports_websockets = true`. It is named `OpenAI`, so Codex keeps first-party behavior such as remote compaction. The Codex desktop app reads the same `config.toml`; restart it after `setup`. If it rewrites the file, `slopmax doctor` notices.
+- **Grok Build** gets its CLI chat proxy at `http://127.0.0.1:7567/grok/v1` and an external auth provider that hands it the slopmax key (`GROK_CLI_CHAT_PROXY_BASE_URL` and `GROK_AUTH_PROVIDER_COMMAND`, or `[endpoints]` and `[grok_com_config]` in `config.toml`). `run` and `env` keep that token in a file of slopmax's own (`GROK_AUTH_PATH`), so Grok Build's own sign-in is left alone. `setup` cannot: the token goes to `~/.grok/auth.json`, so sign Grok Build out of xAI first (`grok logout`) and back in after `--undo`; `slopmax doctor` says when its own sign-in is still there. Only a SuperGrok account serves Grok Build: it reads its settings and models from the CLI chat proxy, so xAI keys are its overflow, never all it has.
 
 Any other client can use the proxy as an OpenAI- or Anthropic-style API at `http://127.0.0.1:7567/v1`, authenticating with `api_key` from the config as a bearer token or `x-api-key`: `/v1/chat/completions`, `/v1/responses`, `/v1/messages`, and `/v1/models`.
 
@@ -111,7 +114,7 @@ Any other client can use the proxy as an OpenAI- or Anthropic-style API at `http
 
 ### Switching
 
-Each request names its session: Claude Code's session id, Codex's `session-id`, or for other clients a session header or `prompt_cache_key`. A session stays on its account for as long as that account can serve it, which keeps prompt caches warm. It moves only when the account refuses, fills up, or signs out, and it is forgotten after `session_ttl_mins` idle minutes. A new session goes to the account chosen with `slopmax use`, if that one can serve. Otherwise it goes to the highest priority tier, and within the tier the strategy decides. When an account that filled up recovers, the sessions that moved off it stay where they are, keeping their cache, and new sessions go back to it.
+Each request names its session: Claude Code's session id, Codex's `session-id`, Grok Build's `x-grok-conv-group-id`, or for other clients a session header or `prompt_cache_key`. A session stays on its account for as long as that account can serve it, which keeps prompt caches warm. It moves only when the account refuses, fills up, or signs out, and it is forgotten after `session_ttl_mins` idle minutes. A new session goes to the account chosen with `slopmax use`, if that one can serve. Otherwise it goes to the highest priority tier, and within the tier the strategy decides. When an account that filled up recovers, the sessions that moved off it stay where they are, keeping their cache, and new sessions go back to it.
 
 Session affinity is what keeps prompt caching working, so it is on by default. With `session_affinity = false` every request is placed by the strategy instead, which spreads load across accounts at the cost of the cache; a client can decide per request by sending `x-slopmax-affinity: off` (or `on`, when the config turns it off). Claude Code sends extra headers from `ANTHROPIC_CUSTOM_HEADERS`. slopmax still remembers which account a session used last, so account-bound state is dropped when a request lands elsewhere, and its own `x-slopmax-*` headers never reach a provider.
 
@@ -123,6 +126,7 @@ Each request is adapted to the account serving it, and nothing more:
 
 - **Claude.** The account's token replaces the slopmax key, and the OAuth beta flag that subscription tokens require is added. Nothing else changes: the body, including Claude Code's billing header and `metadata.user_id`, reaches Anthropic byte for byte as Claude Code sent it. slopmax does not imitate Claude Code or alter what it says about itself.
 - **Codex.** The account's token and workspace id are set. Encrypted reasoning items and `previous_response_id` only work on the account that created them, so they are dropped when a session moves, along with Codex's sticky routing header.
+- **SuperGrok.** The account's token replaces the slopmax key; Grok Build's own headers and body go to xAI's CLI chat proxy as sent. Encrypted reasoning is dropped when a session moves, as for Codex. SuperGrok accounts serve Grok Build alone (their sign-in grants `grok-cli:access`), and slopmax does not imitate Grok Build for other clients.
 - **Keys and endpoints.** The key replaces the slopmax key.
 
 ### One account
@@ -158,16 +162,16 @@ Claude lists and spends limit resets for Claude Code alone, so slopmax makes tho
 
 ### Usage
 
-Every response carries rate-limit headers (`anthropic-ratelimit-unified-*`, `x-codex-*`), and slopmax updates the serving account's windows from them as requests flow. The proxy also polls each subscription's usage endpoint every `poll_mins` minutes and right after a window resets. While an account is blocked it polls every 10 minutes, because quota often comes back before the stated reset.
+Every response carries rate-limit headers (`anthropic-ratelimit-unified-*`, `x-codex-*`), and slopmax updates the serving account's windows from them as requests flow. SuperGrok's plan is a monthly allowance, which slopmax reads from xAI's billing endpoint as a 30-day window. The proxy also polls each subscription's usage endpoint every `poll_mins` minutes and right after a window resets. While an account is blocked it polls every 10 minutes, because quota often comes back before the stated reset.
 
 ## Accounts
 
 Each account is a private TOML file in `~/.slopmax/accounts/`, named after a hash of the account's identity, so signing in again or re-importing updates the account instead of adding a copy.
 
-- **Subscriptions.** `slopmax login claude` and `slopmax login codex` run the same OAuth flow as the official clients: PKCE with a localhost callback. On a machine without a browser, Claude's page shows a code to paste back and Codex shows a device code to enter on any device (`--device` asks for one anywhere). The proxy refreshes tokens ahead of expiry (an hour early for Claude, four days for Codex, whose sign-ins ChatGPT ends early) under a file lock, so no two processes spend the same refresh token. When a provider rejects a refresh, the account is flagged for re-login and leaves the rotation.
+- **Subscriptions.** `slopmax login claude` and `slopmax login codex` run the same OAuth flow as the official clients: PKCE with a localhost callback. On a machine without a browser, Claude's page shows a code to paste back and Codex shows a device code to enter on any device (`--device` asks for one anywhere). `slopmax login grok` signs in to SuperGrok with Grok Build's device code, approved in any browser. The proxy refreshes tokens ahead of expiry (an hour early for Claude, four days for Codex, whose sign-ins ChatGPT ends early, half an hour for SuperGrok's six-hour tokens) under a file lock, so no two processes spend the same refresh token. When a provider rejects a refresh, the account is flagged for re-login and leaves the rotation.
 - **API keys.** `slopmax login anthropic`, `openai`, or `xai` asks for the key at a hidden prompt, or reads it from stdin (`slopmax login xai < key.txt`), so it never lands in your shell history. It is checked against the provider's model list before it is saved.
 - **Compatible endpoints.** `slopmax login compat --url http://localhost:11434/v1` adds any API that speaks OpenAI Chat Completions (the default), Responses (`--dialect responses`), or Anthropic Messages (`--dialect messages`). Its models are read from the endpoint, or named with `--models 'qwen3-*,llama4'`.
-- **Imports.** `slopmax import` reads Claude Code's `~/.claude/.credentials.json` (or the macOS keychain), Codex's `~/.codex/auth.json`, and CLIProxyAPI's `~/.cli-proxy-api/*.json`. An imported login shares its refresh token with the tool it came from, and refresh tokens rotate on use, so whichever refreshes first signs the other out. Logins from CLIProxyAPI are therefore *linked*: slopmax follows the file CLIProxyAPI keeps refreshing and never refreshes them itself, so both can run while you switch over. `slopmax status` says which accounts it follows. Once CLIProxyAPI is stopped, `slopmax own all` hands refreshing to slopmax.
+- **Imports.** `slopmax import` reads Claude Code's `~/.claude/.credentials.json` (or the macOS keychain), Codex's `~/.codex/auth.json`, and CLIProxyAPI's `~/.cli-proxy-api/*.json` (its xAI sign-ins become SuperGrok accounts). An imported login shares its refresh token with the tool it came from, and refresh tokens rotate on use, so whichever refreshes first signs the other out. Logins from CLIProxyAPI are therefore *linked*: slopmax follows the file CLIProxyAPI keeps refreshing and never refreshes them itself, so both can run while you switch over. `slopmax status` says which accounts it follows. Once CLIProxyAPI is stopped, `slopmax own all` hands refreshing to slopmax.
 
 ## Usage and cost
 
@@ -185,7 +189,7 @@ total                 508    398.3k    229.7k      114.4M         2.9M    $39.98
 
 ### Left on the table
 
-A subscription's weekly quota that goes unused is lost at the reset, and with it that part of the fee. slopmax notes each window that resets with how much of it was used (in the usage ledger, `~/.slopmax/usage/`), and values the unused part of each week at the plan's price: Claude Pro $20, Max $100, Ultra $200, ChatGPT Plus $20, Pro $200 (ChatGPT reports every Pro tier as `pro`), and Team $30 a month, or what you pay, under `[plan_prices]`:
+A subscription's weekly quota that goes unused is lost at the reset, and with it that part of the fee. slopmax notes each window that resets with how much of it was used (in the usage ledger, `~/.slopmax/usage/`), and values the unused part of each week at the plan's price: Claude Pro $20, Max $100, Ultra $200, ChatGPT Plus $20, Pro $200 (ChatGPT reports every Pro tier as `pro`), and Team $30, SuperGrok Lite $10, SuperGrok $30, Plus $100, and Heavy $300 a month (a SuperGrok allowance is monthly, so its window is valued over the month), or what you pay, under `[plan_prices]`:
 
 ```
 Left on the table: $39.74, 20% unused on average, across 16 weekly windows
@@ -213,7 +217,7 @@ The same data is available as JSON under `/slopmax/api`, with the slopmax key as
 | `POST accounts/<id>/redeem`, `…/own` | redeem a limit reset; have slopmax refresh an imported login itself |
 | `POST accounts`, `POST imports`, `POST logins` | add an API key or a compatible endpoint, import logins, or sign in to a subscription |
 | `GET`, `POST keys`, `DELETE keys/<name>` | client keys for other machines, as `slopmax key` makes them (shown once) |
-| `GET agents`, `POST agents/<id>/connect` | how Claude Code and Codex are wired, and wiring them |
+| `GET agents`, `POST agents/<id>/connect` | how Claude Code, Codex, and Grok Build are wired, and wiring them |
 | `GET doctor`                     | the findings `slopmax doctor` prints                                     |
 
 ### Tools built for CLIProxyAPI
@@ -263,9 +267,9 @@ slopmax is built to make several accounts of one provider feel like one. It can 
 
 ### API keys and other endpoints
 
-A request's model picks who serves it: every provider with an account that serves the model, subscriptions first. Claude models go to Claude accounts, GPT models to ChatGPT accounts, `grok-*` to xAI keys, and a compatible endpoint's models to it.
+A request's model picks who serves it: every provider with an account that serves the model, subscriptions first. Claude models go to Claude accounts, GPT models to ChatGPT accounts, `grok-*` to SuperGrok accounts for Grok Build and to xAI keys for everything else, and a compatible endpoint's models to it.
 
-- **Paid overflow.** API keys that cover a subscription's models (an OpenAI key behind ChatGPT, an Anthropic key behind Claude) serve those models only when asked for by name, or when you have no such subscription. With `paid_overflow = true` they also take over once every subscription account is limited.
+- **Paid overflow.** API keys that cover a subscription's models (an OpenAI key behind ChatGPT, an Anthropic key behind Claude, an xAI key behind SuperGrok) serve those models only when asked for by name, or when you have no such subscription. With `paid_overflow = true` they also take over once every subscription account is limited.
 - **Selectors.** A model name can pick a provider or one account: `openai/gpt-6-sol`, `work/gpt-6-sol`.
 - **Aliases and fallbacks.** In the config, `[aliases]` renames models and `[fallbacks]` lists models to try once one is limited everywhere:
 
@@ -326,7 +330,7 @@ What crosses: text, images, documents, tool definitions and calls, tool results,
 | `slopmax service install\|uninstall\|status` | Run the proxy at login: a systemd user unit, a launchd agent, or on Windows `slopmaxw.exe` in the user's Run key |
 | `slopmax start\|stop`                | Run the proxy in the background (through the service, if installed), or stop it |
 | `slopmax serve`                      | Run the proxy in the foreground                                               |
-| `slopmax run <agent> [args…]`        | Launch Claude Code or Codex through the proxy                                 |
+| `slopmax run <agent> [args…]`        | Launch Claude Code, Codex, or Grok Build through the proxy                    |
 | `slopmax env <agent>`                | Print shell setup for `eval`                                                  |
 | `slopmax setup <agent> [--undo]`     | Point one agent's own config at the proxy, or restore it                      |
 | `slopmax config [name] [value]`      | Show the routing and redeem settings, or change one while the proxy runs      |
@@ -338,7 +342,7 @@ What crosses: text, images, documents, tool definitions and calls, tool results,
 | `slopmax doctor`                     | Check the setup and say how to fix problems                                   |
 | `slopmax completions <shell>`        | Print a completion script for bash, zsh, or fish                              |
 
-`<account>` is the number shown by `slopmax status`, or the account's id, email, or label. `<provider>` is `claude`, `codex`, `anthropic`, `openai`, `xai`, or `compat`.
+`<account>` is the number shown by `slopmax status`, or the account's id, email, or label. `<provider>` is `claude`, `codex`, `grok`, `anthropic`, `openai`, `xai`, or `compat`.
 
 ## Configuration
 
@@ -369,7 +373,7 @@ The proxy applies a changed config.toml within two seconds, without a restart; o
 
 ## How slopmax compares
 
-[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) and [opencodex](https://github.com/lidge-jun/opencodex) also pool accounts behind a local proxy, and both reach many more providers and clients. slopmax does one job: making several subscriptions of one provider feel like a single account to Claude Code and Codex. It spends quota before it resets, leaves Claude Code's requests as they were sent, and fits in one small binary.
+[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) and [opencodex](https://github.com/lidge-jun/opencodex) also pool accounts behind a local proxy, and both reach many more providers and clients. slopmax does one job: making several subscriptions of one provider feel like a single account to Claude Code, Codex, and Grok Build. It spends quota before it resets, leaves Claude Code's requests as they were sent, and fits in one small binary.
 
 |                        | slopmax                                                                          | CLIProxyAPI                                                                 | opencodex                                          |
 | ---------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------- |

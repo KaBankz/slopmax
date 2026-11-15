@@ -24,6 +24,8 @@ pub struct Home {
     claude: PathBuf,
     /// Codex's config directory.
     codex: PathBuf,
+    /// Grok Build's config directory.
+    grok: PathBuf,
 }
 
 impl Home {
@@ -35,25 +37,27 @@ impl Home {
             dir: dir.into(),
             claude: env_dir("CLAUDE_CONFIG_DIR").unwrap_or_else(|| user.join(".claude")),
             codex: env_dir("CODEX_HOME").unwrap_or_else(|| user.join(".codex")),
+            grok: env_dir("GROK_HOME").unwrap_or_else(|| user.join(".grok")),
             user,
         }
     }
 
     /// `$SLOPMAX_HOME`, else `~/.slopmax`; Claude Code's in
     /// `$CLAUDE_CONFIG_DIR`, else `~/.claude`; Codex's in `$CODEX_HOME`, else
-    /// `~/.codex`.
+    /// `~/.codex`; Grok Build's in `$GROK_HOME`, else `~/.grok`.
     pub fn current() -> Self {
         Self::at(slopmax_common::home())
     }
 
     /// Everything under `root`, as though it were the user's home: slopmax's
-    /// files in `.slopmax`, the agents' in `.claude` and `.codex`.
+    /// files in `.slopmax`, the agents' in `.claude`, `.codex` and `.grok`.
     pub fn sandbox(root: impl Into<PathBuf>) -> Self {
         let user = root.into();
         Self {
             dir: user.join(".slopmax"),
             claude: user.join(".claude"),
             codex: user.join(".codex"),
+            grok: user.join(".grok"),
             user,
         }
     }
@@ -81,6 +85,21 @@ impl Home {
     /// Codex's config directory.
     pub fn codex(&self) -> &Path {
         &self.codex
+    }
+
+    /// Grok Build's config directory.
+    pub fn grok(&self) -> &Path {
+        &self.grok
+    }
+
+    /// The token Grok Build keeps when slopmax runs it with `key`, in place
+    /// of its own sign-in. Grok Build holds a token until it expires, even
+    /// past a 401, so each key gets a file of its own: a new key is a new
+    /// sign-in.
+    pub fn grok_auth(&self, key: &str) -> PathBuf {
+        let digest = crate::ids::sha256(key.as_bytes());
+        let hex: String = digest[..4].iter().map(|b| format!("{b:02x}")).collect();
+        self.dir.join("grok").join(format!("auth-{hex}.json"))
     }
 
     /// CLIProxyAPI's credential files, which `slopmax import` reads.

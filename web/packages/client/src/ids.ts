@@ -7,18 +7,18 @@ import { formatInstant, parseInstant } from "./time.ts"
  * subscriptions first, then API keys, then compatible endpoints. The same
  * order sorts every list of providers.
  */
-export const ProviderId = Schema.Literals(["claude", "codex", "anthropic", "openai", "xai", "compat"]).annotate({
+export const ProviderId = Schema.Literals(["claude", "codex", "grok", "anthropic", "openai", "xai", "compat"]).annotate({
   identifier: "ProviderId",
   description: "A provider slopmax pools accounts of",
 })
 export type ProviderId = typeof ProviderId.Type
 
 /** The providers whose accounts are subscriptions people sign in to; the rest are paid per token. */
-export const SubscriptionId = Schema.Literals(["claude", "codex"])
+export const SubscriptionId = Schema.Literals(["claude", "codex", "grok"])
 export type SubscriptionId = typeof SubscriptionId.Type
 
 /** The coding agents slopmax serves and can wire up. */
-export const AgentId = Schema.Literals(["claude-code", "codex"]).annotate({
+export const AgentId = Schema.Literals(["claude-code", "codex", "grok-build"]).annotate({
   identifier: "AgentId",
   description: "A coding agent slopmax serves",
 })

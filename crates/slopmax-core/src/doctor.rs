@@ -95,13 +95,14 @@ pub async fn check(config: &Config, store: &Store, home: &Home) -> Result<Vec<Se
         accounts_section(&accounts, &failing),
         claude_code(config, home.claude()),
         codex(config, home.codex()),
+        grok_build(config, home.grok(), &accounts),
         cliproxyapi(&accounts, CLIPROXYAPI_PORT),
-        network(&http).await,
+        network(&http, &accounts).await,
         files(&home.accounts()),
     ];
     let mut sections = sections;
     unserved(&mut sections, config, &accounts, home, &|agent| {
-        let program = agent.command(config, &[]).get_program().to_owned();
+        let program = agent.command(config, home, &[]).get_program().to_owned();
         slopmax_common::which(&program.to_string_lossy()).is_some()
     });
     Ok(sections
@@ -448,6 +449,62 @@ fn codex(config: &Config, dir: &Path) -> Section {
     s
 }
 
+/// Grok Build, for those who use it: it is on PATH, or SuperGrok accounts
+/// are connected.
+fn grok_build(config: &Config, dir: &Path, accounts: &[Account]) -> Section {
+    let mut s = Section::new("Grok Build");
+    let installed = on_path("grok");
+    if !installed && !accounts.iter().any(|a| a.provider == ProviderId::Grok) {
+        return s;
+    }
+    if !installed {
+        s.add(Level::Note, "`grok` is not on PATH", None);
+    }
+    let doc: Option<toml_edit::DocumentMut> = std::fs::read_to_string(dir.join("config.toml"))
+        .ok()
+        .and_then(|text| text.parse().ok());
+    let setting = |table: &str, key: &str| {
+        doc.as_ref()
+            .and_then(|d| d.get(table)?.get(key)?.as_str().map(str::to_owned))
+    };
+    let base = setting("endpoints", "cli_chat_proxy_base_url");
+    let command = setting("grok_com_config", "auth_provider_command");
+    let expected = format!("{}/grok/v1", config.base_url());
+    let wired = base.as_deref() == Some(expected.as_str());
+    match base {
+        Some(base) if base == expected => {
+            if command.is_some_and(|c| c.contains(&config.api_key)) {
+                s.add(Level::Ok, "wired through config.toml", None);
+            } else {
+                s.add(
+                    Level::Warn,
+                    "config.toml points at slopmax with a different key",
+                    Some("slopmax setup grok"),
+                );
+            }
+        }
+        Some(base) => s.add(
+            Level::Warn,
+            format!("config.toml sends Grok Build to {base}"),
+            Some("slopmax setup grok"),
+        ),
+        None => s.add(
+            Level::Note,
+            "not wired in config.toml (`slopmax run grok` still works)",
+            Some("slopmax setup grok"),
+        ),
+    }
+    // Its own sign-in comes before the auth provider, for plain `grok`.
+    if wired && crate::agent::grok::signed_in(&dir.join("config.toml")) {
+        s.add(
+            Level::Warn,
+            "Grok Build is signed in to xAI itself, so it goes to xAI directly",
+            Some("grok logout"),
+        );
+    }
+    s
+}
+
 fn cliproxyapi(accounts: &[Account], port: u16) -> Section {
     let mut s = Section::new("CLIProxyAPI");
     let linked = accounts
@@ -478,13 +535,18 @@ fn cliproxyapi(accounts: &[Account], port: u16) -> Section {
     s
 }
 
-async fn network(http: &Client) -> Section {
+async fn network(http: &Client, accounts: &[Account]) -> Section {
     let mut s = Section::new("Network");
     let mut skew_checked = false;
-    for (name, url) in [
+    let mut services = vec![
         ("Anthropic", "https://api.anthropic.com/api/hello"),
         ("ChatGPT", "https://chatgpt.com/backend-api/wham/usage"),
-    ] {
+    ];
+    // xAI only for those who pool SuperGrok.
+    if accounts.iter().any(|a| a.provider == ProviderId::Grok) {
+        services.push(("xAI", "https://cli-chat-proxy.grok.com/v1/models"));
+    }
+    for (name, url) in services {
         match http.get(url).timeout(Duration::from_secs(10)).send().await {
             Ok(response) => {
                 s.add(Level::Ok, format!("{name} is reachable"), None);
@@ -1027,7 +1089,7 @@ mod tests {
     async fn reachable_services_with_a_sound_clock_are_fine() {
         let mock = Mock::start(|_| testkit::reply(401, "")).await;
         let http = mock.client(&["https://api.anthropic.com", "https://chatgpt.com"]);
-        let s = network(&http).await;
+        let s = network(&http, &[]).await;
         assert_eq!(
             texts(&s),
             [
@@ -1037,6 +1099,75 @@ mod tests {
         );
         let paths: Vec<String> = mock.seen().into_iter().map(|s| s.path).collect();
         assert_eq!(paths, ["/api/hello", "/backend-api/wham/usage"]);
+    }
+
+    #[tokio::test]
+    async fn xai_is_checked_for_supergrok_accounts() {
+        let mock = Mock::start(|_| testkit::reply(401, "")).await;
+        let http = mock.client(&[
+            "https://api.anthropic.com",
+            "https://chatgpt.com",
+            "https://cli-chat-proxy.grok.com",
+        ]);
+        let s = network(&http, &[account(ProviderId::Grok, "g@x.com")]).await;
+        assert_eq!(texts(&s).last(), Some(&(Level::Ok, "xAI is reachable")));
+        assert_eq!(mock.seen().last().unwrap().path, "/v1/models");
+    }
+
+    #[test]
+    fn grok_build_is_checked_for_those_who_use_it() {
+        let dir = testkit::temp_dir("doctor-grok");
+        let config = Config {
+            api_key: "sm-key".into(),
+            ..Config::default()
+        };
+        let grok = [account(ProviderId::Grok, "g@x.com")];
+        let with = |text: Option<&str>| {
+            match text {
+                Some(text) => std::fs::write(dir.join("config.toml"), text).unwrap(),
+                None => {
+                    let _ = std::fs::remove_file(dir.join("config.toml"));
+                }
+            }
+            let s = grok_build(&config, &dir, &grok);
+            let last = s.findings.last().unwrap();
+            (last.level, last.text.clone())
+        };
+        let mut saved = None;
+        let file = dir.join("config.toml");
+        crate::agent::Agent::setup(&crate::agent::GrokBuild, &config, &file, &mut saved).unwrap();
+        let wired = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(
+            with(Some(&wired)),
+            (Level::Ok, "wired through config.toml".into())
+        );
+        assert_eq!(with(Some(&wired.replace("sm-key", "old"))).0, Level::Warn);
+        // Its own sign-in would bypass slopmax; a key it was handed would not.
+        let auth = dir.join("auth.json");
+        std::fs::write(&auth, r#"{"a":{"auth_mode":"external"}}"#).unwrap();
+        assert_eq!(with(Some(&wired)).0, Level::Ok);
+        std::fs::write(&auth, r#"{"a":{"auth_mode":"oauth"}}"#).unwrap();
+        assert_eq!(
+            with(Some(&wired)),
+            (
+                Level::Warn,
+                "Grok Build is signed in to xAI itself, so it goes to xAI directly".into()
+            )
+        );
+        std::fs::remove_file(&auth).unwrap();
+        assert_eq!(
+            with(Some(
+                "[endpoints]\ncli_chat_proxy_base_url = \"https://p\"\n"
+            )),
+            (
+                Level::Warn,
+                "config.toml sends Grok Build to https://p".into()
+            )
+        );
+        let (level, text) = with(None);
+        assert_eq!(level, Level::Note);
+        assert!(text.starts_with("not wired in config.toml"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
@@ -1050,7 +1181,7 @@ mod tests {
         })
         .await;
         let http = mock.client(&["https://api.anthropic.com", "https://chatgpt.com"]);
-        let s = network(&http).await;
+        let s = network(&http, &[]).await;
         let skewed: Vec<&Finding> = s
             .findings
             .iter()
@@ -1068,7 +1199,7 @@ mod tests {
             ("https://chatgpt.com", closed.as_str()),
         ]);
         let http = Client::builder().plain_http().origins(origins).build();
-        let s = network(&http).await;
+        let s = network(&http, &[]).await;
         assert_eq!(s.findings.len(), 2);
         for (f, name) in s.findings.iter().zip(["Anthropic", "ChatGPT"]) {
             assert_eq!(f.level, Level::Fail);

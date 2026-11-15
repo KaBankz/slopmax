@@ -15,7 +15,7 @@ Code outside those modules talks to a provider, agent, or format only through it
 ## Ground rules
 
 - **Forward, don't rewrite.** A request in a format the account speaks goes out as the client sent it, except for the credential (and, for Claude, the OAuth beta flag subscription tokens require). Byte-level edits go through `proxy/rawjson.rs`, which changes a value in place instead of re-serializing the body.
-- **Claude serves Claude Code.** Anthropic allows subscription logins in Claude Code only. Providers declare `agent_only: Some("claude")`, routing refuses other clients, and nothing is ever translated *into* Anthropic's format. slopmax does not imitate Claude Code or alter what it says about itself, with one exception: Claude lists and spends limit resets for Claude Code alone, so those two calls carry the user agent Claude Code last sent through the proxy, and are not made before it has sent one (`provider/claude/credits.rs`).
+- **Claude serves Claude Code, SuperGrok serves Grok Build.** Anthropic allows subscription logins in Claude Code only, and a SuperGrok sign-in grants access for Grok Build. Providers declare `agent_only: Some("claude")` (or `Some("grok")`), routing refuses other clients, and nothing is ever translated *into* Anthropic's format. slopmax does not imitate Claude Code or alter what it says about itself, with one exception: Claude lists and spends limit resets for Claude Code alone, so those two calls carry the user agent Claude Code last sent through the proxy, and are not made before it has sent one (`provider/claude/credits.rs`).
 - **Identify honestly.** Translated requests carry `user-agent: slopmax/<version>`, not the client's, as do the calls slopmax makes itself, but for Claude's limit resets above.
 - **Fail over before the first byte.** Once a response streams to the client it is passed through; a failure after that reaches the client in its own format.
 
@@ -157,56 +157,31 @@ pub static MISTRAL: KeyProvider = KeyProvider {
 
 Then add `Mistral` to `ProviderId`, its `ALL` list, and `ProviderId::get`, and a choice to `PROVIDERS` in `slopmax/src/commands.rs`. Login, routing, translation from every client format, model lists, status, the ledger, and notifications all follow from the trait.
 
-### Adding a subscription: SuperGrok
+### A subscription: SuperGrok
 
-A subscription signs in with OAuth and has usage windows. It gets a directory like `provider/codex/`. For SuperGrok, as a sketch (the endpoints are placeholders until the provider is built against the real service):
+A subscription signs in with OAuth and has usage windows; it gets a directory like `provider/codex/`. SuperGrok's is the smallest, and the one to copy:
 
 ```
 slopmax-core/src/provider/grok/
-  mod.rs      the Spec and the Provider impl
-  oauth.rs    login (browser PKCE or device code) and refresh
-  limits.rs   usage windows from the usage endpoint and from response headers
+  mod.rs      the Spec, the Provider impl, usage from /billing, the plan from /settings, the catalog from /models
+  oauth.rs    xAI's device-code sign-in and refresh, with Grok Build's public client id
 ```
 
 ```rust
 static SPEC: Spec = Spec {
     id: "grok",
     title: "SuperGrok",
-    api: "https://…",                        // the API Grok Build talks to
-    dialects: &[Dialect::Responses],         // whichever format that API speaks
+    api: "https://cli-chat-proxy.grok.com/v1",  // the CLI chat proxy Grok Build talks to
+    dialects: &[Dialect::Responses, Dialect::Chat],
     models: &["grok-*"],
     billing: Billing::Subscription,
-    agent_only: None,                        // or Some("grok") if xAI limits it to its own agent
-    refresh_lead: SignedDuration::from_hours(1),
+    agent_only: Some("grok"),                   // the sign-in grants `grok-cli:access`
+    refresh_lead: SignedDuration::from_mins(30), // tokens live six hours
     credential: Credential::OAuth { device: true },
 };
-
-impl Provider for Grok {
-    fn spec(&self) -> &'static Spec { &SPEC }
-    fn identity(&self, account: &Account) -> Option<String> { account.account_id.clone() }
-    fn login<'a>(&'a self, http: &'a Client, options: LoginOptions, prompt: Prompt) -> BoxFuture<'a, Result<Account>> {
-        Box::pin(oauth::login(http, options, prompt))  // reuses auth::browser_login and the PKCE helpers
-    }
-    fn refresh<'a>(&'a self, http: &'a Client, token: &'a str) -> BoxFuture<'a, Result<Grant, RefreshError>> {
-        Box::pin(oauth::refresh(http, token))
-    }
-    fn usage<'a>(&'a self, http: &'a Client, account: &'a Account) -> BoxFuture<'a, Result<Reading, UsageError>> {
-        Box::pin(limits::poll(http, account))      // → limits::Window for each window
-    }
-    fn headers(&self, client: &HeaderMap, account: &Account, _moved: bool) -> HeaderMap {
-        keys::with_key(client, KeyHeader::Bearer, &account.tokens.access_token)
-    }
-    fn limits(&self, headers: &HeaderMap, now: Timestamp) -> Option<Limits> { limits::from_headers(headers, now) }
-    fn verdict(&self, status: StatusCode, headers: &HeaderMap, body: &[u8], model: Option<&str>, now: Timestamp) -> Verdict {
-        match status {
-            StatusCode::TOO_MANY_REQUESTS => limits::refusal(headers, body, now).into(),
-            _ => Verdict::of_status(status),
-        }
-    }
-}
 ```
 
-With `billing: Billing::Subscription` and `grok-*` models, routing puts SuperGrok accounts ahead of xAI API keys (which become paid overflow if their spec says `backs: Some(ProviderId::Grok)`), polling and status pick up its windows, and the strategies place sessions by its resets. That is all a subscription needs: about 150 lines, plus the registry line.
+Its `headers` put the account's token in place of the slopmax key and leave Grok Build's own headers as they came. `verdict` reads a spent allowance (429 or 402 naming a usage limit) apart from throttling, and maps the 403 xAI sends for an invalidated token to `Unauthorized`. `rebind` and the stale-state check reuse Codex's, since both speak Responses with encrypted reasoning. The plan's allowance is monthly, so `usage` reads `/billing` into one `30d` window that resets with the billing period. xAI API keys say `backs: Some(ProviderId::Grok)`: they become paid overflow for Grok Build's traffic, and still serve `grok-*` to every other client, which SuperGrok does not serve (`route::steps_for` gates overflow only on a subscription the client may use).
 
 ## Agents
 
@@ -217,8 +192,8 @@ pub trait Agent: Send + Sync {
     fn provider(&self) -> ProviderId;                // the subscription it uses natively
     fn detect(&self, headers: &HeaderMap) -> bool;   // from headers it always sends, such as its user agent
     fn session(&self, headers: &HeaderMap, body: &[u8]) -> Option<String>;
-    fn command(&self, config: &Config, args: &[String]) -> Command;      // `slopmax run`
-    fn env(&self, config: &Config, exe: &Path) -> String;               // `slopmax env`
+    fn command(&self, config: &Config, home: &Home, args: &[String]) -> Command; // `slopmax run`
+    fn env(&self, config: &Config, home: &Home, exe: &Path) -> String;          // `slopmax env`
     fn config_file(&self) -> PathBuf;
     fn setup(&self, config: &Config, file: &Path, saved: &mut Option<Value>) -> Result<()>;
     fn undo(&self, file: &Path, saved: Value) -> Result<()>;
@@ -228,32 +203,13 @@ pub trait Agent: Send + Sync {
 
 `agent::setup` and `agent::undo` own the file handling around `setup` and `undo`: following symlinks, private file modes, and the backup in `~/.slopmax/setup-backup.json`. An agent only edits the document.
 
-### Adding an agent: Grok Build
+### An agent: Grok Build
 
-```rust
-// slopmax-core/src/agent/grok.rs
-pub struct GrokBuild;
+`agent/grok.rs`. Grok Build names itself `grok-shell/<version>` (or `grok-pager/…`), and every model request of a session, its title included, carries `x-grok-conv-group-id`, the session key. It is wired with two settings Grok Build has for enterprise proxies: the CLI chat proxy's address (`GROK_CLI_CHAT_PROXY_BASE_URL`, or `[endpoints] cli_chat_proxy_base_url`) and an external auth provider, a command whose output is the token (`GROK_AUTH_PROVIDER_COMMAND`, or `[grok_com_config] auth_provider_command`). The command is `echo <slopmax key>`, which runs alike under sh, cmd and PowerShell, the shells Grok Build may use.
 
-impl Agent for GrokBuild {
-    fn id(&self) -> &'static str { "grok" }
-    fn title(&self) -> &'static str { "Grok Build" }
-    fn provider(&self) -> ProviderId { ProviderId::Grok }
-    fn detect(&self, headers: &HeaderMap) -> bool {
-        user_agent(headers).is_some_and(|ua| ua.starts_with("grok-build/"))
-    }
-    fn session(&self, headers: &HeaderMap, body: &[u8]) -> Option<String> {
-        header(headers, "x-session-id")        // whatever the agent sends per conversation
-    }
-    fn command(&self, config: &Config, args: &[String]) -> Command {
-        let mut command = Command::new("grok");
-        command.env("GROK_BASE_URL", config.base_url()).env("GROK_API_KEY", &config.api_key).args(args);
-        command
-    }
-    // env, config_file, setup and undo edit the agent's own config the same way
-}
-```
+Grok Build stores the token it gets and keeps a bare one for good, even after a 401. So `run` and `env` point `GROK_AUTH_PATH` at a file in slopmax's home named after the key (`Home::grok_auth`): a new key is a new file, and Grok Build's own sign-in in `~/.grok/auth.json` is never touched. `setup` has no such setting, so `setup` and `--undo` remove the tokens an auth provider handed it from `~/.grok/auth.json` (`auth_mode = "external"`), keeping its own sign-in, which `doctor` flags since it would come first. Grok Build reads `/v1/settings` and `/v1/models` from the CLI chat proxy, which xAI keys can't answer, so `served_by_keys` is false: a key alone doesn't make it servable.
 
-Add `&GrokBuild` to `AGENTS` and a choice to `AGENTS` in `slopmax/src/commands.rs`. `slopmax run grok`, `env grok`, `setup grok`, session affinity, and the `agent_only` policy then work for it.
+Add the agent to `AGENTS` and a choice to `AGENTS` in `slopmax/src/commands.rs`; `slopmax run grok`, `env grok`, `setup grok`, session affinity, and the `agent_only` policy then work for it.
 
 ## Formats
 

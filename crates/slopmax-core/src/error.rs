@@ -99,7 +99,7 @@ pub enum ConfigError {
 #[derive(Debug, thiserror::Error)]
 pub enum LoginError {
     /// Keys and endpoints are added, not signed in to.
-    #[error("only claude and codex accounts sign in")]
+    #[error("only claude, codex and grok accounts sign in")]
     NotSubscription,
     #[error("the sign-in was cancelled")]
     Cancelled,

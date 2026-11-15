@@ -459,7 +459,7 @@ async fn proxy(app: Arc<App>, request: Request) -> Response {
         return error(
             None,
             StatusCode::NOT_FOUND,
-            "unknown path; slopmax serves /v1/*, /claude/*, and /codex/*",
+            "unknown path; slopmax serves /v1/*, /claude/*, /codex/*, and /grok/*",
         );
     };
     let dialect = target.dialect;
@@ -551,6 +551,21 @@ fn route(path_and_query: &str, headers: &HeaderMap) -> Option<Target> {
     }
     if let Some(rest) = strip("/codex") {
         return Some(codex(rest.to_owned()));
+    }
+    // Grok Build's CLI chat proxy: model work over Responses (or Chat for
+    // models that ask for it), and the plan's settings, models and billing.
+    if let Some(rest) = strip("/grok") {
+        let chat = starts(rest, "/v1/chat/completions");
+        return Some(Target {
+            provider: Some(ProviderId::Grok),
+            by_model: chat || starts(rest, "/v1/responses"),
+            dialect: if chat {
+                Dialect::Chat
+            } else {
+                Dialect::Responses
+            },
+            path: rest.strip_prefix("/v1").unwrap_or(rest).to_owned(),
+        });
     }
     // Unprefixed /v1 paths, as an OpenAI- or Anthropic-style base URL sends.
     let rest = strip("/v1")?;
@@ -665,7 +680,7 @@ mod tests {
             Some((t.provider, t.path, t.dialect, t.by_model))
         };
         use Dialect::{Chat, Messages, Responses};
-        use ProviderId::{Claude, Codex};
+        use ProviderId::{Claude, Codex, Grok};
         assert_eq!(
             at("/claude/v1/messages?beta=true"),
             Some((
@@ -737,6 +752,28 @@ mod tests {
             Some((Some(Claude), "/v1/messagesx".into(), Messages, false))
         );
         assert_eq!(at("/codexx/responses"), None);
+        assert_eq!(
+            at("/grok/v1/responses"),
+            Some((Some(Grok), "/responses".into(), Responses, true))
+        );
+        assert_eq!(
+            at("/grok/v1/chat/completions"),
+            Some((Some(Grok), "/chat/completions".into(), Chat, true))
+        );
+        assert_eq!(
+            at("/grok/v1/user?include=coding_data_team"),
+            Some((
+                Some(Grok),
+                "/user?include=coding_data_team".into(),
+                Responses,
+                false
+            ))
+        );
+        assert_eq!(
+            at("/grok/v1/billing"),
+            Some((Some(Grok), "/billing".into(), Responses, false))
+        );
+        assert_eq!(at("/grokx/v1/responses"), None);
         assert_eq!(at("/other"), None);
     }
 

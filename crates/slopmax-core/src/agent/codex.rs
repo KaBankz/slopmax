@@ -124,7 +124,7 @@ impl Agent for Codex {
             .or_else(|| rawjson::find_str(body, &[Seg::Key("prompt_cache_key")]))
     }
 
-    fn command(&self, config: &Config, args: &[String]) -> Command {
+    fn command(&self, config: &Config, _home: &Home, args: &[String]) -> Command {
         let mut command = Command::new("codex");
         command
             .env(KEY_ENV, &config.api_key)
@@ -134,7 +134,7 @@ impl Agent for Codex {
 
     /// A shell function that goes through `slopmax run`, which places the
     /// overrides after any session subcommand (see [`argv`]).
-    fn env(&self, _config: &Config, exe: &Path) -> String {
+    fn env(&self, _config: &Config, _home: &Home, exe: &Path) -> String {
         let exe = shell_quote(&exe.to_string_lossy());
         format!("codex() {{ {exe} run codex \"$@\"; }}\n")
     }
@@ -326,7 +326,8 @@ mod tests {
 
     #[test]
     fn env_hands_off_to_run() {
-        let script = Codex.env(&config(), Path::new("/opt/my tools/slopmax"));
+        let home = Home::sandbox("/home/me");
+        let script = Codex.env(&config(), &home, Path::new("/opt/my tools/slopmax"));
         assert_eq!(
             script,
             "codex() { '/opt/my tools/slopmax' run codex \"$@\"; }\n"

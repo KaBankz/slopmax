@@ -340,7 +340,7 @@ fn responses_events() -> Vec<String> {
 }
 
 /// The production server, with two Claude and two ChatGPT accounts whose
-/// traffic goes to `upstream`.
+/// traffic goes to `upstream`, as does any SuperGrok account in `home`.
 async fn proxy(listen: SocketAddr, upstream: &str, home: &str) -> Result<()> {
     let home = Home::at(home);
     accounts(&home)?;
@@ -355,6 +355,7 @@ async fn proxy(listen: SocketAddr, upstream: &str, home: &str) -> Result<()> {
     let origins = Origins::new([
         ("https://api.anthropic.com", upstream),
         ("https://chatgpt.com/backend-api", upstream),
+        ("https://cli-chat-proxy.grok.com", upstream),
     ]);
     slopmax_daemon::serve(config, home, origins).await.map(drop)
 }

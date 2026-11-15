@@ -214,7 +214,9 @@ export class ImportResult extends Schema.Class<ImportResult>("ImportResult")({
 
 /** A subscription sign-in. `device` asks for a code to enter on any device instead of a browser redirect. */
 export class StartLogin extends Schema.Class<StartLogin>("StartLogin")({
-  provider: SubscriptionId.annotate({ message: `only ${SubscriptionId.literals.join(" and ")} accounts sign in` }),
+  provider: SubscriptionId.annotate({
+    message: `only ${SubscriptionId.literals.slice(0, -1).join(", ")} and ${SubscriptionId.literals.at(-1)} accounts sign in`,
+  }),
   device: Schema.Boolean.pipe(withDefault(false)),
   /** What to call the account; else its email. */
   label: Schema.optionalKey(Label),

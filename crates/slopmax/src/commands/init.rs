@@ -91,11 +91,11 @@ pub fn subscriptions(list: &str) -> Result<Vec<ProviderId>> {
     names(list)
         .map(|name| {
             let Ok(provider) = name.parse::<ProviderId>() else {
-                bail!("--login takes claude, codex, or both (comma-separated), got {name:?}");
+                bail!("--login takes claude, codex, grok, or none (comma-separated), got {name:?}");
             };
             if !provider.spec().is_subscription() {
                 bail!(
-                    "--login signs in to subscriptions (claude, codex); add {name} keys with --keys-from-env or `slopmax login {name}`"
+                    "--login signs in to subscriptions (claude, codex, grok); add {name} keys with --keys-from-env or `slopmax login {name}`"
                 );
             }
             Ok(provider)
@@ -150,12 +150,12 @@ pub async fn run(config: &Config, store: &Store, answers: Answers, plan: Plan) -
                 "no accounts are connected, so there is nothing to proxy. Add one of:\n  \
                  --import claude-code,codex   use the logins Claude Code and Codex have here\n  \
                  --import cliproxyapi         use CLIProxyAPI's logins\n  \
-                 --login claude,codex         sign in (a device code for ChatGPT without a browser)\n  \
+                 --login claude,codex,grok    sign in (ChatGPT by device code without a browser; SuperGrok always)\n  \
                  --keys-from-env              add ANTHROPIC_API_KEY, OPENAI_API_KEY, XAI_API_KEY"
             );
         }
         println!(
-            "\n  No accounts yet. Run `slopmax setup` again, or add one with `slopmax login claude`\n  or `slopmax login codex`."
+            "\n  No accounts yet. Run `slopmax setup` again, or add one with `slopmax login claude`,\n  `slopmax login codex`, or `slopmax login grok`."
         );
         return Ok(());
     }
@@ -176,6 +176,10 @@ pub async fn run(config: &Config, store: &Store, answers: Answers, plan: Plan) -
         // stops working; unless asked for by name, it is left as it is.
         if !agent::servable(agent, &connected) {
             let title = agent.provider().spec().title;
+            // Not installed and nothing to serve it: nothing to say.
+            if named.is_none() && agent::installed(agent, &config, super::home()).is_err() {
+                continue;
+            }
             if named.is_none() {
                 println!(
                     "  {} left as it is: no {title} account to serve it. `slopmax setup {}` wires it once there is one.",
@@ -197,7 +201,7 @@ pub async fn run(config: &Config, store: &Store, answers: Answers, plan: Plan) -
     background(&config, answers, &plan).await?;
 
     println!(
-        "\n{} {} behind {}.\n  Restart Claude Code, Codex, and the apps that run them. `slopmax` shows each\n  account's usage, `slopmax dashboard` opens the dashboard, and `slopmax doctor`\n  checks the setup.",
+        "\n{} {} behind {}.\n  Restart Claude Code, Codex, Grok Build, and the apps that run them. `slopmax` shows each\n  account's usage, `slopmax dashboard` opens the dashboard, and `slopmax doctor`\n  checks the setup.",
         ui::green("Done."),
         match connected.len() {
             1 => "1 account".to_owned(),
@@ -222,6 +226,7 @@ fn offer(provider: ProviderId) -> &'static str {
     match provider {
         ProviderId::Claude => "Claude Pro or Max, for Claude Code",
         ProviderId::Codex => "ChatGPT Plus, Pro, or Team, for Codex",
+        ProviderId::Grok => "SuperGrok, for Grok Build",
         ProviderId::Anthropic => "an Anthropic API key, billed per token",
         ProviderId::OpenAI => "an OpenAI API key, billed per token",
         ProviderId::Xai => "an xAI API key, for Grok models",
@@ -292,11 +297,18 @@ async fn accounts(
                 .iter()
                 .map(|p| (p.as_str(), offer(*p)))
                 .collect();
-            // Subscriptions without an account yet are the usual start.
+            // Subscriptions without an account yet are the usual start;
+            // one that serves a single agent, only once that is installed.
+            let usable = |provider: ProviderId| {
+                provider.spec().agent_only.is_none_or(|only| {
+                    agent::find(only)
+                        .is_some_and(|a| agent::installed(a, config, super::home()).is_ok())
+                })
+            };
             let defaults: Vec<usize> = ProviderId::ALL
                 .iter()
                 .enumerate()
-                .filter(|(_, p)| p.spec().is_subscription())
+                .filter(|(_, p)| p.spec().is_subscription() && usable(**p))
                 .filter(|(_, p)| !have.iter().any(|a| a.provider == **p))
                 .map(|(i, _)| i)
                 .collect();

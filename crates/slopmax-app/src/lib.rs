@@ -1103,6 +1103,7 @@ fn agent_title(id: AgentId) -> &'static str {
     match id {
         AgentId::ClaudeCode => "Claude Code",
         AgentId::Codex => "Codex",
+        AgentId::GrokBuild => "Grok Build",
     }
 }
 

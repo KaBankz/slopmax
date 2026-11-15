@@ -30,6 +30,8 @@ const KEY: &str = "sm-test-key";
 struct Seen {
     path: String,
     authorization: String,
+    /// What Grok Build says it is, which slopmax passes on.
+    token_auth: String,
     body: Bytes,
 }
 
@@ -80,9 +82,16 @@ async fn mock(log: Log, request: Request) -> Response {
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default()
         .to_owned();
+    let token_auth = parts
+        .headers
+        .get("x-xai-token-auth")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
     log.lock().unwrap().push(Seen {
         path: parts.uri.path().to_owned(),
         authorization: authorization.clone(),
+        token_auth,
         body: body.clone(),
     });
     let sse = "text/event-stream";
@@ -132,6 +141,16 @@ async fn mock(log: Log, request: Request) -> Response {
                 "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"try later\"}}}\n\n",
             ),
         ),
+        // xAI's CLI chat proxy: one SuperGrok account has spent its month.
+        (Method::POST, "/v1/responses", "Bearer grok-ok") => reply(200, sse, CODEX_STREAM),
+        (Method::POST, "/v1/responses", "Bearer grok-spent") => reply(
+            429,
+            json,
+            r#"{"code":"usage_limit_reached","error":"You have reached your usage limit"}"#,
+        ),
+        (Method::GET, "/v1/settings", "Bearer grok-ok" | "Bearer grok-spent") => {
+            reply(200, json, r#"{"subscription_tier_display":"SuperGrok"}"#)
+        }
         (Method::POST, "/local/v1/chat/completions", _) => reply(
             200,
             json,
@@ -236,6 +255,7 @@ async fn harness(build: impl FnOnce(&str) -> Vec<Account>, refresh_tokens: bool)
         ("https://api.anthropic.com", upstream.as_str()),
         ("https://platform.claude.com", upstream.as_str()),
         ("https://chatgpt.com", upstream.as_str()),
+        ("https://cli-chat-proxy.grok.com", upstream.as_str()),
     ]);
     let app = App::new(config, Home::at(&dir), PoolState::default(), origins);
     app.pool.sync(app.store.list().unwrap());
@@ -651,4 +671,102 @@ async fn a_sign_in_another_process_found_revoked_is_neither_refreshed_nor_tried(
         .collect();
     assert_eq!(tried, ["Bearer tok-ok"]);
     assert!(h.app.pool.account(&h.ids[0]).unwrap().auth_error.is_some());
+}
+
+const GROK_BODY: &str = r#"{"model":"grok-4.7","input":[{"type":"message","role":"user","content":"hi"}],"store":false,"stream":true,"prompt_cache_key":"sess-1"}"#;
+
+/// A request as Grok Build sends it through slopmax.
+async fn grok_build(
+    h: &Harness,
+    method: Method,
+    path: &str,
+    user_agent: &str,
+) -> (StatusCode, String) {
+    let client = Client::builder().build();
+    let url = format!("{}/grok/v1{path}", h.proxy);
+    let request = match method {
+        Method::GET => client.get(url),
+        _ => client.post(url).body(GROK_BODY),
+    };
+    let response = request
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("user-agent", user_agent)
+        .header("x-xai-token-auth", "xai-grok-cli")
+        .header("x-grok-conv-group-id", "group-1")
+        .header("content-type", "application/json")
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, response.text().await.unwrap())
+}
+
+const GROK_BUILD: &str = "grok-shell/1.0.77 (linux; x86_64)";
+
+#[tokio::test]
+async fn grok_build_moves_past_a_spent_supergrok_account() {
+    let h = harness(
+        |_| {
+            vec![
+                oauth(ProviderId::Grok, "spent", "grok-spent", "r1", 1000),
+                oauth(ProviderId::Grok, "ok", "grok-ok", "r2", 2000),
+            ]
+        },
+        false,
+    )
+    .await;
+    let (status, body) = grok_build(&h, Method::POST, "/responses", GROK_BUILD).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("response.completed"));
+    let tried: Vec<(String, String)> = h
+        .seen("/v1/responses")
+        .into_iter()
+        .map(|s| (s.authorization, s.token_auth))
+        .collect();
+    assert_eq!(
+        tried,
+        [
+            ("Bearer grok-spent".into(), "xai-grok-cli".into()),
+            ("Bearer grok-ok".into(), "xai-grok-cli".into()),
+        ]
+    );
+
+    // The session stays on the account that served it, and the spent one
+    // sits out.
+    let (status, _) = grok_build(&h, Method::POST, "/responses", GROK_BUILD).await;
+    assert_eq!(status, StatusCode::OK);
+    let last = h.seen("/v1/responses").pop().unwrap();
+    assert_eq!(last.authorization, "Bearer grok-ok");
+    assert_eq!(h.seen("/v1/responses").len(), 3);
+
+    // Grok Build's housekeeping reaches the proxy with an account's token.
+    let (status, body) = grok_build(&h, Method::GET, "/settings", GROK_BUILD).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.contains("SuperGrok"));
+}
+
+#[tokio::test]
+async fn supergrok_accounts_serve_grok_build_alone() {
+    let h = harness(
+        |_| vec![oauth(ProviderId::Grok, "ok", "grok-ok", "r", 1000)],
+        false,
+    )
+    .await;
+    for path in ["/responses", "/settings"] {
+        let method = if path == "/settings" {
+            Method::GET
+        } else {
+            Method::POST
+        };
+        let (status, body) = grok_build(&h, method, path, "codex_exec/0.169.0").await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{path}: {body}");
+        assert!(
+            body.contains("SuperGrok accounts to Grok Build only"),
+            "{body}"
+        );
+    }
+    // Asked for by model on a plain /v1 path, as another client would.
+    let (status, body) = post(&h, "/v1/responses", GROK_BODY).await;
+    assert!(status.is_client_error(), "{status}: {body}");
+    assert!(h.seen("/v1/responses").is_empty());
 }

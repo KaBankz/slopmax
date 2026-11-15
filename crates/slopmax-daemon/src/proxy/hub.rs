@@ -114,8 +114,8 @@ fn auth_files(app: &App) -> Response {
                 "id": account.id,
                 "auth_index": account.id,
                 "name": format!("{}.json", account.id),
-                "type": account.provider.as_str(),
-                "provider": account.provider.as_str(),
+                "type": kind(account.provider),
+                "provider": kind(account.provider),
                 "label": account.name(),
                 "status": status,
                 "disabled": account.disabled,
@@ -392,11 +392,26 @@ fn reset_quota(app: Arc<App>, index: &str) -> Response {
     )
 }
 
+/// The kind CLIProxyAPI gives an account's login file: SuperGrok sign-ins
+/// are its `xai` logins.
+fn kind(provider: ProviderId) -> &'static str {
+    match provider {
+        ProviderId::Grok => "xai",
+        other => other.as_str(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::account::Tokens;
     use crate::time::SignedDuration;
+
+    #[test]
+    fn supergrok_logins_list_as_cliproxyapis_xai_kind() {
+        assert_eq!(kind(ProviderId::Grok), "xai");
+        assert_eq!(kind(ProviderId::Codex), "codex");
+    }
 
     #[test]
     fn readings_take_the_providers_shapes() {

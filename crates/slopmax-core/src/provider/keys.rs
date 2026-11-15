@@ -89,7 +89,11 @@ static XAI_SPEC: Spec = Spec {
     api: "https://api.x.ai/v1",
     dialects: &[Dialect::Chat],
     models: &["grok-*"],
-    billing: Billing::Metered { backs: None },
+    // Grok Build's own traffic stays on SuperGrok; other clients, which
+    // SuperGrok does not serve, reach the key as before.
+    billing: Billing::Metered {
+        backs: Some(ProviderId::Grok),
+    },
     agent_only: None,
     refresh_lead: SignedDuration::ZERO,
     credential: Credential::Key { optional: false },
