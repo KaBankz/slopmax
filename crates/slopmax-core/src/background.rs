@@ -146,7 +146,7 @@ pub async fn launch(config: &Config, home: &Home, exe: &Path) -> Result<()> {
     let logged = std::fs::metadata(home.log()).map_or(0, |m| m.len());
     let child = match Manager::detect().filter(|m| m.status(home).installed) {
         Some(manager) => {
-            manager.start(exe, home)?;
+            manager.start(exe, home, config.listen)?;
             None
         }
         None => Some(spawn(exe, home)?),
@@ -178,7 +178,7 @@ pub async fn install_service(
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
     let logged = std::fs::metadata(home.log()).map_or(0, |m| m.len());
-    let file = manager.install(exe, home)?;
+    let file = manager.install(exe, home, config.listen)?;
     wait_until_running(config, home, None, logged).await?;
     Ok(file)
 }

@@ -217,4 +217,9 @@ pub struct Shutdown {
     /// field refuses it as unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exe: Option<String>,
+    /// Make way for a slopmax that already listens on this proxy's socket
+    /// and waits for its home, as launchd's does after a handoff: save the
+    /// state, let go of the home, and finish the requests under way.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub make_way: bool,
 }

@@ -63,6 +63,10 @@ echo "$bytes bytes (budget 9437184)"
 [ "$bytes" -le 9437184 ]
 '''
 
+[tasks.launchd]
+description = "On a macOS CI runner: the login agent under launchd, through a crash, a handoff, stop and start"
+run = ["cargo build -p slopmax --locked", "scripts/launchd-check.sh"]
+
 [tasks.bench]
 description = "Measure the latency, throughput, memory, and startup slopmax adds"
 tools = { oha = "1.16", jq = "1.8", hyperfine = "1.20" }

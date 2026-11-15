@@ -40,6 +40,17 @@ pub(super) async fn run(config: &Config, store: &Store, args: StatusArgs) -> Res
         for line in update_notes(running.as_deref()) {
             println!("{}", ui::dim(line));
         }
+        if slopmax_core::service::Manager::detect().is_some_and(|m| {
+            m.status(super::home()).installed && m.outdated(super::home(), config.listen)
+        }) {
+            println!(
+                "{}",
+                ui::dim(
+                    "The login service was written by another slopmax version or for another \
+                     listen address; `slopmax service install` writes it anew."
+                )
+            );
+        }
     }
     Ok(())
 }

@@ -157,6 +157,19 @@ async fn move_proxy(config: &Config, home: &Home, exe: &Path) -> Result<()> {
         );
         return Ok(());
     };
+    // A plist from before launchd kept the proxy's socket: loading the new
+    // one restarts the proxy, once.
+    if let Some(manager) = Manager::detect().filter(|m| {
+        *m == Manager::Launchd && m.status(home).installed && m.outdated(home, config.listen)
+    }) {
+        println!(
+            "The login service predates launchd keeping the proxy's socket; writing it anew \
+             restarts the proxy this once, and agents retry what it cuts off."
+        );
+        background::install_service(config, home, manager, exe).await?;
+        println!("The proxy now runs slopmax {version}.");
+        return Ok(());
+    }
     if Version::parse(&running) == Some(version) {
         point_service()?;
         println!("slopmax {version} is installed, and the proxy runs it.");

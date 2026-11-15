@@ -228,7 +228,10 @@ impl Client {
         self.call(
             Method::POST,
             "shutdown",
-            Some(&Shutdown { restart, exe: None }),
+            Some(&Shutdown {
+                restart,
+                ..Default::default()
+            }),
         )
         .await
     }
@@ -240,8 +243,8 @@ impl Client {
             Method::POST,
             "shutdown",
             Some(&Shutdown {
-                restart: false,
                 exe: Some(exe.to_owned()),
+                ..Default::default()
             }),
         )
         .await

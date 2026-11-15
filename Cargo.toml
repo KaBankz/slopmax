@@ -61,12 +61,13 @@ tokio-util = { version = "0.7.19", default-features = false, features = ["rt"] }
 tower-service = "0.3.3"
 
 [workspace.lints.rust]
-# Unsafe code lives in five places, each allowed where it is written: the
+# Unsafe code lives in six places, each allowed where it is written: the
 # local time offset (slopmax-common), turning off terminal echo for secrets
 # (the CLI), keeping the CLI's standard handles out of the background proxy on
 # Windows (the CLI), making refused local connections fail at once on Windows
-# (slopmax-net), and passing the listening socket to a new binary on an
-# update (slopmax-daemon's handoff).
+# (slopmax-net), passing the listening socket to a new binary on an update
+# (slopmax-daemon's handoff), and taking the socket systemd or launchd keeps
+# and giving it to systemd to keep (slopmax-daemon's supervisor).
 unsafe_code = "deny"
 
 # A desktop UI lays out and draws every frame on the CPU: unoptimized, a GPUI

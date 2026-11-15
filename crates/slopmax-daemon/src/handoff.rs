@@ -8,10 +8,15 @@
 //! then on: the socket never closes, so agents never see the move.
 //!
 //! What supervises the proxy has to keep seeing it run. systemd is told
-//! the new process is the service's main one (`MAINPID=`). Anything else
-//! (launchd, `slopmaxw.exe`, a terminal) watches the process it started, so
-//! that one stays: once drained it waits for the new process, passes on
-//! the signals it gets, and exits as the new one does.
+//! the new process is the service's main one (`MAINPID=`). launchd can't
+//! be told, but it keeps the socket ([`crate::supervisor`]): once drained,
+//! the process it started exits for it to start the service's binary
+//! again, and that one, taking launchd's socket, has the process the proxy
+//! was handed to make way ([`make_way`]): save the state, let go of the
+//! home, and drain in turn. Anything else (`slopmaxw.exe`, a terminal)
+//! watches the process it started, so that one stays: once drained it
+//! waits for the new process, passes on the signals it gets, and exits as
+//! the new one does.
 //!
 //! Windows has no way to hand a socket to a child that slopmax uses, so a
 //! move there is a restart: `slopmaxw.exe` starts the binary again at once.
@@ -32,6 +37,9 @@ use crate::update::{self, Version};
 /// `<its pid>:<listener fd>:<lock fd>:<ready fd>`.
 #[cfg(unix)]
 const ENV: &str = "SLOPMAX_HANDOFF";
+/// Set for the new daemon when the socket handed over is launchd's.
+#[cfg(unix)]
+const LAUNCHD_ENV: &str = "SLOPMAX_HANDOFF_LAUNCHD";
 /// How long the new binary has to start and say it is ready.
 #[cfg(unix)]
 const READY_WAIT: Duration = Duration::from_secs(30);
@@ -44,6 +52,8 @@ pub struct Inherited {
     pub listener: std::net::TcpListener,
     pub lock: std::fs::File,
     ready: std::fs::File,
+    /// The socket is launchd's ([`crate::supervisor::keep_nonblocking`]).
+    pub launchd: bool,
 }
 
 impl Inherited {
@@ -85,6 +95,7 @@ impl Inherited {
             listener,
             lock,
             ready,
+            launchd: std::env::var_os(LAUNCHD_ENV).is_some_and(|v| v == "1"),
         })
     }
 
@@ -95,6 +106,11 @@ impl Inherited {
 
     /// Tells the old daemon this one serves: it stops taking connections.
     pub fn ready(self) -> (std::net::TcpListener, std::fs::File, Ready) {
+        if self.launchd
+            && let Ok(copy) = self.listener.try_clone()
+        {
+            crate::supervisor::keep_nonblocking(copy);
+        }
         (self.listener, self.lock, Ready(self.ready))
     }
 }
@@ -108,38 +124,6 @@ impl Ready {
             log::warn!("telling the old proxy this one is ready: {e}");
         }
     }
-}
-
-/// Tells systemd `state` (`READY=1`, `MAINPID=…`) when it supervises this
-/// process with `Type=notify`. Whether it was told.
-#[cfg(unix)]
-pub fn notify(state: &str) -> bool {
-    use std::os::unix::net::UnixDatagram;
-    let Some(path) = std::env::var_os("NOTIFY_SOCKET") else {
-        return false;
-    };
-    let Ok(socket) = UnixDatagram::unbound() else {
-        return false;
-    };
-    let bytes = std::os::unix::ffi::OsStrExt::as_bytes(path.as_os_str());
-    let sent = match bytes.strip_prefix(b"@") {
-        #[cfg(target_os = "linux")]
-        Some(name) => {
-            use std::os::linux::net::SocketAddrExt;
-            std::os::unix::net::SocketAddr::from_abstract_name(name)
-                .and_then(|addr| socket.send_to_addr(state.as_bytes(), &addr))
-        }
-        #[cfg(not(target_os = "linux"))]
-        Some(_) => return false,
-        None => socket.send_to(state.as_bytes(), &path),
-    };
-    sent.inspect_err(|e| log::warn!("telling systemd {state}: {e}"))
-        .is_ok()
-}
-
-#[cfg(not(unix))]
-pub fn notify(_state: &str) -> bool {
-    false
 }
 
 /// The descriptors a handoff passes on: the listener and the lock, while
@@ -212,12 +196,13 @@ async fn attempt(app: &Arc<App>, exe: &Path, newer: bool) -> Result<()> {
     crate::auth::settle(Duration::from_secs(5)).await;
     let saver = Arc::clone(app);
     crate::blocking::run(move || crate::save_state_now(&saver)).await;
-    let pid = start(exe, handles).await?;
+    let detach = app.launchd_socket.load(Ordering::SeqCst);
+    let pid = start(exe, handles, detach).await?;
     log::info!(
         "slopmax {version} (pid {pid}) serves from {}; finishing what this one started",
         exe.display()
     );
-    let adopted = notify(&format!("MAINPID={pid}"));
+    let adopted = crate::supervisor::notify(&format!("MAINPID={pid}"));
     *app.successor.lock().unwrap_or_else(|p| p.into_inner()) = Some((pid, adopted));
     // While this one drains, a stop it is sent goes to the new process,
     // and once that ends nothing here is worth keeping.
@@ -238,15 +223,38 @@ async fn attempt(app: &Arc<App>, exe: &Path, newer: bool) -> Result<()> {
     {
         log::warn!("pointing the service at {}: {e}", exe.display());
     }
+    app.handed_over.store(true, Ordering::SeqCst);
+    app.stop.cancel();
+    Ok(())
+}
+
+/// Makes way for a process that already listens on this proxy's socket
+/// and waits for its home: launchd's, started once the process that handed
+/// the proxy to this one exited. This one saves the state and lets go of
+/// the home, then stops taking connections and finishes the ones it has;
+/// connections that come meanwhile wait in the socket's queue.
+pub async fn make_way(app: &Arc<App>) -> Result<()> {
+    if app.handing_off.swap(true, Ordering::SeqCst) {
+        bail!("the proxy is already moving to another process");
+    }
+    app.frozen.store(true, Ordering::SeqCst);
+    crate::auth::settle(Duration::from_secs(5)).await;
+    let saver = Arc::clone(app);
+    crate::blocking::run(move || crate::save_state_now(&saver)).await;
+    app.handed_over.store(true, Ordering::SeqCst);
+    drop(app.serving.lock().unwrap_or_else(|p| p.into_inner()).take());
+    log::info!("another slopmax takes over this proxy's socket; finishing what this one started");
     app.stop.cancel();
     Ok(())
 }
 
 /// Starts `exe serve` with this daemon's socket and lock, and waits until
-/// it says it is ready. Its pid.
+/// it says it is ready. Its pid. `detach`: the socket is launchd's, so the
+/// new daemon runs in a session of its own, to outlive this process
+/// (launchd ends a job's process group with it), and is told so.
 #[cfg(unix)]
 #[allow(unsafe_code)]
-async fn start(exe: &Path, handles: Handles) -> Result<u32> {
+async fn start(exe: &Path, handles: Handles, detach: bool) -> Result<u32> {
     use std::io::Read;
     use std::os::fd::FromRawFd;
     use std::os::unix::process::CommandExt;
@@ -282,11 +290,19 @@ async fn start(exe: &Path, handles: Handles) -> Result<u32> {
                 write_fd
             ),
         )
+        // systemd's sockets were this process's to take.
+        .env_remove(LAUNCHD_ENV)
+        .env_remove("LISTEN_PID")
+        .env_remove("LISTEN_FDS")
+        .env_remove("LISTEN_FDNAMES")
         .stdin(std::process::Stdio::null());
     // SAFETY: the closure runs in the forked child before exec and only
-    // calls fcntl, which is async-signal-safe.
+    // calls fcntl and setsid, which are async-signal-safe.
     unsafe {
         command.pre_exec(move || {
+            if detach && libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
             for fd in passed {
                 if libc::fcntl(fd, libc::F_SETFD, 0) == -1 {
                     return Err(std::io::Error::last_os_error());
@@ -294,6 +310,9 @@ async fn start(exe: &Path, handles: Handles) -> Result<u32> {
             }
             Ok(())
         });
+    }
+    if detach {
+        command.env(LAUNCHD_ENV, "1");
     }
     let mut child = command
         .spawn()
@@ -323,7 +342,7 @@ async fn start(exe: &Path, handles: Handles) -> Result<u32> {
 }
 
 #[cfg(not(unix))]
-async fn start(_exe: &Path, _handles: Handles) -> Result<u32> {
+async fn start(_exe: &Path, _handles: Handles, _detach: bool) -> Result<u32> {
     bail!("handing the socket to another process isn't supported on this system")
 }
 

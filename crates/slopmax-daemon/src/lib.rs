@@ -7,6 +7,7 @@
 
 pub mod handoff;
 pub mod proxy;
+pub mod supervisor;
 
 // The engine's modules, under the names the daemon's code uses.
 pub(crate) use slopmax_core::{
@@ -87,20 +88,23 @@ pub enum Stopped {
     /// handed over: the service manager restarts it on exit code 75.
     Restart,
     /// Handed the proxy to the process `pid` ([`handoff`]). `adopted`:
-    /// systemd took that one as the service's main process. `exited`: its
-    /// exit code, if it already stopped.
+    /// systemd took that one as the service's main process. `relaunch`:
+    /// launchd keeps the socket, and the process it starts next takes over
+    /// from that one. `exited`: its exit code, if it already stopped.
     HandedOff {
         pid: u32,
         adopted: bool,
+        relaunch: bool,
         exited: Option<i32>,
     },
 }
 
 impl Stopped {
     /// The process's exit code: 75 (`EX_TEMPFAIL`) asks for a restart.
-    /// After a handoff that systemd did not adopt, this process stands in
-    /// for the new one with whatever supervises it: it waits for it and
-    /// exits as it does.
+    /// After a handoff under launchd, that starts the service's binary,
+    /// which takes over from the new process. After one nothing knows of
+    /// (`slopmaxw.exe`, a terminal), this process stands in for the new one
+    /// with whatever started it: it waits for it and exits as it does.
     pub async fn finish(self) -> i32 {
         match self {
             Self::Done | Self::HandedOff { adopted: true, .. } => 0,
@@ -108,6 +112,7 @@ impl Stopped {
             Self::HandedOff {
                 exited: Some(code), ..
             } => code,
+            Self::HandedOff { relaunch: true, .. } => 75,
             Self::HandedOff { pid, .. } => handoff::wait_for(pid).await,
         }
     }
@@ -125,25 +130,61 @@ const SETTLE: Duration = Duration::from_secs(5);
 /// finishes, refreshes in flight save their tokens, and state is saved
 /// last, by the only writer left.
 pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<Stopped> {
+    let mut launchd = false;
+    let mut launchd_socket = false;
     let (serving, listener, ready) = match handoff::Inherited::take() {
         Some(inherited) => {
+            launchd_socket = inherited.launchd;
             let (listener, lock, ready) = inherited.ready();
             write_pid(&home)?;
             listener.set_nonblocking(true)?;
-            (lock, TcpListener::from_std(listener)?, Some(ready))
+            (lock, listener, Some(ready))
         }
-        None => (serve_lock(&home)?, bind(config.listen).await?, None),
+        None => match supervisor::take() {
+            // systemd's store holds the socket of a listen address since
+            // changed: a fresh one, stored in its place.
+            Some(kept)
+                if kept.by == supervisor::Keeper::Systemd
+                    && kept.listener.local_addr().ok() != Some(config.listen) =>
+            {
+                drop(kept);
+                supervisor::forget();
+                (serve_lock(&home)?, bind(config.listen)?, None)
+            }
+            Some(kept) => {
+                launchd = kept.by == supervisor::Keeper::Launchd;
+                launchd_socket = launchd;
+                let addr = kept.listener.local_addr()?;
+                let lock = take_over(&home, &config, addr).await?;
+                kept.listener.set_nonblocking(true)?;
+                (lock, kept.listener, None)
+            }
+            None => (serve_lock(&home)?, bind(config.listen)?, None),
+        },
     };
     if listener.local_addr().ok() != Some(config.listen) {
+        let next = if launchd {
+            "once `slopmax service install` writes it into the login service"
+        } else {
+            "at the next restart"
+        };
         log::warn!(
-            "serving the socket handed over, on {}; listen = {} applies at the next restart",
+            "serving the socket kept for this proxy, on {}; listen = {} applies {next}",
             listener.local_addr().map_or("?".into(), |a| a.to_string()),
             config.listen
         );
     }
+    // systemd keeps the socket from now on (a copy, sent once the unit
+    // allows it), and passes it to the process it starts next.
+    let kept = listener.try_clone().ok();
+    let listener = TcpListener::from_std(listener)?;
     let state = read_state(&home);
     let app = App::new(config, home, state, origins);
     app.sync()?;
+    app.launchd
+        .store(launchd, std::sync::atomic::Ordering::SeqCst);
+    app.launchd_socket
+        .store(launchd_socket, std::sync::atomic::Ordering::SeqCst);
     #[cfg(unix)]
     {
         use std::os::fd::AsRawFd;
@@ -154,6 +195,7 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<Stopp
     }
     #[cfg(not(unix))]
     let _ = app.handles.set(handoff::Handles {});
+    *app.serving.lock().unwrap_or_else(|p| p.into_inner()) = Some(serving);
 
     // Logins, removals and `slopmax use` from the CLI and the apps are told
     // to the daemon at once (`/slopmax/api/sync`); the rescan catches the rest.
@@ -241,7 +283,10 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<Stopp
     if let Some(ready) = ready {
         ready.tell();
     }
-    handoff::notify("READY=1");
+    supervisor::notify("READY=1");
+    if let Some(kept) = kept {
+        app.spawn(keep_socket(app.clone(), kept));
+    }
     // After a handoff, draining ends early if the new process stops, or
     // this one is told to: what it still holds is cut.
     tokio::select! {
@@ -249,13 +294,10 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<Stopp
         () = app.cut.cancelled() => log::info!("ending what this proxy still had"),
     }
     let successor = *app.successor.lock().unwrap_or_else(|p| p.into_inner());
+    let handed_over = app.handed_over.load(std::sync::atomic::Ordering::SeqCst);
     // What the daemon started finishes too: after a handoff, Codex's
     // sockets end their turns, which takes as long as the streams.
-    let settle = if successor.is_some() {
-        handoff::DRAIN
-    } else {
-        SETTLE
-    };
+    let settle = if handed_over { handoff::DRAIN } else { SETTLE };
     app.tasks.close();
     let settled = tokio::select! {
         done = tokio::time::timeout(settle, app.tasks.wait()) => done.is_ok(),
@@ -267,8 +309,8 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<Stopp
     auth::settle(SETTLE).await;
     save_state(&app);
     app.ledger.sync();
-    drop(serving);
-    if successor.is_some() {
+    drop(app.serving.lock().unwrap_or_else(|p| p.into_inner()).take());
+    if handed_over {
         log::info!("finished what this proxy started; the new one serves");
     } else {
         log::info!("stopped");
@@ -277,6 +319,7 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<Stopp
         Some((pid, adopted)) => Stopped::HandedOff {
             pid,
             adopted,
+            relaunch: app.launchd.load(std::sync::atomic::Ordering::SeqCst),
             exited: *app.successor_exit.lock().unwrap_or_else(|p| p.into_inner()),
         },
         None if app.restart.load(std::sync::atomic::Ordering::Relaxed) => Stopped::Restart,
@@ -336,8 +379,8 @@ async fn look_for_releases(app: &Arc<App>) {
 }
 
 /// Listens on `listen`, saying what holds the port when it is taken.
-async fn bind(listen: std::net::SocketAddr) -> Result<TcpListener> {
-    Ok(TcpListener::bind(listen).await.map_err(|source| {
+fn bind(listen: std::net::SocketAddr) -> Result<std::net::TcpListener> {
+    let listener = std::net::TcpListener::bind(listen).map_err(|source| {
         // Windows refuses a port another process holds as access denied;
         // elsewhere that means a port below 1024, whoever holds it.
         let taken = source.kind() == std::io::ErrorKind::AddrInUse
@@ -352,7 +395,9 @@ async fn bind(listen: std::net::SocketAddr) -> Result<TcpListener> {
                 cause: source,
             },
         }
-    })?)
+    })?;
+    listener.set_nonblocking(true)?;
+    Ok(listener)
 }
 
 /// How often the account files are checked for changes the daemon was not
@@ -367,8 +412,28 @@ const RESCAN: Duration = Duration::from_secs(30);
 /// The holder's pid goes in a file beside it, `.serve.pid`, for the error
 /// a second daemon gives: Windows locks a file against reading too.
 fn serve_lock(home: &Home) -> Result<std::fs::File> {
+    match lock_within(home, Duration::from_secs(1))? {
+        Some(file) => Ok(file),
+        None => held(home),
+    }
+}
+
+/// The error for a home another daemon serves.
+fn held<T>(home: &Home) -> Result<T> {
+    let pid = std::fs::read_to_string(home.dir().join(".serve.pid")).unwrap_or_default();
+    let holder = match pid.trim() {
+        "" => String::new(),
+        pid => format!(" (pid {pid})"),
+    };
+    bail!(
+        "another slopmax{holder} is already serving {}",
+        home.dir().display()
+    )
+}
+
+/// The serve lock, once it is free within `wait`; `None` if it isn't.
+fn lock_within(home: &Home, wait: Duration) -> Result<Option<std::fs::File>> {
     let path = home.dir().join(".serve.lock");
-    let pid = home.dir().join(".serve.pid");
     fsx::private_dir(home.dir())?;
     let file = std::fs::OpenOptions::new()
         .read(true)
@@ -377,11 +442,10 @@ fn serve_lock(home: &Home) -> Result<std::fs::File> {
         .truncate(false)
         .open(&path)
         .with_context(|| format!("opening {}", path.display()))?;
-    let mut tries = 0;
+    let deadline = std::time::Instant::now() + wait;
     let taken = loop {
         match file.try_lock() {
-            Err(std::fs::TryLockError::WouldBlock) if tries < 20 => {
-                tries += 1;
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(50));
             }
             taken => break taken,
@@ -390,23 +454,91 @@ fn serve_lock(home: &Home) -> Result<std::fs::File> {
     match taken {
         Ok(()) => {
             write_pid(home)?;
-            Ok(file)
+            Ok(Some(file))
         }
-        Err(std::fs::TryLockError::WouldBlock) => {
-            let pid = std::fs::read_to_string(&pid).unwrap_or_default();
-            let holder = match pid.trim() {
-                "" => String::new(),
-                pid => format!(" (pid {pid})"),
-            };
-            bail!(
-                "another slopmax{holder} is already serving {}",
-                home.dir().display()
-            )
-        }
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
         Err(std::fs::TryLockError::Error(e)) => {
             Err(e).with_context(|| format!("locking {}", path.display()))
         }
     }
+}
+
+/// The serve lock for a process the service manager gave the socket to.
+/// One that still serves the home (under launchd, the process the proxy
+/// was handed to before this one started) is asked through the socket to
+/// make way ([`handoff::make_way`]): it lets go of the home once its state
+/// is saved, and finishes its requests while this one takes the new ones.
+async fn take_over(
+    home: &Home,
+    config: &Config,
+    addr: std::net::SocketAddr,
+) -> Result<std::fs::File> {
+    let lookup = home.clone();
+    if let Some(file) = blocking::run(move || lock_within(&lookup, Duration::from_secs(1))).await? {
+        return Ok(file);
+    }
+    log::info!("another slopmax still serves this home; asking it to make way");
+    let key = config.api_key.clone();
+    if let Err(e) = blocking::run(move || ask_to_make_way(addr, &key)).await {
+        log::warn!("asking the other slopmax to make way: {e:#}");
+    }
+    let lookup = home.clone();
+    match blocking::run(move || lock_within(&lookup, MAKE_WAY)).await? {
+        Some(file) => Ok(file),
+        None => held(home),
+    }
+}
+
+/// How long a daemon making way has to save the state and let go.
+const MAKE_WAY: Duration = Duration::from_secs(30);
+
+/// Asks the daemon taking connections on `addr` to make way for this one.
+fn ask_to_make_way(addr: std::net::SocketAddr, key: &str) -> Result<()> {
+    use std::io::{BufRead, Write};
+    let mut addr = addr;
+    if addr.ip().is_unspecified() {
+        addr.set_ip(match addr {
+            std::net::SocketAddr::V4(_) => std::net::Ipv4Addr::LOCALHOST.into(),
+            std::net::SocketAddr::V6(_) => std::net::Ipv6Addr::LOCALHOST.into(),
+        });
+    }
+    let mut stream = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
+    stream.set_read_timeout(Some(MAKE_WAY))?;
+    let body = serde_json::to_string(&slopmax_api::requests::Shutdown {
+        make_way: true,
+        ..Default::default()
+    })?;
+    write!(
+        stream,
+        "POST /slopmax/api/shutdown HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer {key}\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )?;
+    let mut status = String::new();
+    std::io::BufReader::new(stream).read_line(&mut status)?;
+    match status.split_whitespace().nth(1) {
+        Some("200") => Ok(()),
+        _ => bail!("it answered {}", status.trim()),
+    }
+}
+
+/// Has the service manager keep the listening socket: systemd stores it
+/// once its unit allows that, which this rewrites when it predates it.
+async fn keep_socket(app: Arc<App>, listener: std::net::TcpListener) {
+    if !cfg!(target_os = "linux") || std::env::var_os("NOTIFY_SOCKET").is_none() {
+        return;
+    }
+    let home = app.home.clone();
+    let listen = app.config().listen;
+    blocking::run(move || {
+        if let Some(manager) = slopmax_core::service::Manager::detect()
+            && let Err(e) = manager.refresh(&home, listen)
+        {
+            log::warn!("updating the login service: {e:#}");
+        }
+        supervisor::keep(&listener);
+    })
+    .await;
 }
 
 /// Names this process the lock's holder, in `.serve.pid`.
@@ -543,12 +675,7 @@ async fn shutdown(app: Arc<App>) -> server::Stop {
         () = app.stop.cancelled() => {},
     }
     app.stop.cancel();
-    if app
-        .successor
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .is_some()
-    {
+    if app.handed_over.load(std::sync::atomic::Ordering::SeqCst) {
         server::Stop::HandedOver(handoff::DRAIN)
     } else {
         server::Stop::Now(server::DRAIN)

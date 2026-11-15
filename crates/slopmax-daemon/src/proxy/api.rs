@@ -159,6 +159,12 @@ async fn answer(app: &Arc<App>, route: Route<'_>, query: &str, body: &[u8]) -> A
             let stopping = Stopping {
                 status: StoppingStatus::Stopping,
             };
+            if asked.make_way {
+                return match crate::handoff::make_way(app).await {
+                    Ok(()) => ok(&stopping),
+                    Err(e) => Err(ApiError::conflict(format!("{e:#}"))),
+                };
+            }
             if let Some(exe) = asked.exe.filter(|e| !e.trim().is_empty()) {
                 return match crate::handoff::hand_off(app, std::path::Path::new(&exe), false).await
                 {

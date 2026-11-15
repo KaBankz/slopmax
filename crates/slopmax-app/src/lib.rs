@@ -662,10 +662,17 @@ impl App {
             .spawn(async move { shared.start_proxy().await });
     }
 
+    /// Stops the proxy as `slopmax stop` does, which under launchd also
+    /// unloads the agent: launchd would start it again for the next
+    /// connection to the socket it keeps.
     pub fn stop_proxy(&self) {
-        self.call(|client, _| async move {
-            client.shutdown(false).await?;
-            Ok(Some("Stopped the proxy.".to_owned()))
+        let shared = self.shared.clone();
+        self.runtime.spawn(async move {
+            match shared.run_cli(&["stop"]).await {
+                Ok(_) => shared.tell("Stopped the proxy.".to_owned(), false),
+                Err(e) => shared.tell(format!("Could not stop the proxy: {e:#}"), true),
+            }
+            shared.look_again(true);
         });
     }
 
