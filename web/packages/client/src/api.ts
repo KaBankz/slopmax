@@ -147,6 +147,8 @@ export type AddAccount = typeof AddAccount.Type
 export class AccountAdded extends Schema.Class<AccountAdded>("AccountAdded")({
   account: AccountView,
   report: Report,
+  /** What to know about it though it was saved, such as an endpoint that did not answer when its key was checked. */
+  notices: Schema.optionalKey(Schema.Array(Schema.String)),
 }) {}
 
 /** Changes to an account. A `null` or blank label clears it, so the email shows again. */

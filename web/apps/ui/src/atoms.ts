@@ -596,7 +596,10 @@ export const addAccount = appRuntime.fn<AddAccount>()(
       const client = yield* Api
       const added = yield* client.accounts.add({ payload: account })
       store.set(reportAtom, Option.some(added.report))
-      say(store, `${addedName(account)} added.`)
+      const notices = added.notices ?? []
+      // Saved, but not answering: said as a warning, so it is not missed.
+      if (notices.length > 0) say(store, notices.join(" "), true)
+      else say(store, `${addedName(account)} added.`)
       return added.account
     }),
   concurrent,

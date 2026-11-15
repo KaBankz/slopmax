@@ -211,9 +211,14 @@ export const makeStub = (options: StubOptions = {}): Stub => {
               resets: [],
               served: Usage.zero,
             })
+            // An endpoint on a port nothing listens on is saved, with a word about it.
+            const silent = payload._tag === "Endpoint" && payload.url.includes("127.0.0.1:1/")
             return new AccountAdded({
               account: added,
               report: change(new Report({ ...report, accounts: [...report.accounts, added] })),
+              ...(silent
+                ? { notices: [`Saved, but ${payload.url} didn't answer (connection refused); requests will fail until it does.`] }
+                : {}),
             })
           }),
         ),

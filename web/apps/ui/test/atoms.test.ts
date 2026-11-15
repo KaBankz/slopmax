@@ -205,6 +205,16 @@ describe("actions", () => {
     expect(toasts(h)).toEqual([["Team added.", false]])
   })
 
+  test("an endpoint saved though it did not answer says so as a warning", async () => {
+    const h = await started()
+    h.registry.mount(addAccount)
+    h.registry.set(addAccount, { _tag: "Endpoint", url: "http://127.0.0.1:1/v1", dialect: "chat", models: ["m"] })
+    await until(() => AsyncResult.isSuccess(h.registry.get(addAccount)), "the account")
+    expect(toasts(h)).toEqual([
+      ["Saved, but http://127.0.0.1:1/v1 didn't answer (connection refused); requests will fail until it does.", true],
+    ])
+  })
+
   test("a live setting is sent, and what it does now is said", async () => {
     const h = await started()
     h.run(changeSettings, { strategy: "fill-first" })
