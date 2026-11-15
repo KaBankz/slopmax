@@ -882,11 +882,11 @@ fn grok_build(config: &Config, dir: &Path, accounts: &[Account]) -> Section {
     };
     let base = setting("endpoints", "cli_chat_proxy_base_url");
     let command = setting("grok_com_config", "auth_provider_command");
-    let expected = format!("{}/grok/v1", config.base_url());
+    let expected = format!("{}/grok/v1", config.agent_base());
     let wired = base.as_deref() == Some(expected.as_str());
     match base {
         Some(base) if base == expected => {
-            if command.is_some_and(|c| c.contains(&config.api_key)) {
+            if command.is_some_and(|c| c.contains(&config.agent_token())) {
                 s.add(Level::Ok, "wired through config.toml", None);
             } else {
                 s.add(
@@ -1526,6 +1526,28 @@ mod tests {
         let s = network(&http, &[account(ProviderId::Grok, "g@x.com")]).await;
         assert_eq!(texts(&s).last(), Some(&(Level::Ok, "xAI is reachable")));
         assert_eq!(mock.seen().last().unwrap().path, "/v1/models");
+    }
+
+    #[test]
+    fn grok_build_on_a_hub_client_is_judged_against_the_hub() {
+        let dir = testkit::temp_dir("doctor-grok-hub");
+        let config = Config {
+            api_key: "sm-key".into(),
+            hub: Some(crate::config::HubLink {
+                url: "https://hub.example.ts.net:7567".into(),
+                key: None,
+            }),
+            ..Config::default()
+        };
+        let grok = [account(ProviderId::Grok, "g@x.com")];
+        let file = dir.join("config.toml");
+        crate::agent::Agent::setup(&crate::agent::GrokBuild, &config, &file, &mut None).unwrap();
+        let s = grok_build(&config, &dir, &grok);
+        let last = s.findings.last().unwrap();
+        assert_eq!(
+            (last.level, last.text.as_str()),
+            (Level::Ok, "wired through config.toml")
+        );
     }
 
     #[test]

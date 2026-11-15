@@ -50,9 +50,10 @@ const SETTINGS: [(&str, &str); 2] = [
     ("grok_com_config", "auth_provider_command"),
 ];
 
-/// Where Grok Build sends its model traffic through slopmax.
+/// Where Grok Build sends its model traffic through slopmax: this
+/// machine's proxy, or the hub it uses.
 fn base_url(config: &Config) -> String {
-    format!("{}/grok/v1", config.base_url())
+    format!("{}/grok/v1", config.agent_base())
 }
 
 /// The auth provider command: the key as the whole reply.
@@ -61,14 +62,15 @@ fn key_command(key: &str) -> String {
 }
 
 fn env(config: &Config, home: &Home) -> Vec<(&'static str, String)> {
-    let auth = home.grok_auth(&config.api_key);
+    let token = config.agent_token();
+    let auth = home.grok_auth(&token);
     // Grok Build writes the file, but may not make its folder.
     if let Some(dir) = auth.parent() {
         let _ = fs::create_dir_all(dir);
     }
     vec![
         ("GROK_CLI_CHAT_PROXY_BASE_URL", base_url(config)),
-        ("GROK_AUTH_PROVIDER_COMMAND", key_command(&config.api_key)),
+        ("GROK_AUTH_PROVIDER_COMMAND", key_command(&token)),
         ("GROK_AUTH_PROVIDER_LABEL", "slopmax".into()),
         ("GROK_AUTH_PATH", auth.to_string_lossy().into_owned()),
     ]
@@ -155,7 +157,7 @@ impl Agent for GrokBuild {
         }
         // The config file has no environment of its own, so the command
         // carries the key; the file stays private.
-        let values = [base_url(config), key_command(&config.api_key)];
+        let values = [base_url(config), key_command(&config.agent_token())];
         for ((table, key), new) in SETTINGS.iter().zip(values) {
             let table = doc
                 .entry(table)
@@ -355,6 +357,39 @@ mod tests {
         );
         assert!(script.contains("export GROK_AUTH_PROVIDER_COMMAND='echo sm-test'"));
         assert!(script.contains("unset XAI_API_KEY GROK_CODE_XAI_API_KEY"));
+    }
+
+    #[test]
+    fn with_a_hub_grok_build_uses_it() {
+        let hub = |key: Option<&str>| Config {
+            hub: Some(crate::config::HubLink {
+                url: "https://hub.example.ts.net:7567".into(),
+                key: key.map(str::to_owned),
+            }),
+            ..config()
+        };
+        let dir = crate::testkit::temp_dir("grok-hub");
+        let file = dir.join("config.toml");
+        GrokBuild.setup(&hub(None), &file, &mut None).unwrap();
+        let text = fs::read_to_string(&file).unwrap();
+        assert!(
+            text.contains(r#"cli_chat_proxy_base_url = "https://hub.example.ts.net:7567/grok/v1""#),
+            "{text}"
+        );
+        assert!(
+            text.contains("echo tailnet") && !text.contains("sm-test"),
+            "{text}"
+        );
+        GrokBuild
+            .setup(&hub(Some("sm-x")), &file, &mut None)
+            .unwrap();
+        assert!(fs::read_to_string(&file).unwrap().contains("echo sm-x"));
+        let script = GrokBuild.env(&hub(None), &Home::sandbox("/home/me"), Path::new("slopmax"));
+        assert!(
+            script.contains("https://hub.example.ts.net:7567/grok/v1"),
+            "{script}"
+        );
+        assert!(!script.contains("sm-test"), "{script}");
     }
 
     #[test]
