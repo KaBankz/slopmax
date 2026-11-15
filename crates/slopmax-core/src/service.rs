@@ -18,6 +18,15 @@ const LABEL: &str = "dev.slopmax";
 const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
 /// Windows: the windowed program that runs the proxy, beside slopmax.exe.
 const LAUNCHER: &str = "slopmaxw.exe";
+/// systemd: load the new unit, start it at login, and run it now. Restart,
+/// not `enable --now`: a proxy the unit already runs, even one still
+/// finishing its requests, would keep the old binary, and once it exits
+/// cleanly `Restart=on-failure` leaves nothing running.
+const SYSTEMD_INSTALL: [&[&str]; 3] = [
+    &["--user", "daemon-reload"],
+    &["--user", "enable", NAME],
+    &["--user", "restart", NAME],
+];
 
 /// The service manager on this machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,8 +108,9 @@ impl Manager {
             .with_context(|| format!("writing {}", file.display()))?;
         match self {
             Self::Systemd => {
-                run("systemctl", &["--user", "daemon-reload"])?;
-                run("systemctl", &["--user", "enable", "--now", NAME])?;
+                for args in SYSTEMD_INSTALL {
+                    run("systemctl", args)?;
+                }
             }
             Self::Launchd => {
                 // Replacing a loaded agent: unload it first (fails if absent).
@@ -378,6 +388,13 @@ fn run(program: &str, args: &[&str]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installing_over_a_running_unit_restarts_it() {
+        let last = SYSTEMD_INSTALL.last().unwrap();
+        assert_eq!(*last, ["--user", "restart", NAME]);
+        assert!(!SYSTEMD_INSTALL.iter().any(|args| args.contains(&"--now")));
+    }
 
     #[test]
     fn systemd_unit_runs_serve_and_appends_to_the_log() {

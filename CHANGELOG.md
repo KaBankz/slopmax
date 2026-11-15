@@ -4,6 +4,10 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Fixed
+
+- On Linux, `slopmax service install` run while the service is already running, as when moving to a new version, no longer leaves the proxy stopped. It now restarts the service on the new binary. Before, the old proxy stopped and nothing started again until the next login or `slopmax start`.
+
 ## [0.10.0] - 2026-11-15
 
 slopmax now pools SuperGrok subscriptions for Grok Build. One change to rely on: with a SuperGrok account connected, xAI API keys serve Grok Build only as paid overflow. T3 Code shows when a spent pool frees up, and an account's old sign-in error clears once it signs in again.
