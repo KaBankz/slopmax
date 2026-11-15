@@ -211,7 +211,10 @@ describe("actions", () => {
     h.registry.set(addAccount, { _tag: "Endpoint", url: "http://127.0.0.1:1/v1", dialect: "chat", models: ["m"] })
     await until(() => AsyncResult.isSuccess(h.registry.get(addAccount)), "the account")
     expect(toasts(h)).toEqual([
-      ["Saved, but http://127.0.0.1:1/v1 didn't answer (connection refused); requests will fail until it does.", true],
+      [
+        "Saved, but http://127.0.0.1:1/v1 didn't answer: couldn't connect to 127.0.0.1:1 (connection refused); requests will fail until it does.",
+        true,
+      ],
     ])
   })
 

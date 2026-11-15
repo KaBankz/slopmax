@@ -181,10 +181,8 @@ async fn post(http: &Client, url: &str, event: &Event) -> Result<()> {
     let mut body = serde_json::to_value(event)?;
     body["text"] = event.message.clone().into();
     body["content"] = event.message.clone().into();
-    let response = http.post(url).json(&body).send().await.map_err(|e| {
-        let why = crate::provider::keys::plain(&e);
-        anyhow::anyhow!("the notify webhook didn't answer ({why})")
-    })?;
+    let response = (http.post(url).json(&body).send().await)
+        .map_err(|e| anyhow::anyhow!("the notify webhook didn't answer: {e}"))?;
     let status = response.status();
     if !status.is_success() {
         bail!("the notify webhook answered {status}");
@@ -692,7 +690,8 @@ mod tests {
         };
         let error = refused.send(&http, &event).await.unwrap_err().to_string();
         assert!(
-            error == "the notify webhook didn't answer (connection refused)",
+            error
+                == "the notify webhook didn't answer: couldn't connect to 127.0.0.1:9 (connection refused)",
             "{error}"
         );
         let mock = crate::testkit::Mock::start(|_| crate::testkit::reply(404, "")).await;

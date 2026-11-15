@@ -1108,7 +1108,7 @@ async fn login_with_keys_reads_them_from_stdin() {
     .ok();
     assert!(
         out.stdout.contains(
-            "Saved, but http://127.0.0.1:9/v1 didn't answer (connection refused); requests will fail until it does."
+            "Saved, but http://127.0.0.1:9/v1 didn't answer: couldn't connect to 127.0.0.1:9 (connection refused); requests will fail until it does."
         ),
         "{out:?}"
     );

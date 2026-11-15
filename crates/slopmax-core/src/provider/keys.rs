@@ -205,7 +205,7 @@ impl Checked {
     pub fn problem(&self, address: &str) -> Option<String> {
         match self {
             Self::Listed(_) => None,
-            Self::Unreachable(why) => Some(format!("{address} didn't answer ({why})")),
+            Self::Unreachable(why) => Some(format!("{address} didn't answer: {why}")),
             Self::Answered(status) => Some(format!(
                 "{address} answered {status} when asked for its models"
             )),
@@ -222,21 +222,6 @@ impl Checked {
             }
             _ => format!("Saved, but {problem}, so the key is unchecked."),
         })
-    }
-}
-
-/// A network error's cause in a person's words: `connection refused`.
-pub(crate) fn plain(error: &impl std::fmt::Display) -> String {
-    let text = error.to_string();
-    let cause = text.rsplit(": ").next().unwrap_or(&text);
-    let cause = match cause.find(" (os error") {
-        Some(at) => &cause[..at],
-        None => cause,
-    };
-    let mut chars = cause.chars();
-    match chars.next() {
-        Some(first) => first.to_lowercase().chain(chars).collect(),
-        None => text,
     }
 }
 
@@ -271,7 +256,7 @@ pub async fn probe(http: &Client, url: &str, header: KeyHeader, key: &str) -> Re
             let why = if e.is_timeout() {
                 "it timed out".to_owned()
             } else {
-                plain(&e)
+                e.to_string()
             };
             return Ok(Checked::Unreachable(why));
         }
@@ -527,7 +512,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             down.notice("http://127.0.0.1:9/v1").unwrap(),
-            "Saved, but http://127.0.0.1:9/v1 didn't answer (connection refused); requests will fail until it does."
+            "Saved, but http://127.0.0.1:9/v1 didn't answer: couldn't connect to 127.0.0.1:9 (connection refused); requests will fail until it does."
         );
         let forbidden = Mock::start(|_| testkit::reply(403, "")).await;
         let url = format!("{}/models", forbidden.url);

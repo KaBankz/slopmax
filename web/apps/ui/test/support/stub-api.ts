@@ -217,7 +217,11 @@ export const makeStub = (options: StubOptions = {}): Stub => {
               account: added,
               report: change(new Report({ ...report, accounts: [...report.accounts, added] })),
               ...(silent
-                ? { notices: [`Saved, but ${payload.url} didn't answer (connection refused); requests will fail until it does.`] }
+                ? {
+                    notices: [
+                      `Saved, but ${payload.url} didn't answer: couldn't connect to 127.0.0.1:1 (connection refused); requests will fail until it does.`,
+                    ],
+                  }
                 : {}),
             })
           }),
