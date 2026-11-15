@@ -4,6 +4,14 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Changed
+
+- The proxy allocates about a third less for each request it forwards (180 allocations for a Claude Code request, from 265), and keeps its connections to the providers itself: one task watches them while any is open, and an idle proxy wakes for none. The dashboard's 30-day history answers in about 0.3 ms, from 2.5.
+
+### Fixed
+
+- `slopmax usage`, `/history` and the dashboard cost a long prompt at the higher prices the API charges for it: Claude Haiku 5.5 over 100,000 prompt tokens, and GPT models over 272K input tokens, with cache reads and writes counting toward both. Each such request pays them on all of its tokens. They were costed at the prices for shorter prompts, which put a 150K-token Haiku 5.5 request at a fifth of its price.
+
 ## [0.8.0] - 2026-11-15
 
 ### Added
@@ -20,7 +28,6 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 - `slopmax login codex --device` fails again when device codes are unavailable, as it did before 0.7.0, rather than waiting for an address nobody can paste when there is no terminal.
 - A model refused at its limit is set aside on that account however its name is capitalized, so a request for `Claude-Fable-5-2` no longer goes back to the account that just refused `claude-fable-5-2`.
-- `slopmax usage`, `/history` and the dashboard cost a long prompt at the higher prices the API charges for it: Claude Haiku 5.5 over 100,000 prompt tokens, and GPT models over 272K input tokens, with cache reads and writes counting toward both. Each such request pays them on all of its tokens. They were costed at the prices for shorter prompts, which put a 150K-token Haiku 5.5 request at a fifth of its price.
 
 ## [0.7.0] - 2026-11-15
 
