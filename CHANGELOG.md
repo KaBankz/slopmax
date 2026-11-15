@@ -4,6 +4,10 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-15
+
+slopmax now pools SuperGrok subscriptions for Grok Build. One change to rely on: with a SuperGrok account connected, xAI API keys serve Grok Build only as paid overflow. T3 Code shows when a spent pool frees up, and an account's old sign-in error clears once it signs in again.
+
 ### Added
 
 - SuperGrok subscriptions, for Grok Build. `slopmax login grok` signs in with xAI's device code, `slopmax import cliproxyapi` brings over CLIProxyAPI's xAI sign-ins, and `slopmax run grok`, `env grok`, and `setup grok` point Grok Build at the proxy (`/grok/v1`) through its chat-proxy and auth-provider settings. Sessions stay on one account by Grok Build's conversation group and move when an account's monthly allowance is spent. Each account's allowance, read from xAI's billing endpoint, shows as a 30-day window, and its plan (`lite`, `supergrok`, `plus`, or `heavy`, as `[plan_prices]` names them under `grok/`) is priced for the dashboard's value figures. SuperGrok accounts serve Grok Build alone. The dashboard signs in to SuperGrok, and `slopmax doctor` checks Grok Build's wiring, that its own xAI sign-in isn't bypassing slopmax, and that xAI is reachable. The CLIProxyAPI hub lists SuperGrok accounts as `xai`, as CLIProxyAPI does, and answers T3 Code's read of their allowance from slopmax's own reading.
