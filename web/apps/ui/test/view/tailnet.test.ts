@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Health, TailnetView } from "@slopmax/client"
 import { Option } from "effect"
-import { adminCommand, machinesCard, tailnetAccess } from "../../src/view/tailnet.ts"
+import { adminCommand, machinesCard, onTheHub, tailnetAccess } from "../../src/view/tailnet.ts"
 
 const health = (fields: Partial<ConstructorParameters<typeof Health>[0]>) =>
   Option.some(new Health({ version: "0.10.0", ...fields }))
@@ -21,6 +21,15 @@ describe("the tailnet's gate", () => {
   test("names the machine to make an admin, when the hub knows it", () => {
     expect(adminCommand(Option.some("laptop"))).toBe("slopmax tailscale admins add laptop")
     expect(adminCommand(Option.none())).toBe("slopmax tailscale admins add <machine>")
+  })
+
+  test("knows when the page is open on the hub itself, which can't be its own admin", () => {
+    const origin = "https://hub.example.ts.net:7567"
+    expect(onTheHub(Option.some("hub"), origin)).toBe(true)
+    expect(onTheHub(Option.some("Hub"), "https://HUB.example.ts.net")).toBe(true)
+    expect(onTheHub(Option.some("laptop"), origin)).toBe(false)
+    expect(onTheHub(Option.none(), origin)).toBe(false)
+    expect(onTheHub(Option.some("hub"), "")).toBe(false)
   })
 })
 

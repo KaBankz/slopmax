@@ -1,7 +1,7 @@
 // The dashboard on the tailnet: whether this machine's tailnet identity
 // opens it without a key, what a machine that may only look is told, and
 // the Other machines card on the Access page.
-import { type Health, hubHost, type TailnetView } from "@slopmax/client"
+import { type Health, hubTarget, type TailnetView } from "@slopmax/client"
 import { Option } from "effect"
 
 /**
@@ -18,6 +18,17 @@ export const tailnetAccess = (health: Option.Option<Health>): Option.Option<"vie
 /** The command that lets a machine manage slopmax, run on the hub. */
 export const adminCommand = (machine: Option.Option<string>): string =>
   `slopmax tailscale admins add ${Option.getOrElse(machine, () => "<machine>")}`
+
+/**
+ * Whether the page is open on the hub itself, at its tailnet address: the
+ * machine the hub says is asking is the one `origin` names. The hub can't be
+ * one of its own admin machines; `slopmax dashboard` there opens the page with
+ * its key instead.
+ */
+export const onTheHub = (machine: Option.Option<string>, origin: string): boolean => {
+  const host = /^[a-z]+:\/\/([^/:]+)/i.exec(origin)?.[1]?.split(".")[0]
+  return host !== undefined && Option.exists(machine, (name) => name.toLowerCase() === host.toLowerCase())
+}
 
 /** Said wherever a machine that may only look would change something. */
 export const readOnlyShort = "Read-only from this machine"
@@ -87,11 +98,11 @@ export const machinesCard = (view: TailnetView): MachinesCard => {
             detail: `To let a machine manage slopmax: ${adminCommand(Option.none())}.`,
           },
     )
-    const host = hubHost(view)
-    if (host !== undefined) {
+    const target = hubTarget(view)
+    if (target !== undefined) {
       rows.push({
         title: "On another machine",
-        value: `slopmax setup --hub ${host}`,
+        value: `slopmax setup --hub ${target}`,
         detail: "Points its Claude Code and Codex at this slopmax.",
         copy: true,
       })

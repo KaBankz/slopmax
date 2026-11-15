@@ -52,7 +52,7 @@ import { RequestsPage } from "./pages/requests.tsx"
 import { SettingsPage } from "./pages/settings.tsx"
 import { PerformancePage, UsagePage } from "./pages/usage.tsx"
 import { keyFromHash, type Page, pageOrder, Pages, pageTitle } from "./view/pages.ts"
-import { adminCommand } from "./view/tailnet.ts"
+import { adminCommand, onTheHub } from "./view/tailnet.ts"
 import { rangeTitle, ranges } from "./view/words.ts"
 
 /** Light or dark, from the Appearance setting or the system's; and whether the window sits on a Mac. */
@@ -269,10 +269,21 @@ function ProxyBanner() {
 function ReadOnlyBanner() {
   const readOnly = useAtomValue(readOnlyAtom)
   const machine = useAtomValue(machineAtom)
+  const host = useAtomValue(hostAtom)
   if (!readOnly) return null
+  const origin = Option.match(host, { onNone: () => "", onSome: (h) => h.origin })
   return (
     <div role="note" className="rounded-xl border px-4 py-2.5 text-small text-muted-foreground">
-      Read-only from this machine. On the hub: <code className="font-mono">{adminCommand(machine)}</code>
+      {onTheHub(machine, origin) ? (
+        <>
+          Read-only at this address, even on the hub. Here, <code className="font-mono">slopmax dashboard</code> opens
+          it with its key.
+        </>
+      ) : (
+        <>
+          Read-only from this machine. On the hub: <code className="font-mono">{adminCommand(machine)}</code>
+        </>
+      )}
     </div>
   )
 }

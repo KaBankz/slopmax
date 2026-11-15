@@ -5,7 +5,7 @@ import {
   Access,
   AdminMachine,
   Health,
-  hubHost,
+  hubTarget,
   LedgerRecord,
   reaches,
   Summary,
@@ -79,11 +79,19 @@ describe("the tailnet's view", () => {
   })
 
   it("names the hub for `slopmax setup --hub`", () => {
-    expect(hubHost(decodeView(published))).toBe("hub")
+    expect(hubTarget(decodeView(published))).toBe("hub")
     const { host: _host, ...nameless } = published
-    expect(hubHost(decodeView(nameless))).toBe("hub")
+    expect(hubTarget(decodeView(nameless))).toBe("hub")
     const { url: _url, ...unpublished } = nameless
-    expect(hubHost(decodeView(unpublished))).toBeUndefined()
+    expect(hubTarget(decodeView(unpublished))).toBeUndefined()
+  })
+
+  it("gives the whole address when the hub is on another port, where setup does not look", () => {
+    const elsewhere = { ...published, url: "https://hub.example.ts.net:7568" }
+    expect(hubTarget(decodeView(elsewhere))).toBe("https://hub.example.ts.net:7568")
+    expect(hubTarget(decodeView({ ...published, url: "https://hub.example.ts.net" }))).toBe(
+      "https://hub.example.ts.net",
+    )
   })
 })
 

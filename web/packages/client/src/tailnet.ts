@@ -3,6 +3,7 @@
 // The hub is for the user's own machines; Tailscale tells it which machine
 // is asking, so they need no key.
 import { Schema } from "effect"
+import { defaultPort } from "./settings.ts"
 
 /** What a caller may do, from least to most. */
 export const Access = Schema.Literals(["none", "use", "view", "admin"])
@@ -108,10 +109,16 @@ export class Health extends Schema.Class<Health>("Health")({
   machine: Schema.optionalKey(Schema.String),
 }) {}
 
-/** The host part of a tailnet URL (`hub` of `https://hub.example.ts.net:7567`), for `slopmax setup --hub`. */
-export const hubHost = (view: TailnetView): string | undefined => {
-  if (view.host !== undefined && view.host !== "") return view.host
+/**
+ * What `slopmax setup --hub` takes to reach this hub from another machine:
+ * its name (`hub` of `https://hub.example.ts.net:7567`), which setup looks up
+ * on the usual port, else its whole URL when it is published on another port.
+ */
+export const hubTarget = (view: TailnetView): string | undefined => {
   if (view.url === undefined) return undefined
-  const host = /^[a-z]+:\/\/([^/:]+)/i.exec(view.url)?.[1]
-  return host?.split(".")[0]
+  const match = /^[a-z]+:\/\/([^/:]+)(?::(\d+))?/i.exec(view.url)
+  const port = match?.[2] === undefined ? (view.url.startsWith("https:") ? 443 : 80) : Number(match[2])
+  if (port !== defaultPort) return view.url
+  if (view.host !== undefined && view.host !== "") return view.host
+  return match?.[1]?.split(".")[0]
 }
