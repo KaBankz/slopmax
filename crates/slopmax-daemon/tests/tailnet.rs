@@ -561,6 +561,19 @@ async fn the_user_s_machines_use_the_proxy_without_a_key() {
         message(&answer).contains("tailscale funnel --https=443 off"),
         "{answer}"
     );
+    // So it is when Tailscale passes it to the proxy's TCP port, as it does
+    // when it publishes that port rather than the socket: not even the page
+    // or /healthz answers.
+    for path in ["/slopmax/api/status", "/healthz", "/slopmax/"] {
+        let refused = hub
+            .local(Method::GET, path)
+            .header("tailscale-funnel-request", "?1")
+            .header("authorization", format!("Bearer {KEY}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN, "{path}");
+    }
     std::fs::remove_dir_all(hub.stop().await).unwrap();
 }
 
@@ -862,6 +875,98 @@ async fn sign_ins_are_shown_only_to_those_who_may_manage() {
     std::fs::remove_dir_all(hub.stop().await).unwrap();
 }
 
+impl Hub {
+    /// Rewrites config.toml with `change`, and has the daemon read it.
+    async fn change_config(&self, change: impl Fn(&str) -> String) {
+        let path = self.home.join("config.toml");
+        let config = std::fs::read_to_string(&path).unwrap();
+        let changed = change(&config);
+        assert_ne!(config, changed);
+        std::fs::write(&path, changed).unwrap();
+        let synced = self
+            .local(Method::POST, "/slopmax/api/sync")
+            .header("authorization", format!("Bearer {KEY}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(synced.status(), StatusCode::OK);
+    }
+
+    /// Starts a sign-in through the owner key, and cancels it.
+    async fn sign_in_and_cancel(&self) {
+        let started: Value = self
+            .local(Method::POST, "/slopmax/api/logins")
+            .header("authorization", format!("Bearer {KEY}"))
+            .header("content-type", "application/json")
+            .body(r#"{"provider":"claude","noBrowser":true}"#)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let id = started["id"].as_str().unwrap();
+        let cancelled = self
+            .local(Method::DELETE, &format!("/slopmax/api/logins/{id}"))
+            .header("authorization", format!("Bearer {KEY}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(cancelled.status(), StatusCode::NO_CONTENT);
+    }
+}
+
+/// Whether `body` ends within a few seconds.
+async fn ends(body: &mut Incoming) -> bool {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while let Some(Ok(_)) = body.frame().await {}
+    })
+    .await
+    .is_ok()
+}
+
+#[tokio::test]
+async fn an_admin_machine_s_stream_shows_sign_ins_until_it_is_no_admin() {
+    let home = temp_home();
+    let hub = Hub::start(&home).await;
+    // Opened before slopmax asked whois about the machine: it may only look
+    // at first, and learns it may manage once whois answers.
+    let mut mac = hub
+        .tailnet(empty(member(Method::GET, "/slopmax/api/events", MAC)))
+        .await
+        .into_body();
+    let mut read = String::new();
+    assert!(read_until(&mut mac, &mut read, |r| r.contains(r#""_tag":"Status""#)).await);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    hub.sign_in_and_cancel().await;
+    assert!(read_until(&mut mac, &mut read, |r| r.contains(r#""_tag":"Login""#)).await);
+
+    // Taken off the admins, it may still look, but its stream ends: one
+    // opened again shows no sign-ins.
+    hub.change_config(|config| {
+        config.replace(
+            r#"admins = [{ machine = "mac", id = "nADMIN" }]"#,
+            "admins = []",
+        )
+    })
+    .await;
+    assert!(ends(&mut mac).await, "the event stream stayed open");
+    let mut mac = hub
+        .tailnet(empty(member(Method::GET, "/slopmax/api/events", MAC)))
+        .await
+        .into_body();
+    let mut read = String::new();
+    assert!(read_until(&mut mac, &mut read, |r| r.contains(r#""_tag":"Status""#)).await);
+    hub.sign_in_and_cancel().await;
+    let (status, _) = hub
+        .ask(claude_code(member(Method::POST, "/v1/messages", PHONE)))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(read_until(&mut mac, &mut read, |r| r.contains(r#""_tag":"Request""#)).await);
+    assert!(!read.contains(r#""_tag":"Login""#), "{read}");
+    std::fs::remove_dir_all(hub.stop().await).unwrap();
+}
+
 #[tokio::test]
 async fn a_login_taken_off_the_list_loses_the_proxy_and_its_streams() {
     let home = temp_home();
@@ -873,17 +978,8 @@ async fn a_login_taken_off_the_list_loses_the_proxy_and_its_streams() {
     let mut read = String::new();
     assert!(read_until(&mut events, &mut read, |r| r.contains(r#""_tag":"Status""#)).await);
 
-    let config = std::fs::read_to_string(hub.home.join("config.toml")).unwrap();
-    let dropped = config.replace(r#"users = ["me@test"]"#, "users = []");
-    assert_ne!(config, dropped);
-    std::fs::write(hub.home.join("config.toml"), dropped).unwrap();
-    let synced = hub
-        .local(Method::POST, "/slopmax/api/sync")
-        .header("authorization", format!("Bearer {KEY}"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(synced.status(), StatusCode::OK);
+    hub.change_config(|config| config.replace(r#"users = ["me@test"]"#, "users = []"))
+        .await;
 
     let (status, _) = hub
         .ask(empty(member(Method::GET, "/slopmax/api/status", PHONE)))
@@ -894,11 +990,7 @@ async fn a_login_taken_off_the_list_loses_the_proxy_and_its_streams() {
         .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     // The open stream ends within a few seconds.
-    let ended = tokio::time::timeout(Duration::from_secs(3), async {
-        while let Some(Ok(_)) = events.frame().await {}
-    })
-    .await;
-    assert!(ended.is_ok(), "the event stream stayed open");
+    assert!(ends(&mut events).await, "the event stream stayed open");
     std::fs::remove_dir_all(hub.stop().await).unwrap();
 }
 
@@ -948,5 +1040,65 @@ async fn codex_sockets_are_relayed_over_the_tailnet_too() {
             .any(|e| e.provider == ProviderId::Codex && e.machine.is_some())
     })
     .await;
+    std::fs::remove_dir_all(hub.stop().await).unwrap();
+}
+
+#[tokio::test]
+async fn an_open_codex_socket_stops_serving_a_login_taken_off_the_list() {
+    let home = temp_home();
+    let hub = Hub::start(&home).await;
+    let request = empty(
+        member(Method::GET, "/codex/responses", PHONE)
+            .header("upgrade", "websocket")
+            .header("connection", "Upgrade")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .header("user-agent", "codex_exec/0.159.3 (Linux; x86_64)")
+            .header("session-id", "ws-revoked")
+            .header("x-codex-routing-hint", "model=gpt-6-sol"),
+    );
+    let mut response = hub.tailnet(request).await;
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    let upgraded = hyper::upgrade::on(&mut response).await.unwrap();
+    let (read, write) = tokio::io::split(TokioIo::new(upgraded));
+    let mut reader = ws::Reader::new(tokio::io::BufReader::new(read));
+    let mut writer = ws::Writer::client(write);
+    let create =
+        json!({"type": "response.create", "model": "gpt-6-sol", "input": [], "stream": true})
+            .to_string();
+    writer
+        .send(&ws::Message::Text(create.clone()))
+        .await
+        .unwrap();
+    loop {
+        let Some(ws::Message::Text(text)) = reader.message().await.unwrap() else {
+            panic!("the first turn was not answered");
+        };
+        if text.contains("response.completed") {
+            break;
+        }
+    }
+
+    hub.change_config(|config| config.replace(r#"users = ["me@test"]"#, "users = []"))
+        .await;
+    // The next turn is refused: the socket closes, saying why.
+    writer.send(&ws::Message::Text(create)).await.unwrap();
+    let closed = tokio::time::timeout(Duration::from_secs(5), reader.message())
+        .await
+        .expect("an answer in time")
+        .unwrap();
+    assert!(
+        matches!(&closed, Some(ws::Message::Close(Some((1008, _))))),
+        "{closed:?}"
+    );
+    let sockets = hub
+        .log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(path, _)| path == "/codex/responses")
+        .count();
+    assert_eq!(sockets, 1, "no other socket reached the provider");
+    drop((reader, writer));
     std::fs::remove_dir_all(hub.stop().await).unwrap();
 }

@@ -68,8 +68,14 @@ impl Section {
     }
 }
 
-/// Runs every check. Sections without findings are left out.
-pub async fn check(config: &Config, store: &Store, home: &Home) -> Result<Vec<Section>> {
+/// Runs every check. Sections without findings are left out. Tailscale is
+/// read through `ts`, the `tailscale` command (`None`: there is none).
+pub async fn check(
+    config: &Config,
+    store: &Store,
+    home: &Home,
+    ts: Option<tailscale::Tailscale>,
+) -> Result<Vec<Section>> {
     if config.hub.is_some() {
         return Ok(client_checks(config, home).await);
     }
@@ -98,7 +104,7 @@ pub async fn check(config: &Config, store: &Store, home: &Home) -> Result<Vec<Se
         None => Vec::new(),
     };
     let running = matches!(probe, Probe::Ours { .. });
-    let tailnet = tailnet_checks(config, home, running, service).await;
+    let tailnet = tailnet_checks(ts, config, home, running, service).await;
     let mut proxy = proxy(config, probe, service);
     if tailnet.as_ref().is_some_and(is_published) {
         // The Tailscale section says these louder: other machines lose
@@ -165,15 +171,16 @@ async fn client_checks(config: &Config, home: &Home) -> Vec<Section> {
     .collect()
 }
 
-/// Reads Tailscale here for the Tailscale section, when there is a
-/// `tailscale` command and the section has something to say.
+/// Reads Tailscale here through `ts` for the Tailscale section, when there
+/// is a `tailscale` command and the section has something to say.
 async fn tailnet_checks(
+    ts: Option<tailscale::Tailscale>,
     config: &Config,
     home: &Home,
     running: bool,
     service: Option<Status>,
 ) -> Option<Section> {
-    let ts = tailscale::Tailscale::find().ok()?;
+    let ts = ts?;
     let port = config.listen.port();
     let targets = [
         Target::Socket(home.tailnet_socket()),

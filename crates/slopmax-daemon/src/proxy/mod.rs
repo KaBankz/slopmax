@@ -680,7 +680,7 @@ async fn proxy(app: Arc<App>, request: Request, seen: &Seen) -> Response {
     // Codex's sockets are relayed when they can be; refusing a handshake
     // with 426 makes Codex stream over HTTP at once instead of retrying.
     if is_websocket(request.headers()) {
-        return socket::accept(app, target, request, &who).await;
+        return socket::accept(app, target, request, &who, seen).await;
     }
     forward::forward(app, target, request, who).await
 }
@@ -1045,14 +1045,19 @@ async fn identify<'a>(
         }
         None => None,
     };
-    let admin = machine
-        .as_ref()
-        .is_some_and(|m| !m.tagged && config.admin_ids().any(|id| id == m.id));
     Ok(Caller::Member {
         login: login.to_owned(),
+        access: member_access(config, machine.as_ref()),
         machine: machine.map(|m| m.name),
-        access: if admin { Access::Admin } else { Access::View },
     })
+}
+
+/// What a tailnet login allowed in may do from `machine` (as whois named
+/// it, signed in as that login): manage slopmax when the machine is
+/// untagged and in `[tailscale] admins`, else look.
+fn member_access(config: &Config, machine: Option<&tailnet::Machine>) -> Access {
+    let admin = machine.is_some_and(|m| !m.tagged && config.admin_ids().any(|id| id == m.id));
+    if admin { Access::Admin } else { Access::View }
 }
 
 /// Who sent a request, if they may do what it `need`s.

@@ -661,6 +661,11 @@ async fn harness_of(
         ("https://api.openai.com", openai.as_str()),
     ]);
     let app = App::new(config, Home::at(&dir), PoolState::default(), origins);
+    // No Tailscale here, whatever the machine the tests run on has.
+    app.set_tailnet(proxy::Tailnet {
+        cli: Arc::new(|| None),
+        ..proxy::Tailnet::default()
+    });
     app.pool.sync(app.store.list().unwrap());
     let proxy = serve({
         let app = app.clone();

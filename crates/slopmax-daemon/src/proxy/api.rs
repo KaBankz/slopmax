@@ -426,7 +426,7 @@ fn changed(app: &App, change: Result<(), crate::error::StoreError>) -> Answer {
 }
 
 async fn doctor(app: &App) -> Answer {
-    let sections = doctor::check(&app.config(), &app.store, &app.home)
+    let sections = doctor::check(&app.config(), &app.store, &app.home, app.tailscale_cli())
         .await
         .map_err(|e| ApiError::internal(format!("{e:#}")))?;
     let sections: Vec<Section> = sections
@@ -960,13 +960,17 @@ async fn notify_test(app: &App) -> Answer {
 /// The event stream: `Hello`, the report, then each request answered, each
 /// sign-in's progress, and the report again whenever it changes. The report
 /// is built only while someone watches; the stream ends when the daemon
-/// stops, or when the config no longer lets the asker look.
+/// stops, or when the asker may do less than it could before: the config
+/// no longer lets it look, or its machine may no longer manage slopmax.
 ///
 /// Sign-in progress carries the addresses and codes that finish a sign-in,
-/// so only those who may manage slopmax see it.
+/// so only those who may manage slopmax now see it, asked as each comes.
 fn events(app: &Arc<App>, asker: Asker) -> Response {
     let mut feed = app.api_events.subscribe();
-    let sign_ins = asker.access >= Access::Admin;
+    let mut machine = None;
+    // What the asker could do at most so far; less ends the stream.
+    let mut held =
+        access_now(app, &asker, &mut machine).map_or(asker.access, |now| now.max(asker.access));
     let (app, stop) = (Arc::clone(app), app.stop.clone());
     let (tx, rx) = mpsc::channel::<Bytes>(64);
     app.clone().spawn(async move {
@@ -987,14 +991,24 @@ fn events(app: &Arc<App>, asker: Asker) -> Response {
         loop {
             let frame = tokio::select! {
                 event = feed.recv() => match event {
-                    Ok(frame) if !sign_ins && frame.starts_with(LOGIN_FRAME) => continue,
+                    Ok(frame) if frame.starts_with(LOGIN_FRAME) => {
+                        match access_now(&app, &asker, &mut machine) {
+                            Some(now) if now >= held => held = now,
+                            _ => break,
+                        }
+                        if held < Access::Admin {
+                            continue;
+                        }
+                        frame
+                    }
                     Ok(frame) => frame,
                     Err(broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(broadcast::error::RecvError::Closed) => break,
                 },
                 _ = check.tick() => {
-                    if !may_look(&app, &asker) {
-                        break;
+                    match access_now(&app, &asker, &mut machine) {
+                        Some(now) if now >= held => held = now,
+                        _ => break,
                     }
                     let (seen, frame) = status(&app);
                     if seen == last {
@@ -1024,14 +1038,30 @@ fn events(app: &Arc<App>, asker: Asker) -> Response {
 /// How a sign-in's progress starts on the event stream.
 const LOGIN_FRAME: &[u8] = br#"data: {"_tag":"Login""#;
 
-/// Whether the config as it stands still lets `asker` look: its key still
-/// matches, or its login is still allowed. Whois is not asked again.
-fn may_look(app: &App, asker: &Asker) -> bool {
+/// What `asker` may do as the config stands now; `None` once its key no
+/// longer matches or its login is no longer allowed. A tailnet machine is
+/// judged by what whois said of it lately, kept in `machine` between asks:
+/// when nothing recent is known, the last answer stands while whois is
+/// asked again in the background, so an answer running out does not demote
+/// it, but an answer naming another login, or none, does.
+fn access_now(
+    app: &Arc<App>,
+    asker: &Asker,
+    machine: &mut Option<super::tailnet::Machine>,
+) -> Option<Access> {
     let config = app.config();
     match super::known(&config, &asker.headers, &asker.seen) {
-        Ok(super::Known::Key(caller)) => caller.access() >= Access::View,
-        Ok(super::Known::Login(_)) => true,
-        Err(_) => false,
+        Ok(super::Known::Key(caller)) => Some(caller.access()),
+        Ok(super::Known::Login(login)) => {
+            if let Some(peer) = asker.seen.peer {
+                match app.peers.lately(peer) {
+                    Some(found) => *machine = found.filter(|m| m.is(login)),
+                    None => app.peers.warm(app, peer, login),
+                }
+            }
+            Some(super::member_access(&config, machine.as_ref()))
+        }
+        Err(_) => None,
     }
 }
 
@@ -1098,7 +1128,12 @@ async fn change_tailnet(app: &App, patch: TailnetPatch) -> Answer {
     app.reload_config();
     log::info!("who may use slopmax over the tailnet changed from the API");
     *app.tailnet_view.lock().unwrap_or_else(|p| p.into_inner()) = None;
-    ok(&tailnet_view(app).await)
+    let view = tailnet_view(app).await;
+    // A change of who may use it comes before Tailscale publishes it, as
+    // `slopmax tailscale on` makes them: the next look asks Tailscale again
+    // rather than keeping what it said before.
+    *app.tailnet_view.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    ok(&view)
 }
 
 /// The report as a `Status` event, and what tells it apart from the last:

@@ -5,9 +5,10 @@
 //! headers naming the login it came from (`Tailscale-User-Login`) and the
 //! address it came from (`X-Forwarded-For`). Those headers are believed only
 //! on the [`Channel::Tailnet`] the listener marks, and are taken off every
-//! request, whichever way it came, before anything else reads it.
+//! request, whichever way it came, before anything else reads it. The one
+//! exception is Funnel's mark, believed on every channel: it only refuses.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -66,6 +67,10 @@ impl Seen {
 /// What `request` says about where it came from, believed only when it
 /// came over the tailnet socket. Its tailnet headers are removed either
 /// way, so they reach nothing else: not the providers, not the logs.
+///
+/// Funnel's mark is believed whichever way the request came: Tailscale
+/// passes Funnel's requests to the proxy's TCP port too, when that is what
+/// it publishes, and a request that forges the mark only refuses itself.
 pub(crate) fn take<B>(request: &mut http::Request<B>) -> Seen {
     let channel = request
         .extensions()
@@ -77,7 +82,7 @@ pub(crate) fn take<B>(request: &mut http::Request<B>) -> Seen {
         channel,
         login: None,
         peer: None,
-        funnel: false,
+        funnel: headers.contains_key("tailscale-funnel-request"),
         origin_host: None,
         proto: None,
     };
@@ -93,7 +98,6 @@ pub(crate) fn take<B>(request: &mut http::Request<B>) -> Seen {
             .and_then(|list| list.rsplit(',').next())
             .and_then(|last| last.trim().parse::<IpAddr>().ok())
             .filter(on_tailnet);
-        seen.funnel = headers.contains_key("tailscale-funnel-request");
         seen.origin_host = text(headers, "x-forwarded-host")
             .or_else(|| text(headers, header::HOST.as_str()))
             .map(str::to_owned);
@@ -179,7 +183,7 @@ impl From<tailscale::Machine> for Machine {
 
 impl Machine {
     /// Whether it is signed in as `login`.
-    fn is(&self, login: &str) -> bool {
+    pub fn is(&self, login: &str) -> bool {
         self.login
             .as_deref()
             .is_some_and(|own| own.eq_ignore_ascii_case(login))
@@ -191,7 +195,9 @@ impl Machine {
 #[derive(Default)]
 pub(crate) struct Peers {
     cache: Mutex<HashMap<IpAddr, (Instant, Option<Machine>)>>,
-    inflight: Mutex<HashSet<IpAddr>>,
+    /// The addresses being looked up, each with the turn a lookup of it
+    /// waits for, so requests that ask at once share one lookup.
+    inflight: Mutex<HashMap<IpAddr, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl Peers {
@@ -204,22 +210,59 @@ impl Peers {
     /// lookup that failed. `None` asks again; so does a machine signed in
     /// as someone else, since the address may have changed hands.
     fn known(&self, ip: IpAddr, login: &str) -> Option<Option<Machine>> {
+        match self.lately(ip)? {
+            Some(machine) if !machine.is(login) => None,
+            found => Some(found),
+        }
+    }
+
+    /// What whois said of `ip` lately, whoever it named: the machine, or
+    /// `Some(None)` for a lookup that failed; `None` when nothing recent is
+    /// known.
+    pub fn lately(&self, ip: IpAddr) -> Option<Option<Machine>> {
         let cache = self.cache.lock().unwrap_or_else(|p| p.into_inner());
         let (at, found) = cache.get(&ip)?;
-        match found {
-            Some(machine) if at.elapsed() < HIT && machine.is(login) => Some(Some(machine.clone())),
-            None if at.elapsed() < MISS => Some(None),
-            _ => None,
-        }
+        let fresh = match found {
+            Some(_) => at.elapsed() < HIT,
+            None => at.elapsed() < MISS,
+        };
+        fresh.then(|| found.clone())
     }
 
     /// The machine at `ip`, from what is known, else asked of whois, at
     /// most [`WHOIS`]. It need not be signed in as `login`: the caller
-    /// checks.
+    /// checks. A lookup of `ip` already under way is waited for rather
+    /// than asked again.
     pub async fn resolve(&self, app: &App, ip: IpAddr, login: &str) -> Option<Machine> {
         if let Some(known) = self.known(ip, login) {
             return known;
         }
+        let turn = Arc::clone(
+            self.inflight
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .entry(ip)
+                .or_default(),
+        );
+        let held = turn.lock().await;
+        // The lookup waited for may have answered this one.
+        let found = match self.known(ip, login) {
+            Some(known) => known,
+            None => self.ask(app, ip).await,
+        };
+        drop(held);
+        // The last to finish lets the address go. Turns are handed out only
+        // under the map's lock, so while it is held, a turn that only the
+        // map and this lookup hold has no one else waiting for it.
+        let mut inflight = self.inflight.lock().unwrap_or_else(|p| p.into_inner());
+        if Arc::strong_count(&turn) == 2 {
+            inflight.remove(&ip);
+        }
+        found
+    }
+
+    /// Asks whois which machine is at `ip`, and keeps the answer.
+    async fn ask(&self, app: &App, ip: IpAddr) -> Option<Machine> {
         let whois = app.whois();
         let found = match tokio::time::timeout(WHOIS, whois.whois(ip)).await {
             Ok(Ok(machine)) => Some(Machine::from(machine)),
@@ -248,23 +291,17 @@ impl Peers {
         if self.known(ip, login).is_some() {
             return;
         }
-        if !self
+        if self
             .inflight
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .insert(ip)
+            .contains_key(&ip)
         {
             return;
         }
         let (worker, login) = (Arc::clone(app), login.to_owned());
         app.spawn(async move {
             worker.peers.resolve(&worker, ip, &login).await;
-            worker
-                .peers
-                .inflight
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .remove(&ip);
         });
     }
 }
@@ -325,6 +362,17 @@ mod tests {
             assert_eq!(seen, Seen::tcp());
             let left: Vec<&str> = request.headers().keys().map(|k| k.as_str()).collect();
             assert_eq!(left, ["host"]);
+        }
+    }
+
+    #[test]
+    fn funnel_is_believed_whichever_way_a_request_came() {
+        // Published to the TCP port, Tailscale passes Funnel's requests on
+        // over TCP: the mark still refuses them, and is still taken off.
+        for channel in [None, Some(Channel::Tcp), Some(Channel::Tailnet)] {
+            let mut request = request(channel, &[("tailscale-funnel-request", "?1")]);
+            assert!(take(&mut request).funnel, "{channel:?}");
+            assert!(request.headers().is_empty());
         }
     }
 
@@ -411,6 +459,62 @@ mod tests {
         assert!(machine(Some("me@github"), &["tag:ci"]).tagged);
         assert!(machine(Some("Me@GitHub"), &[]).is("me@github"));
         assert!(!machine(None, &[]).is("me@github"));
+    }
+
+    /// Whois that takes a while to answer, and counts how often it is
+    /// asked.
+    struct Slow(std::sync::atomic::AtomicUsize);
+
+    impl tailscale::Whois for Slow {
+        fn whois<'a>(
+            &'a self,
+            _ip: IpAddr,
+        ) -> tailscale::BoxFuture<'a, Result<tailscale::Machine, tailscale::TsError>> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                Ok(tailscale::Machine {
+                    id: "nMAC".into(),
+                    name: "mac".into(),
+                    login: Some("me@github".into()),
+                    tags: vec![],
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn requests_that_ask_at_once_share_one_lookup() {
+        let dir = std::env::temp_dir().join(format!("slopmax-peers-{}", crate::ids::token()));
+        let app = App::new(
+            crate::config::Config::default(),
+            crate::paths::Home::at(&dir),
+            crate::pool::State::default(),
+            crate::net::Origins::new([]),
+        );
+        let whois = Arc::new(Slow(std::sync::atomic::AtomicUsize::new(0)));
+        app.set_whois(whois.clone());
+        let ip: IpAddr = "100.64.0.1".parse().unwrap();
+        app.peers.warm(&app, ip, "me@github");
+        let asked = at_once(&app, ip).await;
+        assert!(
+            asked
+                .iter()
+                .all(|m| m.as_ref().is_some_and(|m| m.name == "mac"))
+        );
+        assert_eq!(whois.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(app.peers.inflight.lock().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Five lookups of `ip` at once, as a page's first requests make them.
+    async fn at_once(app: &Arc<App>, ip: IpAddr) -> Vec<Option<Machine>> {
+        let mut all = tokio::task::JoinSet::new();
+        for _ in 0..5 {
+            let app = Arc::clone(app);
+            all.spawn(async move { app.peers.resolve(&app, ip, "me@github").await });
+        }
+        all.join_all().await
     }
 
     #[test]
