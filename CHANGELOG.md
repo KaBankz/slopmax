@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-15
+
 ### Added
 
 - While the proxy is stopped, `slopmax status` says how to fill in the accounts it knows no usage for: `slopmax status --refresh` reads it once, and `slopmax start` keeps it current. Such accounts showed only dashes.
