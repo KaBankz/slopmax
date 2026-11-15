@@ -82,14 +82,14 @@ pub(super) async fn accept(
     let model = routing_model(&headers);
     let agent = agent::detect(&headers);
     let session = agent::session(agent, &headers, b"");
-    let accounts = app.pool.accounts();
-    let candidates: Vec<String> = match &model {
+    let (accounts, config) = (app.pool.accounts(), app.config());
+    let candidates: route::Ids = match &model {
         Some(model) => {
             let table = route::Table {
                 accounts: &accounts,
-                aliases: &app.config().aliases,
-                fallbacks: &app.config().fallbacks,
-                paid_overflow: app.config().paid_overflow,
+                aliases: &config.aliases,
+                fallbacks: &config.fallbacks,
+                paid_overflow: config.paid_overflow,
             };
             let request = route::Request {
                 model,
@@ -110,7 +110,7 @@ pub(super) async fn accept(
         None => accounts
             .iter()
             .filter(|a| a.provider == ProviderId::Codex)
-            .map(|a| a.id.clone())
+            .map(|a| a.id.as_str())
             .collect(),
     };
     let pick = Pick {

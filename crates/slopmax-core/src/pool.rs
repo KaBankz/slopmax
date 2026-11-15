@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex};
 
 use http::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 
 use crate::account::Account;
 use crate::config::Strategy;
@@ -228,10 +229,11 @@ pub struct Pick<'a> {
     /// than work: it takes no turn from round-robin.
     pub housekeeping: bool,
     pub model: Option<&'a str>,
-    /// The accounts that may serve it, when routing narrowed them down.
-    pub candidates: Option<&'a [String]>,
+    /// The accounts that may serve it, by id, when routing narrowed them
+    /// down.
+    pub candidates: Option<&'a [&'a str]>,
     /// Accounts already tried for this request.
-    pub exclude: &'a [String],
+    pub exclude: &'a [Arc<Account>],
 }
 
 /// The account chosen for a request.
@@ -300,7 +302,9 @@ struct Inner {
     /// accounts. Replaced whole on change, which is rare.
     accounts: Arc<[Arc<Account>]>,
     states: HashMap<String, AccountState>,
-    sessions: HashMap<(ProviderId, String), Binding>,
+    /// By provider, then session id: a pick looks its session up by the
+    /// id it was given, without copying it.
+    sessions: HashMap<ProviderId, HashMap<String, Binding>>,
     pins: Pins,
     agents: BTreeMap<ProviderId, String>,
     told: Vec<String>,
@@ -351,6 +355,16 @@ impl Inner {
     }
 }
 
+impl Inner {
+    /// The account's state, made on first use. Its id is copied only then.
+    fn state_mut(&mut self, id: &str) -> &mut AccountState {
+        if !self.states.contains_key(id) {
+            self.states.insert(id.to_owned(), AccountState::default());
+        }
+        self.states.get_mut(id).expect("inserted above")
+    }
+}
+
 /// Thread-safe pool shared by the proxy and its background tasks.
 #[derive(Debug)]
 pub struct Pool {
@@ -361,18 +375,19 @@ pub struct Pool {
 impl Pool {
     pub fn new(strategy: Strategy, session_ttl: SignedDuration, state: State) -> Self {
         let now = Timestamp::now();
-        let sessions = state
-            .sessions
-            .into_iter()
-            .filter(|s| now.duration_since(s.last_used) < session_ttl)
-            .map(|s| {
+        let mut sessions: HashMap<ProviderId, HashMap<String, Binding>> = HashMap::new();
+        for s in state.sessions {
+            if now.duration_since(s.last_used) < session_ttl {
                 let binding = Binding {
                     account: s.account,
                     last_used: s.last_used,
                 };
-                ((s.provider, s.session), binding)
-            })
-            .collect();
+                sessions
+                    .entry(s.provider)
+                    .or_default()
+                    .insert(s.session, binding);
+            }
+        }
         let inner = Inner {
             states: state.accounts.into_iter().collect(),
             sessions,
@@ -413,9 +428,9 @@ impl Pool {
     pub fn sync(&self, accounts: Vec<Account>) {
         let mut inner = self.lock();
         let ids: Vec<&str> = accounts.iter().map(|a| a.id.as_str()).collect();
-        inner
-            .sessions
-            .retain(|_, binding| ids.contains(&binding.account.as_str()));
+        for sessions in inner.sessions.values_mut() {
+            sessions.retain(|_, binding| ids.contains(&binding.account.as_str()));
+        }
         inner.accounts = accounts.into_iter().map(Arc::new).collect();
     }
 
@@ -425,7 +440,7 @@ impl Pool {
         let mut inner = self.lock();
         if inner.pins.get(&provider).map(String::as_str) != Some(id) {
             inner.pins.insert(provider, id.to_owned());
-            inner.sessions.retain(|(p, _), _| *p != provider);
+            inner.sessions.remove(&provider);
             inner.dirty = true;
         }
     }
@@ -438,7 +453,7 @@ impl Pool {
             return;
         }
         let pins = std::mem::take(&mut inner.pins);
-        inner.sessions.retain(|(p, _), _| !pins.contains_key(p));
+        inner.sessions.retain(|p, _| !pins.contains_key(p));
         inner.dirty = true;
     }
 
@@ -535,27 +550,57 @@ impl Pool {
         }
     }
 
-    /// Chooses an account for a request.
+    /// Chooses an account for a request. It allocates nothing but for a
+    /// new session, an account first handed a request, or a session that
+    /// moved.
     pub fn pick(&self, req: &Pick, now: Timestamp) -> Result<Choice, Unavailable> {
         let routing = self.routing();
-        let mut inner = self.lock();
-        let session_key = req.session.map(|s| (req.provider, s.to_owned()));
+        let mut guard = self.lock();
+        let inner = &mut *guard;
         // The account the session used last, kept to even when affinity is
         // off, to tell whether the request moved.
-        let bound = session_key
-            .as_ref()
-            .and_then(|key| inner.sessions.get(key))
+        let bound = req
+            .session
+            .and_then(|s| inner.sessions.get(&req.provider)?.get(s))
             .filter(|b| now.duration_since(b.last_used) < routing.session_ttl)
-            .map(|b| b.account.clone());
+            .map(|b| b.account.as_str());
         let sticky = req.affinity.unwrap_or(routing.affinity);
+        let pinned = inner.pins.get(&req.provider).map(String::as_str);
 
-        let usable: Vec<&Arc<Account>> = inner
-            .accounts
-            .iter()
-            .filter(|a| a.provider == req.provider && !a.disabled && a.auth_error.is_none())
-            .filter(|a| req.candidates.is_none_or(|c| c.contains(&a.id)))
-            .collect();
-        if usable.is_empty() {
+        // One pass over the accounts. Those already tried for this request
+        // are skipped, but their blocks still count toward when the pool
+        // frees up again.
+        let mut usable = false;
+        let mut ready: SmallVec<[&Arc<Account>; 8]> = SmallVec::new();
+        let mut soonest: Option<Timestamp> = None;
+        let (mut kept, mut pin) = (None, None);
+        let accounts = inner.accounts.iter().filter(|a| {
+            a.provider == req.provider
+                && !a.disabled
+                && a.auth_error.is_none()
+                && req.candidates.is_none_or(|c| c.contains(&a.id.as_str()))
+        });
+        for account in accounts {
+            usable = true;
+            let blocked = match inner.states.get(&account.id) {
+                Some(state) => state.blocked(req.model, now),
+                None => Ok(()),
+            };
+            match blocked {
+                Ok(()) if !req.exclude.iter().any(|t| t.id == account.id) => {
+                    if sticky && kept.is_none() && bound == Some(account.id.as_str()) {
+                        kept = Some(account);
+                    }
+                    if pin.is_none() && pinned == Some(account.id.as_str()) {
+                        pin = Some(account);
+                    }
+                    ready.push(account);
+                }
+                Ok(()) => {}
+                Err(until) => soonest = Some(soonest.map_or(until, |s| s.min(until))),
+            }
+        }
+        if !usable {
             let reason = if inner.accounts.iter().any(|a| a.provider == req.provider) {
                 format!("every {} account is disabled or signed out", req.provider)
             } else {
@@ -570,41 +615,11 @@ impl Pool {
             });
         }
 
-        // Accounts already tried for this request are skipped, but their
-        // blocks still count toward when the pool frees up again.
-        let mut ready: Vec<&Account> = Vec::with_capacity(usable.len());
-        let mut held: Vec<&Arc<Account>> = Vec::with_capacity(usable.len());
-        let mut soonest: Option<Timestamp> = None;
-        for account in usable {
-            let blocked = match inner.states.get(&account.id) {
-                Some(state) => state.blocked(req.model, now),
-                None => Ok(()),
-            };
-            match blocked {
-                Ok(()) if !req.exclude.contains(&account.id) => {
-                    ready.push(account);
-                    held.push(account);
-                }
-                Ok(()) => {}
-                Err(until) => soonest = Some(soonest.map_or(until, |s| s.min(until))),
-            }
-        }
-
         // Keep the session where it is whenever its account can still serve.
-        let chosen = bound
-            .as_deref()
-            .filter(|_| sticky)
-            .and_then(|id| ready.iter().find(|a| a.id == id))
-            .or_else(|| {
-                let pinned = inner.pins.get(&req.provider)?;
-                ready.iter().find(|a| &a.id == pinned)
-            })
-            .copied()
-            .or_else(|| place(routing.strategy, &ready, &inner, now));
-
-        // The pool's own pointer to it, so the choice copies nothing.
-        let chosen = chosen.and_then(|c| held.iter().find(|a| a.id == c.id).map(|a| Arc::clone(a)));
-        let Some(account) = chosen else {
+        let chosen = kept
+            .or(pin)
+            .or_else(|| place(routing.strategy, &ready, inner, now));
+        let Some(account) = chosen.map(Arc::clone) else {
             let reason = match soonest {
                 Some(_) => format!("every {} account is rate limited", req.provider),
                 None => format!("every {} account failed this request", req.provider),
@@ -614,20 +629,34 @@ impl Pool {
                 reason,
             });
         };
-        let moved_from = bound.filter(|id| *id != account.id);
+        let moved_from = bound.filter(|id| *id != account.id).map(str::to_owned);
         if !req.housekeeping {
             inner.picks += 1;
             let picks = inner.picks;
-            inner.picked.insert(account.id.clone(), picks);
+            match inner.picked.get_mut(&account.id) {
+                Some(at) => *at = picks,
+                None => {
+                    inner.picked.insert(account.id.clone(), picks);
+                }
+            }
         }
-        if let Some(key) = session_key {
-            inner.sessions.insert(
-                key,
-                Binding {
-                    account: account.id.clone(),
-                    last_used: now,
-                },
-            );
+        if let Some(session) = req.session {
+            let sessions = inner.sessions.entry(req.provider).or_default();
+            match sessions.get_mut(session) {
+                Some(binding) => {
+                    if binding.account != account.id {
+                        binding.account.clone_from(&account.id);
+                    }
+                    binding.last_used = now;
+                }
+                None => {
+                    let binding = Binding {
+                        account: account.id.clone(),
+                        last_used: now,
+                    };
+                    sessions.insert(session.to_owned(), binding);
+                }
+            }
             inner.dirty = true;
         }
         Ok(Choice {
@@ -642,7 +671,7 @@ impl Pool {
     pub fn next(&self, provider: ProviderId, now: Timestamp) -> Option<Next> {
         let strategy = self.routing().strategy;
         let inner = self.lock();
-        let ready: Vec<&Account> = inner
+        let ready: Vec<&Arc<Account>> = inner
             .accounts
             .iter()
             .filter(|a| a.provider == provider && !a.disabled && a.auth_error.is_none())
@@ -652,7 +681,6 @@ impl Pool {
                     .get(&a.id)
                     .is_none_or(|s| s.blocked(None, now).is_ok())
             })
-            .map(|a| &**a)
             .collect();
         let next = |account: &Account, reason| {
             Some(Next {
@@ -690,7 +718,7 @@ impl Pool {
     /// Records a successful request: binds the session and clears throttling.
     pub fn record_success(&self, id: &str, now: Timestamp) {
         let mut inner = self.lock();
-        let state = inner.states.entry(id.to_owned()).or_default();
+        let state = inner.state_mut(id);
         state.last_used = Some(now);
         state.throttled_until = None;
         state.last_error = None;
@@ -700,7 +728,7 @@ impl Pool {
     /// Folds a usage reading into the account's limits.
     pub fn observe(&self, id: &str, limits: Limits, now: Timestamp) {
         let mut inner = self.lock();
-        let state = inner.states.entry(id.to_owned()).or_default();
+        let state = inner.state_mut(id);
         let lapsed = state.limits.lapsed(&limits, now);
         state.limits.merge(limits);
         // A fresh reading below the limit proves an earlier block has lifted,
@@ -748,7 +776,7 @@ impl Pool {
     /// Sits an account out after a quota refusal. Deadlines only extend.
     pub fn block(&self, id: &str, until: Timestamp, model: Option<&str>, reason: &str) {
         let mut inner = self.lock();
-        let state = inner.states.entry(id.to_owned()).or_default();
+        let state = inner.state_mut(id);
         match model {
             Some(model) => {
                 // One model however it is spelled: `Claude-Fable-5-2` is
@@ -776,7 +804,7 @@ impl Pool {
     /// Briefly prefers other accounts after throttling.
     pub fn throttle(&self, id: &str, until: Timestamp) {
         let mut inner = self.lock();
-        let state = inner.states.entry(id.to_owned()).or_default();
+        let state = inner.state_mut(id);
         state.throttled_until = state.throttled_until.max(Some(until));
         inner.dirty = true;
     }
@@ -784,14 +812,14 @@ impl Pool {
     /// Notes a non-quota failure for display.
     pub fn record_error(&self, id: &str, error: &str) {
         let mut inner = self.lock();
-        inner.states.entry(id.to_owned()).or_default().last_error = Some(error.to_owned());
+        inner.state_mut(id).last_error = Some(error.to_owned());
         inner.dirty = true;
     }
 
     /// Records the account's reset credits as just listed.
     pub fn record_credits(&self, id: &str, credits: Vec<Credit>, now: Timestamp) {
         let mut inner = self.lock();
-        let state = inner.states.entry(id.to_owned()).or_default();
+        let state = inner.state_mut(id);
         state.credits = Some(CreditList {
             credits,
             listed_at: now,
@@ -805,7 +833,7 @@ impl Pool {
     /// usage until the next reading, and takes the credit off its list.
     pub fn record_reset(&self, id: &str, now: Timestamp, credit: Option<&str>) {
         let mut inner = self.lock();
-        let state = inner.states.entry(id.to_owned()).or_default();
+        let state = inner.state_mut(id);
         state.blocked_until = None;
         state.model_blocks.clear();
         state.throttled_until = None;
@@ -836,7 +864,7 @@ impl Pool {
     /// Returns the models whose blocks were lifted.
     pub fn clear_blocks(&self, id: &str) -> Vec<String> {
         let mut inner = self.lock();
-        let state = inner.states.entry(id.to_owned()).or_default();
+        let state = inner.state_mut(id);
         state.blocked_until = None;
         state.throttled_until = None;
         let models = std::mem::take(&mut state.model_blocks)
@@ -849,12 +877,7 @@ impl Pool {
 
     pub fn add_usage(&self, id: &str, usage: &Usage) {
         let mut inner = self.lock();
-        inner
-            .states
-            .entry(id.to_owned())
-            .or_default()
-            .usage
-            .add(usage);
+        inner.state_mut(id).usage.add(usage);
         inner.dirty = true;
     }
 
@@ -918,17 +941,20 @@ impl Pool {
             }
         }
         let ttl = self.routing().session_ttl;
-        inner
-            .sessions
-            .retain(|_, b| now.duration_since(b.last_used) < ttl);
+        for sessions in inner.sessions.values_mut() {
+            sessions.retain(|_, b| now.duration_since(b.last_used) < ttl);
+        }
+        inner.sessions.retain(|_, sessions| !sessions.is_empty());
         let sessions = inner
             .sessions
             .iter()
-            .map(|((provider, session), b)| SavedSession {
-                provider: *provider,
-                session: session.clone(),
-                account: b.account.clone(),
-                last_used: b.last_used,
+            .flat_map(|(provider, sessions)| {
+                sessions.iter().map(|(session, b)| SavedSession {
+                    provider: *provider,
+                    session: session.clone(),
+                    account: b.account.clone(),
+                    last_used: b.last_used,
+                })
             })
             .collect();
         (
@@ -950,7 +976,7 @@ impl Pool {
         let ttl = self.routing().session_ttl;
         let inner = self.lock();
         let mut counts = HashMap::new();
-        for binding in inner.sessions.values() {
+        for binding in inner.sessions.values().flat_map(HashMap::values) {
             if now.duration_since(binding.last_used) < ttl {
                 *counts.entry(binding.account.clone()).or_default() += 1;
             }
@@ -962,19 +988,15 @@ impl Pool {
 /// Placement for a session without a usable binding.
 fn place<'a>(
     strategy: Strategy,
-    ready: &[&'a Account],
+    ready: &[&'a Arc<Account>],
     inner: &Inner,
     now: Timestamp,
-) -> Option<&'a Account> {
+) -> Option<&'a Arc<Account>> {
     let states = &inner.states;
     let top = ready.iter().map(|a| a.priority).max()?;
     let tier = ready.iter().copied().filter(|a| a.priority == top);
-    let limits = |a: &Account| {
-        states
-            .get(&a.id)
-            .map(|s| s.limits.clone())
-            .unwrap_or_default()
-    };
+    let unknown = Limits::default();
+    let limits = |a: &Account| states.get(&a.id).map_or(&unknown, |s| &s.limits);
     let last_used = |a: &Account| states.get(&a.id).and_then(|s| s.last_used);
     let score = |a: &Account| Score(limits(a).score(now));
 
@@ -1452,7 +1474,7 @@ mod tests {
         let b = account(ProviderId::Claude, "b", 2);
         let pool = pool(Strategy::FillFirst, &[&a, &b]);
         assert_eq!(pick(&pool, Some("s"), 1000).unwrap(), a.id);
-        let exclude = [a.id.clone()];
+        let exclude = [Arc::new(a.clone())];
         let req = Pick {
             provider: ProviderId::Claude,
             affinity: None,
@@ -1574,7 +1596,7 @@ mod tests {
         let a = account(ProviderId::Claude, "a", 1);
         let pool = pool(Strategy::FillFirst, &[&a]);
         pool.block(&a.id, ts(5000), None, "limit");
-        let exclude = [a.id.clone()];
+        let exclude = [Arc::new(a.clone())];
         let req = Pick {
             provider: ProviderId::Claude,
             affinity: None,

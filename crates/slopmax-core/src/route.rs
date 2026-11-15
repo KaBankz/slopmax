@@ -14,6 +14,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use smallvec::SmallVec;
+
 use crate::account::Account;
 use crate::agent;
 use crate::provider::{Billing, ProviderId};
@@ -21,13 +23,20 @@ use crate::wire::Dialect;
 use crate::wire::translate;
 
 /// One way to serve a request: a provider, the model to ask it for, and
-/// the accounts that may.
+/// the accounts that may. It borrows from the table and the request, so
+/// planning copies no names.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Step {
+pub struct Step<'a> {
     pub provider: ProviderId,
-    pub model: String,
-    pub accounts: Vec<String>,
+    pub model: &'a str,
+    pub accounts: Ids<'a>,
 }
+
+/// Account ids, held inline up to four: most setups never reach the heap.
+pub type Ids<'a> = SmallVec<[&'a str; 4]>;
+
+/// The steps of a plan, held inline up to two.
+pub type Steps<'a> = SmallVec<[Step<'a>; 2]>;
 
 /// The configuration and accounts routing works from.
 #[derive(Debug, Clone, Copy)]
@@ -66,8 +75,8 @@ pub enum NoRoute {
 }
 
 /// The steps that may serve `request`, in order.
-pub fn plan(table: &Table, request: &Request) -> Result<Vec<Step>, NoRoute> {
-    let mut steps = Vec::new();
+pub fn plan<'a>(table: &Table<'a>, request: &Request<'a>) -> Result<Steps<'a>, NoRoute> {
+    let mut steps = Steps::new();
     let mut refused = None;
     let primary = resolve(table, request.model);
     let fallbacks = table
@@ -80,7 +89,7 @@ pub fn plan(table: &Table, request: &Request) -> Result<Vec<Step>, NoRoute> {
     for (i, model) in std::iter::once(primary).chain(fallbacks).enumerate() {
         let default = request.default.filter(|_| i == 0);
         for step in steps_for(table, model, default) {
-            match permitted(table, &step, request) {
+            match permitted(table, step, request) {
                 Ok(step) if !steps.contains(&step) => steps.push(step),
                 Ok(_) => {}
                 Err(no) => {
@@ -98,23 +107,30 @@ pub fn plan(table: &Table, request: &Request) -> Result<Vec<Step>, NoRoute> {
 }
 
 /// The model an alias stands for.
-fn resolve<'a>(table: &'a Table, model: &'a str) -> &'a str {
+fn resolve<'a>(table: &Table<'a>, model: &'a str) -> &'a str {
     table.aliases.get(model).map_or(model, String::as_str)
 }
 
 /// Every provider step for `model`, before policy.
-fn steps_for(table: &Table, model: &str, default: Option<ProviderId>) -> Vec<Step> {
-    let serving = |provider: ProviderId, model: &str| -> Vec<String> {
-        table
-            .accounts
+fn steps_for<'a>(table: &Table<'a>, model: &'a str, default: Option<ProviderId>) -> Steps<'a> {
+    let accounts = table.accounts;
+    let serving = |provider: ProviderId, model: &str| -> Ids<'a> {
+        accounts
             .iter()
             .filter(|a| a.provider == provider && provider.get().serves(a, model))
-            .map(|a| a.id.clone())
+            .map(|a| a.id.as_str())
             .collect()
     };
-    let has_accounts = |provider: ProviderId| table.accounts.iter().any(|a| a.provider == provider);
+    let all = |provider: ProviderId| -> Ids<'a> {
+        accounts
+            .iter()
+            .filter(|a| a.provider == provider)
+            .map(|a| a.id.as_str())
+            .collect()
+    };
+    let has_accounts = |provider: ProviderId| accounts.iter().any(|a| a.provider == provider);
 
-    let mut steps = Vec::new();
+    let mut steps = Steps::new();
     for provider in ProviderId::ALL {
         let accounts = serving(provider, model);
         if accounts.is_empty() {
@@ -128,7 +144,7 @@ fn steps_for(table: &Table, model: &str, default: Option<ProviderId>) -> Vec<Ste
         }
         steps.push(Step {
             provider,
-            model: model.to_owned(),
+            model,
             accounts,
         });
     }
@@ -140,30 +156,27 @@ fn steps_for(table: &Table, model: &str, default: Option<ProviderId>) -> Vec<Ste
     // `qwen/qwen3-coder` contain slashes too.
     if let Some((prefix, rest)) = model.split_once('/') {
         if let Ok(provider) = prefix.parse::<ProviderId>() {
-            let accounts: Vec<String> = table
-                .accounts
-                .iter()
-                .filter(|a| a.provider == provider)
-                .map(|a| a.id.clone())
-                .collect();
+            let accounts = all(provider);
             if !accounts.is_empty() {
                 steps.push(Step {
                     provider,
-                    model: rest.to_owned(),
+                    model: rest,
                     accounts,
                 });
             }
             return steps;
         }
-        if let Some(account) = table.accounts.iter().find(|a| {
+        if let Some(account) = accounts.iter().find(|a| {
             a.id == prefix
                 || a.label.as_deref() == Some(prefix)
                 || a.email.as_deref() == Some(prefix)
         }) {
+            let mut ids = Ids::new();
+            ids.push(account.id.as_str());
             steps.push(Step {
                 provider: account.provider,
-                model: rest.to_owned(),
-                accounts: vec![account.id.clone()],
+                model: rest,
+                accounts: ids,
             });
             return steps;
         }
@@ -171,13 +184,8 @@ fn steps_for(table: &Table, model: &str, default: Option<ProviderId>) -> Vec<Ste
     if let Some(provider) = default.filter(|p| has_accounts(*p)) {
         steps.push(Step {
             provider,
-            model: model.to_owned(),
-            accounts: table
-                .accounts
-                .iter()
-                .filter(|a| a.provider == provider)
-                .map(|a| a.id.clone())
-                .collect(),
+            model,
+            accounts: all(provider),
         });
     }
     steps
@@ -185,7 +193,11 @@ fn steps_for(table: &Table, model: &str, default: Option<ProviderId>) -> Vec<Ste
 
 /// The step as far as policy and format allow: accounts that may serve
 /// this client, in its own format or by translation.
-fn permitted(table: &Table, step: &Step, request: &Request) -> Result<Step, NoRoute> {
+fn permitted<'a>(
+    table: &Table<'a>,
+    mut step: Step<'a>,
+    request: &Request,
+) -> Result<Step<'a>, NoRoute> {
     let provider = step.provider.get();
     if let Some(only) = provider.spec().agent_only
         && request.agent != Some(only)
@@ -196,31 +208,24 @@ fn permitted(table: &Table, step: &Step, request: &Request) -> Result<Step, NoRo
             agent,
         });
     }
-    let accounts: Vec<String> = step
-        .accounts
-        .iter()
-        .filter(|id| {
-            table
-                .accounts
-                .iter()
-                .find(|a| &a.id == *id)
-                .is_some_and(|a| {
-                    provider.dialects(a).iter().any(|d| {
-                        *d == request.dialect || translate::can_translate(request.dialect, *d)
-                    })
-                })
-        })
-        .cloned()
-        .collect();
-    if accounts.is_empty() {
+    step.accounts.retain(|id| {
+        table
+            .accounts
+            .iter()
+            .find(|a| a.id == **id)
+            .is_some_and(|a| {
+                provider
+                    .dialects(a)
+                    .iter()
+                    .any(|d| *d == request.dialect || translate::can_translate(request.dialect, *d))
+            })
+    });
+    if step.accounts.is_empty() {
         return Err(NoRoute::Unserved {
-            model: step.model.clone(),
+            model: step.model.to_owned(),
         });
     }
-    Ok(Step {
-        accounts,
-        ..step.clone()
-    })
+    Ok(step)
 }
 
 #[cfg(test)]
@@ -292,8 +297,12 @@ mod tests {
                 agent,
                 default,
             };
-            plan(&table, &request)
-                .map(|steps| steps.into_iter().map(|s| (s.provider, s.model)).collect())
+            plan(&table, &request).map(|steps| {
+                steps
+                    .into_iter()
+                    .map(|s| (s.provider, s.model.to_owned()))
+                    .collect()
+            })
         }
     }
 
@@ -427,7 +436,8 @@ mod tests {
             default: Some(Codex),
         };
         let steps = plan(&table, &request).unwrap();
-        assert_eq!(steps[0].accounts, [f.accounts[1].id.clone()]);
+        assert_eq!(steps[0].accounts.as_slice(), [f.accounts[1].id.as_str()]);
+        drop(steps);
         // A model id with a slash is a model when an account serves it.
         assert_eq!(
             f.plan("qwen/qwen3-coder", Chat, None),

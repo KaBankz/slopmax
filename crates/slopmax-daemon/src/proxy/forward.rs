@@ -27,7 +27,7 @@ use super::{App, Target, error, json_reply};
 use crate::account::Account;
 use crate::agent::{self, Agent};
 use crate::auth;
-use crate::config::ClientKey;
+use crate::config::{ClientKey, Config};
 use crate::human;
 use crate::ledger::{End, Entry};
 use crate::log;
@@ -38,7 +38,7 @@ use crate::net::server::{Request, Response};
 use crate::pool::{Choice, DEFAULT_BLOCK, DEFAULT_THROTTLE, Pick, Unavailable};
 use crate::provider::credits::Outcome;
 use crate::provider::{ProviderId, Verdict};
-use crate::route::{self, NoRoute, Step};
+use crate::route::{self, NoRoute, Step, Steps};
 use crate::time::{SignedDuration, Timestamp};
 use crate::wire::ir::{self, Answer, Event, Part};
 use crate::wire::rawjson::{self, Seg};
@@ -178,12 +178,15 @@ impl Inbound {
         }
     }
 
-    /// The steps that may serve this request.
-    fn plan(&self, app: &App) -> Result<Vec<Step>, NoRoute> {
-        let accounts = app.pool.accounts();
-        let config = app.config();
+    /// The steps that may serve this request, borrowing from it, the
+    /// accounts and the config.
+    fn plan<'a>(
+        &'a self,
+        accounts: &'a [Arc<Account>],
+        config: &'a Config,
+    ) -> Result<Steps<'a>, NoRoute> {
         let table = route::Table {
-            accounts: &accounts,
+            accounts,
             aliases: &config.aliases,
             fallbacks: &config.fallbacks,
             paid_overflow: config.paid_overflow,
@@ -231,12 +234,12 @@ fn models_named(body: &[u8]) -> usize {
 }
 
 /// The one step for a request routed by its path.
-fn native_step(
-    table: &route::Table,
+fn native_step<'a>(
+    table: &route::Table<'a>,
     provider: ProviderId,
-    model: Option<&str>,
+    model: Option<&'a str>,
     agent: Option<&dyn Agent>,
-) -> Result<Vec<Step>, NoRoute> {
+) -> Result<Steps<'a>, NoRoute> {
     if let Some(only) = provider.spec().agent_only
         && agent.map(|a| a.id()) != Some(only)
     {
@@ -247,13 +250,15 @@ fn native_step(
         .accounts
         .iter()
         .filter(|a| a.provider == provider)
-        .map(|a| a.id.clone())
+        .map(|a| a.id.as_str())
         .collect();
-    Ok(vec![Step {
+    let mut steps = Steps::new();
+    steps.push(Step {
         provider,
-        model: model.unwrap_or_default().to_owned(),
+        model: model.unwrap_or_default(),
         accounts,
-    }])
+    });
+    Ok(steps)
 }
 
 /// The reply when routing finds no way to serve a request.
@@ -424,14 +429,16 @@ pub(super) async fn forward(
             return error(Some(dialect), StatusCode::FORBIDDEN, &refused);
         }
     }
-    let mut steps = match inbound.plan(&app) {
+    // Held for the request: its steps borrow their names from these.
+    let (accounts, config) = (app.pool.accounts(), app.config());
+    let mut steps = match inbound.plan(&accounts, &config) {
         Ok(steps) => steps,
         Err(no) => return refusal(dialect, &inbound.parts.headers, no),
     };
     // Aliases and fallbacks may name other models than the one asked for;
     // a key held to some models reaches those alone.
     if let Some(key) = client.as_ref().filter(|k| !k.models.is_empty()) {
-        steps.retain(|step| step.model.is_empty() || key.allows(&step.model));
+        steps.retain(|step| step.model.is_empty() || key.allows(step.model));
         if steps.is_empty() {
             let message = format!(
                 "the key {:?} may not use the models this request is routed to",
@@ -446,7 +453,7 @@ pub(super) async fn forward(
     {
         return count_tokens(&inbound);
     }
-    let mut tried: Vec<String> = Vec::new();
+    let mut tried: Vec<Arc<Account>> = Vec::new();
     let mut last: Option<Failure> = None;
     let mut unavailable: Option<Unavailable> = None;
     for step in &steps {
@@ -457,7 +464,7 @@ pub(super) async fn forward(
                 session: inbound.session.as_deref(),
                 affinity: inbound.affinity,
                 housekeeping: inbound.housekeeping(),
-                model: Some(step.model.as_str()).filter(|m| !m.is_empty()),
+                model: Some(step.model).filter(|m| !m.is_empty()),
                 candidates: Some(&step.accounts),
                 exclude: &tried,
             };
@@ -468,7 +475,7 @@ pub(super) async fn forward(
                     if spent && app.config().redeem_when_exhausted && !rescued {
                         rescued = true;
                         if let Some(id) = rescue(&app, step.provider).await {
-                            tried.retain(|t| *t != id);
+                            tried.retain(|t| t.id != id);
                             continue;
                         }
                     }
@@ -476,7 +483,7 @@ pub(super) async fn forward(
                     break;
                 }
             };
-            tried.push(choice.account.id.clone());
+            tried.push(Arc::clone(&choice.account));
             match attempt(&app, &inbound, step, choice, tried.len()).await {
                 Attempt::Served(response) => return response,
                 Attempt::Done(response) => {
@@ -488,7 +495,7 @@ pub(super) async fn forward(
                             &app,
                             &inbound,
                             step.provider,
-                            tried.last(),
+                            tried.last().map(|a| &a.id),
                             status,
                             tried.len(),
                         );
@@ -505,7 +512,7 @@ pub(super) async fn forward(
         &app,
         &inbound,
         provider,
-        tried.last(),
+        tried.last().map(|a| &a.id),
         response.status(),
         tried.len(),
     );
@@ -560,7 +567,7 @@ fn sooner(earlier: Option<Unavailable>, next: Unavailable) -> Unavailable {
 async fn attempt(
     app: &Arc<App>,
     inbound: &Inbound,
-    step: &Step,
+    step: &Step<'_>,
     choice: Choice,
     attempts: usize,
 ) -> Attempt {
@@ -574,7 +581,7 @@ async fn attempt(
     };
     let provider = step.provider.get();
     let dialect = inbound.target.dialect;
-    let model = Some(step.model.as_str()).filter(|m| !m.is_empty());
+    let model = Some(step.model).filter(|m| !m.is_empty());
     // The format to translate into, when the account's API speaks another.
     let lane = lane(provider.dialects(&account), dialect).or_else(|| {
         // Compaction the API cannot do is done here, by translation.
@@ -778,7 +785,7 @@ async fn offload<T: Send + 'static>(size: usize, work: impl FnOnce() -> T + Send
 async fn outbound(
     app: &Arc<App>,
     inbound: &Inbound,
-    step: &Step,
+    step: &Step<'_>,
     account: &Account,
     lane: Option<Dialect>,
     stripped: bool,
@@ -795,7 +802,11 @@ async fn outbound(
     };
     let decoded = inbound.decode().await?;
     let replay = (!stripped).then(|| (Arc::clone(app), account.id.clone()));
-    let (model, session, which) = (step.model.clone(), inbound.session.clone(), step.provider);
+    let (model, session, which) = (
+        step.model.to_owned(),
+        inbound.session.clone(),
+        step.provider,
+    );
     let body = offload(inbound.body.len(), move || {
         let mut request = ir::Request::clone(&decoded);
         request.model = model;
@@ -876,7 +887,7 @@ fn speaks(app: &App, step: &Step, dialect: Dialect) -> bool {
     app.pool
         .accounts()
         .iter()
-        .filter(|a| step.accounts.contains(&a.id))
+        .filter(|a| step.accounts.contains(&a.id.as_str()))
         .any(|a| provider.dialects(a).contains(&dialect))
 }
 

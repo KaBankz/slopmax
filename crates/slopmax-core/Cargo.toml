@@ -25,6 +25,8 @@ slopmax-client.workspace = true
 slopmax-common.workspace = true
 slopmax-net.workspace = true
 slopmax-wire.workspace = true
+# Routing plans held inline: no heap allocation for a request's steps.
+smallvec.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
