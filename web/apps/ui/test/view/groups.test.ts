@@ -12,6 +12,21 @@ const report = fixtureReport(now)
 const byProvider = (provider: string) => groups(report, now, zone).find((group) => group.provider === provider)
 
 describe("groups", () => {
+  test("a subscription whose limits are not read yet is a group with no columns, marked unread", () => {
+    const fresh = new Report({
+      ...report,
+      accounts: [account({ id: "claude-00000001", provider: "claude", name: "new@studio.dev" })],
+      pools: [],
+    })
+    const [claude] = groups(fresh, now, zone)
+    expect(claude?.subscription).toBe(true)
+    expect(claude?.columns).toEqual([])
+    expect(claude?.overview).toEqual([])
+    expect(claude?.unread).toBe(true)
+    expect(byProvider("claude")?.unread).toBe(false)
+    expect(byProvider("anthropic")?.unread).toBe(false)
+  })
+
   test("carry a group per provider in try order, with gauges, status and the pool", () => {
     expect(groups(report, now, zone).map((group) => group.title)).toEqual([
       "Claude",

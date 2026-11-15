@@ -15,12 +15,14 @@ import {
   groupsAtom,
   nowAtom,
   openCreditsAtom,
+  pollOffAtom,
   proxyAtom,
   redeem,
   redeemingAtom,
   settingsAtom,
   shownReportAtom,
   signIn,
+  unansweredAtom,
   zone,
 } from "../atoms.ts"
 import { useAsk } from "../components/ask.tsx"
@@ -32,7 +34,7 @@ import { Tip } from "../components/ui/tooltip.tsx"
 import { askOwn, askPriority, askRedeem, askRemove, askRename, readPriority } from "../view/asks.ts"
 import { across, type Gauge, type Group, type Row } from "../view/groups.ts"
 import { needsProxy } from "../view/live.ts"
-import { autoRedeem, resetsLine } from "../view/words.ts"
+import { autoRedeem, limitsNotRead, resetsLine, resetsUnlisted } from "../view/words.ts"
 
 function PoolCells({ group }: { readonly group: Group }) {
   return (
@@ -193,6 +195,7 @@ function CreditsWell({ row, provider }: { readonly row: Row; readonly provider: 
   const redeeming = useAtomValue(redeemingAtom)
   const canChange = useAtomValue(canChangeAtom)
   const proxy = useAtomValue(proxyAtom)
+  const unanswered = useAtomValue(unansweredAtom)
   const settings = useAtomValue(settingsAtom)
   const spend = useAtomSet(redeem)
   const ask = useAsk()
@@ -202,7 +205,7 @@ function CreditsWell({ row, provider }: { readonly row: Row; readonly provider: 
   const policy = Option.flatMap(AsyncResult.value(settings), (view) =>
     Option.fromUndefinedOr(autoRedeem(view.settings, providerFacts[provider].title)),
   )
-  const held = !canChange ? (needsProxy(proxy, "redeem one") ?? "Waiting for slopmax") : credits.held
+  const held = !canChange ? (needsProxy(proxy, "redeem one", unanswered) ?? "Waiting for slopmax") : credits.held
   return (
     <div className="mx-4 mb-3.5 flex animate-appear flex-col gap-3 rounded-md bg-well p-3.5">
       <div className="flex items-start gap-4">
@@ -235,7 +238,7 @@ function CreditsWell({ row, provider }: { readonly row: Row; readonly provider: 
         )}
       </div>
       {credits.credits.length === 0 ? (
-        <span className="text-small text-muted-foreground">Listing them…</span>
+        <span className="text-small text-muted-foreground">{resetsUnlisted(credits.count)}</span>
       ) : (
         <div className="flex flex-col">
           {credits.credits.map((credit) => (
@@ -279,6 +282,12 @@ function SignInAgain({ row }: { readonly row: Row }) {
 
 const isSubscription = Schema.is(SubscriptionId)
 
+/** Where an account's windows go, before slopmax has read any of the group's. */
+function UnreadCell() {
+  const pollOff = useAtomValue(pollOffAtom)
+  return <span className="min-w-0 flex-1 text-small text-muted-foreground">{limitsNotRead(pollOff)}</span>
+}
+
 function AccountRow({ row, group }: { readonly row: Row; readonly group: Group }) {
   const [open, setOpen] = useAtom(openCreditsAtom)
   const isOpen = Option.isSome(open) && open.value === row.id
@@ -313,6 +322,8 @@ function AccountRow({ row, group }: { readonly row: Row; readonly group: Group }
               {row.account.models.length === 0 ? "Any model" : row.account.models.join(", ")}
             </span>
           </div>
+        ) : group.unread ? (
+          <UnreadCell />
         ) : (
           <div className="flex flex-wrap gap-x-4 gap-y-3 @table:contents">
             {row.gauges.map((gauge, i) => (
@@ -396,7 +407,7 @@ export function ProviderPage({ provider }: { readonly provider: ProviderId }) {
         }
       >
         <Panel>
-          {g.subscription && (
+          {g.subscription && !g.unread && (
             <div className="hidden items-center gap-4 border-b border-separator px-4 py-2 text-small text-muted-foreground @table:flex">
               <span className="w-60 shrink-0">Account</span>
               {g.columns.map((column) => (

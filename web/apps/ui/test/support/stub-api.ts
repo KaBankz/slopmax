@@ -13,6 +13,7 @@ import {
   defaultSettings,
   Event,
   type HistoryRange,
+  Internal,
   KeyInfo,
   LoginId,
   NewKey,
@@ -93,13 +94,14 @@ export interface Stub {
 }
 
 /** An error the API answers with, and its status. */
-export type Refusal = BadRequest | UpstreamFailed | NotFound | Conflict
+export type Refusal = BadRequest | UpstreamFailed | NotFound | Conflict | Internal
 
 const statuses: { readonly [K in Refusal["_tag"]]: number } = {
   BadRequest: 400,
   NotFound: 404,
   Conflict: 409,
   UpstreamFailed: 502,
+  Internal: 500,
 }
 
 /** An account's notes with its priority's note set to `priority`. */

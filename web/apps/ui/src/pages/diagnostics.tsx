@@ -53,11 +53,12 @@ const checking = <Empty title="Checking your setup…" detail="The same checks s
 export function DiagnosticsPage() {
   const offline = AsyncResult.getOrElse(useAtomValue(offlineAtom), () => Option.none())
   const doctor = useAtomValue(doctorAtom)
+  const again = useAtomRefresh(doctorAtom)
   const sections = Option.isSome(offline) ? Option.some(offline.value.doctor) : AsyncResult.value(doctor)
   const body = Option.isSome(sections) ? (
     <Findings sections={sections.value} />
   ) : AsyncResult.isFailure(doctor) ? (
-    <Failed title="Could not check the setup" detail={failureText(doctor.cause)} />
+    <Failed title="Could not check the setup" detail={failureText(doctor.cause)} onRetry={again} />
   ) : (
     checking
   )

@@ -5,7 +5,8 @@ import { useAtomValue } from "@effect/atom-react"
 import { Option } from "effect"
 import { Activity } from "lucide-react"
 import { feedAtom, liveAtom, shownReportAtom, zone } from "../atoms.ts"
-import { Dot, Empty, Panel } from "../components/parts.tsx"
+import { Dot, Panel } from "../components/parts.tsx"
+import { Quiet } from "../components/quiet.tsx"
 import { feedRow, feedSize } from "../view/live.ts"
 
 export function RequestsPage() {
@@ -19,10 +20,10 @@ export function RequestsPage() {
     })
   if (feed.length === 0) {
     return (
-      <Empty
+      <Quiet
         icon={Activity}
         title={live._tag === "Running" ? "Waiting for requests" : "Connecting to the proxy…"}
-        detail="Answered and failed requests as they happen."
+        detail="Answered and failed requests show here as they happen."
       />
     )
   }

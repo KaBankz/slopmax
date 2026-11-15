@@ -24,24 +24,38 @@ import {
   AccountPatch,
   ImportRequest,
   type ImportResult,
+  type ImportSource,
   MakeKey,
   PasteAddress,
   RedeemRequest,
+  SlopmaxApi,
   StartLogin,
 } from "@slopmax/client/api"
 import { ProxyState } from "@slopmax/client/desktop"
 import type { OfflineView, ProxyAction } from "@slopmax/client/desktop"
 import { noticeBody, noticeTitle } from "@slopmax/client/format"
 import { Cause, Data, DateTime, Duration, Effect, Exit, FiberHandle, Option, Schedule, Schema, Stream } from "effect"
+import { HttpClient, HttpClientRequest } from "effect/http"
+import { HttpApiClient } from "effect/http-api"
 import { AsyncResult, Atom, AtomRegistry, Reactivity } from "effect/reactivity"
-import { Api, appRuntime, hostAtom, ownerKeyAtom } from "./api.ts"
+import { Api, appRuntime, hostAtom, keyCheckRuntime, ownerKeyAtom } from "./api.ts"
 import { Host, UiPrefs } from "./host.ts"
 import { attention, type Attention } from "./view/attention.ts"
 import { type Group, groups } from "./view/groups.ts"
-import { type FeedEntry, pushFeed, type SignIn, signInDone, startSignIn, stepSignIn, tell } from "./view/live.ts"
+import {
+  type FeedEntry,
+  pushFeed,
+  shownProxy,
+  type SignIn,
+  signInDone,
+  startSignIn,
+  stepSignIn,
+  type StreamState,
+  tell,
+} from "./view/live.ts"
 import { type Page, pageHash, Pages, parseRoute, type Route, toggleSidebar as toggled } from "./view/pages.ts"
 import { addToast, type Toast } from "./view/toasts.ts"
-import { defaultRange, failureText, sentenceCase, settingChanged } from "./view/words.ts"
+import { count, defaultRange, failureText, sentenceCase, settingChanged } from "./view/words.ts"
 
 // --- Time ------------------------------------------------------------------------
 
@@ -209,13 +223,20 @@ const onLogin = (store: Store, id: string, event: LoginEvent) =>
     store.set(signInAtom, Option.some(next))
   })
 
+/** The queries read again once the stream is back after a drop. */
+const rereadOnReconnect: ReadonlyArray<string> = ["settings", "keys", "agents", "doctor", "history"]
+
 const onEvent = (event: Event, store: Store, later: FiberHandle.FiberHandle) =>
   Effect.gen(function* () {
     const host = yield* Host
     switch (event._tag) {
-      case "Hello":
+      case "Hello": {
+        const back = store.read(liveAtom)._tag === "Reconnecting"
         store.set(liveAtom, { _tag: "Running", version: event.version })
+        // Back after a drop: what was read while slopmax did not answer (or failed to be read) is read again.
+        if (back) yield* Reactivity.invalidate(rereadOnReconnect)
         return
+      }
       case "Status":
         store.set(reportAtom, Option.some(event.report))
         if (host.kind === "web" && event.report.nudges.length > 0) yield* notifyOnce(event.report.nudges)
@@ -337,6 +358,18 @@ export const proxyAtom = Atom.make((get): ProxyState => {
   return live._tag === "Running" ? ProxyState.cases.Running.make({ version: live.version }) : checking
 })
 
+/** In the web dashboard, whether its event stream is up; none in the desktop window, whose main process knows the proxy. */
+const webStreamAtom = Atom.make((get): StreamState | undefined => {
+  const host = get(hostAtom)
+  return Option.isSome(host) && host.value.kind === "web" ? get(liveAtom)._tag : undefined
+})
+
+/** The proxy's state in a label, the same in the sidebar's foot and in Settings. */
+export const proxyStatusAtom = Atom.make((get) => shownProxy(get(proxyAtom), get(webStreamAtom)))
+
+/** Whether the web dashboard lost slopmax and is trying to reach it again. */
+export const unansweredAtom = Atom.make((get): boolean => get(webStreamAtom) === "Reconnecting")
+
 /** The report and the doctor read from disk while the proxy is stopped (desktop only). */
 export const offlineAtom = appRuntime.atom((get) =>
   Effect.gen(function* () {
@@ -375,6 +408,11 @@ export const keysAtom = Api.query("config", "keys", { reactivityKeys: ["keys"] }
 export const agentsAtom = Api.query("agents", "list", { reactivityKeys: ["agents"] })
 export const doctorAtom = Api.query("system", "doctor", { reactivityKeys: ["doctor"] })
 
+/** Whether usage polling is off, so windows are read only by requests and Refresh; false until the settings are read. */
+export const pollOffAtom = Atom.make((get): boolean =>
+  Option.exists(AsyncResult.value(get(settingsAtom)), (view) => view.settings.pollMinutes === 0),
+)
+
 /** A range's history, read again a little after requests are answered and once a minute while shown. */
 export const historyAtom = Atom.family((range: HistoryRange) =>
   Api.runtime
@@ -409,12 +447,15 @@ type Action<Arg, E> = (arg: Arg, store: Store) => Effect.Effect<Outcome, E, Api 
  */
 const concurrent = { concurrent: true } as const
 
+/** What an action that failed says before why: which action it was, so a toast read later still makes sense. */
+type Failed<Arg> = string | ((arg: Arg, store: Store) => string)
+
 /**
  * Runs an action: on success takes its report and says its text; on failure
  * says what went wrong (after `failed`, when given). A refused key signs the
  * dashboard out.
  */
-const act = <Arg, E>(run: Action<Arg, E>, failed?: string) =>
+const act = <Arg, E>(run: Action<Arg, E>, failed?: Failed<Arg>) =>
   appRuntime.fn<Arg>()(
     (arg) =>
       Effect.flatMap(actionStore, (store) =>
@@ -432,7 +473,12 @@ const act = <Arg, E>(run: Action<Arg, E>, failed?: string) =>
                 yield* signOut(store)
                 return
               }
-              say(store, failed === undefined ? sentenceCase(failureText(cause)) : `${failed}${failureText(cause)}`, true)
+              const before = typeof failed === "function" ? failed(arg, store) : failed
+              say(
+                store,
+                before === undefined ? sentenceCase(failureText(cause)) : `${before}${failureText(cause)}`,
+                true,
+              )
             }),
           ),
           Effect.asVoid,
@@ -442,7 +488,7 @@ const act = <Arg, E>(run: Action<Arg, E>, failed?: string) =>
   )
 
 /** An action that takes nothing. */
-const task = <E>(run: (store: Store) => ReturnType<Action<void, E>>, failed?: string) =>
+const task = <E>(run: (store: Store) => ReturnType<Action<void, E>>, failed?: Failed<void>) =>
   act((_: void, store) => run(store), failed)
 
 const accountOf = (store: Store, id: string) =>
@@ -459,14 +505,19 @@ const providerOf = (store: Store, id: string): string =>
     onSome: (account) => providerFacts[account.provider].title,
   })
 
-export const refresh = task(() =>
-  Effect.gen(function* () {
-    const client = yield* Api
-    const report = yield* client.system.refresh()
-    yield* Reactivity.invalidate(["history"])
-    return { report, text: "Usage and limit resets read again." }
-  }),
+export const refresh = task(
+  () =>
+    Effect.gen(function* () {
+      const client = yield* Api
+      const report = yield* client.system.refresh()
+      yield* Reactivity.invalidate(["history"])
+      return { report, text: "Usage and limit resets read again." }
+    }),
+  "Could not read usage again: ",
 )
+
+/** Whether usage is being read again, so Refresh spins and is not pressed twice. */
+export const refreshingAtom = Atom.make((get): boolean => AsyncResult.isWaiting(get(refresh)))
 
 /** Starts a browser (or device code) sign-in; its steps arrive on the event stream. */
 export const signIn = act(
@@ -505,18 +556,24 @@ export const cancelSignIn = task((store) =>
   }),
 )
 
-/** Hands the address a browser on another machine ended on to the sign-in in progress. */
-export const pasteAddress = act((address: string, store) =>
-  Effect.gen(function* () {
-    const client = yield* Api
-    const current = store.read(signInAtom)
-    if (Option.isNone(current) || current.value.id === undefined || address.trim() === "") return {}
-    yield* client.logins.paste({
-      params: { id: LoginId.make(current.value.id) },
-      payload: new PasteAddress({ address: address.trim() }),
-    })
-    return {}
-  }),
+/** Hands the address a browser on another machine ended on (or the code its page shows) to the sign-in in progress. */
+export const pasteAddress = act(
+  (address: string, store) =>
+    Effect.gen(function* () {
+      const client = yield* Api
+      const current = store.read(signInAtom)
+      if (Option.isNone(current) || current.value.id === undefined || address.trim() === "") return {}
+      yield* client.logins.paste({
+        params: { id: LoginId.make(current.value.id) },
+        payload: new PasteAddress({ address: address.trim() }),
+      })
+      return {}
+    }),
+  (_, store) => {
+    const step = Option.map(store.read(signInAtom), (current) => current.step)
+    const code = Option.exists(step, (s) => s._tag === "Authorize" && s.port === 0)
+    return code ? "That code was not accepted: " : "That address was not accepted: "
+  },
 )
 
 /** What an account added through the API is called in the toast: its label, else its provider. */
@@ -545,13 +602,28 @@ export const addAccount = appRuntime.fn<AddAccount>()(
   concurrent,
 )
 
-/** What importing logins says it did. */
-export const importText = (result: ImportResult): string => {
+/** Where an import found a login, as people call it. */
+const importSources: { readonly [K in ImportSource]: string } = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+  cliproxyapi: "CLIProxyAPI",
+}
+
+/** What importing logins says it did, and whether it reads as a failure. */
+export const importText = (result: ImportResult): { readonly text: string; readonly error: boolean } => {
   const saved = result.outcomes.filter((outcome) => outcome._tag === "Saved").length
   const found = result.outcomes.length
+  if (found === 0) {
+    return { text: "No logins found. Sign in with Claude Code or Codex first, or use Sign in above.", error: false }
+  }
   const accounts = saved === 1 ? "1 account" : `${saved} accounts`
-  if (found === 0) return "No logins found to import."
-  return saved === found ? `Imported ${accounts}.` : `Imported ${accounts} of ${found} logins found.`
+  if (saved === found) return { text: `Imported ${accounts}.`, error: false }
+  const failed = result.outcomes.find((outcome) => outcome._tag === "Failed")
+  const why = failed === undefined ? "" : ` ${importSources[failed.source]}: ${failed.message}`
+  return {
+    text: `Imported ${accounts} of ${count(found, "login")} found.${why}`,
+    error: saved === 0,
+  }
 }
 
 export const importLogins = task(
@@ -559,7 +631,7 @@ export const importLogins = task(
     Effect.gen(function* () {
       const client = yield* Api
       const result = yield* client.accounts.import({ payload: new ImportRequest({ own: false }) })
-      return { report: result.report, text: importText(result) }
+      return { report: result.report, ...importText(result) }
     }),
   "Could not import: ",
 )
@@ -574,50 +646,69 @@ export type AccountChange =
   | { readonly _tag: "Remove"; readonly id: string }
   | { readonly _tag: "Own"; readonly id: string }
 
-export const changeAccount = act((change: AccountChange, store) =>
-  Effect.gen(function* () {
-    const client = yield* Api
+export const changeAccount = act(
+  (change: AccountChange, store) =>
+    Effect.gen(function* () {
+      const client = yield* Api
+      switch (change._tag) {
+        case "Pin": {
+          const report = yield* client.accounts.pin({ params: { id: AccountId.make(change.id) } })
+          return { report, text: `New ${providerOf(store, change.id)} sessions go to ${nameOf(store, change.id)}.` }
+        }
+        case "UnpinAll":
+          return { report: yield* client.accounts.unpinAll(), text: "slopmax chooses accounts again." }
+        case "Enable": {
+          const name = nameOf(store, change.id)
+          const report = yield* client.accounts.update({
+            params: { id: AccountId.make(change.id) },
+            payload: new AccountPatch({ disabled: !change.on }),
+          })
+          return { report, text: `${name} ${change.on ? "enabled" : "disabled"}.` }
+        }
+        case "Priority": {
+          const report = yield* client.accounts.update({
+            params: { id: AccountId.make(change.id) },
+            payload: new AccountPatch({ priority: change.priority }),
+          })
+          return { report, text: `${nameOf(store, change.id)} is at priority ${change.priority}.` }
+        }
+        case "Rename": {
+          const report = yield* client.accounts.update({
+            params: { id: AccountId.make(change.id) },
+            payload: new AccountPatch({ label: change.label.trim() === "" ? null : change.label.trim() }),
+          })
+          return { report, text: "Renamed." }
+        }
+        case "Remove": {
+          const name = nameOf(store, change.id)
+          const report = yield* client.accounts.remove({ params: { id: AccountId.make(change.id) } })
+          return { report, text: `${name} removed.` }
+        }
+        case "Own": {
+          const name = nameOf(store, change.id)
+          const report = yield* client.accounts.own({ params: { id: AccountId.make(change.id) } })
+          return { report, text: `slopmax refreshes ${name} itself now.` }
+        }
+      }
+    }),
+  (change, store) => {
+    if (change._tag === "UnpinAll") return "Could not stop pinning: "
+    const name = nameOf(store, change.id)
     switch (change._tag) {
-      case "Pin": {
-        const report = yield* client.accounts.pin({ params: { id: AccountId.make(change.id) } })
-        return { report, text: `New ${providerOf(store, change.id)} sessions go to ${nameOf(store, change.id)}.` }
-      }
-      case "UnpinAll":
-        return { report: yield* client.accounts.unpinAll(), text: "slopmax chooses accounts again." }
-      case "Enable": {
-        const name = nameOf(store, change.id)
-        const report = yield* client.accounts.update({
-          params: { id: AccountId.make(change.id) },
-          payload: new AccountPatch({ disabled: !change.on }),
-        })
-        return { report, text: `${name} ${change.on ? "enabled" : "disabled"}.` }
-      }
-      case "Priority": {
-        const report = yield* client.accounts.update({
-          params: { id: AccountId.make(change.id) },
-          payload: new AccountPatch({ priority: change.priority }),
-        })
-        return { report, text: `${nameOf(store, change.id)} is at priority ${change.priority}.` }
-      }
-      case "Rename": {
-        const report = yield* client.accounts.update({
-          params: { id: AccountId.make(change.id) },
-          payload: new AccountPatch({ label: change.label.trim() === "" ? null : change.label.trim() }),
-        })
-        return { report, text: "Renamed." }
-      }
-      case "Remove": {
-        const name = nameOf(store, change.id)
-        const report = yield* client.accounts.remove({ params: { id: AccountId.make(change.id) } })
-        return { report, text: `${name} removed.` }
-      }
-      case "Own": {
-        const name = nameOf(store, change.id)
-        const report = yield* client.accounts.own({ params: { id: AccountId.make(change.id) } })
-        return { report, text: `slopmax refreshes ${name} itself now.` }
-      }
+      case "Pin":
+        return `Could not send new sessions to ${name}: `
+      case "Enable":
+        return `Could not ${change.on ? "enable" : "disable"} ${name}: `
+      case "Priority":
+        return `Could not change ${name}'s priority: `
+      case "Rename":
+        return `Could not rename ${name}: `
+      case "Remove":
+        return `Could not remove ${name}: `
+      case "Own":
+        return `Could not refresh ${name} here: `
     }
-  }),
+  },
 )
 
 /** What a redeemed limit reset came to, and whether it reads as a failure. */
@@ -658,22 +749,26 @@ export const redeem = act(
   "Could not redeem a limit reset: ",
 )
 
-export const connectAgent = act((id: AgentId) =>
-  Effect.gen(function* () {
-    const client = yield* Api
-    const connected = yield* client.agents.connect({ params: { id } })
-    yield* Reactivity.invalidate(["agents"])
-    return { text: `${agentFacts[id].title} now uses slopmax. ${connected.note}`.trim() }
-  }),
+export const connectAgent = act(
+  (id: AgentId) =>
+    Effect.gen(function* () {
+      const client = yield* Api
+      const connected = yield* client.agents.connect({ params: { id } })
+      yield* Reactivity.invalidate(["agents"])
+      return { text: `${agentFacts[id].title} now uses slopmax. ${connected.note}`.trim() }
+    }),
+  (id) => `Could not connect ${agentFacts[id].title}: `,
 )
 
-export const disconnectAgent = act((id: AgentId) =>
-  Effect.gen(function* () {
-    const client = yield* Api
-    yield* client.agents.disconnect({ params: { id } })
-    yield* Reactivity.invalidate(["agents"])
-    return { text: `${agentFacts[id].title} is back to its own setup.` }
-  }),
+export const disconnectAgent = act(
+  (id: AgentId) =>
+    Effect.gen(function* () {
+      const client = yield* Api
+      yield* client.agents.disconnect({ params: { id } })
+      yield* Reactivity.invalidate(["agents"])
+      return { text: `${agentFacts[id].title} is back to its own setup.` }
+    }),
+  (id) => `Could not disconnect ${agentFacts[id].title}: `,
 )
 
 /**
@@ -681,37 +776,50 @@ export const disconnectAgent = act((id: AgentId) =>
  * written. A refused change reads the settings again, so every control
  * shows what is really in force.
  */
-export const changeSettings = act((patch: LivePatch) =>
-  Effect.gen(function* () {
-    const client = yield* Api
-    yield* client.config
-      .change({ payload: patch })
-      .pipe(Effect.ensuring(Reactivity.invalidate(["settings"]).pipe(Effect.ignore)))
-    const text = settingChanged(patch)
-    return text === undefined ? {} : { text }
-  }),
+export const changeSettings = act(
+  (patch: LivePatch) =>
+    Effect.gen(function* () {
+      const client = yield* Api
+      yield* client.config
+        .change({ payload: patch })
+        .pipe(Effect.ensuring(Reactivity.invalidate(["settings"]).pipe(Effect.ignore)))
+      const text = settingChanged(patch)
+      return text === undefined ? {} : { text }
+    }),
+  "The setting was not changed: ",
 )
 
-export const makeKey = act((input: { readonly name: string; readonly models: ReadonlyArray<string> }, store) =>
-  Effect.gen(function* () {
-    const client = yield* Api
-    const name = yield* Schema.decodeUnknownEffect(KeyName)(input.name.trim())
-    const made = yield* client.config.makeKey({ payload: new MakeKey({ name, models: input.models }) })
-    store.set(newKeyAtom, Option.some(made))
-    yield* Reactivity.invalidate(["keys"])
-    return { text: `Made the key ${made.name}.` }
-  }),
+/**
+ * Makes a client key. Like adding an account, its failure stays with the
+ * form that asked (a taken name belongs beside the name), so this answers its
+ * error rather than toasting it.
+ */
+export const makeKey = appRuntime.fn<{ readonly name: string; readonly models: ReadonlyArray<string> }>()(
+  (input) =>
+    Effect.gen(function* () {
+      const store = yield* actionStore
+      const client = yield* Api
+      const name = yield* Schema.decodeUnknownEffect(KeyName)(input.name.trim())
+      const made = yield* client.config.makeKey({ payload: new MakeKey({ name, models: input.models }) })
+      store.set(newKeyAtom, Option.some(made))
+      yield* Reactivity.invalidate(["keys"])
+      say(store, `Made the key ${made.name}.`)
+      return made
+    }),
+  concurrent,
 )
 
-export const revokeKey = act((name: string, store) =>
-  Effect.gen(function* () {
-    const client = yield* Api
-    yield* client.config.removeKey({ params: { name: KeyName.make(name) } })
-    const shown = store.read(newKeyAtom)
-    if (Option.isSome(shown) && shown.value.name === name) store.set(newKeyAtom, Option.none())
-    yield* Reactivity.invalidate(["keys"])
-    return { text: `${name} revoked.` }
-  }),
+export const revokeKey = act(
+  (name: string, store) =>
+    Effect.gen(function* () {
+      const client = yield* Api
+      yield* client.config.removeKey({ params: { name: KeyName.make(name) } })
+      const shown = store.read(newKeyAtom)
+      if (Option.isSome(shown) && shown.value.name === name) store.set(newKeyAtom, Option.none())
+      yield* Reactivity.invalidate(["keys"])
+      return { text: `${name} revoked.` }
+    }),
+  (name) => `Could not revoke ${name}: `,
 )
 
 export const dismissNewKey = Atom.writable<Option.Option<NewKey>, void>(
@@ -838,6 +946,22 @@ export const enterKey = Atom.writable<Option.Option<string>, string>(
     ctx.set(ownerKeyAtom, Option.some(key))
   },
 )
+
+/**
+ * Asks slopmax whether it takes an owner key, with a cheap call carrying it,
+ * before the gate keeps it. Fails with Unauthorized when it is refused.
+ */
+export const checkKey = keyCheckRuntime.fn<string>()((key) =>
+  Effect.gen(function* () {
+    const client = yield* HttpApiClient.make(SlopmaxApi, {
+      transformClient: HttpClient.mapRequest(HttpClientRequest.bearerToken(key)),
+    })
+    yield* client.system.status()
+  }),
+)
+
+/** Whether a failure is slopmax refusing the key. */
+export const refusedKey = isUnauthorized
 
 /** Shows or hides the sidebar: the button slides it, the keyboard and the menus move it at once. */
 export const toggleSidebar = appRuntime.fn<"button" | "keyboard">()(

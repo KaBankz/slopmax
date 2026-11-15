@@ -23,6 +23,7 @@ import {
   proxyAtom,
   rangeAtom,
   refresh,
+  refreshingAtom,
   routeAtom,
   settingsAtom,
   shownReportAtom,
@@ -86,6 +87,7 @@ const useShortcuts = () => {
   const toggle = useAtomSet(toggleSidebar)
   const report = Option.getOrUndefined(useAtomValue(shownReportAtom))
   const canChange = useAtomValue(canChangeAtom)
+  const refreshing = useAtomValue(refreshingAtom)
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey || event.defaultPrevented || isTyping(event.target)) return
@@ -93,19 +95,21 @@ const useShortcuts = () => {
       if (/^[1-9]$/.test(event.key)) {
         const page = order[Number(event.key) - 1]
         if (page !== undefined) go(page)
-      } else if (event.key === "r" && canChange) again()
-      else if (event.key === "\\") toggle("keyboard")
+      } else if (event.key === "r") {
+        if (canChange && !refreshing) again()
+      } else if (event.key === "\\") toggle("keyboard")
       else if (event.key === ",") go(Pages.settings)
       else return
       event.preventDefault()
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [report, canChange, again, toggle])
+  }, [report, canChange, refreshing, again, toggle])
 }
 
 function RefreshButton() {
   const canChange = useAtomValue(canChangeAtom)
+  const refreshing = useAtomValue(refreshingAtom)
   const again = useAtomSet(refresh)
   return (
     <Tip
@@ -115,8 +119,15 @@ function RefreshButton() {
         </span>
       }
     >
-      <Button variant="ghost" size="icon" aria-label="Refresh usage" disabled={!canChange} onClick={() => again()}>
-        <RefreshCw />
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label={refreshing ? "Reading usage again…" : "Refresh usage"}
+        aria-busy={refreshing || undefined}
+        disabled={!canChange || refreshing}
+        onClick={() => again()}
+      >
+        <RefreshCw className={refreshing ? "animate-spin motion-reduce:animate-none" : undefined} />
       </Button>
     </Tip>
   )

@@ -18,6 +18,8 @@ export interface Ask {
     readonly value: string
     readonly placeholder?: string
     readonly kind: "text" | "number"
+    /** Why what was typed cannot be taken, so the dialog stays open and says so; nothing when it can. */
+    readonly check?: (value: string) => string | undefined
   }
   readonly confirm: string
   /** Whether the answer cannot be taken back, so the button reads as a warning. */
@@ -37,7 +39,12 @@ export const askOwn = (account: AccountView): Ask => {
 export const askPriority = (account: AccountView): Ask => ({
   title: "Set priority",
   body: `Higher tiers are used first; within a tier the strategy decides. ${account.name} is at ${account.priority}.`,
-  field: { label: "Priority", value: String(account.priority), kind: "number" },
+  field: {
+    label: "Priority",
+    value: String(account.priority),
+    kind: "number",
+    check: (value) => (readPriority(value) === undefined ? "Enter a whole number, such as 2." : undefined),
+  },
   confirm: "Save",
   danger: false,
 })

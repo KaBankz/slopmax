@@ -20,20 +20,17 @@ import {
   Zap,
 } from "lucide-react"
 import { type KeyboardEvent, type PointerEvent, useRef, useState } from "react"
-import { hostAtom } from "../api.ts"
 import {
   attentionAtom,
   go,
-  liveAtom,
   prefsAtom,
-  proxyAtom,
+  proxyStatusAtom,
   routeAtom,
   savePrefs,
   shownReportAtom,
   sidebarInstantAtom,
 } from "../atoms.ts"
 import { worstTone } from "../view/attention.ts"
-import { proxyLabel } from "../view/live.ts"
 import { clampWidth, dragSidebar, movePage, type Page, pageOrder, Pages, pageTitle, samePage } from "../view/pages.ts"
 import { Dot, Logo } from "./parts.tsx"
 import { Button } from "./ui/button.tsx"
@@ -106,17 +103,7 @@ function Row({
 
 /** How the proxy stands, at the sidebar's foot; it opens Settings. */
 function ProxyFoot({ address }: { readonly address: string }) {
-  const host = useAtomValue(hostAtom)
-  const live = useAtomValue(liveAtom)
-  const proxy = useAtomValue(proxyAtom)
-  const web = Option.isSome(host) && host.value.kind === "web"
-  // The web dashboard can only tell whether its stream is up.
-  const label =
-    web && live._tag === "Reconnecting"
-      ? { text: "Reconnecting…", tone: "warn" as const }
-      : web && live._tag === "Connecting"
-        ? { text: "Connecting…", tone: "muted" as const }
-        : proxyLabel(proxy)
+  const label = useAtomValue(proxyStatusAtom)
   return (
     <button
       type="button"

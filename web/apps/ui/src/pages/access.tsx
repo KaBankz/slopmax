@@ -1,7 +1,7 @@
 // The accounts slopmax sends requests to, and the keys other machines and
 // tools reach it with: sign in, import logins, add an API key or a
 // compatible endpoint, and make or revoke client keys.
-import { useAtomSet, useAtomValue } from "@effect/atom-react"
+import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
 import type { Dialect } from "@slopmax/client"
 import { providerFacts } from "@slopmax/client"
 import { Exit, Option } from "effect"
@@ -18,6 +18,7 @@ import {
   proxyAtom,
   revokeKey,
   signIn,
+  unansweredAtom,
 } from "../atoms.ts"
 import { useAsk } from "../components/ask.tsx"
 import { Loaded, Panel, Section, SettingRow, Skeleton } from "../components/parts.tsx"
@@ -51,12 +52,15 @@ function KeyRow({ disabled }: { readonly disabled: boolean }) {
   const [provider, setProvider] = useState<KeyProvider>("anthropic")
   const [key, setKey] = useState("")
   const [refused, setRefused] = useState<string | undefined>(undefined)
+  const [busy, setBusy] = useState(false)
   const errorId = useId()
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    if (key.trim() === "") return
+    if (key.trim() === "" || busy) return
     setRefused(undefined)
+    setBusy(true)
     void add({ _tag: "Key", provider, key: key.trim() }).then((exit) => {
+      setBusy(false)
       if (Exit.isSuccess(exit)) setKey("")
       else setRefused(failureText(exit.cause))
     })
@@ -90,8 +94,8 @@ function KeyRow({ disabled }: { readonly disabled: boolean }) {
             onChange={(event) => setKey(event.currentTarget.value)}
           />
         </span>
-        <Button type="submit" variant="primary" disabled={disabled || key.trim() === ""}>
-          Add key
+        <Button type="submit" variant="primary" disabled={disabled || busy || key.trim() === ""}>
+          {busy ? "Checking key…" : "Add key"}
         </Button>
       </form>
     </SettingRow>
@@ -120,10 +124,12 @@ function EndpointRow({ disabled }: { readonly disabled: boolean }) {
   const [models, setModels] = useState("")
   const [key, setKey] = useState("")
   const [name, setName] = useState("")
+  const [busy, setBusy] = useState(false)
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    if (url.trim() === "") return
+    if (url.trim() === "" || busy) return
     setRefused(undefined)
+    setBusy(true)
     void add({
       _tag: "Endpoint",
       url: url.trim().replace(/\/+$/, ""),
@@ -132,6 +138,7 @@ function EndpointRow({ disabled }: { readonly disabled: boolean }) {
       ...(key.trim() === "" ? {} : { key: key.trim() }),
       ...(name.trim() === "" ? {} : { label: name.trim() }),
     }).then((exit) => {
+      setBusy(false)
       if (Exit.isFailure(exit)) return setRefused(failureText(exit.cause))
       setUrl("")
       setModels("")
@@ -184,8 +191,8 @@ function EndpointRow({ disabled }: { readonly disabled: boolean }) {
           {refused !== undefined && (
             <Refused id={errorId} text={refused} className="min-w-0 flex-1 text-small text-danger" />
           )}
-          <Button type="submit" variant="primary" disabled={disabled || url.trim() === ""}>
-            Add endpoint
+          <Button type="submit" variant="primary" disabled={disabled || busy || url.trim() === ""}>
+            {busy ? "Adding…" : "Add endpoint"}
           </Button>
         </div>
       </form>
@@ -196,7 +203,13 @@ function EndpointRow({ disabled }: { readonly disabled: boolean }) {
 function AddAccount() {
   const canChange = useAtomValue(canChangeAtom)
   const start = useAtomSet(signIn)
-  const importAll = useAtomSet(importLogins)
+  const importAll = useAtomSet(importLogins, { mode: "promiseExit" })
+  const [importing, setImporting] = useState(false)
+  const runImport = () => {
+    if (importing) return
+    setImporting(true)
+    void importAll().then(() => setImporting(false))
+  }
   return (
     <Section title="Add an account">
       <Panel>
@@ -212,8 +225,8 @@ function AddAccount() {
           </Button>
         </SettingRow>
         <SettingRow title="Import" detail="Logins Claude Code, Codex, or CLIProxyAPI already have.">
-          <Button disabled={!canChange} onClick={() => importAll()}>
-            Import
+          <Button disabled={!canChange || importing} onClick={runImport}>
+            {importing ? "Importing…" : "Import"}
           </Button>
         </SettingRow>
         <KeyRow disabled={!canChange} />
@@ -252,19 +265,29 @@ function NewKeyWell() {
 
 function ClientKeys() {
   const keys = useAtomValue(keysAtom)
+  const again = useAtomRefresh(keysAtom)
   const canChange = useAtomValue(canChangeAtom)
-  const waiting = needsProxy(useAtomValue(proxyAtom), "list and make keys")
-  const make = useAtomSet(makeKey)
+  const waiting = needsProxy(useAtomValue(proxyAtom), "list and make keys", useAtomValue(unansweredAtom))
+  const make = useAtomSet(makeKey, { mode: "promiseExit" })
   const revoke = useAtomSet(revokeKey)
   const ask = useAsk()
   const [name, setName] = useState("")
   const [models, setModels] = useState("")
+  const [refused, setRefused] = useState<string | undefined>(undefined)
+  const [busy, setBusy] = useState(false)
+  const errorId = useId()
+  // The form is cleared only once the key is made, so a refused name keeps what was typed.
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    if (name.trim() === "") return
-    make({ name, models: patterns(models) })
-    setName("")
-    setModels("")
+    if (name.trim() === "" || busy) return
+    setRefused(undefined)
+    setBusy(true)
+    void make({ name, models: patterns(models) }).then((exit) => {
+      setBusy(false)
+      if (Exit.isFailure(exit)) return setRefused(failureText(exit.cause))
+      setName("")
+      setModels("")
+    })
   }
   return (
     <Section title="Client keys">
@@ -278,7 +301,7 @@ function ClientKeys() {
               <div className="px-4 py-3.5 text-small text-muted-foreground">{waiting}.</div>
             )
           ) : (
-            <Loaded result={keys} title="Could not read the keys" loading={<Skeleton lines={2} />}>
+            <Loaded result={keys} title="Could not read the keys" loading={<Skeleton lines={2} />} onRetry={again}>
               {(list) => (
                 <>
                   {list.map((key) => (
@@ -314,24 +337,32 @@ function ClientKeys() {
               )}
             </Loaded>
           )}
-          <form onSubmit={submit} className="flex items-center gap-2 border-t border-separator px-4 py-3">
-            <span className="w-50 shrink-0">
+          <form onSubmit={submit} className="flex flex-col gap-2 border-t border-separator px-4 py-3">
+            <div className="flex items-center gap-2">
+              <span className="w-50 shrink-0">
+                <Input
+                  aria-label="Name, such as laptop"
+                  placeholder="Name, such as laptop"
+                  value={name}
+                  aria-invalid={refused !== undefined || undefined}
+                  aria-describedby={refused === undefined ? undefined : errorId}
+                  onChange={(e) => {
+                    setName(e.currentTarget.value)
+                    setRefused(undefined)
+                  }}
+                />
+              </span>
               <Input
-                aria-label="Name, such as laptop"
-                placeholder="Name, such as laptop"
-                value={name}
-                onChange={(e) => setName(e.currentTarget.value)}
+                aria-label="Models it may use, as patterns (any if empty)"
+                placeholder="Models it may use, as patterns (any if empty)"
+                value={models}
+                onChange={(e) => setModels(e.currentTarget.value)}
               />
-            </span>
-            <Input
-              aria-label="Models it may use, as patterns (any if empty)"
-              placeholder="Models it may use, as patterns (any if empty)"
-              value={models}
-              onChange={(e) => setModels(e.currentTarget.value)}
-            />
-            <Button type="submit" variant="primary" disabled={!canChange || name.trim() === ""}>
-              Create key
-            </Button>
+              <Button type="submit" variant="primary" disabled={!canChange || busy || name.trim() === ""}>
+                {busy ? "Creating…" : "Create key"}
+              </Button>
+            </div>
+            {refused !== undefined && <Refused id={errorId} text={refused} className="text-small text-danger" />}
           </form>
         </Panel>
         <p className="text-caption text-faint">

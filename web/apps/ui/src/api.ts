@@ -49,6 +49,13 @@ const clientLayer = (
     }),
   ).pipe(Layer.provide(transport))
 
+/**
+ * The page's way out without the key it holds, for checking a key before it
+ * is kept: the gate asks slopmax with the typed key first, so a wrong one
+ * never opens the dashboard.
+ */
+export const keyCheckRuntime = Atom.runtime((get) => clientLayer(get(transportAtom), get(originAtom), Option.none()))
+
 export class Api extends AtomHttpApi.Service<Api>()("@slopmax/ui/Api", {
   api: SlopmaxApi,
   httpClient: (get) => clientLayer(get(transportAtom), get(originAtom), get(ownerKeyAtom)),

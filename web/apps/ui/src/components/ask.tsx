@@ -5,7 +5,7 @@
 import { useAtom, useAtomSet } from "@effect/atom-react"
 import { Option } from "effect"
 import { Atom } from "effect/reactivity"
-import { type FormEvent, useState } from "react"
+import { type FormEvent, useId, useState } from "react"
 import type { Ask } from "../view/asks.ts"
 import { Button } from "./ui/button.tsx"
 import { Dialog, DialogDescription } from "./ui/dialog.tsx"
@@ -30,8 +30,12 @@ export const useAsk = (): ((ask: Ask) => Promise<string | null>) => {
 function AskForm({ asking, close }: { readonly asking: Asking; readonly close: (answer: string | null) => void }) {
   const { ask } = asking
   const [value, setValue] = useState(ask.field?.value ?? "")
+  const [refused, setRefused] = useState<string | undefined>(undefined)
+  const errorId = useId()
   const submit = (event: FormEvent) => {
     event.preventDefault()
+    const why = ask.field?.check?.(value)
+    if (why !== undefined) return setRefused(why)
     close(ask.field === undefined ? "" : value)
   }
   return (
@@ -51,11 +55,22 @@ function AskForm({ asking, close }: { readonly asking: Asking; readonly close: (
           {ask.field.label}
           <Input
             autoFocus
+            aria-label={ask.field.label}
             value={value}
             inputMode={ask.field.kind === "number" ? "numeric" : "text"}
             placeholder={ask.field.placeholder}
-            onChange={(event) => setValue(event.currentTarget.value)}
+            aria-invalid={refused !== undefined || undefined}
+            aria-describedby={refused === undefined ? undefined : errorId}
+            onChange={(event) => {
+              setValue(event.currentTarget.value)
+              setRefused(undefined)
+            }}
           />
+          {refused !== undefined && (
+            <span id={errorId} role="alert" className="text-danger">
+              {refused}
+            </span>
+          )}
         </label>
       )}
       <div className="flex justify-end gap-2">

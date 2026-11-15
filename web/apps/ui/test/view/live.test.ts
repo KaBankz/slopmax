@@ -12,6 +12,8 @@ import { ProxyState } from "@slopmax/client/desktop"
 import { DateTime } from "effect"
 import {
   agentLine,
+  agentsInOrder,
+  anyWired,
   feedRow,
   feedSize,
   loginService,
@@ -19,6 +21,7 @@ import {
   proxyLabel,
   pushFeed,
   secs,
+  shownProxy,
   signInDone,
   signInView,
   startSignIn,
@@ -149,10 +152,29 @@ describe("the proxy, agents and the login service", () => {
     // While the window is still finding out, it waits rather than saying the proxy is stopped.
     expect(needsProxy(ProxyState.cases.Checking.make({}), "x")).toBeUndefined()
     expect(needsProxy(ProxyState.cases.Running.make({ version: "0.4.0" }), "x")).toBeUndefined()
+    // Once the web dashboard's stream has dropped, it says slopmax is not answering rather than pulse.
+    expect(needsProxy(ProxyState.cases.Checking.make({}), "x", true)).toBe("slopmax is not answering")
+    expect(needsProxy(ProxyState.cases.Stopped.make({}), "x", true)).toBe("Start the proxy to x")
+  })
+
+  test("the web dashboard's proxy label follows its stream, the same in the sidebar and Settings", () => {
+    const checking = ProxyState.cases.Checking.make({})
+    expect(shownProxy(checking, "Reconnecting")).toEqual({ text: "Reconnecting…", tone: "warn" })
+    expect(shownProxy(checking, "Connecting")).toEqual({ text: "Connecting…", tone: "muted" })
+    expect(shownProxy(ProxyState.cases.Running.make({ version: "0.4.0" }), "Running").text).toBe("Running 0.4.0")
+    expect(shownProxy(checking, undefined).text).toBe("Looking for the proxy…")
   })
 
   test("agents and the login service read plainly", () => {
-    expect(agentLine(agent(true, "http://127.0.0.1:7567"))).toEqual({ text: "Goes through slopmax", connected: true })
+    // Connected says so in its label alone.
+    expect(agentLine(agent(true, "http://127.0.0.1:7567"))).toEqual({ connected: true })
+    expect(agentLine(new AgentWiring({ ...agent(false), installed: false })).text).toBe(
+      "Not installed on this machine. Connecting writes its settings now, so it goes through slopmax once installed.",
+    )
+    const missing = new AgentWiring({ ...agent(false), id: "claude-code", title: "Claude Code", installed: false })
+    expect(agentsInOrder([missing, agent(false)]).map((a) => a.title)).toEqual(["Codex", "Claude Code"])
+    expect(anyWired([missing, agent(false)])).toBe(false)
+    expect(anyWired([agent(true)])).toBe(true)
     expect(agentLine(agent(false, "https://gateway.example"))).toEqual({
       text: "Goes to https://gateway.example",
       connected: false,

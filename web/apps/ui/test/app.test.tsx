@@ -4,11 +4,11 @@
 // mode and the menu bar's panel.
 import { useBrowser } from "./support/dom.ts"
 import { afterEach, describe, expect, test } from "bun:test"
-import { UpstreamFailed } from "@slopmax/client"
+import { Report, UpstreamFailed } from "@slopmax/client"
 import { OfflineView, ProxyState } from "@slopmax/client/desktop"
 import { DateTime } from "effect"
 import { act } from "react"
-import { emptyReport, fixtureDoctor, ownerKey } from "./support/fixtures.ts"
+import { account, emptyReport, fixtureDoctor, ownerKey } from "./support/fixtures.ts"
 import { control, draw, type Drawn, key, press, settle, shows, showsSoon, type } from "./support/render.tsx"
 
 useBrowser()
@@ -150,6 +150,103 @@ describe("the web dashboard", () => {
     drawn = await draw({ stub: { key: ownerKey, scenario: "empty" }, host: { key: ownerKey } })
     await showsSoon("No accounts yet")
     expect(shows("None yet")).toBe(true)
+  })
+})
+
+describe("what the dashboard says while waiting, failing or quiet", () => {
+  test("a wrong key typed into the gate is checked first, so the dashboard never opens for it", async () => {
+    drawn = await draw({ stub: { key: ownerKey } })
+    await showsSoon("Open the slopmax dashboard")
+    await type("Owner key", "sm-wrong")
+    await press("Open")
+    await showsSoon("slopmax refused that key")
+    expect(shows("Looking for the proxy")).toBe(false)
+    expect(shows("Running 0.4.0")).toBe(false)
+    expect(document.querySelector("code")?.textContent).toBe("slopmax dashboard")
+  })
+
+  test("while slopmax does not answer, the agents say so rather than pulse, and Settings agrees with the sidebar", async () => {
+    drawn = await draw({
+      stub: { key: ownerKey },
+      host: { key: ownerKey },
+      at: "#/agents",
+      prepare: (stub) => stub.failNext("events", new UpstreamFailed({ message: "the proxy went away" })),
+    })
+    await showsSoon("Agents can be connected once it answers again.")
+    await act(async () => {
+      location.hash = "#/settings"
+    })
+    await showsSoon("Status")
+    expect(shows("Looking for the proxy")).toBe(false)
+    expect(document.querySelectorAll("[title='Reconnecting…']").length).toBeGreaterThan(0)
+    await showsSoon("Running 0.4.0")
+  })
+
+  test("a new sign-in shows under Subscriptions before its limits are read", async () => {
+    await web()
+    const fresh = account({ id: "claude-00000009", provider: "claude", name: "new@studio.dev" })
+    await act(async () => {
+      drawn?.stub.setReport(new Report({ ...emptyReport(DateTime.nowUnsafe()), accounts: [fresh] }))
+    })
+    await showsSoon("Limits not read yet: slopmax reads them on the first request, or press Refresh (R).")
+    expect(shows("Subscriptions")).toBe(true)
+    await act(async () => {
+      location.hash = "#/claude"
+    })
+    await showsSoon("new@studio.dev")
+    expect(shows("Limits not read yet")).toBe(true)
+  })
+
+  test("an empty activity page points to the Agents page", async () => {
+    drawn = await draw({ stub: { key: ownerKey, scenario: "empty" }, host: { key: ownerKey }, at: "#/usage" })
+    await showsSoon("Nothing in this range")
+    await press("Connect an agent")
+    await settle(() => location.hash === "#/agents", "the Agents page")
+    // Installed agents first; a connected one says so once.
+    await showsSoon("Not connected")
+    expect(shows("Goes through slopmax")).toBe(false)
+    expect(shows("Connected")).toBe(true)
+  })
+
+  test("a refresh spins and cannot be pressed again until it is answered", async () => {
+    drawn = await draw({ stub: { key: ownerKey, latency: "150 millis" }, host: { key: ownerKey } })
+    await showsSoon("Running 0.4.0", 5_000)
+    await press("Refresh usage")
+    expect(control("Reading usage again…").hasAttribute("disabled")).toBe(true)
+    await key("r")
+    await showsSoon("Usage and limit resets read again.")
+    expect(drawn.stub.calls.filter((call) => call.endpoint === "refresh")).toHaveLength(1)
+  })
+
+  test("adding a key says it is being checked, and a taken key name keeps what was typed", async () => {
+    drawn = await draw({ stub: { key: ownerKey, latency: "150 millis" }, host: { key: ownerKey }, at: "#/access" })
+    await showsSoon("laptop", 5_000)
+    await type("Paste an API key", "sk-ant-good")
+    await press("Add key")
+    await showsSoon("Checking key…")
+    await showsSoon("Anthropic API added.")
+    await type("Name, such as laptop", "laptop")
+    await press("Create key")
+    await showsSoon("There is already a key named laptop")
+    const name = document.querySelector<HTMLInputElement>("input[aria-label='Name, such as laptop']")
+    expect(name?.value).toBe("laptop")
+    expect(name?.getAttribute("aria-invalid")).toBe("true")
+  })
+
+  test("a priority that is not a whole number keeps the dialog open and says what it takes", async () => {
+    await web("#/claude")
+    await showsSoon("Across 3 accounts, weighted by plan")
+    await press("More for ana@studio.dev")
+    await settle(() => document.querySelector("[role=menuitem]") !== null, "the menu")
+    await press("Set priority…")
+    await showsSoon("Higher tiers are used first")
+    await type("Priority", "high")
+    await press("Save")
+    await showsSoon("Enter a whole number, such as 2.")
+    expect(shows("Higher tiers are used first")).toBe(true)
+    await type("Priority", "3")
+    await press("Save")
+    await showsSoon("ana@studio.dev is at priority 3.")
   })
 })
 

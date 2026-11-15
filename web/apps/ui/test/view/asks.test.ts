@@ -38,6 +38,11 @@ describe("what the app asks before changing an account", () => {
     expect(readPriority(" -3 ")).toBe(-3)
     expect(readPriority("")).toBeUndefined()
     expect(readPriority("1.5")).toBeUndefined()
+    // The dialog keeps what cannot be a priority, and says what it takes.
+    const check = askPriority(ana).field?.check
+    expect(check?.("high")).toBe("Enter a whole number, such as 2.")
+    expect(check?.("1.5")).toBe("Enter a whole number, such as 2.")
+    expect(check?.(" 3 ")).toBeUndefined()
   })
 
   test("a name, empty to show the email again", () => {

@@ -2,7 +2,7 @@
 // the event stream, every action's call and what it says, sign-in steps,
 // a refused key, browser notifications, and the desktop's proxy states.
 import { afterEach, describe, expect, test } from "bun:test"
-import { Event, LedgerRecord, Notice, UpstreamFailed, Usage } from "@slopmax/client"
+import { BadRequest, Event, Internal, LedgerRecord, Notice, UpstreamFailed, Usage } from "@slopmax/client"
 import { ImportOutcome, ImportResult } from "@slopmax/client/api"
 import { OfflineView, ProxyState } from "@slopmax/client/desktop"
 import { DateTime, Effect, Option } from "effect"
@@ -12,6 +12,8 @@ import {
   addAccount,
   changeAccount,
   changeSettings,
+  checkKey,
+  connectAgent,
   enterKey,
   eventsAtom,
   feedAtom,
@@ -26,7 +28,9 @@ import {
   proxyAtom,
   redeem,
   refresh,
+  refusedKey,
   reportAtom,
+  settingsAtom,
   shownReportAtom,
   signIn,
   signInAtom,
@@ -85,6 +89,35 @@ describe("the event stream", () => {
     // The proxy serves the dashboard, so a dropped stream is a wait, never a stopped proxy.
     expect(h.registry.get(proxyAtom)._tag).toBe("Checking")
     await until(() => h.registry.get(liveAtom)._tag === "Running", "running again", 3_000)
+  })
+
+  test("once back after a drop, what was read while slopmax did not answer is read again", async () => {
+    const h = harness({ stub: { key: ownerKey }, host: { key: ownerKey } })
+    open = h
+    h.stub.failNext("events", new UpstreamFailed({ message: "the proxy went away" }))
+    h.registry.mount(settingsAtom)
+    h.registry.mount(eventsAtom)
+    await until(() => h.registry.get(liveAtom)._tag === "Reconnecting", "reconnecting")
+    await until(() => AsyncResult.isSuccess(h.registry.get(settingsAtom)), "the settings")
+    const read = () => h.stub.calls.filter((call) => call.endpoint === "settings").length
+    const before = read()
+    await until(() => h.registry.get(liveAtom)._tag === "Running", "running again", 3_000)
+    await until(() => read() > before, "the settings read again")
+  })
+
+  test("a key is checked with slopmax before it is kept", async () => {
+    const h = harness({ stub: { key: ownerKey }, host: {} })
+    open = h
+    h.registry.mount(checkKey)
+    h.registry.set(checkKey, "sm-wrong")
+    await until(() => AsyncResult.isFailure(h.registry.get(checkKey)), "the refusal")
+    const refusal = h.registry.get(checkKey)
+    expect(AsyncResult.isFailure(refusal) && refusedKey(refusal.cause)).toBe(true)
+    h.registry.set(checkKey, ownerKey)
+    await until(() => AsyncResult.isSuccess(h.registry.get(checkKey)), "the key taken")
+    // The refused call never reaches the handler; the one with the right key does.
+    expect(h.stub.calls.filter((call) => call.endpoint === "status")).toHaveLength(1)
+    expect(Option.isNone(h.registry.get(ownerKeyAtom))).toBe(true)
   })
 
   test("a refused key is forgotten, so the dashboard asks for it again", async () => {
@@ -188,18 +221,57 @@ describe("actions", () => {
     expect(toasts(h)).toEqual([["Made the key phone.", false]])
   })
 
-  test("importing says how many of the logins found were saved", async () => {
+  test("a taken key name answers its refusal to the form, not as a toast", async () => {
+    const h = await started()
+    h.run(makeKey, { name: "laptop", models: [] })
+    await until(() => AsyncResult.isFailure(h.registry.get(makeKey)), "the refusal")
+    expect(toasts(h)).toEqual([])
+  })
+
+  test("a failed change says which change it was", async () => {
+    const h = await started()
+    h.stub.failNext("update", new Internal({ message: "config.json is read-only" }))
+    h.run(changeAccount, { _tag: "Rename", id: "claude-5e6f7a8b", label: "Ben" })
+    await until(() => toasts(h).length === 1, "the rename's failure")
+    h.stub.failNext("remove", new Internal({ message: "config.json is read-only" }))
+    h.run(changeAccount, { _tag: "Remove", id: "claude-5e6f7a8b" })
+    await until(() => toasts(h).length === 2, "the removal's failure")
+    h.stub.failNext("connect", new Internal({ message: "settings.json is not JSON" }))
+    h.run(connectAgent, "codex")
+    await until(() => toasts(h).length === 3, "the connection's failure")
+    h.stub.failNext("change", new BadRequest({ message: "pollMinutes is too large" }))
+    h.run(changeSettings, { pollMinutes: 5 })
+    await until(() => toasts(h).length === 4, "the setting's failure")
+    expect(toasts(h)).toEqual([
+      ["Could not rename ben@studio.dev: config.json is read-only", true],
+      ["Could not remove ben@studio.dev: config.json is read-only", true],
+      ["Could not connect Codex: settings.json is not JSON", true],
+      ["The setting was not changed: pollMinutes is too large", true],
+    ])
+  })
+
+  test("importing says how many of the logins found were saved, and why the first of the rest was not", async () => {
     const h = await started()
     h.run(importLogins, undefined)
     await until(() => toasts(h).length === 1, "the toast")
-    expect(toasts(h)).toEqual([["Imported 1 account of 2 logins found.", false]])
+    expect(toasts(h)).toEqual([["Imported 1 account of 2 logins found. CLIProxyAPI: no logins there", false]])
   })
 
-  test("counts of imported accounts agree with what was found", () => {
+  test("an import that saved nothing is a failure that says why, and finding nothing says what to do", () => {
     const report = emptyReport(DateTime.nowUnsafe())
-    const failed = ImportOutcome.cases.Failed.make({ source: "codex", origin: "~/.codex", message: "x" })
-    expect(importText(new ImportResult({ outcomes: [], report }))).toBe("No logins found to import.")
-    expect(importText(new ImportResult({ outcomes: [failed], report }))).toBe("Imported 0 accounts of 1 logins found.")
+    const failed = ImportOutcome.cases.Failed.make({
+      source: "codex",
+      origin: "~/.codex",
+      message: "its login expired; sign in to Codex again",
+    })
+    expect(importText(new ImportResult({ outcomes: [], report }))).toEqual({
+      text: "No logins found. Sign in with Claude Code or Codex first, or use Sign in above.",
+      error: false,
+    })
+    expect(importText(new ImportResult({ outcomes: [failed, failed], report }))).toEqual({
+      text: "Imported 0 accounts of 2 logins found. Codex: its login expired; sign in to Codex again",
+      error: true,
+    })
   })
 })
 

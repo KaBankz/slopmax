@@ -1,6 +1,6 @@
 // The overview: how the accounts stand in a line, what wants a look, each
 // subscription's pool at a glance, keys and endpoints, and today so far.
-import { useAtomSet, useAtomValue } from "@effect/atom-react"
+import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
 import { type Report, SubscriptionId } from "@slopmax/client"
 import { DateTime, Duration, Option, Schema } from "effect"
 import { AsyncResult } from "effect/reactivity"
@@ -16,20 +16,22 @@ import {
   nowAtom,
   openCreditsAtom,
   permissionAtom,
+  pollOffAtom,
   settingsAtom,
   shownReportAtom,
   signIn,
 } from "../atoms.ts"
 import { Hours } from "../components/charts.tsx"
 import { Dot, Empty, Label, Loaded, Panel, Section, SegmentedBar, Skeleton, Stats } from "../components/parts.tsx"
+import { Quiet } from "../components/quiet.tsx"
 import { Badge } from "../components/ui/badge.tsx"
 import { Button } from "../components/ui/button.tsx"
 import { Tip } from "../components/ui/tooltip.tsx"
 import { type Attention, standing } from "../view/attention.ts"
 import { type Group, resetsLeft } from "../view/groups.ts"
 import { Pages } from "../view/pages.ts"
-import { hourly, todayStats } from "../view/usage.ts"
-import { resetCount, resetsLine, routing, updated } from "../view/words.ts"
+import { hourly, isQuiet, todayStats } from "../view/usage.ts"
+import { limitsNotRead, resetCount, resetsLine, routing, updated } from "../view/words.ts"
 
 function Standing({ report }: { readonly report: Report }) {
   const now = useAtomValue(nowAtom)
@@ -123,6 +125,7 @@ function AttentionRow({ item }: { readonly item: Attention }) {
 
 /** One subscription at a glance; it opens its provider's page. */
 function PoolBlock({ group }: { readonly group: Group }) {
+  const pollOff = useAtomValue(pollOffAtom)
   return (
     <button
       type="button"
@@ -151,6 +154,7 @@ function PoolBlock({ group }: { readonly group: Group }) {
           </span>
         </span>
       ))}
+      {group.unread && <span className="pl-3.5 text-small text-muted-foreground">{limitsNotRead(pollOff)}</span>}
       {group.credits !== undefined && <span className="pl-3.5 text-small text-muted-foreground">{group.credits}</span>}
       <span className="pl-3.5 text-small">
         <Label tone={group.next.tone} text={group.next.text} raw />
@@ -184,18 +188,23 @@ function Metered({ group }: { readonly group: Group }) {
 
 function Today() {
   const today = useAtomValue(historyAtom("today"))
+  const again = useAtomRefresh(historyAtom("today"))
   return (
-    <Loaded result={today} title="Could not read today's ledger" loading={<Skeleton lines={4} />}>
-      {(history) => (
-        <div className="flex flex-col gap-3">
-          <Stats stats={todayStats(history)} />
-          <Panel>
-            <div className="px-4 pt-4 pb-3">
-              <Hours values={hourly(history)} />
-            </div>
-          </Panel>
-        </div>
-      )}
+    <Loaded result={today} title="Could not read today's ledger" loading={<Skeleton lines={4} />} onRetry={again}>
+      {(history) =>
+        isQuiet(history) ? (
+          <Quiet title="Nothing yet today" />
+        ) : (
+          <div className="flex flex-col gap-3">
+            <Stats stats={todayStats(history)} />
+            <Panel>
+              <div className="px-4 pt-4 pb-3">
+                <Hours values={hourly(history)} />
+              </div>
+            </Panel>
+          </div>
+        )
+      }
     </Loaded>
   )
 }
@@ -224,7 +233,8 @@ export function OverviewPage() {
       </Empty>
     )
   }
-  const pools = all.filter((group) => group.subscription && group.overview.length > 0)
+  // A subscription shows even before its limits are read, so a new sign-in appears at once.
+  const pools = all.filter((group) => group.subscription)
   const metered = all.filter((group) => !group.subscription)
   return (
     <>

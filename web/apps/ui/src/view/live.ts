@@ -198,12 +198,34 @@ export const proxyLabel = (state: ProxyState): { readonly text: string; readonly
   }
 }
 
+/** Whether the web dashboard's event stream is up: all that page knows of the proxy. */
+export type StreamState = "Connecting" | "Running" | "Reconnecting"
+
+/**
+ * The proxy's state as the window shows it, in the sidebar's foot and in
+ * Settings alike. The web dashboard says whether its stream is up, as that is
+ * all it knows; the desktop window says what its main process knows.
+ */
+export const shownProxy = (
+  state: ProxyState,
+  stream: StreamState | undefined,
+): { readonly text: string; readonly tone: Tone } =>
+  stream === "Reconnecting"
+    ? { text: "Reconnecting…", tone: "warn" }
+    : stream === "Connecting"
+      ? { text: "Connecting…", tone: "muted" }
+      : proxyLabel(state)
+
+/** What a part of the window that needs slopmax says while slopmax does not answer. */
+export const notAnswering = "slopmax is not answering"
+
 /**
  * What a part of the window that needs the running proxy says in its place:
- * how to get it running, or nothing while the window is still finding out
- * (a placeholder shows then, rather than a stopped proxy that is not).
+ * how to get it running, that slopmax is not answering (the web dashboard's
+ * stream dropped), or nothing while the window is still finding out (a
+ * placeholder shows then, rather than a stopped proxy that is not).
  */
-export const needsProxy = (state: ProxyState, doing: string): string | undefined => {
+export const needsProxy = (state: ProxyState, doing: string, unanswered = false): string | undefined => {
   switch (state._tag) {
     case "Stopped":
       return `Start the proxy to ${doing}`
@@ -211,18 +233,37 @@ export const needsProxy = (state: ProxyState, doing: string): string | undefined
       return `Restart the proxy to ${doing}`
     case "Checking":
     case "Starting":
+      return unanswered ? notAnswering : undefined
     case "Running":
       return undefined
   }
 }
 
-/** How an agent is wired, and whether that is through slopmax. */
-export const agentLine = (agent: AgentWiring): { readonly text: string; readonly connected: boolean } =>
+/**
+ * How an agent is wired, and whether that is through slopmax. A connected
+ * agent's row says so in its label, so its line adds nothing; one not
+ * installed says what connecting it does now.
+ */
+export const agentLine = (agent: AgentWiring): { readonly text?: string; readonly connected: boolean } =>
   agent.wired
-    ? { text: "Goes through slopmax", connected: true }
-    : agent.wiredTo !== undefined
-      ? { text: `Goes to ${agent.wiredTo}`, connected: false }
-      : { text: "Goes straight to its provider", connected: false }
+    ? { connected: true }
+    : !agent.installed
+      ? {
+          text: "Not installed on this machine. Connecting writes its settings now, so it goes through slopmax once installed.",
+          connected: false,
+        }
+      : agent.wiredTo !== undefined
+        ? { text: `Goes to ${agent.wiredTo}`, connected: false }
+        : { text: "Goes straight to its provider", connected: false }
+
+/** The agents installed on this machine first, in the order the API lists them. */
+export const agentsInOrder = (agents: ReadonlyArray<AgentWiring>): ReadonlyArray<AgentWiring> => [
+  ...agents.filter((agent) => agent.installed),
+  ...agents.filter((agent) => !agent.installed),
+]
+
+/** Whether any agent goes through slopmax. */
+export const anyWired = (agents: ReadonlyArray<AgentWiring>): boolean => agents.some((agent) => agent.wired)
 
 /** The login service, as the Start at login setting shows it. */
 export interface LoginService {

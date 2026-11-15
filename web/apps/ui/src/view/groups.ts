@@ -133,6 +133,8 @@ export interface Group {
   readonly subscription: boolean
   /** The column titles: `5-hour`, `Weekly`, then any limited to one model. */
   readonly columns: ReadonlyArray<string>
+  /** A subscription none of whose accounts has had a window read yet, so there are no columns. */
+  readonly unread: boolean
   readonly rows: ReadonlyArray<Row>
   /** Each window across the working accounts, with every account's share. */
   readonly overview: ReadonlyArray<Overview>
@@ -407,6 +409,7 @@ export const groups = (report: Report, now: DateTime.Utc, zone: DateTime.TimeZon
         title: providerFacts[provider].title,
         subscription: providerFacts[provider].billing === "subscription",
         columns: columns.map(windowTitle),
+        unread: providerFacts[provider].billing === "subscription" && columns.length === 0,
         rows: accounts.map((account) => row(account, columns, pool?.next?.account, now, zone)),
         overview,
         working: pool?.accounts ?? accounts.filter(serving).length,

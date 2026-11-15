@@ -1,7 +1,7 @@
 // Settings: how the app looks, the proxy and its address, how new sessions
 // find an account, limit resets, notifications, and the rest of the live
 // settings, each saved to config.json and applied at once.
-import { useAtomSet, useAtomValue } from "@effect/atom-react"
+import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
 import type { LiveKey } from "@slopmax/client"
 import type { Appearance } from "@slopmax/client/desktop"
 import { Option } from "effect"
@@ -18,11 +18,13 @@ import {
   prefsAtom,
   proxyAction,
   proxyAtom,
+  proxyStatusAtom,
   savePrefs,
   serviceAction,
   serviceAtom,
   settingsAtom,
   testNotifications,
+  unansweredAtom,
 } from "../atoms.ts"
 import { Empty, Label, Loaded, Panel, Section, SettingRow, Skeleton } from "../components/parts.tsx"
 import { Button } from "../components/ui/button.tsx"
@@ -30,7 +32,7 @@ import { Choices } from "../components/ui/choices.tsx"
 import { Segmented } from "../components/ui/segmented.tsx"
 import { Stepper } from "../components/ui/stepper.tsx"
 import { Switch } from "../components/ui/switch.tsx"
-import { loginService, needsProxy, proxyLabel } from "../view/live.ts"
+import { loginService, needsProxy } from "../view/live.ts"
 import { advancedRows, livePatch, restartLine } from "../view/settings.ts"
 import {
   affinityDetail,
@@ -77,7 +79,7 @@ function ProxySection({ listen }: { readonly listen: string | undefined }) {
   const desktop = Option.isSome(host) && host.value.kind === "desktop"
   const address =
     listen === undefined ? Option.match(host, { onNone: () => "", onSome: (h) => h.origin }) : `http://${listen}`
-  const status = proxyLabel(proxy)
+  const status = useAtomValue(proxyStatusAtom)
   const running = proxy._tag === "Running"
   const login = loginService(Option.getOrUndefined(AsyncResult.getOrElse(service, () => Option.none())))
   return (
@@ -178,10 +180,11 @@ function NotificationsSection() {
 
 function LiveSections() {
   const settings = useAtomValue(settingsAtom)
+  const again = useAtomRefresh(settingsAtom)
   const change = useAtomSet(changeSettings)
   const set = (name: LiveKey, value: boolean | number) => Option.map(livePatch(name, value), change)
   return (
-    <Loaded result={settings} title="Could not read the settings" loading={<Skeleton lines={6} />}>
+    <Loaded result={settings} title="Could not read the settings" loading={<Skeleton lines={6} />} onRetry={again}>
       {(view) => {
         const s = view.settings
         const restart = restartLine(view)
@@ -270,7 +273,7 @@ export function SettingsPage() {
   const settings = useAtomValue(settingsAtom)
   const proxy = useAtomValue(proxyAtom)
   const listen = Option.getOrUndefined(Option.map(AsyncResult.value(settings), (view) => view.settings.listen))
-  const waiting = needsProxy(proxy, "change settings")
+  const waiting = needsProxy(proxy, "change settings", useAtomValue(unansweredAtom))
   return (
     <>
       <AppearanceSection />

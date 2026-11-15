@@ -280,6 +280,20 @@ export const resetsLine = (resetsIn: string | undefined, resetsAt: string | unde
       ? `Resets in ${resetsIn}`
       : `Resets in ${resetsIn} · ${resetsAt}`
 
+/**
+ * Where a subscription's windows would show before slopmax has read any:
+ * how they get read, and that polling will not read them when it is off.
+ */
+export const limitsNotRead = (pollOff: boolean): string =>
+  `Limits not read yet: slopmax reads them on the first request, or press Refresh (R).${pollOff ? " Usage polling is off." : ""}`
+
+/** An account's limit resets, counted by its usage before slopmax has listed each one. */
+export const resetsUnlisted = (n: number): string =>
+  `slopmax knows this account holds ${resetCount(n)}, but not when they expire yet.`
+
+/** What the activity pages add while no agent goes through slopmax. */
+export const unwiredLine = "No agent goes through slopmax yet."
+
 /** When the report was built: `Updated just now`, `Updated 3m ago`. */
 export const updated = (seconds: number): string => {
   const s = Math.max(0, Math.floor(seconds))

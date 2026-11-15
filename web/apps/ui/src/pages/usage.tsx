@@ -1,14 +1,14 @@
 // What went through slopmax over a range: the Usage page (tokens, requests,
 // value, models, agents, when you work, accounts, quota left on the table)
 // and the Performance page (reliability, cache, speed, first byte).
-import { useAtomValue } from "@effect/atom-react"
+import { useAtomRefresh, useAtomValue } from "@effect/atom-react"
 import type { History, HistoryRange } from "@slopmax/client"
 import { compact, grouped, providerTitle } from "@slopmax/client/format"
-import { ChartColumn } from "lucide-react"
 import type { ReactNode } from "react"
 import { historyAtom, rangeAtom } from "../atoms.ts"
 import { Columns, Heatmap, type Ink, Legend, Lines, SplitBar, Swatch } from "../components/charts.tsx"
-import { Empty, Loaded, Meter, Panel, Section, Skeleton, Stats } from "../components/parts.tsx"
+import { Loaded, Meter, Panel, Section, Skeleton, Stats } from "../components/parts.tsx"
+import { Quiet } from "../components/quiet.tsx"
 import {
   cacheAxis,
   cacheTip,
@@ -73,10 +73,12 @@ function Pair({ children }: { readonly children: ReactNode }) {
 function WithHistory({ children }: { readonly children: (history: History, range: HistoryRange) => ReactNode }) {
   const range = useAtomValue(rangeAtom)
   const history = useAtomValue(historyAtom(range))
+  const again = useAtomRefresh(historyAtom(range))
   return (
     <Loaded
       result={history}
       title="Could not read the ledger"
+      onRetry={again}
       loading={
         <div className="flex flex-col gap-4" aria-label="Reading the ledger…">
           <Skeleton lines={2} />
@@ -89,11 +91,7 @@ function WithHistory({ children }: { readonly children: (history: History, range
         found.range !== range ? (
           <Skeleton lines={6} />
         ) : isQuiet(found) ? (
-          <Empty
-            icon={ChartColumn}
-            title={range === "today" ? "Nothing yet today" : "Nothing in this range"}
-            detail="Requests show here once an agent sends them through slopmax."
-          />
+          <Quiet title={range === "today" ? "Nothing yet today" : "Nothing in this range"} />
         ) : (
           children(found, range)
         )
