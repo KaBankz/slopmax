@@ -296,6 +296,52 @@ pub struct Unavailable {
     pub reason: String,
 }
 
+/// Why none of `req`'s accounts may serve at all: none is connected, or
+/// each is disabled or signed out, named with what to run.
+fn unusable(accounts: &[Arc<Account>], req: &Pick) -> String {
+    let (id, title) = (req.provider, req.provider.spec().title);
+    let mine: Vec<&Arc<Account>> = accounts
+        .iter()
+        .filter(|a| a.provider == id && req.candidates.is_none_or(|c| c.contains(&a.id.as_str())))
+        .collect();
+    if mine.is_empty() {
+        return format!(
+            "slopmax has no {title} account connected yet; run `slopmax login {id}` (or `slopmax import`)"
+        );
+    }
+    // What `slopmax enable` and the other commands find an account by.
+    let handle = |a: &Account| {
+        a.label
+            .clone()
+            .or_else(|| a.email.clone())
+            .unwrap_or_else(|| a.id.clone())
+    };
+    let named: Vec<String> = mine
+        .iter()
+        .take(4)
+        .map(|a| {
+            let why = if a.disabled { "disabled" } else { "signed out" };
+            format!("{}: {why}", handle(a))
+        })
+        .collect();
+    let more = match mine.len().saturating_sub(named.len()) {
+        0 => String::new(),
+        n => format!(", {n} more"),
+    };
+    let mut fixes = Vec::new();
+    if let Some(a) = mine.iter().find(|a| a.disabled) {
+        fixes.push(format!("`slopmax enable {}`", handle(a)));
+    }
+    if mine.iter().any(|a| !a.disabled) {
+        fixes.push(format!("`slopmax login {id}`"));
+    }
+    format!(
+        "every {title} account is disabled or signed out ({}{more}); run {}",
+        named.join(", "),
+        fixes.join(" or ")
+    )
+}
+
 #[derive(Debug, Default)]
 struct Inner {
     /// Shared with requests as it is: a pick copies a pointer, not the
@@ -601,17 +647,9 @@ impl Pool {
             }
         }
         if !usable {
-            let reason = if inner.accounts.iter().any(|a| a.provider == req.provider) {
-                format!("every {} account is disabled or signed out", req.provider)
-            } else {
-                format!(
-                    "no {} accounts connected; run `slopmax login {}`",
-                    req.provider, req.provider
-                )
-            };
             return Err(Unavailable {
                 until: None,
-                reason,
+                reason: unusable(&inner.accounts, req),
             });
         }
 
@@ -620,9 +658,22 @@ impl Pool {
             .or(pin)
             .or_else(|| place(routing.strategy, &ready, inner, now));
         let Some(account) = chosen.map(Arc::clone) else {
+            let title = req.provider.spec().title;
             let reason = match soonest {
-                Some(_) => format!("every {} account is rate limited", req.provider),
-                None => format!("every {} account failed this request", req.provider),
+                Some(_) => format!("every {title} account is rate limited"),
+                None => {
+                    // Why the last one tried failed: its error, just recorded.
+                    let cause = req
+                        .exclude
+                        .iter()
+                        .rev()
+                        .filter(|a| a.provider == req.provider)
+                        .find_map(|a| inner.states.get(&a.id)?.last_error.as_deref());
+                    match cause {
+                        Some(cause) => format!("every {title} account failed: {cause}"),
+                        None => format!("every {title} account failed this request"),
+                    }
+                }
             };
             return Err(Unavailable {
                 until: soonest,
@@ -1088,6 +1139,10 @@ mod tests {
         let pool = Pool::new(strategy, SignedDuration::from_hours(1), State::default());
         pool.sync(accounts.iter().map(|a| (*a).clone()).collect());
         pool
+    }
+
+    fn pool_of(accounts: &[&Account]) -> Pool {
+        pool(Strategy::FillFirst, accounts)
     }
 
     fn pick(pool: &Pool, session: Option<&str>, now: i64) -> Result<String, Unavailable> {
@@ -1588,11 +1643,46 @@ mod tests {
         let mut b = account(ProviderId::Claude, "b", 2);
         b.auth_error = Some("revoked".into());
         let pool = pool(Strategy::FillFirst, &[&a, &b]);
-        assert!(
-            pick(&pool, None, 1000)
-                .unwrap_err()
-                .reason
-                .contains("disabled")
+        let reason = pick(&pool, None, 1000).unwrap_err().reason;
+        assert_eq!(
+            reason,
+            format!(
+                "every Claude account is disabled or signed out ({}: disabled, {}: signed out); \
+                 run `slopmax enable {}` or `slopmax login claude`",
+                a.id, b.id, a.id
+            )
+        );
+        // With none at all, the reason says to connect one.
+        let none = pool_of(&[]);
+        assert_eq!(
+            pick(&none, None, 1000).unwrap_err().reason,
+            "slopmax has no Claude account connected yet; run `slopmax login claude` (or `slopmax import`)"
+        );
+    }
+
+    #[test]
+    fn when_every_account_failed_the_reason_carries_the_last_error() {
+        let a = account(ProviderId::Claude, "a", 1);
+        let b = account(ProviderId::Claude, "b", 2);
+        let pool = pool(Strategy::FillFirst, &[&a, &b]);
+        pool.record_error(&a.id, "an older error");
+        pool.record_error(
+            &b.id,
+            "couldn't connect to api.anthropic.com (connection refused)",
+        );
+        let exclude = [Arc::new(a.clone()), Arc::new(b.clone())];
+        let req = Pick {
+            provider: ProviderId::Claude,
+            affinity: None,
+            housekeeping: false,
+            session: None,
+            model: None,
+            candidates: None,
+            exclude: &exclude,
+        };
+        assert_eq!(
+            pool.pick(&req, ts(1000)).unwrap_err().reason,
+            "every Claude account failed: couldn't connect to api.anthropic.com (connection refused)"
         );
     }
 

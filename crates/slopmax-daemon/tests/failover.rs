@@ -469,11 +469,98 @@ async fn an_unreachable_endpoint_fails_over_and_records_why() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(body.contains("chat.completion"));
     let down = h.app.pool.state(&h.ids[0]);
-    assert!(
-        down.last_error
-            .as_deref()
-            .is_some_and(|e| e.starts_with("network error")),
+    let port = closed.trim_end_matches("/v1").rsplit(':').next().unwrap();
+    assert_eq!(
+        down.last_error.as_deref(),
+        Some(format!("couldn't connect to 127.0.0.1:{port} (connection refused)").as_str()),
         "{down:?}"
+    );
+}
+
+#[tokio::test]
+async fn when_every_account_is_unreachable_the_agent_hears_why() {
+    let closed = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        format!("http://{}/v1", listener.local_addr().unwrap())
+    };
+    let h = harness(|_| vec![endpoint(&closed, 1000)], false).await;
+    let (status, body) = post(
+        &h,
+        "/v1/chat/completions",
+        r#"{"model":"local-model","messages":[{"role":"user","content":"hi"}]}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    let reply: Value = serde_json::from_str(&body).unwrap();
+    let port = closed.trim_end_matches("/v1").rsplit(':').next().unwrap();
+    assert_eq!(
+        reply["error"]["message"],
+        format!(
+            "every Compatible API account failed: couldn't connect to 127.0.0.1:{port} \
+             (connection refused). Check your network, or run `slopmax logs`."
+        )
+    );
+}
+
+#[tokio::test]
+async fn with_no_account_connected_claude_code_hears_how_to_add_one() {
+    let h = harness(|_| Vec::new(), false).await;
+    let (status, body) = claude_code(&h).await;
+    // Not a 404, which Claude Code reads as an unknown model.
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    let reply: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(reply["type"], "error", "Anthropic's error shape: {body}");
+    assert_eq!(
+        reply["error"]["message"],
+        "slopmax has no Claude account connected yet; run `slopmax login claude` (or `slopmax import`)"
+    );
+    // Codex hears it in its own shape, of its own provider.
+    let (status, body) = post(
+        &h,
+        "/codex/responses",
+        r#"{"model":"gpt-6-sol","input":[],"stream":true}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    let reply: Value = serde_json::from_str(&body).unwrap();
+    assert!(reply.get("type").is_none(), "{body}");
+    assert_eq!(
+        reply["error"]["message"],
+        "slopmax has no ChatGPT account connected yet; run `slopmax login codex` (or `slopmax import`)"
+    );
+    // A chat client naming no known model hears there is no account at all.
+    let (status, body) = post(
+        &h,
+        "/v1/chat/completions",
+        r#"{"model":"local-model","messages":[]}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert!(
+        body.contains("slopmax has no account connected yet"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_model_no_connected_account_serves_is_not_found() {
+    let h = harness(
+        |upstream| vec![endpoint(&format!("{upstream}/local/v1"), 1000)],
+        false,
+    )
+    .await;
+    let (status, body) = post(
+        &h,
+        "/v1/chat/completions",
+        r#"{"model":"other-model","messages":[]}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let reply: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        reply["error"]["message"],
+        "no connected account serves the model \"other-model\"; \
+         `slopmax status` lists accounts and the models they serve"
     );
 }
 

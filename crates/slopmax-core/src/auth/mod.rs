@@ -61,9 +61,34 @@ impl RefreshError {
         if status == StatusCode::UNAUTHORIZED || (status.is_client_error() && rejected) {
             Self::Revoked(format!("refresh token rejected ({status})"))
         } else {
-            Self::Transient(anyhow!("token refresh failed ({status}): {body}"))
+            match brief(body) {
+                Some(said) => Self::Transient(anyhow!("token refresh failed ({status}): {said}")),
+                None => Self::Transient(anyhow!("token refresh failed ({status})")),
+            }
         }
     }
+}
+
+/// What an error page says, on one line short enough to show beside an
+/// account: an HTML page's title, or the start of the text.
+fn brief(body: &str) -> Option<String> {
+    const MAX: usize = 120;
+    let body = body.trim();
+    let lower = body.to_ascii_lowercase();
+    let text = match (lower.find("<title>"), lower.find("</title>")) {
+        (Some(open), Some(close)) if open < close => &body[open + "<title>".len()..close],
+        // Other markup says nothing worth reading here.
+        _ if body.starts_with('<') => "",
+        _ => body,
+    };
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.is_empty() {
+        return None;
+    }
+    Some(match text.char_indices().nth(MAX) {
+        Some((cut, _)) => format!("{}…", text[..cut].trim_end()),
+        None => text,
+    })
 }
 
 impl std::fmt::Display for RefreshError {
@@ -404,6 +429,26 @@ async fn save(store: &Store, account: &Account) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_failed_refresh_says_why_on_one_short_line() {
+        let page = format!(
+            "<!DOCTYPE html>\n<html><head>\n<title>502 Bad Gateway</title></head>\n<body>{}</body></html>",
+            "x".repeat(5000)
+        );
+        let err = RefreshError::classify(StatusCode::BAD_GATEWAY, &page);
+        assert_eq!(
+            err.to_string(),
+            "token refresh failed (502 Bad Gateway): 502 Bad Gateway"
+        );
+        let err = RefreshError::classify(StatusCode::BAD_GATEWAY, "<html><body>oops</body></html>");
+        assert_eq!(err.to_string(), "token refresh failed (502 Bad Gateway)");
+        let long = format!("upstream\nbroke {}", "y".repeat(500));
+        let said = RefreshError::classify(StatusCode::SERVICE_UNAVAILABLE, &long).to_string();
+        assert!(!said.contains('\n'), "{said}");
+        assert!(said.ends_with('…'), "{said}");
+        assert!(said.chars().count() < 170, "{said}");
+    }
     use super::*;
 
     #[tokio::test]

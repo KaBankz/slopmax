@@ -262,10 +262,13 @@ fn native_step<'a>(
 }
 
 /// The reply when routing finds no way to serve a request.
-fn refusal(dialect: Dialect, headers: &HeaderMap, no: NoRoute) -> Response {
+fn refusal(inbound: &Inbound, accounts: &[Arc<Account>], no: NoRoute) -> Response {
+    let dialect = inbound.target.dialect;
     match no {
         NoRoute::Refused { provider, agent } => {
-            let client = headers
+            let client = inbound
+                .parts
+                .headers
                 .get(http::header::USER_AGENT)
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("an unidentified client");
@@ -280,13 +283,53 @@ fn refusal(dialect: Dialect, headers: &HeaderMap, no: NoRoute) -> Response {
             StatusCode::BAD_REQUEST,
             "the request names no model",
         ),
-        NoRoute::Unserved { model } => {
-            let message = format!(
-                "no connected account serves {model:?} in the {} format (`slopmax status` lists accounts)",
-                dialect.as_str()
-            );
-            error(Some(dialect), StatusCode::NOT_FOUND, &message)
-        }
+        NoRoute::Unserved { model } => match unconnected(accounts, &model, inbound.target.provider)
+        {
+            // Not a bad model name: nothing is connected that could serve it.
+            // A 404 would read to the agent as an unknown model.
+            Some(message) => error(Some(dialect), StatusCode::SERVICE_UNAVAILABLE, &message),
+            None => {
+                let message = format!(
+                    "no connected account serves the model {model:?}; `slopmax status` lists accounts and the models they serve"
+                );
+                error(Some(dialect), StatusCode::NOT_FOUND, &message)
+            }
+        },
+    }
+}
+
+/// Why `model` has no account, when the reason is that none of the
+/// providers that would serve it (or the path's own, `default`) has an
+/// account connected at all: the fix is to connect one.
+fn unconnected(
+    accounts: &[Arc<Account>],
+    model: &str,
+    default: Option<ProviderId>,
+) -> Option<String> {
+    let owners: Vec<ProviderId> = ProviderId::ALL
+        .into_iter()
+        .filter(|p| {
+            p.spec()
+                .models
+                .iter()
+                .any(|m| crate::provider::matches(m, model))
+        })
+        .chain(default)
+        .collect();
+    if accounts.iter().any(|a| owners.contains(&a.provider)) {
+        return None;
+    }
+    // Subscriptions come first in `ALL`: name the one most people connect.
+    match owners.first() {
+        Some(owner) => Some(format!(
+            "slopmax has no {} account connected yet; run `slopmax login {owner}` (or `slopmax import`)",
+            owner.spec().title
+        )),
+        None if accounts.is_empty() => Some(
+            "slopmax has no account connected yet; run `slopmax login <provider>` (or `slopmax import`)"
+                .to_owned(),
+        ),
+        None => None,
     }
 }
 
@@ -371,6 +414,8 @@ enum Attempt {
     Done(Response),
     /// The account failed; try another.
     Failed(Option<Failure>),
+    /// The account's API could not be reached; try another.
+    Unreachable,
 }
 
 /// Serves a request; `client` is the client key it came with, if not the
@@ -433,7 +478,7 @@ pub(super) async fn forward(
     let (accounts, config) = (app.pool.accounts(), app.config());
     let mut steps = match inbound.plan(&accounts, &config) {
         Ok(steps) => steps,
-        Err(no) => return refusal(dialect, &inbound.parts.headers, no),
+        Err(no) => return refusal(&inbound, &accounts, no),
     };
     // Aliases and fallbacks may name other models than the one asked for;
     // a key held to some models reaches those alone.
@@ -456,6 +501,8 @@ pub(super) async fn forward(
     let mut tried: Vec<Arc<Account>> = Vec::new();
     let mut last: Option<Failure> = None;
     let mut unavailable: Option<Unavailable> = None;
+    // Whether the last account tried could not be reached at all.
+    let mut unreachable = false;
     for step in &steps {
         let mut rescued = false;
         loop {
@@ -502,12 +549,23 @@ pub(super) async fn forward(
                     }
                     return response;
                 }
-                Attempt::Failed(failure) => last = failure.or(last),
+                Attempt::Failed(failure) => {
+                    unreachable = false;
+                    last = failure.or(last);
+                }
+                Attempt::Unreachable => unreachable = true,
             }
         }
     }
     let provider = last.as_ref().map_or(steps[0].provider, |f| f.provider);
-    let response = give_up(&app, dialect, steps[0].provider, unavailable, last);
+    let response = give_up(
+        &app,
+        dialect,
+        steps[0].provider,
+        unavailable,
+        last,
+        unreachable,
+    );
     failed(
         &app,
         &inbound,
@@ -604,8 +662,8 @@ async fn attempt(
             Ok(response) => response,
             Err(e) => {
                 log::warn!("{id}: upstream unreachable: {e}");
-                app.pool.record_error(&id, &format!("network error: {e}"));
-                return Attempt::Failed(None);
+                app.pool.record_error(&id, &e.to_string());
+                return Attempt::Unreachable;
             }
         };
         let now = Timestamp::now();
@@ -1115,13 +1173,15 @@ fn remembering(app: &Arc<App>, account: String, upstream: Dialect) -> Watch {
     })
 }
 
-/// The response when no account can take the request.
+/// The response when no account can take the request; `unreachable` when
+/// the last account tried could not be reached.
 fn give_up(
     app: &App,
     dialect: Dialect,
     provider: ProviderId,
     unavailable: Option<Unavailable>,
     last: Option<Failure>,
+    unreachable: bool,
 ) -> Response {
     let until = unavailable.as_ref().and_then(|u| u.until);
     match (last, until) {
@@ -1132,13 +1192,17 @@ fn give_up(
         }
         (Some(failure), _) => failure.into_response(app),
         (None, Some(until)) => limit_reached(dialect, provider, until),
-        (None, None) => error(
-            Some(dialect),
-            StatusCode::SERVICE_UNAVAILABLE,
-            unavailable
+        (None, None) => {
+            let reason = unavailable
                 .as_ref()
-                .map_or("no account could take the request", |u| u.reason.as_str()),
-        ),
+                .map_or("no account could take the request", |u| u.reason.as_str());
+            let message = if unreachable {
+                format!("{reason}. Check your network, or run `slopmax logs`.")
+            } else {
+                reason.to_owned()
+            };
+            error(Some(dialect), StatusCode::SERVICE_UNAVAILABLE, &message)
+        }
     }
 }
 
