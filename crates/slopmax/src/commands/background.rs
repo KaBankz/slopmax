@@ -34,7 +34,14 @@ pub(super) async fn start(config: &Config) -> Result<()> {
 }
 
 pub(super) async fn stop(config: &Config) -> Result<()> {
-    if background::stop(config).await? {
+    let stopped = background::stop(config).await?;
+    // launchd would start it again for the next connection to its socket.
+    if let Some(manager) =
+        slopmax_core::service::Manager::detect().filter(|m| m.status(super::home()).installed)
+    {
+        manager.stopped();
+    }
+    if stopped {
         println!("slopmax stopped");
     } else {
         println!("slopmax is not running");

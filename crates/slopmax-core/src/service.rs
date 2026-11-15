@@ -3,6 +3,7 @@
 //! `slopmaxw.exe` in the user's Run key, which supervises the proxy as the
 //! other two do (crates/slopmax-launcher).
 
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -86,22 +87,13 @@ impl Manager {
     ///
     /// On Linux and macOS the service runs `exe` through the home's link
     /// ([`Home::service_exe`]), which an update moves to the new binary:
-    /// the definition never names a version that may be removed.
-    pub fn install(self, exe: &Path, home: &Home) -> Result<PathBuf> {
+    /// the definition never names a version that may be removed. launchd
+    /// listens on `listen` for it.
+    pub fn install(self, exe: &Path, home: &Home, listen: SocketAddr) -> Result<PathBuf> {
         let file = self.file(home);
-        let log = home.log();
-        let linked = if self == Self::Windows {
-            exe.to_path_buf()
-        } else {
-            let resolved = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
-            let target = Install::of(&resolved).entry(&resolved);
-            install::link(home, &target)
-                .with_context(|| format!("linking {}", home.service_exe().display()))?;
-            home.service_exe()
-        };
-        let exe = linked.as_path();
-        let home = std::env::var_os("SLOPMAX_HOME").map(PathBuf::from);
         if self == Self::Windows {
+            let log = home.log();
+            let home = std::env::var_os("SLOPMAX_HOME").map(PathBuf::from);
             let line = windows_command(&launcher(exe)?, exe, &log, home.as_deref());
             run(
                 "reg",
@@ -114,11 +106,13 @@ impl Manager {
             spawn_launcher(exe, &log, home.as_deref())?;
             return Ok(file);
         }
-        let text = match self {
-            Self::Systemd => systemd_unit(exe, &log, home.as_deref()),
-            Self::Launchd => launchd_plist(exe, &log, home.as_deref()),
-            Self::Windows => unreachable!("Windows keeps no file"),
-        };
+        let resolved = exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf());
+        let target = Install::of(&resolved).entry(&resolved);
+        install::link(home, &target)
+            .with_context(|| format!("linking {}", home.service_exe().display()))?;
+        let text = self
+            .definition(home, listen)
+            .context("Windows keeps no file")?;
         fsx::write_private(&file, text.as_bytes())
             .with_context(|| format!("writing {}", file.display()))?;
         match self {
@@ -168,6 +162,56 @@ impl Manager {
         Ok(file)
     }
 
+    /// What this version writes for `home`: the unit or the plist, which
+    /// runs the home's link. `None` on Windows, which keeps no file.
+    fn definition(self, home: &Home, listen: SocketAddr) -> Option<String> {
+        let exe = home.service_exe();
+        let log = home.log();
+        let moved = std::env::var_os("SLOPMAX_HOME").map(PathBuf::from);
+        match self {
+            Self::Systemd => Some(systemd_unit(&exe, &log, moved.as_deref())),
+            Self::Launchd => Some(launchd_plist(&exe, &log, moved.as_deref(), listen)),
+            Self::Windows => None,
+        }
+    }
+
+    /// Whether the installed definition is not what this version writes:
+    /// from an older slopmax, or for another listen address.
+    pub fn outdated(self, home: &Home, listen: SocketAddr) -> bool {
+        let Some(text) = self.definition(home, listen) else {
+            return false;
+        };
+        std::fs::read_to_string(self.file(home)).is_ok_and(|old| old != text)
+    }
+
+    /// systemd: writes the unit anew when this home's (it runs the home's
+    /// link) is outdated, and has systemd load it. The proxy it runs
+    /// carries on: nothing here restarts it. Whether it was rewritten.
+    pub fn refresh(self, home: &Home, listen: SocketAddr) -> Result<bool> {
+        if self != Self::Systemd || !self.outdated(home, listen) {
+            return Ok(false);
+        }
+        let file = self.file(home);
+        let ours = format!("ExecStart=\"{}\" serve\n", home.service_exe().display());
+        if !std::fs::read_to_string(&file).is_ok_and(|old| old.contains(&ours)) {
+            return Ok(false);
+        }
+        let text = self.definition(home, listen).unwrap_or_default();
+        fsx::write_private(&file, text.as_bytes())
+            .with_context(|| format!("writing {}", file.display()))?;
+        run("systemctl", &["--user", "daemon-reload"])?;
+        Ok(true)
+    }
+
+    /// After the proxy was told to stop: launchd, which would start it
+    /// again for the next connection to the socket it keeps, unloads the
+    /// agent until `start` or the next login.
+    pub fn stopped(self) {
+        if self == Self::Launchd {
+            let _ = launchctl(&["bootout", &launchd_target()]);
+        }
+    }
+
     pub fn status(self, home: &Home) -> Status {
         if self == Self::Windows {
             let installed = run_key_set();
@@ -195,11 +239,23 @@ impl Manager {
     }
 
     /// Starts the installed service, which runs `exe` (the one it was
-    /// installed with, on Linux and macOS).
-    pub fn start(self, exe: &Path, home: &Home) -> Result<()> {
+    /// installed with, on Linux and macOS). An agent `stop` unloaded is
+    /// loaded again, its plist written anew for `listen`.
+    pub fn start(self, exe: &Path, home: &Home, listen: SocketAddr) -> Result<()> {
         match self {
             Self::Systemd => run("systemctl", &["--user", "start", NAME]),
-            Self::Launchd => launchctl(&["kickstart", &launchd_target()]),
+            Self::Launchd if launchctl(&["print", &launchd_target()]).is_ok() => {
+                launchctl(&["kickstart", &launchd_target()])
+            }
+            Self::Launchd => {
+                let file = self.file(home);
+                if self.outdated(home, listen) {
+                    let text = self.definition(home, listen).unwrap_or_default();
+                    fsx::write_private(&file, text.as_bytes())
+                        .with_context(|| format!("writing {}", file.display()))?;
+                }
+                launchctl(&["bootstrap", &launchd_domain(), &file.to_string_lossy()])
+            }
             // One already running starts the proxy itself, once its pause
             // after a failure is over.
             Self::Windows if launcher_running() => Ok(()),
@@ -222,8 +278,12 @@ fn config_home(home: &Home) -> PathBuf {
 /// The user unit. `Type=notify`: systemd counts the proxy started once it
 /// listens, and `NotifyAccess=all` lets a proxy that hands its socket to a
 /// newer binary name that one the main process (`MAINPID=`), so an update
-/// keeps the service running without a restart. A crash restarts it within
-/// a second, as often as it takes.
+/// keeps the service running without a restart. The proxy keeps its socket
+/// in the unit's store (`FileDescriptorStoreMax=`), which passes it to the
+/// next process: through a crash, restarted within a second as often as it
+/// takes, or a restart, connections wait rather than being refused. Room
+/// for two, as systemd counts before it sees that a process offering the
+/// socket again offers the one it holds.
 fn systemd_unit(exe: &Path, log: &Path, home: Option<&Path>) -> String {
     let environment = home
         .map(|h| format!("Environment=\"SLOPMAX_HOME={}\"\n", h.display()))
@@ -238,6 +298,7 @@ fn systemd_unit(exe: &Path, log: &Path, home: Option<&Path>) -> String {
          [Service]\n\
          Type=notify\n\
          NotifyAccess=all\n\
+         FileDescriptorStoreMax=2\n\
          ExecStart=\"{exe}\" serve\n\
          {environment}\
          Restart=on-failure\n\
@@ -252,7 +313,13 @@ fn systemd_unit(exe: &Path, log: &Path, home: Option<&Path>) -> String {
     )
 }
 
-fn launchd_plist(exe: &Path, log: &Path, home: Option<&Path>) -> String {
+/// The agent. launchd binds the proxy's socket (`Listener`) when it loads
+/// and keeps it: each process it starts takes it, so through a crash or a
+/// restart connections wait rather than being refused, and once a proxy
+/// that handed itself to a new binary exits, the process launchd starts
+/// next takes over from that one. Processes it started that outlive the
+/// proxy's are left be (`AbandonProcessGroup`).
+fn launchd_plist(exe: &Path, log: &Path, home: Option<&Path>, listen: SocketAddr) -> String {
     let xml = |p: &Path| {
         p.display()
             .to_string()
@@ -287,6 +354,24 @@ fn launchd_plist(exe: &Path, log: &Path, home: Option<&Path>) -> String {
     <key>SuccessfulExit</key>
     <false/>
   </dict>
+  <key>ThrottleInterval</key>
+  <integer>1</integer>
+  <key>AbandonProcessGroup</key>
+  <true/>
+  <key>Sockets</key>
+  <dict>
+    <key>Listener</key>
+    <dict>
+      <key>SockNodeName</key>
+      <string>{node}</string>
+      <key>SockServiceName</key>
+      <string>{port}</string>
+      <key>SockFamily</key>
+      <string>{family}</string>
+      <key>SockType</key>
+      <string>stream</string>
+    </dict>
+  </dict>
   <key>StandardOutPath</key>
   <string>{log}</string>
   <key>StandardErrorPath</key>
@@ -296,6 +381,9 @@ fn launchd_plist(exe: &Path, log: &Path, home: Option<&Path>) -> String {
 "#,
         exe = xml(exe),
         log = xml(log),
+        node = listen.ip(),
+        port = listen.port(),
+        family = if listen.is_ipv4() { "IPv4" } else { "IPv6" },
     )
 }
 
@@ -482,6 +570,7 @@ mod tests {
             Path::new("/Users/a&b/slopmax"),
             Path::new("/Users/a&b/.slopmax/slopmax.log"),
             None,
+            "127.0.0.1:7567".parse().unwrap(),
         );
         assert!(plist.contains("<string>/Users/a&amp;b/slopmax</string>"));
         assert!(plist.contains("<key>RunAtLoad</key>\n  <true/>"));
@@ -494,12 +583,68 @@ mod tests {
             Path::new("/bin/slopmax"),
             Path::new("/l.log"),
             Some(Path::new("/srv/<home>")),
+            "127.0.0.1:7567".parse().unwrap(),
         );
         assert!(plist.contains(
             "<key>EnvironmentVariables</key>\n  <dict>\n    <key>SLOPMAX_HOME</key>\n    <string>/srv/&lt;home&gt;</string>"
         ));
         assert!(plist.contains("<string>dev.slopmax</string>"));
         assert!(plist.ends_with("</dict>\n</plist>\n"));
+    }
+
+    #[test]
+    fn launchd_keeps_the_proxys_socket() {
+        let plist = launchd_plist(
+            Path::new("/bin/slopmax"),
+            Path::new("/l.log"),
+            None,
+            "127.0.0.1:7567".parse().unwrap(),
+        );
+        assert!(plist.contains(
+            "<key>Sockets</key>\n  <dict>\n    <key>Listener</key>\n    <dict>\n      \
+             <key>SockNodeName</key>\n      <string>127.0.0.1</string>\n      \
+             <key>SockServiceName</key>\n      <string>7567</string>\n      \
+             <key>SockFamily</key>\n      <string>IPv4</string>"
+        ));
+        assert!(plist.contains("<key>AbandonProcessGroup</key>\n  <true/>"));
+        assert!(plist.contains("<key>ThrottleInterval</key>\n  <integer>1</integer>"));
+        let v6 = launchd_plist(
+            Path::new("/bin/slopmax"),
+            Path::new("/l.log"),
+            None,
+            "[::1]:9000".parse().unwrap(),
+        );
+        assert!(v6.contains("<string>::1</string>"));
+        assert!(v6.contains("<string>9000</string>"));
+        assert!(v6.contains("<string>IPv6</string>"));
+    }
+
+    #[test]
+    fn an_outdated_unit_is_written_anew_only_when_it_is_this_homes() {
+        let root = std::env::temp_dir().join(format!("slopmax-refresh-{}", std::process::id()));
+        let home = Home::sandbox(&root);
+        let listen: SocketAddr = "127.0.0.1:7567".parse().unwrap();
+        let file = Manager::Systemd.file(&home);
+        if !file.starts_with(&root) {
+            // XDG_CONFIG_HOME puts units elsewhere: the user's own.
+            return;
+        }
+        assert!(
+            !Manager::Systemd.outdated(&home, listen),
+            "nothing installed"
+        );
+        let current = Manager::Systemd.definition(&home, listen).unwrap();
+        assert!(current.contains("FileDescriptorStoreMax=2\n"));
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, &current).unwrap();
+        assert!(!Manager::Systemd.outdated(&home, listen));
+        assert!(!Manager::Systemd.refresh(&home, listen).unwrap());
+        // Another binary's unit is left alone, outdated or not.
+        std::fs::write(&file, "[Service]\nExecStart=/usr/bin/other serve\n").unwrap();
+        assert!(Manager::Systemd.outdated(&home, listen));
+        assert!(!Manager::Systemd.refresh(&home, listen).unwrap());
+        assert!(!Manager::Windows.outdated(&home, listen));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

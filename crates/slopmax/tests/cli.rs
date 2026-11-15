@@ -2178,3 +2178,205 @@ async fn handing_the_proxy_to_another_binary_refuses_and_cuts_off_nothing() {
     let left = std::fs::read_to_string(s.slopmax.join(".serve.pid")).unwrap();
     assert_eq!(left.trim(), second.to_string());
 }
+
+/// Starts `slopmax serve` as systemd starts a unit whose store holds
+/// `listener`: as fd 3, named in `LISTEN_FDNAMES`, for its own pid, with
+/// `NOTIFY_SOCKET` at `notify`. Its output goes to `<name>.log`.
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+fn serve_on_kept_socket(s: &Sandbox, listener: &TcpListener, notify: &Path, name: &str) -> Child {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::process::CommandExt;
+    let template = s.command(&["serve"]);
+    let mut command = Command::new("/bin/sh");
+    command.env_clear();
+    for (key, value) in template.get_envs() {
+        if let Some(value) = value {
+            command.env(key, value);
+        }
+    }
+    let log = std::fs::File::create(s.root.join(format!("{name}.log"))).unwrap();
+    command
+        .args([
+            "-c",
+            "LISTEN_PID=$$ exec \"$0\" serve",
+            env!("CARGO_BIN_EXE_slopmax"),
+        ])
+        .env("LISTEN_FDS", "1")
+        .env("LISTEN_FDNAMES", "listener")
+        .env("NOTIFY_SOCKET", notify)
+        .stdin(Stdio::null())
+        .stdout(log.try_clone().unwrap())
+        .stderr(log);
+    let fd = listener.as_raw_fd();
+    // SAFETY: dup2 and fcntl are async-signal-safe, and touch only the
+    // child's own descriptors.
+    unsafe {
+        command.pre_exec(move || {
+            if fd == 3 {
+                libc::fcntl(3, libc::F_SETFD, 0);
+            } else if libc::dup2(fd, 3) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command.spawn().unwrap()
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_proxy_started_on_the_kept_socket_takes_over_without_refusing_a_connection() {
+    use slopmax_core::net::Client;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    let upstream = slow_endpoint().await;
+    let s = Arc::new(Sandbox::new("kept-socket"));
+    let login = {
+        let s = s.clone();
+        let url = format!("{upstream}/v1");
+        tokio::task::spawn_blocking(move || {
+            s.run_with(
+                &["login", "compat", "--url", &url, "--models", "slow-model"],
+                "sk-slow\n",
+            )
+        })
+        .await
+        .unwrap()
+    };
+    assert_eq!(login.code, 0, "{login:?}");
+    let info: Value = serde_json::from_str(&s.run(&["daemon-info", "--json"]).ok().stdout).unwrap();
+    let key = info["key"].as_str().unwrap().to_owned();
+    let base = format!("http://127.0.0.1:{}", s.port);
+
+    // The socket the service manager keeps, and where it hears from the
+    // proxy.
+    let kept = TcpListener::bind(("127.0.0.1", s.port)).unwrap();
+    let notify_path = s.root.join("notify.sock");
+    let notify = std::os::unix::net::UnixDatagram::bind(&notify_path).unwrap();
+    notify
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+
+    let mut first = serve_on_kept_socket(&s, &kept, &notify_path, "first");
+    let mut heard = Vec::new();
+    while !(heard.iter().any(|m| m == "READY=1")
+        && heard.iter().any(|m| m == "FDSTORE=1\nFDNAME=listener"))
+    {
+        let mut buffer = [0u8; 512];
+        let n = notify
+            .recv(&mut buffer)
+            .unwrap_or_else(|e| panic!("systemd isn't told ({e}): {heard:?}"));
+        heard.push(String::from_utf8_lossy(&buffer[..n]).into_owned());
+    }
+    let http = Client::builder().plain_http().build();
+    let health = |http: Client, base: String| async move {
+        let response = http.get(format!("{base}/healthz")).send().await.ok()?;
+        response.json::<Value>().await.ok()
+    };
+    assert_eq!(
+        health(http.clone(), base.clone()).await.unwrap()["pid"],
+        first.id()
+    );
+
+    // A stream under way when the next process starts…
+    let streaming = {
+        let (http, base, key) = (http.clone(), base.clone(), key.clone());
+        tokio::spawn(async move {
+            let response = http
+                .post(format!("{base}/v1/chat/completions"))
+                .bearer_auth(&key)
+                .json(&json!({
+                    "model": "slow-model",
+                    "stream": true,
+                    "messages": [{ "role": "user", "content": "hi" }]
+                }))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 200);
+            response.text().await.unwrap()
+        })
+    };
+    // …and new connections, one after another, all through the change.
+    let stop = Arc::new(AtomicBool::new(false));
+    let (answered, refused) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let knocking = {
+        let (stop, answered, refused) = (stop.clone(), answered.clone(), refused.clone());
+        let base = base.clone();
+        tokio::spawn(async move {
+            while !stop.load(Ordering::SeqCst) {
+                let fresh = Client::builder().plain_http().build();
+                match health(fresh, base.clone()).await {
+                    Some(_) => answered.fetch_add(1, Ordering::SeqCst),
+                    None => refused.fetch_add(1, Ordering::SeqCst),
+                };
+            }
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // The next process finds the home served, and has the first make way.
+    let mut second = serve_on_kept_socket(&s, &kept, &notify_path, "second");
+    let start = Instant::now();
+    loop {
+        let now = health(Client::builder().plain_http().build(), base.clone()).await;
+        if now.is_some_and(|h| h["pid"] == second.id()) {
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "the second process never took over: {}",
+            std::fs::read_to_string(s.root.join("second.log")).unwrap_or_default()
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    let text = tokio::time::timeout(Duration::from_secs(20), streaming)
+        .await
+        .expect("the stream ends")
+        .unwrap();
+    for i in 0..10 {
+        assert!(
+            text.contains(&format!("part{i} ")),
+            "part {i} missing: {text}"
+        );
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    stop.store(true, Ordering::SeqCst);
+    knocking.await.unwrap();
+    assert_eq!(
+        refused.load(Ordering::SeqCst),
+        0,
+        "connections refused while the second process took over"
+    );
+    assert!(answered.load(Ordering::SeqCst) > 10);
+
+    // Its connections closed, the first process is done, and the second
+    // holds the home.
+    drop(http);
+    let start = Instant::now();
+    loop {
+        if let Some(status) = first.try_wait().unwrap() {
+            assert!(status.success(), "{status:?}");
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(15),
+            "the first process kept running"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let holder = std::fs::read_to_string(s.slopmax.join(".serve.pid")).unwrap();
+    assert_eq!(holder.trim(), second.id().to_string());
+    assert!(second.try_wait().unwrap().is_none());
+    s.run(&["stop"]).ok();
+    let start = Instant::now();
+    while second.try_wait().unwrap().is_none() {
+        assert!(
+            start.elapsed() < Duration::from_secs(15),
+            "the second process kept running"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
