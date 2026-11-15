@@ -247,11 +247,20 @@ fn unconnected(
 ) -> String {
     let host = authority.host();
     // hyper's connector calls a failed lookup a "dns error"; on Windows,
-    // connections to this machine look names up themselves.
+    // connections to this machine look names up themselves, and Windows
+    // says "No such host is known" (WSAHOST_NOT_FOUND, WSANO_DATA).
     let mut link = Some(error);
     while let Some(e) = link {
-        let text = e.to_string();
-        if text == "dns error" || text.contains("lookup address") || text.contains("has no address")
+        let text = e.to_string().to_ascii_lowercase();
+        let windows = e
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::raw_os_error)
+            .is_some_and(|code| cfg!(windows) && matches!(code, 11001 | 11004));
+        if windows
+            || text == "dns error"
+            || text.contains("lookup address")
+            || text.contains("has no address")
+            || text.contains("no such host is known")
         {
             return format!("couldn't find {host} (DNS lookup failed)");
         }

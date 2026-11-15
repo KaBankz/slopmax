@@ -1606,11 +1606,12 @@ fn start_says_at_once_why_the_proxy_did_not_start() {
     let out = s.run(&["start"]);
     assert_eq!(out.code, 1, "{out:?}");
     assert!(out.stderr.contains("the proxy did not start: "), "{out:?}");
+    // Linux names the program holding it; elsewhere it is "another program".
     assert!(
-        out.stderr.contains(&format!(
-            "is using 127.0.0.1:{}. Set `listen` in config.toml to a free port.",
-            s.port
-        )),
+        out.stderr.contains(&format!("127.0.0.1:{}", s.port))
+            && out
+                .stderr
+                .contains(". Set `listen` in config.toml to a free port."),
         "{out:?}"
     );
     assert!(
