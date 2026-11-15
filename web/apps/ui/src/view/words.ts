@@ -3,6 +3,7 @@
 import type { HistoryRange, Level, LiveKey, LivePatch, Settings, Strategy, Tone } from "@slopmax/client"
 import { fixed, grouped } from "@slopmax/client/format"
 import { Cause } from "effect"
+import { HttpClientError } from "effect/http"
 
 /** The first letter capitalized, the rest as it is. */
 export const capitalize = (text: string): string => text.charAt(0).toUpperCase() + text.slice(1)
@@ -13,18 +14,48 @@ const withoutPath = (message: string): string => message.split("\n")[0]?.trim() 
 /** The words of a check of the answer's shape, which say nothing to someone reading the page. */
 const shapeWords = /^(Missing key|Unexpected key|Expected )/
 
+/** What the page says when slopmax does not answer at all. */
+export const notAnswering = "slopmax is not answering. Is it running? Start it with slopmax start."
+
+/** What the page says when slopmax answers with an error status it does not explain. */
+export const answeredError = (status: number): string => `slopmax answered with an error (${status}).`
+
+const unreadable = "slopmax answered in a form this page does not read; reload it"
+
+/**
+ * A request that failed on its way, rather than one slopmax refused in its
+ * own words: nothing answered, an error status without a body this page
+ * reads, or an answer it could not read. Never the request's method and address.
+ */
+const httpText = (error: HttpClientError.HttpClientError): string => {
+  const reason = error.reason
+  switch (reason._tag) {
+    case "TransportError":
+      return notAnswering
+    case "StatusCodeError":
+    case "DecodeError":
+    case "EmptyBodyError":
+      return reason.response.status >= 400 ? answeredError(reason.response.status) : unreadable
+    case "EncodeError":
+    case "InvalidUrlError":
+      return "this page could not send that; reload it"
+  }
+}
+
 /**
  * What went wrong, as people read it: the API's own words, a refused
- * field's message without its path, and an answer this page cannot read as such.
+ * field's message without its path, slopmax not answering at all, and an
+ * answer this page cannot read as such.
  */
 export const failureText = (cause: Cause.Cause<unknown>): string => {
   const error = Cause.squash(cause)
+  if (HttpClientError.isHttpClientError(error)) return httpText(error)
   const message =
     typeof error === "object" && error !== null && "message" in error && typeof error.message === "string"
       ? withoutPath(error.message)
       : ""
   if (message === "") return "it failed"
-  return shapeWords.test(message) ? "slopmax answered in a form this page does not read; reload it" : message
+  return shapeWords.test(message) ? unreadable : message
 }
 
 /**

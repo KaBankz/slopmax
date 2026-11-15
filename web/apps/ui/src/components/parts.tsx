@@ -10,7 +10,7 @@ import appIcon from "../icon-128.png"
 import { pct } from "../lib/style.ts"
 import mark from "../logo.svg"
 import type { Overview } from "../view/groups.ts"
-import { capitalize, failureText, poolBarTip, segmentsShown, sentence } from "../view/words.ts"
+import { failureText, poolBarTip, segmentsShown, sentence, sentenceCase } from "../view/words.ts"
 import { Button } from "./ui/button.tsx"
 import { Tip } from "./ui/tooltip.tsx"
 
@@ -306,7 +306,7 @@ export function Failed({
     <Panel>
       <div role="alert" className="flex flex-col items-center gap-1.5 px-6 py-10 text-center">
         <div className="font-medium text-danger">{title}</div>
-        <div className="max-w-md text-small text-muted-foreground">{capitalize(detail)}</div>
+        <div className="max-w-md text-small text-muted-foreground">{sentenceCase(detail)}</div>
         {onRetry !== undefined && (
           <div className="mt-3">
             <Button onClick={onRetry}>Try again</Button>

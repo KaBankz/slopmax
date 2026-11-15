@@ -41,7 +41,7 @@ import { type Group, groups } from "./view/groups.ts"
 import { type FeedEntry, pushFeed, type SignIn, signInDone, startSignIn, stepSignIn, tell } from "./view/live.ts"
 import { type Page, pageHash, Pages, parseRoute, type Route, toggleSidebar as toggled } from "./view/pages.ts"
 import { addToast, type Toast } from "./view/toasts.ts"
-import { capitalize, defaultRange, failureText, settingChanged } from "./view/words.ts"
+import { defaultRange, failureText, sentenceCase, settingChanged } from "./view/words.ts"
 
 // --- Time ------------------------------------------------------------------------
 
@@ -432,7 +432,7 @@ const act = <Arg, E>(run: Action<Arg, E>, failed?: string) =>
                 yield* signOut(store)
                 return
               }
-              say(store, failed === undefined ? capitalize(failureText(cause)) : `${failed}${failureText(cause)}`, true)
+              say(store, failed === undefined ? sentenceCase(failureText(cause)) : `${failed}${failureText(cause)}`, true)
             }),
           ),
           Effect.asVoid,

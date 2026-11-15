@@ -26,7 +26,7 @@ import { Input } from "../components/ui/input.tsx"
 import { Segmented } from "../components/ui/segmented.tsx"
 import { askRevoke } from "../view/asks.ts"
 import { needsProxy } from "../view/live.ts"
-import { capitalize, failureText, patterns } from "../view/words.ts"
+import { failureText, patterns, sentenceCase } from "../view/words.ts"
 
 type KeyProvider = "anthropic" | "openai" | "xai"
 const keyProviders: ReadonlyArray<KeyProvider> = ["anthropic", "openai", "xai"]
@@ -41,7 +41,7 @@ const dialects: ReadonlyArray<{ readonly value: Dialect; readonly title: string 
 function Refused({ id, text, className }: { readonly id: string; readonly text: string; readonly className: string }) {
   return (
     <div id={id} role="alert" className={className}>
-      {capitalize(text)}
+      {sentenceCase(text)}
     </div>
   )
 }

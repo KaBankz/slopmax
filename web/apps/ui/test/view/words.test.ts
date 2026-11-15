@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Strategy } from "@slopmax/client"
 import { Cause, Schema } from "effect"
+import { HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http"
 import {
   autoRedeem,
   count,
@@ -171,5 +172,28 @@ describe("the pool's bar and failures", () => {
     expect(failureText(unread.cause)).toBe("slopmax answered in a form this page does not read; reload it")
     expect(failureText(Cause.fail(new Error("ChatGPT answered 503")))).toBe("ChatGPT answered 503")
     expect(failureText(Cause.fail(42))).toBe("it failed")
+  })
+
+  test("a request that never reached slopmax, or an error it did not explain, says so without the address", () => {
+    const request = HttpClientRequest.post("http://127.0.0.1:7567/slopmax/api/accounts/abc/pin")
+    const transport = new HttpClientError.HttpClientError({
+      reason: new HttpClientError.TransportError({ request, description: "Failed to fetch" }),
+    })
+    expect(failureText(Cause.fail(transport))).toBe(
+      "slopmax is not answering. Is it running? Start it with slopmax start.",
+    )
+    const response = HttpClientResponse.fromWeb(request, new Response("Bad Gateway", { status: 502 }))
+    const status = new HttpClientError.HttpClientError({
+      reason: new HttpClientError.StatusCodeError({ request, response }),
+    })
+    expect(failureText(Cause.fail(status))).toBe("slopmax answered with an error (502).")
+    const decode = new HttpClientError.HttpClientError({
+      reason: new HttpClientError.DecodeError({
+        request,
+        response: HttpClientResponse.fromWeb(request, new Response("<html>", { status: 404 })),
+      }),
+    })
+    expect(failureText(Cause.fail(decode))).toBe("slopmax answered with an error (404).")
+    expect(failureText(Cause.fail(status))).not.toContain("127.0.0.1")
   })
 })
