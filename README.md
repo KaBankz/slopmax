@@ -205,7 +205,9 @@ gpt-6-sol              96     88.1k     41.7k       12.0M            0          
 total                 508    398.3k    229.7k      114.4M         2.9M    $39.98+
 ```
 
-`API cost` is what the same tokens would cost on the pay-as-you-go API, at Anthropic's and OpenAI's list prices and any you set under `[prices]` in the config. Requests to models without a price are counted apart and marked `+`. Group `--by day`, `model`, or `account`, over `today`, `7d`, `30d`, or `all`, or print `--json`.
+`API cost` is what the same tokens would cost on the pay-as-you-go API, at Anthropic's and OpenAI's list prices and any you set under `[prices]` in the config. Requests to models without a price are counted apart and marked `+`. Group `--by day`, `model`, `account`, or `machine`, over `today`, `7d`, `30d`, or `all`, or print `--json`.
+
+On a [hub](#other-machines), `--by machine` shows which of your machines sent what. A machine is named by its client key, or by its name on your tailnet. The hub's own agents show as `this machine`, or as `hub` when another machine asks.
 
 ### Left on the table
 
@@ -221,16 +223,18 @@ Left on the table: $39.74, 20% unused on average, across 16 weekly windows
 
 ## Dashboard
 
-`slopmax dashboard` opens a page that shows every account's windows and reset countdowns, usage and cost by day, model, or account, and a live feed of answered requests. It can enable, disable, pin, reprioritize, and redeem. The page is built into the binary and loads nothing from elsewhere. It takes the slopmax key from its address's `#fragment`, which browsers never send to a server. On a remote machine, forward the port first (`ssh -L 7567:127.0.0.1:7567 host`).
+`slopmax dashboard` opens a page that shows every account's windows and reset countdowns, usage and cost by day, model, account, or machine, and a live feed of answered requests. It can enable, disable, pin, reprioritize, and redeem. The page is built into the binary and loads nothing from elsewhere. It takes the slopmax key from its address's `#fragment`, which browsers never send to a server.
 
-The same data is available as JSON under `/slopmax/api`, with the slopmax key as a bearer token. It is slopmax's one API: the CLI and the dashboard both use it, and `contract/fixtures/` holds an answer from each endpoint.
+When slopmax is [published to your tailnet](#over-tailscale), open `https://<hub>.<tailnet>.ts.net:7567/slopmax/` on any of your machines, your phone included, without a key. It is read-only unless the machine is an admin. Otherwise, on a remote machine, forward the port first (`ssh -L 7567:127.0.0.1:7567 host`).
+
+The same data is available as JSON under `/slopmax/api`, with the slopmax key as a bearer token. From your tailnet, a machine's identity works instead, with any token, such as `Bearer tailnet`: users may read status, events, history, usage, and the tailnet's view, and admins may do everything. It is slopmax's one API: the CLI and the dashboard both use it, and `contract/fixtures/` holds an answer from each endpoint.
 
 | Endpoint                         | Gives                                                                    |
 | -------------------------------- | ------------------------------------------------------------------------ |
 | `GET status`, `POST refresh`     | every account's condition, windows, limit resets and notes, and each provider's pool (the usage the agents see) |
 | `GET events`                     | server-sent events: the report whenever it changes, each request as it is answered, notices, and sign-in progress |
 | `GET history?range=today\|7d\|30d` | tokens, cost, failovers, caching, and speed over time, by account, model, and agent |
-| `GET usage?range=…&by=…`         | totals by day, model, or account                                         |
+| `GET usage?range=…&by=…`         | totals by day, model, account, or machine                                |
 | `GET`, `PATCH settings`          | the settings; `PATCH` takes the live ones as JSON, such as `{"strategy": "round-robin"}`, writes config.toml, and applies them at once |
 | `PATCH`, `DELETE accounts/<id>`  | change an account's label, priority, order or whether it is on, or remove it    |
 | `POST accounts/<id>/pin`, `DELETE pins` | prefer an account for new sessions, or let slopmax choose again |
@@ -239,6 +243,9 @@ The same data is available as JSON under `/slopmax/api`, with the slopmax key as
 | `GET`, `POST keys`, `DELETE keys/<name>` | client keys for other machines, as `slopmax key` makes them (shown once) |
 | `GET agents`, `POST agents/<id>/connect` | how Claude Code, Codex, and Grok Build are wired, and wiring them |
 | `GET doctor`                     | the findings `slopmax doctor` prints                                     |
+| `GET`, `PATCH tailnet`           | where slopmax is published on your tailnet, who may use it, and what is wrong; `PATCH` changes `users` and `admins` |
+
+`/healthz`, outside the API, needs no key. It answers `service`, `version`, and the proxy's `pid`, which it leaves out over the tailnet. Asked with a token, it adds `owner`, whether that is the owner key, and `access`: `none`, `use`, `view`, or `admin`, with the `login` and `machine` the hub knows the caller by. `via` is `tailnet` for a request that came over the tailnet.
 
 ### Tools built for CLIProxyAPI
 
@@ -269,13 +276,63 @@ command = 'notify-send slopmax "$SLOPMAX_MESSAGE"'  # also gets SLOPMAX_EVENT, _
 
 ## Other machines
 
-Set `listen = "0.0.0.0:7567"` to serve your network, and give each machine or tool its own key, so you can revoke them one at a time:
+Keep your accounts on one machine, the hub, and point your other machines at it. Refresh tokens rotate each time they are used, so two machines that each refresh the same login sign each other out. With a hub, only the hub refreshes each login, and your other machines hold no tokens at all.
+
+### Over Tailscale
+
+If your machines are on the same [Tailscale](https://tailscale.com) tailnet, publish slopmax to it from the machine with the accounts:
+
+```sh
+slopmax tailscale on
+```
+
+It runs `tailscale serve` for you, and the proxy itself keeps listening on 127.0.0.1 only. The tailnet needs HTTPS certificates turned on (DNS in Tailscale's admin console). On Linux, Tailscale lets only root change what a machine serves, so allow your user once first:
+
+```sh
+sudo tailscale set --operator=$USER
+```
+
+slopmax never runs sudo itself. Then, on each of your other machines:
+
+```sh
+slopmax setup --hub <machine>   # the hub's name on your tailnet, or its URL
+```
+
+Claude Code and Codex there now use the hub's accounts. No proxy runs on those machines, and `slopmax setup --hub off` goes back to their own. On a new machine, `slopmax setup` offers a hub it finds on your tailnet.
+
+Tailscale tells the hub which machine is asking, so your own machines need no key. What a machine may do depends on two lists on the hub:
+
+- **Users** (`slopmax tailscale users add <login>`): machines signed in as these tailnet logins use the proxy and see slopmax's status, usage, and history. `slopmax tailscale on` adds your own login.
+- **Admins** (`slopmax tailscale admins add <machine>`): these machines may also manage slopmax: accounts, sign-ins, settings, and keys. There are none at first. Each is matched by Tailscale's stable node id, so another machine signed in as you does not become an admin.
+
+List only your own logins. The hub is for your own machines.
+
+When the hub is down, agents on your other machines fail. They don't fall back to accounts of their own, because that would bring the sign-outs back.
+
+Some machines need a key: tagged machines, which Tailscale doesn't tie to a login, and every machine when the hub runs on Windows or uses Tailscale's macOS app rather than Homebrew's tailscaled, where Tailscale can't tell slopmax who is asking. Make one on the hub, then give it to setup:
+
+```sh
+slopmax key add ci                                                  # on the hub; prints the key
+slopmax setup --hub https://hub.example.ts.net:7567 --key <the key>   # on the other machine
+```
+
+slopmax serves your tailnet, never the internet: `tailscale on` won't publish a port Tailscale Funnel exposes, and the hub refuses every request that comes through Funnel, even with a key.
+
+The Docker image has no Tailscale. Run `tailscale serve --bg --https=7567 http://127.0.0.1:7567` on the host or in a Tailscale sidecar container; every machine then needs a key.
+
+`slopmax tailscale status` shows where slopmax is published and who may use it, `slopmax tailscale off` stops publishing it, and `slopmax doctor` checks the setup.
+
+### Over your network
+
+Without Tailscale, set `listen = "0.0.0.0:7567"` to serve your network, and give each machine or tool its own key, so you can revoke them one at a time:
 
 ```sh
 slopmax key add laptop                    # prints the new key
 slopmax key add ci --models 'gpt-*'       # a key limited to some models
 slopmax key remove laptop
 ```
+
+On the other machine, `slopmax setup --hub http://<hub address>:7567 --key <the key>` points its agents at the hub. Plain http works only with a key; use it only on a network you trust.
 
 Client keys can use the proxy but not slopmax's own API, and `slopmax doctor` notes when the proxy listens beyond this machine.
 
@@ -354,11 +411,14 @@ What crosses: text, images, documents, tool definitions and calls, tool results,
 | `slopmax run <agent> [args…]`        | Launch Claude Code, Codex, or Grok Build through the proxy                    |
 | `slopmax env <agent>`                | Print shell setup for `eval`                                                  |
 | `slopmax setup <agent> [--undo]`     | Point one agent's own config at the proxy, or restore it                      |
+| `slopmax setup --hub <machine\|url\|off>` | Use a hub's accounts from this machine, or go back to its own (`--key`, `--name`, `--yes`) |
 | `slopmax config [name] [value]`      | Show the routing and redeem settings, or change one while the proxy runs      |
-| `slopmax usage [range]`              | Token totals and API-equivalent cost (`--by`, `--json`)                       |
+| `slopmax usage [range]`              | Token totals and API-equivalent cost (`--by day\|model\|account\|machine`, `--json`) |
 | `slopmax dashboard`                  | Open the dashboard in a browser (`--print` shows its address)                 |
 | `slopmax logs [-f]`                  | The background proxy's log (`-n` lines, `-f` to follow)                       |
 | `slopmax key [list\|add\|remove] [name]` | Keys for other machines and tools (`--models` limits what a key may use)  |
+| `slopmax tailscale [status\|on\|off]` | Publish slopmax to your tailnet, or stop (`--port`, `--user`, `--admin`, `--loopback`, `--socket`; `status --json`) |
+| `slopmax tailscale users\|admins [list\|add\|remove] [name]` | Logins whose machines need no key, and machines that may also manage slopmax |
 | `slopmax notify`                     | Send a test notification                                                      |
 | `slopmax doctor`                     | Check the setup and say how to fix problems                                   |
 | `slopmax completions <shell>`        | Print a completion script for bash, zsh, or fish                              |
@@ -390,6 +450,8 @@ What crosses: text, images, documents, tool definitions and calls, tool results,
 | `[plan_prices]`           | list prices      | What each plan costs a month (`"claude/ultra" = 200`), for what unused quota is worth |
 | `[notify]`                | none             | Webhook, command, and events for notifications                      |
 | `[[keys]]`                | none             | Client keys, made with `slopmax key add`, each possibly limited to some models |
+| `[tailscale]` `users`, `admins` | none       | Tailnet logins whose machines use slopmax without a key, and machines that may also manage it (`slopmax tailscale users`, `admins`) |
+| `[hub]` `url`, `key`      | none             | On your other machines: the hub their agents use, and a key when the hub can't tell the machine by its tailnet login (`slopmax setup --hub`) |
 
 The proxy applies a changed config.toml within two seconds, without a restart; only `listen` and `proxy` need one. The background proxy logs to `~/.slopmax/slopmax.log`. `SLOPMAX_LOG` sets the log level, for example `SLOPMAX_LOG=debug`.
 
