@@ -227,18 +227,19 @@ impl Hist {
         out.extend_from_slice(&b[j..]);
         self.0 = out;
     }
-
-    fn merge_into(&self, all: &mut Bins) {
-        for &(bin, n) in &self.0 {
-            *all.entry(bin).or_default() += u64::from(n);
-        }
-    }
 }
 
-/// A hasher for keys that are small numbers or hashes already: one
-/// multiply, as a map of bins or of hashed sessions needs no more.
+/// A hasher for the few short keys a history groups by (names, models,
+/// providers): a multiply for each eight bytes, a fraction of what the
+/// default hasher's rounds cost.
 #[derive(Default, Clone, Copy)]
 struct Mix(u64);
+
+impl Mix {
+    fn add(&mut self, n: u64) {
+        self.0 = (self.0.rotate_left(5) ^ n).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+}
 
 impl Hasher for Mix {
     fn finish(&self) -> u64 {
@@ -246,41 +247,88 @@ impl Hasher for Mix {
     }
 
     fn write(&mut self, bytes: &[u8]) {
-        for &b in bytes {
-            self.0 = (self.0.rotate_left(5) ^ u64::from(b)).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+        let (words, rest) = bytes.as_chunks::<8>();
+        for word in words {
+            self.add(u64::from_le_bytes(*word));
+        }
+        if !rest.is_empty() {
+            let mut last = [0; 8];
+            last[..rest.len()].copy_from_slice(rest);
+            self.add(u64::from_le_bytes(last));
         }
     }
 
-    fn write_u32(&mut self, n: u32) {
-        self.write_u64(u64::from(n));
+    fn write_u8(&mut self, n: u8) {
+        self.add(u64::from(n));
     }
 
     fn write_u64(&mut self, n: u64) {
-        self.0 = (self.0.rotate_left(5) ^ n).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+        self.add(n);
+    }
+
+    fn write_usize(&mut self, n: usize) {
+        self.add(n as u64);
     }
 }
 
 type Fast = std::hash::BuildHasherDefault<Mix>;
-/// Bins counted across spans.
-type Bins = HashMap<u32, u64, Fast>;
 
-/// Percentiles `ps` of what `bins` counted, each as the sorted values'
-/// element at `len * p / 100` would be.
-fn percentiles<const N: usize>(bins: &Bins, ps: [u64; N]) -> [Option<u64>; N] {
-    let mut sorted: Vec<(u32, u64)> = bins.iter().map(|(&b, &n)| (b, n)).collect();
-    sorted.sort_unstable_by_key(|(b, _)| *b);
-    let count: u64 = sorted.iter().map(|(_, n)| n).sum();
+/// Percentiles `ps` of what `hists` counted together, each as the sorted
+/// values' element at `len * p / 100` would be. One list is read as it is;
+/// several are counted in one array by bin, from the lowest any holds to
+/// the highest, as each is sorted and its ends bound it.
+fn percentiles<const N: usize>(hists: &[&Hist], ps: [u64; N]) -> [Option<u64>; N] {
+    let [one] = hists else {
+        let low = hists.iter().filter_map(|h| h.0.first()).map(|b| b.0).min();
+        let high = hists.iter().filter_map(|h| h.0.last()).map(|b| b.0).max();
+        let Some((low, high)) = low.zip(high) else {
+            return [None; N];
+        };
+        let mut counts = vec![0u64; (high - low) as usize + 1];
+        for hist in hists {
+            for &(bin, n) in &hist.0 {
+                counts[(bin - low) as usize] += u64::from(n);
+            }
+        }
+        let bins = counts.iter().enumerate().map(|(i, &n)| (low + i as u32, n));
+        return ranks(bins, ps);
+    };
+    ranks(one.0.iter().map(|&(bin, n)| (bin, u64::from(n))), ps)
+}
+
+/// Percentiles `ps` of the values `bins` counted, by bin in order.
+fn ranks<const N: usize>(
+    bins: impl Iterator<Item = (u32, u64)> + Clone,
+    ps: [u64; N],
+) -> [Option<u64>; N] {
+    let count: u64 = bins.clone().map(|(_, n)| n).sum();
     ps.map(|p| {
         if count == 0 {
             return None;
         }
         let rank = (count * p / 100).min(count - 1);
         let mut seen = 0;
-        sorted.iter().find_map(|&(bin, n)| {
+        bins.clone().find_map(|(bin, n)| {
             seen += n;
             (seen > rank).then(|| Hist::value(bin))
         })
     })
+}
+
+/// The conversations in sorted lists of distinct values, each counted once:
+/// the longest list as it is, and what the others hold that it does not.
+fn distinct(lists: &[&[u64]]) -> u64 {
+    let Some(longest) = (0..lists.len()).max_by_key(|&i| lists[i].len()) else {
+        return 0;
+    };
+    let rest = lists
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| i != longest)
+        .fold(Vec::new(), |all, (_, list)| union(&all, list));
+    let most = lists[longest];
+    let more = rest.iter().filter(|s| most.binary_search(s).is_err());
+    (most.len() + more.count()) as u64
 }
 
 /// The ledger by local hour, with the days before today rolled up as they
@@ -291,8 +339,22 @@ pub struct Index {
     hours: BTreeMap<i64, Span>,
     /// Days before today, by local day, rolled up from their hours.
     days: HashMap<i64, Span>,
+    /// What each range's days before today came to together, by the
+    /// range's first day and today.
+    pasts: HashMap<(i64, i64), Past>,
     /// Each name once, shared by the cells that use it.
     names: HashSet<Arc<str>>,
+}
+
+/// A range's days before today: their conversations, waits and speeds as
+/// one span, and each day's median and 95th percentile wait, which every
+/// read of the range would otherwise work out again. Made the first time
+/// the range is read on a day, and dropped when a late answer changes one
+/// of its days.
+#[derive(Debug, Default)]
+struct Past {
+    all: Span,
+    first_byte: Vec<Option<(u64, u64)>>,
 }
 
 /// An instant's local hour, counted from the epoch.
@@ -341,8 +403,11 @@ impl Index {
                 }),
         };
         let hour = hour_of(entry.at);
-        // A late answer changes a day already rolled up.
-        self.days.remove(&day_of(hour));
+        // A late answer changes a day already rolled up, and what the
+        // days before today came to.
+        if self.days.remove(&day_of(hour)).is_some() {
+            self.pasts.clear();
+        }
         let span = self.hours.entry(hour).or_default();
         if answered && entry.agent.as_deref() != Some(WARMUP) {
             span.work[hour.rem_euclid(24) as usize] += 1;
@@ -383,6 +448,7 @@ impl Index {
     fn keep_from(&mut self, hour: i64) {
         self.hours = self.hours.split_off(&hour);
         self.days.retain(|&day, _| day >= day_of(hour));
+        self.pasts.retain(|&(first, _), _| first >= day_of(hour));
     }
 
     /// What went through over `range` up to `now`. `names` gives accounts
@@ -414,6 +480,28 @@ impl Index {
             }
             self.days.insert(day, rolled);
         }
+        // The days before today in the range, as one, for what is counted
+        // across the whole range.
+        let past = (range != Range::Today).then_some((first_day, today));
+        if let Some(key) = past {
+            self.pasts.retain(|&(_, to), _| to == today);
+            if !self.pasts.contains_key(&key) {
+                let mut all = Span::default();
+                let mut first_byte = Vec::new();
+                for day in (first_day..today).take(count) {
+                    let span = &self.days[&day];
+                    all.sessions = union(&all.sessions, &span.sessions);
+                    all.waits.merge(&span.waits);
+                    for (model, hist) in &span.speeds {
+                        all.speeds(model).merge(hist);
+                    }
+                    let [p50, p95] = percentiles(&[&span.waits], [50, 95]);
+                    first_byte.push(p50.zip(p95));
+                }
+                self.pasts.insert(key, Past { all, first_byte });
+            }
+        }
+        let past = past.map(|key| &self.pasts[&key]);
         let mut spans: Vec<(usize, i64, &Span)> = Vec::new();
         match range {
             Range::Today => spans.extend(
@@ -444,7 +532,7 @@ impl Index {
             })
             .collect();
 
-        let mut priced: HashMap<Arc<str>, Option<Pricing>> = HashMap::new();
+        let mut priced: HashMap<Arc<str>, Option<Pricing>, Fast> = HashMap::default();
         let mut price = |cell: &Cell| -> Option<Price> {
             let model = cell.model.as_ref()?;
             let pricing = priced
@@ -453,13 +541,14 @@ impl Index {
             pricing.map(|p| p.tier(cell.long))
         };
 
-        struct Filling {
+        struct Filling<'a> {
             totals: Totals,
             work: Totals,
             tokens: Vec<u64>,
             rescued: u64,
-            sessions: HashSet<u64, Fast>,
-            waits: Bins,
+            sessions: Vec<&'a [u64]>,
+            waits: Vec<&'a Hist>,
+            first_byte: Option<(u64, u64)>,
         }
         let mut buckets: Vec<Filling> = (0..count)
             .map(|_| Filling {
@@ -467,8 +556,9 @@ impl Index {
                 work: Totals::default(),
                 tokens: vec![0; providers.len()],
                 rescued: 0,
-                sessions: HashSet::default(),
-                waits: Bins::default(),
+                sessions: Vec::new(),
+                waits: Vec::new(),
+                first_byte: None,
             })
             .collect();
         let mut total = Totals::default();
@@ -476,26 +566,40 @@ impl Index {
         let (mut rescued, mut unplaced) = (0, 0);
         let mut billed = Totals::default();
         let mut cache_saved = 0.;
-        let mut sessions: HashSet<u64, Fast> = HashSet::default();
-        let mut waits = Bins::default();
+        // Across the range: the days before today as one, then today's
+        // hours.
+        let mut sessions: Vec<&[u64]> = Vec::new();
+        let mut waits: Vec<&Hist> = Vec::new();
         let mut activity = [[0; 24]; 7];
-        let mut models: HashMap<Model, Totals> = HashMap::new();
-        let mut accounts: HashMap<(Arc<str>, ProviderId), Totals> = HashMap::new();
+        let mut models: HashMap<Model, Totals, Fast> = HashMap::default();
+        let mut accounts: HashMap<(Arc<str>, ProviderId), Totals, Fast> = HashMap::default();
         let mut agents: BTreeMap<&'static str, Totals> = BTreeMap::new();
-        let mut speeds: HashMap<Model, Bins> = HashMap::new();
+        let mut speeds: HashMap<Model, Vec<&Hist>, Fast> = HashMap::default();
+        if let Some(past) = past {
+            sessions.push(&past.all.sessions);
+            waits.push(&past.all.waits);
+            for (model, hist) in &past.all.speeds {
+                speeds.entry(model.clone()).or_default().push(hist);
+            }
+        }
 
         for (slot, day, span) in spans {
             let bucket = &mut buckets[slot];
-            bucket.sessions.extend(&span.sessions);
-            sessions.extend(&span.sessions);
+            bucket.sessions.push(&span.sessions);
             let weekday = (day + 3).rem_euclid(7) as usize;
             for (hour, n) in span.work.iter().enumerate() {
                 activity[weekday][hour] += n;
             }
-            span.waits.merge_into(&mut bucket.waits);
-            span.waits.merge_into(&mut waits);
-            for (model, hist) in &span.speeds {
-                hist.merge_into(speeds.entry(model.clone()).or_default());
+            match past {
+                Some(past) if day < today => bucket.first_byte = past.first_byte[slot],
+                _ => {
+                    bucket.waits.push(&span.waits);
+                    sessions.push(&span.sessions);
+                    waits.push(&span.waits);
+                    for (model, hist) in &span.speeds {
+                        speeds.entry(model.clone()).or_default().push(hist);
+                    }
+                }
             }
             for (cell, sums) in &span.cells {
                 let price = price(cell);
@@ -545,16 +649,19 @@ impl Index {
             .into_iter()
             .enumerate()
             .map(|(i, b)| {
-                let [p50, p95] = percentiles(&b.waits, [50, 95]);
+                let first_byte = b.first_byte.or_else(|| {
+                    let [p50, p95] = percentiles(&b.waits, [50, 95]);
+                    p50.zip(p95)
+                });
                 Bucket {
                     label: label(range, since, i),
                     requests: b.totals.requests,
                     failed: b.totals.failed,
                     rescued: b.rescued,
-                    sessions: b.sessions.len() as u64,
+                    sessions: distinct(&b.sessions),
                     cost: b.totals.cost,
                     cached: cached(&b.work),
-                    first_byte: p50.zip(p95),
+                    first_byte,
                     tokens: b.tokens,
                 }
             })
@@ -568,17 +675,17 @@ impl Index {
         // model that named none as `unknown`.
         let model_name =
             |model: Option<Arc<str>>| model.map_or_else(|| "unknown".to_owned(), |m| m.to_string());
-        let mut by_speed: BTreeMap<(String, ProviderId), Bins> = BTreeMap::new();
-        for ((model, provider), bins) in speeds {
-            let all = by_speed.entry((model_name(model), provider)).or_default();
-            for (bin, n) in bins {
-                *all.entry(bin).or_default() += n;
-            }
+        let mut by_speed: BTreeMap<(String, ProviderId), Vec<&Hist>> = BTreeMap::new();
+        for ((model, provider), hists) in speeds {
+            by_speed
+                .entry((model_name(model), provider))
+                .or_default()
+                .extend(hists);
         }
         let mut speeds: Vec<Speed> = by_speed
             .into_iter()
-            .filter_map(|((model, provider), bins)| {
-                let [median] = percentiles(&bins, [50]);
+            .filter_map(|((model, provider), hists)| {
+                let [median] = percentiles(&hists, [50]);
                 Some(Speed {
                     model,
                     provider,
@@ -621,7 +728,7 @@ impl Index {
             left: crate::waste::Left::default(),
             cache_saved,
             cached: cached(&work),
-            sessions: sessions.len() as u64,
+            sessions: distinct(&sessions),
             first_byte,
             activity,
             models: ranked(by_model),
@@ -791,19 +898,88 @@ mod tests {
         for value in 1..=100 {
             hist.add(value);
         }
-        let mut bins = Bins::default();
-        hist.merge_into(&mut bins);
-        assert_eq!(percentiles(&bins, [50, 95]), [Some(51), Some(96)]);
-        assert_eq!(percentiles(&Bins::default(), [50]), [None]);
-        // Merged lists count as one.
+        assert_eq!(percentiles(&[&hist], [50, 95]), [Some(51), Some(96)]);
+        assert_eq!(percentiles(&[], [50]), [None]);
+        assert_eq!(percentiles(&[&Hist::default()], [50]), [None]);
+        // Merged lists count as one, and as the lists read together.
         let mut other = Hist::default();
-        other.add(51);
-        other.add(5_000);
-        hist.merge(&other);
-        let mut bins = Bins::default();
-        hist.merge_into(&mut bins);
-        assert_eq!(bins[&51], 2);
-        assert_eq!(bins.values().sum::<u64>(), 102);
+        for value in [0, 51, 5_000, 7_654_321] {
+            other.add(value);
+        }
+        let mut merged = hist.clone();
+        merged.merge(&other);
+        assert_eq!(merged.0.iter().find(|(b, _)| *b == 51).unwrap().1, 2);
+        assert_eq!(merged.0.iter().map(|(_, n)| n).sum::<u32>(), 104);
+        for ps in [[0, 1], [50, 95], [99, 100]] {
+            let read = percentiles(&[&merged], ps);
+            assert_eq!(percentiles(&[&hist, &other], ps), read);
+            assert_eq!(percentiles(&[&other, &Hist::default(), &hist], ps), read);
+        }
+        assert_eq!(percentiles(&[&other, &hist], [100]), [Some(7_651_328)]);
+    }
+
+    #[test]
+    fn conversations_count_once_across_spans() {
+        assert_eq!(distinct(&[]), 0);
+        assert_eq!(distinct(&[&[1, 5, 9]]), 3);
+        assert_eq!(distinct(&[&[1, 5, 9], &[], &[2, 5, 10], &[9]]), 5);
+        assert_eq!(distinct(&[&[3], &[1, 2, 3, 4], &[0, 4]]), 5);
+    }
+
+    #[test]
+    fn what_is_kept_between_reads_answers_as_a_fresh_index_does() {
+        let now = Timestamp::now();
+        let entry = |hours_ago: i64, session: &str, wait: u64| Entry {
+            at: now - crate::time::SignedDuration::from_hours(hours_ago),
+            account: "claude-1".into(),
+            provider: ProviderId::Claude,
+            model: Some("claude-opus-5-5".into()),
+            status: 200,
+            input: 100,
+            output: 300 + wait,
+            cache_read: 1_000,
+            cache_write: 10,
+            ms: 9_000 + wait,
+            first_byte_ms: Some(wait),
+            attempts: 1,
+            agent: Some("claude".into()),
+            session: Some(session.into()),
+            end: None,
+        };
+        let early: Vec<Entry> = (0..40)
+            .map(|i| entry(i * 13, &format!("s{}", i % 7), 300 + i as u64 * 41))
+            .collect();
+        // Late answers for days already read, one of them a new
+        // conversation; then today's, one resuming an old conversation.
+        let late = [
+            entry(50, "new", 9_000),
+            entry(24 * 9, "s1", 5),
+            entry(0, "s3", 700),
+            entry(0, "fresh", 800),
+        ];
+        let (models, plans) = (BTreeMap::new(), BTreeMap::new());
+        let prices = Prices {
+            models: &models,
+            plans: &plans,
+        };
+        let read = |index: &mut Index, range| {
+            let history = index.history(range, now, &prices, &HashMap::new());
+            serde_json::to_string(&history).unwrap()
+        };
+        let mut kept = Index::of(&early);
+        for range in Range::ALL {
+            read(&mut kept, range);
+        }
+        for entry in &late {
+            kept.add(entry);
+        }
+        let all: Vec<Entry> = early.iter().chain(&late).cloned().collect();
+        for range in Range::ALL {
+            let fresh = read(&mut Index::of(&all), range);
+            assert_eq!(read(&mut kept, range), fresh, "{range:?}");
+            // And again, from what the first read kept.
+            assert_eq!(read(&mut kept, range), fresh, "{range:?}");
+        }
     }
 }
 
