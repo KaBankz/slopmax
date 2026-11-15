@@ -106,17 +106,12 @@ impl Settle {
     }
 }
 
-/// How a response body is read, by its headers: compressed bodies pass
-/// through unread, JSON bodies are read whole, anything else as events.
+/// How a response body is read, by its headers: JSON bodies are read whole,
+/// anything else as events, gzip and deflate through a decoder, and other
+/// encodings pass through unread.
 pub(crate) fn shape(headers: &HeaderMap) -> Shape {
     let header = |name| headers.get(name).and_then(|v| v.to_str().ok());
-    if header("content-encoding").is_some_and(|v| v != "identity") {
-        Shape::Opaque
-    } else if header("content-type").is_some_and(|v| v.contains("json")) {
-        Shape::Json
-    } else {
-        Shape::Events
-    }
+    Shape::of(header("content-encoding"), header("content-type"))
 }
 
 /// The upstream's answer on its way to the agent.
@@ -322,6 +317,17 @@ mod tests {
         mpsc::UnboundedSender<Result<Bytes, BoxError>>,
         Relay<Fed>,
     ) {
+        relay_shaped(held, Shape::Events)
+    }
+
+    fn relay_shaped(
+        held: &[&'static str],
+        shape: Shape,
+    ) -> (
+        Arc<App>,
+        mpsc::UnboundedSender<Result<Bytes, BoxError>>,
+        Relay<Fed>,
+    ) {
         let dir = temp_dir("relay");
         let app = App::new(
             Config::default(),
@@ -349,7 +355,7 @@ mod tests {
             Fed(fed),
             held,
             Dialect::Messages,
-            Shape::Events,
+            shape,
             settle,
             Duration::from_secs(10),
         );
@@ -384,6 +390,33 @@ mod tests {
             (200, 10, 7, None)
         );
         assert!(entry.first_byte_ms.is_some() && !entry.failed());
+    }
+
+    #[tokio::test]
+    async fn a_gzipped_answer_passes_unchanged_and_is_recorded_with_its_usage() {
+        use std::io::Write as _;
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(START.as_bytes()).unwrap();
+        e.write_all(b"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":7}}\n\n")
+            .unwrap();
+        let gzipped = e.finish().unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("content-encoding", "gzip".parse().unwrap());
+        headers.insert("content-type", "text/event-stream".parse().unwrap());
+        let (app, feed, mut relay) = relay_shaped(&[], shape(&headers));
+        for chunk in gzipped.chunks(9) {
+            feed.send(Ok(Bytes::copy_from_slice(chunk))).unwrap();
+        }
+        drop(feed);
+        let mut sent = Vec::new();
+        while let Some(frame) = relay.frame().await {
+            sent.extend_from_slice(&frame.unwrap().into_data().unwrap());
+        }
+        assert_eq!(sent, gzipped, "the agent gets the bytes as they came");
+        drop(relay);
+        let entries = recorded(&app);
+        assert_eq!(entries.len(), 1);
+        assert_eq!((entries[0].input, entries[0].output), (10, 7));
     }
 
     #[tokio::test]

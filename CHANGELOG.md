@@ -6,6 +6,7 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ### Fixed
 
+- Claude requests count their tokens again. Anthropic now sends Claude Code's answers gzip-compressed, and slopmax passed compressed answers through unread, so every Claude request showed 0 tokens in `slopmax status`, the dashboard's costs and value figures, and the history. slopmax now reads a decompressed copy of gzip and deflate answers. What Claude Code receives is unchanged.
 - On Linux, `slopmax service install` run while the service is already running, as when moving to a new version, no longer leaves the proxy stopped. It now restarts the service on the new binary. Before, the old proxy stopped and nothing started again until the next login or `slopmax start`.
 
 ## [0.10.0] - 2026-11-15

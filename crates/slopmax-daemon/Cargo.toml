@@ -24,6 +24,8 @@ tokio-util.workspace = true
 toml_edit.workspace = true
 
 [dev-dependencies]
+# Gzipped answers, as Anthropic sends them.
+flate2.workspace = true
 # Paused time, for timeouts tested without waiting them out.
 tokio = { workspace = true, features = ["test-util"] }
 # The client the CLI and the desktop app reach the daemon with.

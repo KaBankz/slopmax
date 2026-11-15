@@ -9,6 +9,8 @@
 
 use std::ops::ControlFlow;
 
+use miniz_oxide::inflate::stream::{InflateState, inflate};
+use miniz_oxide::{DataFormat, MZError, MZFlush, MZStatus};
 use serde_json::Value;
 
 use crate::{Dialect, Opening, Outcome};
@@ -118,8 +120,164 @@ pub enum Shape {
     Events,
     /// One JSON document, read whole at the end.
     Json,
-    /// Compressed: passed through unread; only the request counts.
+    /// Compressed as `coding`, read through a decoder as events, or as JSON
+    /// when `json`. The bytes that pass on stay compressed.
+    Compressed { coding: Coding, json: bool },
+    /// Compressed some way slopmax does not read: passed through unread;
+    /// only the request counts.
     Opaque,
+}
+
+/// A `content-encoding` slopmax can decode to read a response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Coding {
+    Gzip,
+    /// HTTP's `deflate`, which is zlib-wrapped.
+    Deflate,
+}
+
+impl Shape {
+    /// The shape of a body sent with these `content-encoding` and
+    /// `content-type` headers.
+    pub fn of(encoding: Option<&str>, content_type: Option<&str>) -> Self {
+        let json = content_type.is_some_and(|v| v.contains("json"));
+        let coding = match encoding.map(str::trim) {
+            None | Some("") => None,
+            Some(e) if e.eq_ignore_ascii_case("identity") => None,
+            Some(e) if e.eq_ignore_ascii_case("gzip") || e.eq_ignore_ascii_case("x-gzip") => {
+                Some(Coding::Gzip)
+            }
+            Some(e) if e.eq_ignore_ascii_case("deflate") => Some(Coding::Deflate),
+            Some(_) => return Self::Opaque,
+        };
+        match coding {
+            Some(coding) => Self::Compressed { coding, json },
+            None if json => Self::Json,
+            None => Self::Events,
+        }
+    }
+}
+
+/// Decompresses a copy of a compressed body as it streams past.
+struct Inflate {
+    state: Box<InflateState>,
+    /// Gzip: the header read so far, until the deflate data starts.
+    header: Option<Vec<u8>>,
+    /// The compressed data ended; what follows (gzip's trailer) is skipped.
+    done: bool,
+}
+
+impl std::fmt::Debug for Inflate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Inflate")
+            .field("header", &self.header.as_ref().map(Vec::len))
+            .field("done", &self.done)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Longest gzip header held while it is read; its name and comment fields
+/// have no length of their own.
+const MAX_GZIP_HEADER: usize = 64 * 1024;
+
+impl Inflate {
+    fn new(coding: Coding) -> Self {
+        let (format, header) = match coding {
+            Coding::Gzip => (DataFormat::Raw, Some(Vec::new())),
+            Coding::Deflate => (DataFormat::Zlib, None),
+        };
+        Self {
+            state: InflateState::new_boxed(format),
+            header,
+            done: false,
+        }
+    }
+
+    /// What `chunk` decompresses to, or `None` once the body is not what
+    /// its encoding says.
+    fn feed(&mut self, chunk: &[u8]) -> Option<Vec<u8>> {
+        let held;
+        let mut input = chunk;
+        if let Some(header) = self.header.as_mut() {
+            header.extend_from_slice(chunk);
+            let start = match gzip_header(header) {
+                GzipHeader::Partial if header.len() <= MAX_GZIP_HEADER => {
+                    return Some(Vec::new());
+                }
+                GzipHeader::Partial | GzipHeader::Invalid => return None,
+                GzipHeader::Ends(at) => at,
+            };
+            held = self.header.take().unwrap_or_default();
+            input = &held[start..];
+        }
+        let mut plain = Vec::new();
+        let mut out = [0u8; 16 * 1024];
+        while !self.done {
+            let step = inflate(&mut self.state, input, &mut out, MZFlush::None);
+            plain.extend_from_slice(&out[..step.bytes_written]);
+            input = &input[step.bytes_consumed..];
+            match step.status {
+                Ok(MZStatus::StreamEnd) => self.done = true,
+                Ok(_) => {}
+                // No progress: it needs the next chunk.
+                Err(MZError::Buf) => break,
+                Err(_) => return None,
+            }
+            if input.is_empty() && step.bytes_written < out.len() {
+                break;
+            }
+        }
+        Some(plain)
+    }
+}
+
+/// How far a gzip header (RFC 1952) has been read.
+#[derive(Debug, PartialEq, Eq)]
+enum GzipHeader {
+    /// It may still be one; more bytes are needed.
+    Partial,
+    Invalid,
+    /// It ends here, where the deflate data starts.
+    Ends(usize),
+}
+
+fn gzip_header(bytes: &[u8]) -> GzipHeader {
+    const MAGIC: [u8; 3] = [0x1f, 0x8b, 8];
+    const FHCRC: u8 = 0x02;
+    const FEXTRA: u8 = 0x04;
+    const FNAME: u8 = 0x08;
+    const FCOMMENT: u8 = 0x10;
+    if !bytes.iter().zip(MAGIC).all(|(b, m)| *b == m) {
+        return GzipHeader::Invalid;
+    }
+    if bytes.len() < 10 {
+        return GzipHeader::Partial;
+    }
+    let flags = bytes[3];
+    let mut at = 10;
+    if flags & FEXTRA != 0 {
+        let Some(&[lo, hi]) = bytes.get(at..at + 2) else {
+            return GzipHeader::Partial;
+        };
+        at += 2 + usize::from(u16::from_le_bytes([lo, hi]));
+    }
+    for field in [FNAME, FCOMMENT] {
+        if flags & field != 0 {
+            let rest = bytes.get(at..).unwrap_or_default();
+            let Some(end) = memchr::memchr(0, rest) else {
+                return GzipHeader::Partial;
+            };
+            at += end + 1;
+        }
+    }
+    if flags & FHCRC != 0 {
+        at += 2;
+    }
+    if bytes.len() < at {
+        GzipHeader::Partial
+    } else {
+        GzipHeader::Ends(at)
+    }
 }
 
 /// Watches a response go by and says, at its end, what it reported: token
@@ -127,7 +285,10 @@ pub enum Shape {
 #[derive(Debug)]
 pub struct Tap {
     dialect: Dialect,
+    /// How the body reads once decompressed: never [`Shape::Compressed`].
     shape: Shape,
+    /// Decompresses a compressed body before it is read.
+    inflate: Option<Inflate>,
     lines: Lines,
     /// A JSON body, collected whole.
     whole: Vec<u8>,
@@ -137,9 +298,17 @@ pub struct Tap {
 
 impl Tap {
     pub fn new(dialect: Dialect, shape: Shape) -> Self {
+        let (shape, inflate) = match shape {
+            Shape::Compressed { coding, json } => {
+                let shape = if json { Shape::Json } else { Shape::Events };
+                (shape, Some(Inflate::new(coding)))
+            }
+            shape => (shape, None),
+        };
         Self {
             dialect,
             shape,
+            inflate,
             lines: Lines::default(),
             whole: Vec::new(),
             overflow: false,
@@ -148,8 +317,26 @@ impl Tap {
     }
 
     pub fn feed(&mut self, chunk: &[u8]) {
+        let Some(inflate) = self.inflate.as_mut() else {
+            return self.read(chunk);
+        };
+        match inflate.feed(chunk) {
+            Some(plain) => self.read(&plain),
+            None => self.unreadable(),
+        }
+    }
+
+    /// A body that fails to decompress is passed over unread from there on,
+    /// as an unknown encoding is: what reaches the agent is untouched.
+    fn unreadable(&mut self) {
+        self.inflate = None;
+        self.shape = Shape::Opaque;
+        self.whole = Vec::new();
+    }
+
+    fn read(&mut self, chunk: &[u8]) {
         match self.shape {
-            Shape::Opaque => {}
+            Shape::Compressed { .. } | Shape::Opaque => {}
             Shape::Json if self.overflow => {}
             Shape::Json if self.whole.len() + chunk.len() > MAX_LINE => {
                 self.overflow = true;
@@ -168,6 +355,9 @@ impl Tap {
 
     /// What the response reported; it counts as one request.
     pub fn finish(&mut self) -> Outcome {
+        // Each chunk was decompressed as it came; a cut-off body is read as
+        // far as it went.
+        self.inflate = None;
         match self.shape {
             Shape::Events => {
                 if let Some(line) = self.lines.rest() {
@@ -179,7 +369,7 @@ impl Tap {
                     self.dialect.observe(&body, &mut self.outcome);
                 }
             }
-            Shape::Json | Shape::Opaque => {}
+            Shape::Json | Shape::Compressed { .. } | Shape::Opaque => {}
         }
         self.outcome.usage.requests = 1;
         std::mem::take(&mut self.outcome)
@@ -260,6 +450,8 @@ fn opening(dialect: Dialect, line: &[u8]) -> Opening {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write as _;
+
     use super::*;
     use crate::Usage;
 
@@ -376,6 +568,123 @@ mod tests {
         let mut tap = Tap::new(Dialect::Messages, Shape::Opaque);
         tap.feed(b"\x1f\x8b");
         assert_eq!(tap.finish().usage.requests, 1);
+    }
+
+    fn gzip(plain: &[u8]) -> Vec<u8> {
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(plain).unwrap();
+        e.finish().unwrap()
+    }
+
+    const CLAUDE_STREAM: &[u8] = b"event: message_start\n\
+        data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":7,\"cache_read_input_tokens\":300,\"output_tokens\":1}}}\n\n\
+        event: content_block_delta\n\
+        data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n\
+        event: message_delta\n\
+        data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n";
+
+    #[test]
+    fn gzipped_streams_are_read_for_usage() {
+        // Anthropic gzips Claude Code's streams; they arrive in any split.
+        let body = gzip(CLAUDE_STREAM);
+        for size in [1, 7, body.len()] {
+            let mut tap = Tap::new(
+                Dialect::Messages,
+                Shape::of(Some("gzip"), Some("text/event-stream; charset=utf-8")),
+            );
+            for chunk in body.chunks(size) {
+                tap.feed(chunk);
+            }
+            let usage = tap.finish().usage;
+            assert_eq!(
+                (
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.cache_read_tokens
+                ),
+                (7, 5, 300),
+                "chunks of {size}"
+            );
+        }
+    }
+
+    #[test]
+    fn gzip_headers_with_every_optional_field_are_read() {
+        let mut e = flate2::GzBuilder::new()
+            .filename("answer.txt")
+            .comment("from a test")
+            .extra(vec![1, 2, 3])
+            .write(Vec::new(), flate2::Compression::fast());
+        e.write_all(CLAUDE_STREAM).unwrap();
+        let body = e.finish().unwrap();
+        let mut tap = Tap::new(Dialect::Messages, Shape::of(Some("gzip"), None));
+        for byte in &body {
+            tap.feed(std::slice::from_ref(byte));
+        }
+        assert_eq!(tap.finish().usage.output_tokens, 5);
+
+        assert_eq!(gzip_header(b"\x1f"), GzipHeader::Partial);
+        assert_eq!(gzip_header(b"data: {"), GzipHeader::Invalid);
+        assert_eq!(
+            gzip_header(b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff"),
+            GzipHeader::Ends(10)
+        );
+        // A name with no end yet.
+        assert_eq!(
+            gzip_header(b"\x1f\x8b\x08\x08\x00\x00\x00\x00\x00\xffname"),
+            GzipHeader::Partial
+        );
+    }
+
+    #[test]
+    fn deflated_json_is_read_for_usage() {
+        let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(
+            br#"{"type":"message","content":[],"usage":{"input_tokens":12,"output_tokens":3}}"#,
+        )
+        .unwrap();
+        let mut tap = Tap::new(
+            Dialect::Messages,
+            Shape::of(Some("deflate"), Some("application/json")),
+        );
+        tap.feed(&e.finish().unwrap());
+        let usage = tap.finish().usage;
+        assert_eq!((usage.input_tokens, usage.output_tokens), (12, 3));
+    }
+
+    #[test]
+    fn a_body_that_does_not_decompress_counts_only_the_request() {
+        let mut tap = Tap::new(Dialect::Messages, Shape::of(Some("gzip"), None));
+        tap.feed(b"\x1f\x8b\x08\x00not gzip at all");
+        tap.feed(CLAUDE_STREAM);
+        let outcome = tap.finish();
+        assert_eq!(outcome.usage.requests, 1);
+        assert_eq!(outcome.usage.total_tokens(), 0);
+    }
+
+    #[test]
+    fn shape_follows_the_encoding_and_type() {
+        let events = Some("text/event-stream");
+        let json = Some("application/json");
+        assert_eq!(Shape::of(None, events), Shape::Events);
+        assert_eq!(Shape::of(Some("identity"), json), Shape::Json);
+        assert_eq!(
+            Shape::of(Some("GZIP"), events),
+            Shape::Compressed {
+                coding: Coding::Gzip,
+                json: false
+            }
+        );
+        assert_eq!(
+            Shape::of(Some("deflate"), json),
+            Shape::Compressed {
+                coding: Coding::Deflate,
+                json: true
+            }
+        );
+        assert_eq!(Shape::of(Some("br"), events), Shape::Opaque);
+        assert_eq!(Shape::of(Some("zstd"), events), Shape::Opaque);
+        assert_eq!(Shape::of(Some("gzip, br"), events), Shape::Opaque);
     }
 
     #[test]
