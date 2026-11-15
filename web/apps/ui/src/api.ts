@@ -2,6 +2,7 @@
 // API (`@slopmax/client/api`) gives the daemon its handlers and this page its
 // client. The page talks to its own origin: the proxy itself for the web
 // dashboard, the desktop app's main process (which adds the key) for the window.
+import type { Access } from "@slopmax/client"
 import { SlopmaxApi } from "@slopmax/client/api"
 import { Effect, Layer, Option } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http"
@@ -15,8 +16,21 @@ export const hostAtom = Atom.make<Option.Option<HostShape>>(Option.none()).pipe(
 /** How requests leave the page: the browser's fetch, or in tests, the stub API in process. */
 export const transportAtom = Atom.make<Layer.Layer<HttpClient.HttpClient>>(FetchHttpClient.layer).pipe(Atom.keepAlive)
 
-/** The owner key the web dashboard holds; none in the desktop window, whose main process adds it. */
+/**
+ * The owner key the web dashboard holds; none in the desktop window, whose
+ * main process adds it. A page opened over the tailnet without a key holds
+ * the tailnet token here instead, for this tab only.
+ */
 export const ownerKeyAtom = Atom.make<Option.Option<string>>(Option.none()).pipe(Atom.keepAlive)
+
+/**
+ * What the page may do: everything with a key, else what the hub said this
+ * machine's tailnet identity may do (view or admin).
+ */
+export const accessAtom = Atom.make<Access>("admin").pipe(Atom.keepAlive)
+
+/** The hub's name for this machine, when the page uses its tailnet identity. */
+export const machineAtom = Atom.make<Option.Option<string>>(Option.none()).pipe(Atom.keepAlive)
 
 /** Where the API is: the page's own origin. */
 const originAtom = Atom.make((get) =>

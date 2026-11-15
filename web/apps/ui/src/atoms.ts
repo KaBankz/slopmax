@@ -18,7 +18,7 @@ import {
   type SubscriptionId,
   Unauthorized,
 } from "@slopmax/client"
-import { AccountId, KeyName, LoginId } from "@slopmax/client"
+import { AccountId, Health, KeyName, LoginId, reaches, tailnetToken } from "@slopmax/client"
 import {
   type AddAccount,
   AccountPatch,
@@ -38,7 +38,7 @@ import { Cause, Data, DateTime, Duration, Effect, Exit, FiberHandle, Option, Sch
 import { HttpClient, HttpClientRequest } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
 import { AsyncResult, Atom, AtomRegistry, Reactivity } from "effect/reactivity"
-import { Api, appRuntime, hostAtom, keyCheckRuntime, ownerKeyAtom } from "./api.ts"
+import { accessAtom, Api, appRuntime, hostAtom, keyCheckRuntime, machineAtom, ownerKeyAtom } from "./api.ts"
 import { Host, UiPrefs } from "./host.ts"
 import { attention, type Attention } from "./view/attention.ts"
 import { type Group, groups } from "./view/groups.ts"
@@ -54,6 +54,7 @@ import {
   tell,
 } from "./view/live.ts"
 import { type Page, pageHash, Pages, parseRoute, type Route, toggleSidebar as toggled } from "./view/pages.ts"
+import { tailnetAccess } from "./view/tailnet.ts"
 import { addToast, type Toast } from "./view/toasts.ts"
 import { count, defaultRange, failureText, sentenceCase, settingChanged } from "./view/words.ts"
 
@@ -107,6 +108,14 @@ const feedSeqAtom = Atom.make(0).pipe(Atom.keepAlive)
 
 /** Whether the owner key the dashboard last tried was refused, so the gate says so. */
 export const keyRefusedAtom = Atom.make(false).pipe(Atom.keepAlive)
+
+/**
+ * The tailnet's side of the gate: `asked` once a refused tailnet token sent
+ * the page back to `/healthz`, until the event stream next says Hello;
+ * `refused` when it was refused again before that, so the gate asks for a
+ * key rather than asking `/healthz` round and round.
+ */
+export const tailnetRetryAtom = Atom.make<"none" | "asked" | "refused">("none").pipe(Atom.keepAlive)
 
 /**
  * Reading and writing atoms from inside the stream's handler or an action.
@@ -163,10 +172,28 @@ export const clearFeed = Atom.writable<ReadonlyArray<FeedEntry>, void>(
 
 const isUnauthorized = (cause: Cause.Cause<unknown>): boolean => Cause.squash(cause) instanceof Unauthorized
 
-/** The key was refused: forget it, so the web dashboard asks again and says why. */
+/**
+ * The key was refused: forget it, so the web dashboard asks again and says
+ * why. A page that held the tailnet token asks `/healthz` again first: the
+ * hub may still take this machine, perhaps for less than before, and asks
+ * for a key only when it does not.
+ */
 const signOut = (store: Store) =>
   Effect.gen(function* () {
     const host = yield* Host
+    const held = store.read(ownerKeyAtom)
+    // Already signed out: a call that was on its way without a key says nothing new.
+    if (host.kind === "web" && Option.isNone(held)) return
+    if (Option.contains(held, tailnetToken)) {
+      store.set(accessAtom, "admin")
+      store.set(machineAtom, Option.none())
+      if (store.read(tailnetRetryAtom) === "none") {
+        store.set(tailnetRetryAtom, "asked")
+        store.refresh(tailnetProbeAtom)
+      } else store.set(tailnetRetryAtom, "refused")
+      store.set(ownerKeyAtom, Option.none())
+      return
+    }
     yield* host.forgetKey
     store.set(keyRefusedAtom, true)
     store.set(ownerKeyAtom, Option.none())
@@ -224,7 +251,7 @@ const onLogin = (store: Store, id: string, event: LoginEvent) =>
   })
 
 /** The queries read again once the stream is back after a drop. */
-const rereadOnReconnect: ReadonlyArray<string> = ["settings", "keys", "agents", "doctor", "history"]
+const rereadOnReconnect: ReadonlyArray<string> = ["settings", "keys", "agents", "doctor", "history", "tailnet"]
 
 const onEvent = (event: Event, store: Store, later: FiberHandle.FiberHandle) =>
   Effect.gen(function* () {
@@ -232,6 +259,7 @@ const onEvent = (event: Event, store: Store, later: FiberHandle.FiberHandle) =>
     switch (event._tag) {
       case "Hello": {
         const back = store.read(liveAtom)._tag === "Reconnecting"
+        if (store.read(tailnetRetryAtom) !== "none") store.set(tailnetRetryAtom, "none")
         store.set(liveAtom, { _tag: "Running", version: event.version })
         // Back after a drop: what was read while slopmax did not answer (or failed to be read) is read again.
         if (back) yield* Reactivity.invalidate(rereadOnReconnect)
@@ -388,8 +416,14 @@ export const shownReportAtom = Atom.make((get): Option.Option<Report> => {
   return get(reportAtom)
 })
 
-/** Whether changes can be made: only a running proxy takes them. */
-export const canChangeAtom = Atom.make((get): boolean => get(proxyAtom)._tag === "Running")
+/**
+ * Whether this page may only look: it was opened over the tailnet, from a
+ * machine the hub lets see its status but not change it.
+ */
+export const readOnlyAtom = Atom.make((get): boolean => !reaches(get(accessAtom), "admin"))
+
+/** Whether changes can be made: only a running proxy takes them, and only from a page that may make them. */
+export const canChangeAtom = Atom.make((get): boolean => get(proxyAtom)._tag === "Running" && !get(readOnlyAtom))
 
 /** The shown report's accounts by provider, worked out once a second for every part of the window that shows them. */
 export const groupsAtom = Atom.make((get): ReadonlyArray<Group> =>
@@ -403,10 +437,24 @@ export const attentionAtom = Atom.make((get): ReadonlyArray<Attention> =>
 
 // --- Queries ------------------------------------------------------------------------------
 
-export const settingsAtom = Api.query("config", "settings", { reactivityKeys: ["settings"] })
-export const keysAtom = Api.query("config", "keys", { reactivityKeys: ["keys"] })
-export const agentsAtom = Api.query("agents", "list", { reactivityKeys: ["agents"] })
-export const doctorAtom = Api.query("system", "doctor", { reactivityKeys: ["doctor"] })
+/**
+ * A query only an admin may make, left unasked while the page may only look
+ * (the hub would refuse it): it stays as if not yet read, and the page says
+ * why instead. Retrying it retries the query itself.
+ */
+const adminOnly = <A, E>(query: Atom.Atom<AsyncResult.AsyncResult<A, E>>): Atom.Atom<AsyncResult.AsyncResult<A, E>> =>
+  Atom.readable(
+    (get) => (get(readOnlyAtom) ? AsyncResult.initial<A, E>() : get(query)),
+    (refresh) => refresh(query),
+  )
+
+export const settingsAtom = adminOnly(Api.query("config", "settings", { reactivityKeys: ["settings"] }))
+export const keysAtom = adminOnly(Api.query("config", "keys", { reactivityKeys: ["keys"] }))
+export const agentsAtom = adminOnly(Api.query("agents", "list", { reactivityKeys: ["agents"] }))
+export const doctorAtom = adminOnly(Api.query("system", "doctor", { reactivityKeys: ["doctor"] }))
+
+/** slopmax on the tailnet, as the hub sees it; an older proxy answers 404, and the page then leaves it out. */
+export const tailnetAtom = Api.query("tailnet", "view", { reactivityKeys: ["tailnet"] })
 
 /** Whether usage polling is off, so windows are read only by requests and Refresh; false until the settings are read. */
 export const pollOffAtom = Atom.make((get): boolean =>
@@ -421,6 +469,19 @@ export const historyAtom = Atom.family((range: HistoryRange) =>
       return Effect.gen(function* () {
         const client = yield* Api
         return yield* client.usage.history({ query: { range } })
+      })
+    })
+    .pipe(Api.runtime.factory.withReactivity(["history"])),
+)
+
+/** A range's usage by the machine that sent it, read again with the history. */
+export const machinesAtom = Atom.family((range: HistoryRange) =>
+  Api.runtime
+    .atom((get) => {
+      get(minuteAtom)
+      return Effect.gen(function* () {
+        const client = yield* Api
+        return yield* client.usage.summary({ query: { range, by: "machine" } })
       })
     })
     .pipe(Api.runtime.factory.withReactivity(["history"])),
@@ -946,8 +1007,44 @@ export const enterKey = Atom.writable<Option.Option<string>, string>(
     const host = ctx.get(hostAtom)
     if (Option.isSome(host)) Effect.runSync(host.value.saveKey(key))
     ctx.set(keyRefusedAtom, false)
+    ctx.set(tailnetRetryAtom, "none")
+    ctx.set(accessAtom, "admin")
+    ctx.set(machineAtom, Option.none())
     ctx.set(ownerKeyAtom, Option.some(key))
   },
+)
+
+/** What `/healthz` says of a request carrying the tailnet token; none when it did not answer, or not with JSON. */
+const askHealth = Effect.gen(function* () {
+  const client = yield* HttpClient.HttpClient
+  const response = yield* client.execute(
+    HttpClientRequest.get("/healthz").pipe(HttpClientRequest.bearerToken(tailnetToken)),
+  )
+  if (response.status !== 200) return Option.none<Health>()
+  return Schema.decodeUnknownOption(Health)(yield* response.json)
+}).pipe(Effect.orElseSucceed(() => Option.none<Health>()))
+
+/**
+ * Asks slopmax whether this machine's tailnet identity opens the web
+ * dashboard without a key, for a page that holds none. When `/healthz` says
+ * the request came over the tailnet and may view or administer, the page
+ * holds the tailnet token for this tab (never in its storage) and keeps what
+ * it may do; otherwise it answers false and the gate asks for the key.
+ */
+export const tailnetProbeAtom = keyCheckRuntime.atom((get) =>
+  Effect.gen(function* () {
+    const health = yield* askHealth
+    const access = tailnetAccess(health)
+    if (Option.isNone(access)) return false
+    get.set(accessAtom, access.value)
+    get.set(
+      machineAtom,
+      Option.flatMap(health, (h) => Option.fromUndefinedOr(h.machine)),
+    )
+    get.set(keyRefusedAtom, false)
+    get.set(ownerKeyAtom, Option.some(tailnetToken))
+    return true
+  }),
 )
 
 /**

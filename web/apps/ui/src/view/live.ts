@@ -6,6 +6,7 @@ import { agentFacts, providerFacts } from "@slopmax/client"
 import type { ProxyState } from "@slopmax/client/desktop"
 import { compact, grouped } from "@slopmax/client/format"
 import { DateTime } from "effect"
+import { readOnlyShort } from "./tailnet.ts"
 
 // --- Live requests -------------------------------------------------------------
 
@@ -79,6 +80,7 @@ export const feedRow = (
     failed,
     detail: [
       record.account === undefined ? "no account free" : accountName(record.account),
+      ...(record.machine === undefined ? [] : [`from ${record.machine}`]),
       ...(record.attempts > 1 ? ["after failover"] : []),
       ...(record.via === "socket" ? ["WebSocket"] : []),
     ].join(" · "),
@@ -238,6 +240,18 @@ export const needsProxy = (state: ProxyState, doing: string, unanswered = false)
       return undefined
   }
 }
+
+/**
+ * Why a change can't be made from this page now: it may only look, or the
+ * proxy is not running (see {@link needsProxy}). Undefined when it can be,
+ * or while that is still being found out.
+ */
+export const cannotChange = (
+  state: ProxyState,
+  doing: string,
+  unanswered: boolean,
+  readOnly: boolean,
+): string | undefined => (readOnly ? readOnlyShort : needsProxy(state, doing, unanswered))
 
 /**
  * How an agent is wired, and whether that is through slopmax. A connected

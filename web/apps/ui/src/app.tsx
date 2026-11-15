@@ -1,13 +1,14 @@
-// The app: the web dashboard's gate when it has no key, the menu bar's
-// panel, or the window: the sidebar, the page's title and tools, the
-// sign-in card, the page, and the toasts.
+// The app: the web dashboard's gate when it has no key (unless this
+// machine's tailnet identity opens it), the menu bar's panel, or the window:
+// the sidebar, the page's title and tools, the sign-in card, the page, and
+// the toasts.
 import { RegistryProvider, useAtomMount, useAtomSet, useAtomValue } from "@effect/atom-react"
 import { Option } from "effect"
 import type { Atom } from "effect/reactivity"
 import { AsyncResult } from "effect/reactivity"
 import { PanelLeft, Plus, RefreshCw, Trash } from "lucide-react"
 import { Component, type ErrorInfo, type ReactNode, useEffect } from "react"
-import { hostAtom, ownerKeyAtom } from "./api.ts"
+import { hostAtom, machineAtom, ownerKeyAtom } from "./api.ts"
 import {
   canChangeAtom,
   clearFeed,
@@ -22,11 +23,14 @@ import {
   proxyAction,
   proxyAtom,
   rangeAtom,
+  readOnlyAtom,
   refresh,
   refreshingAtom,
   routeAtom,
   settingsAtom,
   shownReportAtom,
+  tailnetProbeAtom,
+  tailnetRetryAtom,
   toggleSidebar,
 } from "./atoms.ts"
 import { AskHost } from "./components/ask.tsx"
@@ -48,6 +52,7 @@ import { RequestsPage } from "./pages/requests.tsx"
 import { SettingsPage } from "./pages/settings.tsx"
 import { PerformancePage, UsagePage } from "./pages/usage.tsx"
 import { keyFromHash, type Page, pageOrder, Pages, pageTitle } from "./view/pages.ts"
+import { adminCommand } from "./view/tailnet.ts"
 import { rangeTitle, ranges } from "./view/words.ts"
 
 /** Light or dark, from the Appearance setting or the system's; and whether the window sits on a Mac. */
@@ -257,6 +262,21 @@ function ProxyBanner() {
   )
 }
 
+/**
+ * A page opened over the tailnet from a machine that may only look: what it
+ * can't do, and how to let it.
+ */
+function ReadOnlyBanner() {
+  const readOnly = useAtomValue(readOnlyAtom)
+  const machine = useAtomValue(machineAtom)
+  if (!readOnly) return null
+  return (
+    <div role="note" className="rounded-xl border px-4 py-2.5 text-small text-muted-foreground">
+      Read-only from this machine. On the hub: <code className="font-mono">{adminCommand(machine)}</code>
+    </div>
+  )
+}
+
 function Window() {
   useAtomMount(eventsAtom)
   useAtomMount(menuAtom)
@@ -302,6 +322,7 @@ function Window() {
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="@container flex max-w-page flex-col gap-8 px-8 pt-1 pb-10">
+            <ReadOnlyBanner />
             <ProxyBanner />
             <SignInCard />
             <PageBody page={page} />
@@ -362,8 +383,26 @@ export function App() {
   const key = useAtomValue(ownerKeyAtom)
   const web = Option.isSome(host) && host.value.kind === "web"
   useKeyFromAddress(web)
-  if (web && Option.isNone(key)) return <Gate />
+  if (web && Option.isNone(key)) return <Entrance />
   return route._tag === "Panel" ? <Panel /> : <Window />
+}
+
+/**
+ * The web dashboard without a key: it first asks slopmax whether this
+ * machine's tailnet identity opens it, and asks for the key only when not.
+ */
+function Entrance() {
+  if (useAtomValue(tailnetRetryAtom) === "refused") return <Gate />
+  return <Probe />
+}
+
+/** Asks `/healthz` whether this machine's tailnet identity opens the dashboard; the gate when it does not. */
+function Probe() {
+  const probe = useAtomValue(tailnetProbeAtom)
+  if (AsyncResult.isInitial(probe) || AsyncResult.isWaiting(probe)) {
+    return <main aria-busy="true" aria-label="Opening slopmax…" className="h-full bg-sidebar" />
+  }
+  return <Gate />
 }
 
 /** Catches a page that fails to draw, so the rest of the window stays usable. */

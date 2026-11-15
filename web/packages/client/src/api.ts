@@ -1,7 +1,9 @@
 // slopmax's own API, under `/slopmax/api`. The daemon serves it, the CLI
 // calls it while a proxy runs, and the dashboard and the desktop window are
 // built on it, so all of them share this one typed definition. Every
-// endpoint needs the owner key.
+// endpoint needs the owner key; over the tailnet the daemon may take a
+// machine's identity instead, with the `tailnet` token in its place, and
+// decides per endpoint whether to look (view) is enough or it takes an admin.
 import { Effect, Layer, Redacted, Schema, SchemaTransformation } from "effect"
 import { Mac } from "effect/crypto"
 import {
@@ -22,6 +24,7 @@ import { LoginId } from "./login.ts"
 import { providerFacts } from "./providers.ts"
 import { AccountView, RedeemResult, Report } from "./report.ts"
 import { KeyInfo, NewKey, SettingsPatch, SettingsView, strict } from "./settings.ts"
+import { TailnetPatch, TailnetView } from "./tailnet.ts"
 
 const encoder = new TextEncoder()
 
@@ -47,6 +50,8 @@ export const ownerKeyMatches = (given: Redacted.Redacted<string>, key: Redacted.
 /**
  * The owner key, as `Authorization: Bearer <key>` or `x-api-key: <key>`,
  * compared in constant time. Client keys reach the proxy but get 401 here.
+ * A page opened over the tailnet sends `Bearer tailnet` instead
+ * (`tailnetToken`); the daemon takes it for the machine's identity.
  */
 export class OwnerKey extends HttpApiMiddleware.Service<OwnerKey>()("@slopmax/client/OwnerKey", {
   security: {
@@ -379,6 +384,11 @@ export class NotifyGroup extends HttpApiGroup.make("notify").add(
   HttpApiEndpoint.post("test", "/notify/test", { error: [BadRequest, UpstreamFailed] }),
 ) {}
 
+/** slopmax on the tailnet: looking needs view access, changing who may use it needs an admin. */
+export class TailnetGroup extends HttpApiGroup.make("tailnet")
+  .add(HttpApiEndpoint.get("view", "/tailnet", { success: TailnetView, error: [NotFound, Internal] }))
+  .add(HttpApiEndpoint.patch("change", "/tailnet", { payload: TailnetPatch, success: TailnetView, error: Internal })) {}
+
 /** Where the API lives on the proxy's address. */
 export const apiPrefix = "/slopmax/api"
 
@@ -391,6 +401,7 @@ export class SlopmaxApi extends HttpApi.make("slopmax")
   .add(UsageGroup)
   .add(EventsGroup)
   .add(NotifyGroup)
+  .add(TailnetGroup)
   .middleware(InputErrors)
   .middleware(OwnerKey)
   .prefix(apiPrefix)

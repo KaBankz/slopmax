@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { History, NamedTotals, Totals } from "@slopmax/client"
+import { History, NamedTotals, Summary, SummaryRow, Totals } from "@slopmax/client"
 import { DateTime } from "effect"
 import {
   accountRows,
   hourly,
   isQuiet,
+  machineRows,
   modelRows,
   perRequest,
   performanceStats,
@@ -136,5 +137,28 @@ describe("tables and parts", () => {
     expect(hours.slice(0, today.buckets.length).some((n) => n > 0)).toBe(true)
     expect(isQuiet(quietHistory("today"))).toBe(true)
     expect(isQuiet(today)).toBe(false)
+  })
+})
+
+const summary = (rows: ReadonlyArray<SummaryRow>) =>
+  new Summary({ range: "7d", by: "machine", since: now, rows, total: Totals.zero })
+const row = (key: string, requests: number, tokens: number) => new SummaryRow({ key, totals: totals(requests, tokens) })
+
+describe("usage by machine", () => {
+  test("lists the machines most tokens first, the hub's own key among them", () => {
+    const rows = machineRows(summary([row("ci", 31, 20_400), row("hub", 96, 88_100), row("laptop", 412, 310_200)]))
+    expect(rows.map((r) => [r.name, r.tokens, r.requests])).toEqual([
+      ["laptop", "310.2k", "412 requests"],
+      ["hub", "88.1k", "96 requests"],
+      ["ci", "20.4k", "31 requests"],
+    ])
+    expect(rows[0]?.fraction).toBe(1)
+  })
+
+  test("says nothing while only this slopmax's own key sent requests", () => {
+    expect(machineRows(summary([]))).toEqual([])
+    expect(machineRows(summary([row("this machine", 9, 900)]))).toEqual([])
+    expect(machineRows(summary([row("hub", 9, 900)]))).toEqual([])
+    expect(machineRows(summary([row("this machine", 9, 900), row("laptop", 1, 10)])).length).toBe(2)
   })
 })

@@ -1,10 +1,13 @@
 // The accounts slopmax sends requests to, and the keys other machines and
 // tools reach it with: sign in, import logins, add an API key or a
-// compatible endpoint, and make or revoke client keys.
+// compatible endpoint, make or revoke client keys, and see how your other
+// machines reach slopmax over your tailnet.
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
 import type { Dialect } from "@slopmax/client"
-import { providerFacts } from "@slopmax/client"
-import { Exit, Option } from "effect"
+import { NotFound, providerFacts } from "@slopmax/client"
+import { Cause, Exit, Option } from "effect"
+import { AsyncResult } from "effect/reactivity"
+import { Copy } from "lucide-react"
 import { type FormEvent, type ReactNode, useId, useState } from "react"
 import {
   addAccount,
@@ -16,17 +19,21 @@ import {
   makeKey,
   newKeyAtom,
   proxyAtom,
+  readOnlyAtom,
   revokeKey,
   signIn,
+  tailnetAtom,
   unansweredAtom,
 } from "../atoms.ts"
 import { useAsk } from "../components/ask.tsx"
-import { Loaded, Panel, Section, SettingRow, Skeleton } from "../components/parts.tsx"
+import { Dot, Failed, Loaded, Panel, Section, SettingRow, Skeleton } from "../components/parts.tsx"
 import { Button } from "../components/ui/button.tsx"
 import { Input } from "../components/ui/input.tsx"
 import { Segmented } from "../components/ui/segmented.tsx"
+import { Tip } from "../components/ui/tooltip.tsx"
 import { askRevoke } from "../view/asks.ts"
-import { needsProxy } from "../view/live.ts"
+import { cannotChange } from "../view/live.ts"
+import { machinesCard } from "../view/tailnet.ts"
 import { failureText, patterns, sentenceCase } from "../view/words.ts"
 
 type KeyProvider = "anthropic" | "openai" | "xai"
@@ -276,7 +283,12 @@ function ClientKeys() {
   const keys = useAtomValue(keysAtom)
   const again = useAtomRefresh(keysAtom)
   const canChange = useAtomValue(canChangeAtom)
-  const waiting = needsProxy(useAtomValue(proxyAtom), "list and make keys", useAtomValue(unansweredAtom))
+  const waiting = cannotChange(
+    useAtomValue(proxyAtom),
+    "list and make keys",
+    useAtomValue(unansweredAtom),
+    useAtomValue(readOnlyAtom),
+  )
   const make = useAtomSet(makeKey, { mode: "promiseExit" })
   const revoke = useAtomSet(revokeKey)
   const ask = useAsk()
@@ -383,6 +395,78 @@ function ClientKeys() {
   )
 }
 
+/** A command or an address, with a button that copies it. */
+function Copyable({ text, label }: { readonly text: string; readonly label: string }) {
+  const copyText = useAtomSet(copy)
+  return (
+    <span className="flex min-w-0 items-center gap-1">
+      <code className="truncate rounded-sm border bg-well px-1.5 py-0.5 font-mono text-caption select-all">{text}</code>
+      <Tip content={label}>
+        <Button variant="ghost" size="icon-sm" aria-label={label} onClick={() => copyText({ text })}>
+          <Copy />
+        </Button>
+      </Tip>
+    </span>
+  )
+}
+
+/**
+ * How your other machines reach slopmax over your tailnet, as the hub sees
+ * it. An older proxy has no such endpoint (404), and the card is left out.
+ */
+function OtherMachines() {
+  const result = useAtomValue(tailnetAtom)
+  const again = useAtomRefresh(tailnetAtom)
+  if (AsyncResult.isFailure(result) && Cause.squash(result.cause) instanceof NotFound) return null
+  const view = AsyncResult.value(result)
+  if (Option.isNone(view)) {
+    if (AsyncResult.isFailure(result)) {
+      return (
+        <Section title="Other machines">
+          <Failed title="Could not read the tailnet" detail={failureText(result.cause)} onRetry={again} />
+        </Section>
+      )
+    }
+    return null
+  }
+  const card = machinesCard(view.value)
+  return (
+    <Section title="Other machines">
+      <div className="flex flex-col gap-2">
+        <Panel>
+          {card.problem !== undefined && (
+            <div role="alert" className="flex items-start gap-3 px-4 py-3">
+              <span className="flex h-4.5 items-center">
+                <Dot tone="bad" />
+              </span>
+              <span className="min-w-0 flex-1">{sentenceCase(card.problem.text)}</span>
+              {card.problem.fix !== undefined && <Copyable text={card.problem.fix} label="Copy the fix" />}
+            </div>
+          )}
+          {card.rows.map((row) => (
+            <SettingRow key={row.title} title={row.title} {...(row.detail === undefined ? {} : { detail: row.detail })}>
+              {row.copy === true ? (
+                <Copyable text={row.value} label={`Copy ${row.value}`} />
+              ) : (
+                <span className="text-small">{row.value}</span>
+              )}
+            </SettingRow>
+          ))}
+          {card.start !== undefined && (
+            <div className="border-t border-separator px-4 py-3 text-small text-muted-foreground first:border-t-0">
+              {card.start}
+            </div>
+          )}
+        </Panel>
+        <p className="text-caption text-faint">
+          The hub is for your own machines: list only your own tailnet logins. Machines Tailscale can't vouch for, such
+          as tagged ones, use a client key.
+        </p>
+      </div>
+    </Section>
+  )
+}
+
 export function AccessPage() {
   return (
     <>
@@ -391,6 +475,7 @@ export function AccessPage() {
       </p>
       <AddAccount />
       <ClientKeys />
+      <OtherMachines />
     </>
   )
 }

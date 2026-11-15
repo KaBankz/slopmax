@@ -1,7 +1,7 @@
 // What the Usage and Performance pages, and the overview's Today panel,
 // say about a history: the figures across the top, the tables, and the
 // token mix. The history is the ledger's own shape (`GET /history`).
-import { type History, providerFacts, Totals } from "@slopmax/client"
+import { type History, providerFacts, type Summary, Totals } from "@slopmax/client"
 import { compact, fixed, grouped, providerTitle } from "@slopmax/client/format"
 import { count, dollars, priced } from "./words.ts"
 
@@ -139,6 +139,23 @@ export const modelRows = (history: History): ReadonlyArray<BarRow> => {
 /** The agents by tokens. */
 export const agentRows = (history: History): ReadonlyArray<BarRow> =>
   bars(history.agents.map((row) => ({ name: row.name, totals: row.totals })))
+
+/** What the summary calls requests sent with slopmax's own key: here, or the hub read from another machine. */
+const ownKey: ReadonlyArray<string> = ["this machine", "hub"]
+
+/**
+ * The machines that sent requests, most tokens first: none when only this
+ * slopmax's own key did, as on a machine no other uses.
+ */
+export const machineRows = (summary: Summary): ReadonlyArray<BarRow> => {
+  if (summary.rows.every((row) => ownKey.includes(row.key))) return []
+  return bars(
+    summary.rows
+      .filter((row) => row.totals.requests > 0 || row.totals.failed > 0)
+      .toSorted((a, b) => b.totals.tokens - a.totals.tokens || a.key.localeCompare(b.key))
+      .map((row) => ({ name: row.key, totals: row.totals })),
+  )
+}
 
 /** One part of the token mix. */
 export interface MixPart {
