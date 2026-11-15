@@ -4,6 +4,14 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Added
+
+- SuperGrok subscriptions, for Grok Build. `slopmax login grok` signs in with xAI's device code, `slopmax import cliproxyapi` brings over CLIProxyAPI's xAI sign-ins, and `slopmax run grok`, `env grok`, and `setup grok` point Grok Build at the proxy (`/grok/v1`) through its chat-proxy and auth-provider settings. Sessions stay on one account by Grok Build's conversation group and move when an account's monthly allowance is spent. Each account's allowance, read from xAI's billing endpoint, shows as a 30-day window, and its plan (`lite`, `supergrok`, `plus`, or `heavy`, as `[plan_prices]` names them under `grok/`) is priced for the dashboard's value figures. SuperGrok accounts serve Grok Build alone. The dashboard signs in to SuperGrok, and `slopmax doctor` checks Grok Build's wiring, that its own xAI sign-in isn't bypassing slopmax, and that xAI is reachable. The CLIProxyAPI hub lists SuperGrok accounts as `xai`, as CLIProxyAPI does.
+
+### Changed
+
+- xAI API keys now back SuperGrok: with a SuperGrok account connected, they serve Grok Build only as paid overflow (`paid_overflow = true`). They still serve `grok-*` models to every other client.
+
 ## [0.9.0] - 2026-11-15
 
 New sessions now fill accounts in an order you set, and limit resets are no longer redeemed by themselves. Both are new defaults: a config that names its own keeps it. Errors and empty states across the CLI, the proxy and the dashboard now say what happened and what to run.

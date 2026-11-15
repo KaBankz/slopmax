@@ -200,7 +200,7 @@ fn systemd_unit(exe: &Path, log: &Path, home: Option<&Path>) -> String {
         .unwrap_or_default();
     format!(
         "[Unit]\n\
-         Description=slopmax account pool for Claude Code and Codex\n\
+         Description=slopmax account pool for Claude Code, Codex, and Grok Build\n\
          After=network-online.target\n\
          Wants=network-online.target\n\
          \n\

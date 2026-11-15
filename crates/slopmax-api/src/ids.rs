@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub enum Provider {
     Claude,
     Codex,
+    Grok,
     Anthropic,
     #[serde(rename = "openai")]
     OpenAi,
@@ -17,9 +18,10 @@ pub enum Provider {
 
 impl Provider {
     /// In the order requests try them.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Claude,
         Self::Codex,
+        Self::Grok,
         Self::Anthropic,
         Self::OpenAi,
         Self::Xai,
@@ -31,6 +33,7 @@ impl Provider {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Grok => "grok",
             Self::Anthropic => "anthropic",
             Self::OpenAi => "openai",
             Self::Xai => "xai",
@@ -43,6 +46,7 @@ impl Provider {
         match self {
             Self::Claude => "Claude",
             Self::Codex => "ChatGPT",
+            Self::Grok => "SuperGrok",
             Self::Anthropic => "Anthropic API",
             Self::OpenAi => "OpenAI API",
             Self::Xai => "xAI API",
@@ -53,7 +57,7 @@ impl Provider {
     /// A subscription with usage windows, rather than a key billed per
     /// token.
     pub fn is_subscription(self) -> bool {
-        matches!(self, Self::Claude | Self::Codex)
+        matches!(self, Self::Claude | Self::Codex | Self::Grok)
     }
 
     /// Whether it grants limit resets, which clear its windows at once.
@@ -80,6 +84,7 @@ impl std::fmt::Display for Strategy {
 pub enum AgentId {
     ClaudeCode,
     Codex,
+    GrokBuild,
 }
 
 /// How a new session picks its account.
@@ -164,6 +169,7 @@ impl AgentId {
         match self {
             Self::ClaudeCode => "claude-code",
             Self::Codex => "codex",
+            Self::GrokBuild => "grok-build",
         }
     }
 }

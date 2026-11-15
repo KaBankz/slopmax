@@ -554,9 +554,10 @@ pub async fn poll_one(app: &App, account: &Account) {
                 .observe(&account.id, reading.limits, Timestamp::now());
             if reading.plan.is_some() && reading.plan != fresh.plan {
                 let (store, id, plan) = (app.store.clone(), fresh.id.clone(), reading.plan);
-                let saved = blocking::run(move || store.update(&id, |a| a.plan = plan)).await;
-                if let Err(e) = saved {
-                    log::warn!("{}: saving plan: {e:#}", fresh.id);
+                match blocking::run(move || store.update(&id, |a| a.plan = plan)).await {
+                    // Status and the dashboard read the pool's copy.
+                    Ok(saved) => app.pool.put(&saved),
+                    Err(e) => log::warn!("{}: saving plan: {e:#}", fresh.id),
                 }
             }
         }

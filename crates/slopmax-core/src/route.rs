@@ -88,7 +88,7 @@ pub fn plan<'a>(table: &Table<'a>, request: &Request<'a>) -> Result<Steps<'a>, N
         .map(|m| resolve(table, m));
     for (i, model) in std::iter::once(primary).chain(fallbacks).enumerate() {
         let default = request.default.filter(|_| i == 0);
-        for step in steps_for(table, model, default) {
+        for step in steps_for(table, model, default, request.agent) {
             match permitted(table, step, request) {
                 Ok(step) if !steps.contains(&step) => steps.push(step),
                 Ok(_) => {}
@@ -112,7 +112,12 @@ fn resolve<'a>(table: &Table<'a>, model: &'a str) -> &'a str {
 }
 
 /// Every provider step for `model`, before policy.
-fn steps_for<'a>(table: &Table<'a>, model: &'a str, default: Option<ProviderId>) -> Steps<'a> {
+fn steps_for<'a>(
+    table: &Table<'a>,
+    model: &'a str,
+    default: Option<ProviderId>,
+    agent: Option<&str>,
+) -> Steps<'a> {
     let accounts = table.accounts;
     let serving = |provider: ProviderId, model: &str| -> Ids<'a> {
         accounts
@@ -129,6 +134,13 @@ fn steps_for<'a>(table: &Table<'a>, model: &'a str, default: Option<ProviderId>)
             .collect()
     };
     let has_accounts = |provider: ProviderId| accounts.iter().any(|a| a.provider == provider);
+    // A subscription this client may not use leaves its keys to serve it.
+    let serves_client = |provider: ProviderId| {
+        provider
+            .spec()
+            .agent_only
+            .is_none_or(|only| agent == Some(only))
+    };
 
     let mut steps = Steps::new();
     for provider in ProviderId::ALL {
@@ -138,6 +150,7 @@ fn steps_for<'a>(table: &Table<'a>, model: &'a str, default: Option<ProviderId>)
         }
         if let Billing::Metered { backs: Some(sub) } = provider.spec().billing
             && has_accounts(sub)
+            && serves_client(sub)
             && !table.paid_overflow
         {
             continue;
@@ -307,7 +320,7 @@ mod tests {
     }
 
     use Dialect::{Chat, Messages, Responses};
-    use ProviderId::{Anthropic, Claude, Codex, Compat, OpenAI, Xai};
+    use ProviderId::{Anthropic, Claude, Codex, Compat, Grok, OpenAI, Xai};
 
     fn step(provider: ProviderId, model: &str) -> (ProviderId, String) {
         (provider, model.to_owned())
@@ -340,6 +353,39 @@ mod tests {
         assert_eq!(
             f.plan("gpt-6-sol", Responses, codex),
             Ok(vec![step(OpenAI, "gpt-6-sol")])
+        );
+    }
+
+    #[test]
+    fn xai_keys_back_supergrok_for_grok_build_and_serve_everyone_else() {
+        let mut f = Fixture::new(vec![account(Grok, "heavy"), account(Xai, "key")]);
+        let grok = Some("grok");
+        assert_eq!(
+            f.plan("grok-4.7", Responses, grok),
+            Ok(vec![step(Grok, "grok-4.7")])
+        );
+        // SuperGrok serves Grok Build alone, so the key serves the rest.
+        assert_eq!(
+            f.plan("grok-4.7", Chat, Some("codex")),
+            Ok(vec![step(Xai, "grok-4.7")])
+        );
+        assert_eq!(
+            f.plan("grok-4.7", Chat, None),
+            Ok(vec![step(Xai, "grok-4.7")])
+        );
+        f.paid_overflow = true;
+        assert_eq!(
+            f.plan("grok-4.7", Chat, grok),
+            Ok(vec![step(Grok, "grok-4.7"), step(Xai, "grok-4.7")])
+        );
+        // Without a key, other clients are told who SuperGrok serves.
+        let f = Fixture::new(vec![account(Grok, "heavy")]);
+        assert_eq!(
+            f.plan("grok-4.7", Chat, Some("codex")),
+            Err(NoRoute::Refused {
+                provider: Grok,
+                agent: "Grok Build"
+            })
         );
     }
 

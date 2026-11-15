@@ -40,6 +40,10 @@ const PROVIDERS: &[Choice] = &[
         help: "ChatGPT Plus/Pro/Team, used by Codex",
     },
     Choice {
+        value: "grok",
+        help: "SuperGrok, used by Grok Build",
+    },
+    Choice {
         value: "anthropic",
         help: "An Anthropic API key (for Claude Code)",
     },
@@ -65,6 +69,10 @@ const AGENTS: &[Choice] = &[
     Choice {
         value: "codex",
         help: "Codex",
+    },
+    Choice {
+        value: "grok",
+        help: "Grok Build",
     },
 ];
 
@@ -168,7 +176,7 @@ const ACCOUNT_ARG: Arg = arg("account", ACCOUNT, Kind::Required(&[]));
 
 pub static APP: App = App {
     name: "slopmax",
-    about: "Multi-account switcher and proxy for Claude Code and Codex",
+    about: "Multi-account switcher and proxy for Claude Code, Codex, and Grok Build",
     after_help: "Run without a command to show account status.",
     default: "status",
     commands: &[
@@ -204,7 +212,7 @@ pub static APP: App = App {
                 ),
                 arg(
                     "login",
-                    "Sign in to these subscriptions: claude, codex",
+                    "Sign in to these subscriptions: claude, codex, grok",
                     Kind::Value(None, "PROVIDERS"),
                 ),
                 arg(
@@ -224,7 +232,7 @@ pub static APP: App = App {
                 ),
                 arg(
                     "agents",
-                    "Point these agents at the proxy: claude, codex, or none",
+                    "Point these agents at the proxy: claude, codex, grok, or none",
                     Kind::Value(None, "AGENTS"),
                 ),
                 arg(
@@ -610,13 +618,13 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
         "run" => {
             let agent = agent_named(m)?;
             // Before the proxy starts: it would be left running for nothing.
-            agent::installed(agent, &config)?;
+            agent::installed(agent, &config, home())?;
             ensure_running(&config).await?;
-            return agent::run(agent, &config, &m.rest);
+            return agent::run(agent, &config, home(), &m.rest);
         }
         "env" => {
             let exe = std::env::current_exe().context("locating the slopmax binary")?;
-            print!("{}", agent_named(m)?.env(&config, &exe));
+            print!("{}", agent_named(m)?.env(&config, home(), &exe));
         }
         "config" => {
             let name = m.value("name").unwrap_or_default();

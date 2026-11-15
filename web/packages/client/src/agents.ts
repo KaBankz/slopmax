@@ -15,6 +15,7 @@ export interface AgentFacts {
 export const agentFacts: { readonly [K in AgentId]: AgentFacts & { readonly id: K } } = {
   "claude-code": { id: "claude-code", title: "Claude Code", program: "claude", provider: "claude" },
   codex: { id: "codex", title: "Codex", program: "codex", provider: "codex" },
+  "grok-build": { id: "grok-build", title: "Grok Build", program: "grok", provider: "grok" },
 }
 
 /** Every agent, in the order requests are matched against them. */

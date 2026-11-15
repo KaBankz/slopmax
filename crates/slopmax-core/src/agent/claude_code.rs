@@ -86,7 +86,7 @@ impl Agent for ClaudeCode {
         })
     }
 
-    fn command(&self, config: &Config, args: &[String]) -> Command {
+    fn command(&self, config: &Config, _home: &Home, args: &[String]) -> Command {
         let mut command = Command::new("claude");
         command
             .envs(env(config))
@@ -95,7 +95,7 @@ impl Agent for ClaudeCode {
         command
     }
 
-    fn env(&self, config: &Config, _exe: &Path) -> String {
+    fn env(&self, config: &Config, _home: &Home, _exe: &Path) -> String {
         let mut out: String = env(config)
             .into_iter()
             .map(|(k, v)| format!("export {k}={}\n", shell_quote(&v)))
@@ -315,7 +315,7 @@ mod tests {
 
     #[test]
     fn env_points_at_the_proxy() {
-        let script = ClaudeCode.env(&config(), Path::new("slopmax"));
+        let script = ClaudeCode.env(&config(), &Home::sandbox("/home/me"), Path::new("slopmax"));
         assert!(script.contains("export ANTHROPIC_BASE_URL=http://127.0.0.1:7567"));
         assert!(script.contains("export ANTHROPIC_AUTH_TOKEN=sm-test"));
         assert!(script.contains("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1"));
@@ -352,7 +352,11 @@ mod tests {
 
     #[test]
     fn the_command_runs_claude_through_the_proxy_without_an_api_key() {
-        let command = ClaudeCode.command(&config(), &["-p".into(), "hi".into()]);
+        let command = ClaudeCode.command(
+            &config(),
+            &Home::sandbox("/home/me"),
+            &["-p".into(), "hi".into()],
+        );
         assert_eq!(command.get_program(), "claude");
         let args: Vec<_> = command.get_args().collect();
         assert_eq!(args, ["-p", "hi"]);

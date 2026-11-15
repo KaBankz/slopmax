@@ -353,7 +353,7 @@ fn mistakes_explain_themselves_and_fail() {
     ])
     .fails(1, "--dialect takes chat, responses, or messages");
     s.run(&["login", "claude", "--device"])
-        .fails(1, "--device works for ChatGPT accounts");
+        .fails(1, "--device works for ChatGPT and SuperGrok accounts");
     s.run(&["notify"]).fails(1, "notifications are off");
     s.run(&["label", "1", "work"])
         .fails(1, "no account matches \"1\"");
@@ -1762,14 +1762,14 @@ fn setup_flags_that_make_no_sense_are_refused() {
     s.run(&["setup", "--affinity", "maybe"])
         .fails(1, "--affinity takes on or off, got \"maybe\"");
     s.run(&["setup", "--login", "xai"])
-        .fails(1, "--login signs in to subscriptions (claude, codex)");
+        .fails(1, "--login signs in to subscriptions (claude, codex, grok)");
     s.run(&["setup", "--login", "bogus"]).fails(
         1,
-        "--login takes claude, codex, or both (comma-separated), got \"bogus\"",
+        "--login takes claude, codex, grok, or none (comma-separated), got \"bogus\"",
     );
-    s.run(&["setup", "--agents", "grok"]).fails(
+    s.run(&["setup", "--agents", "gemini"]).fails(
         1,
-        "--agents takes claude, codex, or none (comma-separated), got \"grok\"",
+        "--agents takes claude, codex, grok, or none (comma-separated), got \"gemini\"",
     );
     s.run(&["setup", "--import", "dropbox"]).fails(
         1,
@@ -1870,6 +1870,14 @@ fn unattended_setup_imports_routes_wires_and_starts_the_proxy() {
 #[test]
 fn unattended_setup_leaves_alone_an_agent_it_has_no_account_for() {
     let s = Sandbox::new("init-unserved");
+    // Claude Code is installed; Grok Build is not.
+    let claude = s.stubs.join(if cfg!(windows) {
+        "claude.cmd"
+    } else {
+        "claude"
+    });
+    write(&claude, "#!/bin/sh\nexit 0\n");
+    make_executable(&claude);
     write(
         &s.home.join(".cli-proxy-api/codex-a.json"),
         &json!({"type": "codex", "access_token": "tok-a", "refresh_token": "ref-a",
@@ -1884,6 +1892,8 @@ fn unattended_setup_leaves_alone_an_agent_it_has_no_account_for() {
         text.contains("Claude Code left as it is: no Claude account to serve it."),
         "{text}"
     );
+    // An agent that isn't installed goes unmentioned.
+    assert!(!text.contains("Grok Build left"), "{text}");
     assert!(text.contains("1 account behind"), "{text}");
     // Claude Code keeps working as it did; Codex goes through slopmax.
     assert!(!s.claude.join("settings.json").exists());

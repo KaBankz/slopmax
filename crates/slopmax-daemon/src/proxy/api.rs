@@ -581,7 +581,7 @@ fn start_login(app: &Arc<App>, asked: StartLogin) -> Answer {
     let provider = api::provider_id(asked.provider);
     if !provider.spec().is_subscription() {
         return Err(ApiError::bad_request(
-            "only claude and codex accounts sign in",
+            "only claude, codex and grok accounts sign in",
         ));
     }
     let id = crate::ids::token()[..16].to_owned();

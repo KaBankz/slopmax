@@ -59,12 +59,13 @@ describe("providers", () => {
     }
     expect(providerFacts.anthropic.backs).toBe("claude")
     expect(providerFacts.openai.backs).toBe("codex")
-    expect(providerFacts.xai.backs).toBeUndefined()
+    expect(providerFacts.xai.backs).toBe("grok")
+    expect(providerFacts.compat.backs).toBeUndefined()
   })
 
   it("lists the known providers when an id is none of them", () => {
-    expect(parseProviderId("grok")).toEqual(
-      Result.fail('expected one of claude, codex, anthropic, openai, xai, compat, got "grok"'),
+    expect(parseProviderId("gemini")).toEqual(
+      Result.fail('expected one of claude, codex, grok, anthropic, openai, xai, compat, got "gemini"'),
     )
   })
 })
@@ -80,6 +81,8 @@ describe("agents", () => {
     }
     expect(agentFacts.codex.title).toBe("Codex")
     expect(agentFacts["claude-code"].title).toBe("Claude Code")
-    expect(AgentId.literals).toEqual(["claude-code", "codex"])
+    expect(agentFacts["grok-build"].program).toBe("grok")
+    expect(providerFacts.grok.agentOnly).toBe("grok-build")
+    expect(AgentId.literals).toEqual(["claude-code", "codex", "grok-build"])
   })
 })

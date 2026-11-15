@@ -12,14 +12,14 @@ export interface ProviderFacts {
   readonly billing: "subscription" | "metered"
   /** The subscription whose models a metered provider also serves, as paid overflow. */
   readonly backs?: ProviderId
-  /** The one agent these accounts may serve: Claude subscriptions serve Claude Code alone. */
+  /** The one agent these accounts may serve: Claude subscriptions serve Claude Code alone, SuperGrok Grok Build. */
   readonly agentOnly?: AgentId
   /**
    * How an account is added: a browser sign-in, a browser sign-in or a device
-   * code on machines without one, an API key, or an endpoint's address with an
-   * optional key.
+   * code on machines without one, a device code alone (approved in any
+   * browser), an API key, or an endpoint's address with an optional key.
    */
-  readonly signIn: "browser" | "browser-or-device" | "key" | "endpoint"
+  readonly signIn: "browser" | "browser-or-device" | "device" | "key" | "endpoint"
   /** The base URL agents' request paths are appended to; per account for endpoints. */
   readonly api: string
   /** The formats that API speaks, preferred first; per account for endpoints. */
@@ -64,6 +64,18 @@ export const providerFacts: {
     refreshLead: Duration.hours(24),
     hasResets: true,
   },
+  grok: {
+    id: "grok",
+    title: "SuperGrok",
+    billing: "subscription",
+    agentOnly: "grok-build",
+    signIn: "device",
+    api: "https://cli-chat-proxy.grok.com/v1",
+    dialects: ["responses", "chat"],
+    models: ["grok-*"],
+    refreshLead: Duration.minutes(30),
+    hasResets: false,
+  },
   anthropic: {
     id: "anthropic",
     title: "Anthropic API",
@@ -93,6 +105,7 @@ export const providerFacts: {
     id: "xai",
     title: "xAI API",
     billing: "metered",
+    backs: "grok",
     signIn: "key",
     api: "https://api.x.ai/v1",
     dialects: ["chat"],

@@ -122,6 +122,10 @@ const PLANS: &[(ProviderId, &str, f64)] = &[
     (ProviderId::Codex, "pro", 200.0),
     (ProviderId::Codex, "team", 30.0),
     (ProviderId::Codex, "business", 30.0),
+    (ProviderId::Grok, "lite", 10.0),
+    (ProviderId::Grok, "supergrok", 30.0),
+    (ProviderId::Grok, "plus", 100.0),
+    (ProviderId::Grok, "heavy", 300.0),
 ];
 
 /// What a subscription plan costs a month: the user's own figure, set as
@@ -447,6 +451,7 @@ mod tests {
         assert_eq!(plan_monthly(ProviderId::Claude, "Pro", &none), Some(20.0));
         assert_eq!(plan_monthly(ProviderId::Codex, "pro", &none), Some(200.0));
         assert_eq!(plan_monthly(ProviderId::Codex, "enterprise", &none), None);
+        assert_eq!(plan_monthly(ProviderId::Grok, "heavy", &none), Some(300.0));
         let mine = BTreeMap::from([("codex/pro".to_owned(), 229.0)]);
         assert_eq!(plan_monthly(ProviderId::Codex, "pro", &mine), Some(229.0));
     }

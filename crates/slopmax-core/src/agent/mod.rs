@@ -13,6 +13,7 @@
 
 mod claude_code;
 mod codex;
+pub(crate) mod grok;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -32,9 +33,10 @@ use crate::wire::rawjson::{self, Seg};
 
 pub use claude_code::ClaudeCode;
 pub use codex::Codex;
+pub use grok::GrokBuild;
 
 /// Every agent slopmax knows.
-pub static AGENTS: [&dyn Agent; 2] = [&ClaudeCode, &Codex];
+pub static AGENTS: [&dyn Agent; 3] = [&ClaudeCode, &Codex, &GrokBuild];
 
 /// The agent with this CLI name.
 pub fn find(id: &str) -> Option<&'static dyn Agent> {
@@ -92,11 +94,11 @@ pub trait Agent: Send + Sync {
     fn session(&self, headers: &HeaderMap, body: &[u8]) -> Option<String>;
 
     /// The agent launched through the proxy, with `args` passed along.
-    fn command(&self, config: &Config, args: &[String]) -> Command;
+    fn command(&self, config: &Config, home: &Home, args: &[String]) -> Command;
 
     /// Shell commands that wire the current shell to the proxy. `exe` is
     /// this slopmax binary.
-    fn env(&self, config: &Config, exe: &Path) -> String;
+    fn env(&self, config: &Config, home: &Home, exe: &Path) -> String;
 
     /// The config file `setup` edits.
     fn config_file(&self, home: &Home) -> PathBuf;
@@ -121,18 +123,24 @@ pub trait Agent: Send + Sync {
 
     /// The agent's own saved login, if it has one.
     fn import<'a>(&'a self, http: &'a Client, home: &'a Home) -> BoxFuture<'a, Option<Found>>;
+
+    /// Whether API keys that back its provider can serve it alone, with no
+    /// account of the provider itself.
+    fn served_by_keys(&self) -> bool {
+        true
+    }
 }
 
-/// Where an agent's own config sends it.
 /// Whether any of `accounts` can serve `agent`'s own models: an account of
 /// its provider, or an API key that backs it.
 pub fn servable(agent: &dyn Agent, accounts: &[crate::account::Account]) -> bool {
     accounts.iter().any(|a| {
         a.provider == agent.provider()
-            || matches!(
-                a.provider.spec().billing,
-                crate::provider::Billing::Metered { backs: Some(p) } if p == agent.provider()
-            )
+            || agent.served_by_keys()
+                && matches!(
+                    a.provider.spec().billing,
+                    crate::provider::Billing::Metered { backs: Some(p) } if p == agent.provider()
+                )
     })
 }
 
@@ -159,8 +167,8 @@ pub fn wiring(agent: &dyn Agent, config: &Config, home: &Home) -> Wiring {
 
 /// Fails, saying what to do, when the agent's program cannot be found:
 /// checked before the proxy is started for it.
-pub fn installed(agent: &dyn Agent, config: &Config) -> Result<()> {
-    let command = agent.command(config, &[]);
+pub fn installed(agent: &dyn Agent, config: &Config, home: &Home) -> Result<()> {
+    let command = agent.command(config, home, &[]);
     let program = command.get_program().to_string_lossy();
     if slopmax_common::which(&program).is_none() {
         anyhow::bail!(
@@ -173,8 +181,8 @@ pub fn installed(agent: &dyn Agent, config: &Config) -> Result<()> {
 }
 
 /// Launches the agent through the proxy and returns its exit status.
-pub fn run(agent: &dyn Agent, config: &Config, args: &[String]) -> Result<i32> {
-    let mut command = agent.command(config, args);
+pub fn run(agent: &dyn Agent, config: &Config, home: &Home, args: &[String]) -> Result<i32> {
+    let mut command = agent.command(config, home, args);
     let program = command.get_program().to_string_lossy().into_owned();
     #[cfg(unix)]
     {
@@ -268,13 +276,26 @@ mod tests {
             }
         }
         assert_eq!(find("codex").map(|a| a.title()), Some("Codex"));
+        assert_eq!(find("grok").map(|a| a.title()), Some("Grok Build"));
         for id in [
             slopmax_api::AgentId::ClaudeCode,
             slopmax_api::AgentId::Codex,
+            slopmax_api::AgentId::GrokBuild,
         ] {
             assert_eq!(of_api(id).api(), id);
         }
         assert!(find("gemini").is_none());
+    }
+
+    #[test]
+    fn keys_serve_the_agents_they_back_but_grok_build() {
+        let of = |provider| crate::account::Account::new(provider, Default::default());
+        let (anthropic, xai) = (of(ProviderId::Anthropic), of(ProviderId::Xai));
+        assert!(servable(&ClaudeCode, std::slice::from_ref(&anthropic)));
+        assert!(!servable(&Codex, std::slice::from_ref(&anthropic)));
+        // Grok Build's settings and models come only through SuperGrok.
+        assert!(!servable(&GrokBuild, std::slice::from_ref(&xai)));
+        assert!(servable(&GrokBuild, &[xai, of(ProviderId::Grok)]));
     }
 
     #[test]
