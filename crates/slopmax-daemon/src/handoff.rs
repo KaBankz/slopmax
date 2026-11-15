@@ -37,6 +37,9 @@ use crate::update::{self, Version};
 /// `<its pid>:<listener fd>:<lock fd>:<ready fd>`.
 #[cfg(unix)]
 const ENV: &str = "SLOPMAX_HANDOFF";
+/// Set for the new daemon when the socket handed over is launchd's.
+#[cfg(unix)]
+const LAUNCHD_ENV: &str = "SLOPMAX_HANDOFF_LAUNCHD";
 /// How long the new binary has to start and say it is ready.
 #[cfg(unix)]
 const READY_WAIT: Duration = Duration::from_secs(30);
@@ -49,6 +52,8 @@ pub struct Inherited {
     pub listener: std::net::TcpListener,
     pub lock: std::fs::File,
     ready: std::fs::File,
+    /// The socket is launchd's ([`crate::supervisor::keep_nonblocking`]).
+    pub launchd: bool,
 }
 
 impl Inherited {
@@ -90,6 +95,7 @@ impl Inherited {
             listener,
             lock,
             ready,
+            launchd: std::env::var_os(LAUNCHD_ENV).is_some_and(|v| v == "1"),
         })
     }
 
@@ -100,6 +106,11 @@ impl Inherited {
 
     /// Tells the old daemon this one serves: it stops taking connections.
     pub fn ready(self) -> (std::net::TcpListener, std::fs::File, Ready) {
+        if self.launchd
+            && let Ok(copy) = self.listener.try_clone()
+        {
+            crate::supervisor::keep_nonblocking(copy);
+        }
         (self.listener, self.lock, Ready(self.ready))
     }
 }
@@ -185,7 +196,7 @@ async fn attempt(app: &Arc<App>, exe: &Path, newer: bool) -> Result<()> {
     crate::auth::settle(Duration::from_secs(5)).await;
     let saver = Arc::clone(app);
     crate::blocking::run(move || crate::save_state_now(&saver)).await;
-    let detach = app.launchd.load(Ordering::SeqCst);
+    let detach = app.launchd_socket.load(Ordering::SeqCst);
     let pid = start(exe, handles, detach).await?;
     log::info!(
         "slopmax {version} (pid {pid}) serves from {}; finishing what this one started",
@@ -238,9 +249,9 @@ pub async fn make_way(app: &Arc<App>) -> Result<()> {
 }
 
 /// Starts `exe serve` with this daemon's socket and lock, and waits until
-/// it says it is ready. Its pid. `detach`: in a session of its own, so it
-/// outlives this process under launchd, which ends a job's process group
-/// with it.
+/// it says it is ready. Its pid. `detach`: the socket is launchd's, so the
+/// new daemon runs in a session of its own, to outlive this process
+/// (launchd ends a job's process group with it), and is told so.
 #[cfg(unix)]
 #[allow(unsafe_code)]
 async fn start(exe: &Path, handles: Handles, detach: bool) -> Result<u32> {
@@ -280,6 +291,7 @@ async fn start(exe: &Path, handles: Handles, detach: bool) -> Result<u32> {
             ),
         )
         // systemd's sockets were this process's to take.
+        .env_remove(LAUNCHD_ENV)
         .env_remove("LISTEN_PID")
         .env_remove("LISTEN_FDS")
         .env_remove("LISTEN_FDNAMES")
@@ -298,6 +310,9 @@ async fn start(exe: &Path, handles: Handles, detach: bool) -> Result<u32> {
             }
             Ok(())
         });
+    }
+    if detach {
+        command.env(LAUNCHD_ENV, "1");
     }
     let mut child = command
         .spawn()

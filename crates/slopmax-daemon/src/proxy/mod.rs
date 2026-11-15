@@ -108,9 +108,11 @@ pub struct App {
     /// The home's serve lock while this process serves the home. Let go of
     /// early when this one makes way ([`crate::handoff::make_way`]).
     pub serving: Mutex<Option<std::fs::File>>,
-    /// launchd keeps the listening socket, and starts the service's binary
-    /// again once this process exits.
+    /// launchd started this process: it keeps the listening socket, and
+    /// starts the service's binary again once this process exits.
     pub launchd: std::sync::atomic::AtomicBool,
+    /// The listening socket is launchd's, whoever started this process.
+    pub launchd_socket: std::sync::atomic::AtomicBool,
     /// Cancelled when a handed-off daemon should stop draining: the new
     /// process stopped, or this one was signalled.
     pub cut: CancellationToken,
@@ -167,6 +169,7 @@ impl App {
             handed_over: std::sync::atomic::AtomicBool::new(false),
             serving: Mutex::default(),
             launchd: std::sync::atomic::AtomicBool::new(false),
+            launchd_socket: std::sync::atomic::AtomicBool::new(false),
             cut: CancellationToken::new(),
             successor_exit: Mutex::default(),
             running: crate::handoff::Running::now(),

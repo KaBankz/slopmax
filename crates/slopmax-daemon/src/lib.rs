@@ -131,8 +131,10 @@ const SETTLE: Duration = Duration::from_secs(5);
 /// last, by the only writer left.
 pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<Stopped> {
     let mut launchd = false;
+    let mut launchd_socket = false;
     let (serving, listener, ready) = match handoff::Inherited::take() {
         Some(inherited) => {
+            launchd_socket = inherited.launchd;
             let (listener, lock, ready) = inherited.ready();
             write_pid(&home)?;
             listener.set_nonblocking(true)?;
@@ -151,6 +153,7 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<Stopp
             }
             Some(kept) => {
                 launchd = kept.by == supervisor::Keeper::Launchd;
+                launchd_socket = launchd;
                 let addr = kept.listener.local_addr()?;
                 let lock = take_over(&home, &config, addr).await?;
                 kept.listener.set_nonblocking(true)?;
@@ -180,6 +183,8 @@ pub async fn serve(config: Config, home: Home, origins: Origins) -> Result<Stopp
     app.sync()?;
     app.launchd
         .store(launchd, std::sync::atomic::Ordering::SeqCst);
+    app.launchd_socket
+        .store(launchd_socket, std::sync::atomic::Ordering::SeqCst);
     #[cfg(unix)]
     {
         use std::os::fd::AsRawFd;

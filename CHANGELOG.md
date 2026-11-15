@@ -4,6 +4,15 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+The login service keeps the proxy's listening socket open, so a crash or a restart no longer refuses a single connection, and on macOS an update leaves no stand-in process behind. One change to rely on: on macOS, `slopmax stop` now unloads the login agent until `slopmax start` or the next login.
+
+### Changed
+
+- The login service keeps the proxy's listening socket between one process and the next. systemd holds it in the unit's file-descriptor store, and launchd owns it outright, as the plist now says. After a crash, a `systemctl restart`, or a restart of the agent, requests wait about a second for the new process instead of being refused. The proxy rewrites an older Linux unit by itself, with nothing restarted.
+- On macOS, an update no longer leaves the old process running as a stand-in for the new one. Once the old one has finished its requests, it exits, and launchd starts the service again: that process takes launchd's socket and has the process the proxy moved to make way. It saves its state, lets go of the home, and finishes its own requests. Moving from 0.11 or older writes the login agent anew with `slopmax update`, which restarts the proxy once.
+- On macOS, `slopmax stop` unloads the login agent, since launchd would otherwise start the proxy again for the next connection to the socket it holds. `slopmax start` loads it again, and so does the next login. Changing `listen` takes `slopmax service install`, which writes the new address into the agent.
+- `slopmax status` says when the login service was written by another version or for another listen address.
+
 ## [0.11.0] - 2026-11-15
 
 slopmax updates itself, and the running proxy moves to a new version without refusing or cutting off a single connection. One change to rely on: the Linux login service is now a `Type=notify` unit that runs `~/.slopmax/bin/slopmax`, which updates move to each new binary.

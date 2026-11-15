@@ -21,15 +21,15 @@ knock() { # knock <seconds> → "answered failed slow"
 }
 pid() { curl -s --max-time 5 http://127.0.0.1:7599/healthz | sed -n 's/.*"pid":\([0-9]*\).*/\1/p'; }
 jobpid() { launchctl print "$T" 2>/dev/null | awk '/^\tpid = /{print $3}'; }
-serving() { pgrep -f "slopmax serve" | tr '\n' ' '; }
+serving() { pgrep -f "slopmax2? serve" | tr '\n' ' '; }
 
 "$B" service install || { cat "$H/home/slopmax.log"; exit 1; }
 cat ~/Library/LaunchAgents/dev.slopmax.plist
 sleep 1
 P=$(pid); echo "pid $P, launchd's $(jobpid)"
 check "launchd runs the proxy" '[ -n "$P" ] && [ "$P" = "$(jobpid)" ]'
-lsof -nP -iTCP:7599 -sTCP:LISTEN
-check "launchd holds the socket" 'lsof -nP -iTCP:7599 -sTCP:LISTEN | grep -q "^launchd"'
+sudo lsof +fg -nP -iTCP:7599 -sTCP:LISTEN
+check "launchd holds the socket" 'sudo lsof -nP -iTCP:7599 -sTCP:LISTEN | grep -q "^launchd"'
 
 echo "== crash"
 knock 6 > "$H/k1" & sleep 1.5; kill -9 "$P"; wait

@@ -126,8 +126,46 @@ fn from_launchd() -> Option<std::net::TcpListener> {
             std::net::TcpListener::from_raw_fd(fd)
         }
     });
-    listeners.next()
+    let listener = listeners.next()?;
+    // launchd makes the socket blocking, for every process that holds it,
+    // when its last process exits (see `keep_nonblocking`).
+    if let Err(e) = listener.set_nonblocking(true) {
+        log::warn!("making launchd's socket non-blocking: {e}");
+    }
+    Some(listener)
 }
+
+/// How often a process serving launchd's socket, that launchd did not
+/// start, makes it non-blocking again.
+#[cfg(unix)]
+const NONBLOCKING_EVERY: std::time::Duration = std::time::Duration::from_millis(20);
+
+/// Keeps launchd's socket non-blocking for a process launchd did not start
+/// (the one a handoff moved the proxy to). When the process launchd
+/// started exits, launchd makes the socket blocking, and the flag belongs
+/// to the socket, not the process: this one's accept would then wait for
+/// the next connection with its requests unanswered, until launchd's next
+/// process takes the socket and makes it non-blocking again. A thread sets
+/// it every few milliseconds instead, for as long as this process runs.
+#[cfg(unix)]
+pub fn keep_nonblocking(listener: std::net::TcpListener) {
+    let spawned = std::thread::Builder::new()
+        .name("launchd socket".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(NONBLOCKING_EVERY);
+                if listener.set_nonblocking(true).is_err() {
+                    return;
+                }
+            }
+        });
+    if let Err(e) = spawned {
+        log::warn!("watching launchd's socket: {e}");
+    }
+}
+
+#[cfg(not(unix))]
+pub fn keep_nonblocking(_listener: std::net::TcpListener) {}
 
 /// Tells systemd `state` (`READY=1`, `MAINPID=…`) when it supervises this
 /// process with `Type=notify`. Whether it was told.
