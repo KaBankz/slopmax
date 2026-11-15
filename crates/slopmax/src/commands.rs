@@ -1082,12 +1082,30 @@ fn endpoint(url: &str, dialect: Option<&str>, models: Option<&str>) -> Result<En
 async fn settings(config: &Config, name: &str, value: &str) -> Result<()> {
     use slopmax_client::api::settings::{LIVE, LivePatch};
     let path = home().config();
+    // A machine that uses a hub shows the hub's settings.
+    let shown = if config.hub.is_some() && value.is_empty() && name != "listen" {
+        match daemon(config).await? {
+            Some(client) => Some(client.settings().await?.settings),
+            None => None,
+        }
+    } else {
+        None
+    };
     let current = |config: &Config, name: &str| {
-        slopmax_core::api::settings(config)
+        let settings = match &shown {
+            Some(settings) => settings.clone(),
+            None => slopmax_core::api::settings(config),
+        };
+        settings
             .live
             .get(name)
             .map(|v| v.text())
             .unwrap_or_default()
+    };
+    let rest = if config.hub.is_some() {
+        "the hub's config.toml".to_owned()
+    } else {
+        path.display().to_string()
     };
     if name.is_empty() {
         let width = LIVE.iter().map(|l| l.toml.len()).max().unwrap_or(0);
@@ -1102,8 +1120,7 @@ async fn settings(config: &Config, name: &str, value: &str) -> Result<()> {
         println!(
             "\n{}",
             ui::dim(format!(
-                "`slopmax config <name> <value>` changes one; the rest live in {}.",
-                path.display()
+                "`slopmax config <name> <value>` changes one; the rest live in {rest}."
             ))
         );
         return Ok(());

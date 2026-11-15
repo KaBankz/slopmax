@@ -732,6 +732,14 @@ fn usage_totals_the_ledger() {
         .take_while(|l| !l.starts_with("total"))
         .collect();
     assert_eq!(rows.len(), 1, "{accounts}");
+    // Requests another machine sent are its; this one's own read as such.
+    let mut sent = entry(now, &a.id, "claude-sonnet-4-6", 200);
+    sent.machine = Some("laptop".into());
+    write_ledger(&s, &[sent]);
+    let machines = s.run(&["usage", "today", "--by", "machine"]).ok().stdout;
+    assert!(machines.contains("MACHINE"), "{machines}");
+    assert!(machines.contains("this machine"), "{machines}");
+    assert!(machines.contains("laptop"), "{machines}");
 
     // With nothing but failures, it says so rather than show zeros.
     let s = Sandbox::new("usage-failed");
@@ -2606,6 +2614,14 @@ fn tailscale_on_publishes_the_socket_and_off_takes_it_down() {
         .output()
         .unwrap();
     assert!(String::from_utf8_lossy(&out.stdout).contains("ssh -L"));
+    // A key for another machine comes with how that machine uses it.
+    let out = s.ts(&["key", "add", "ci"]).ok();
+    assert!(
+        out.stderr.contains(&format!(
+            "On that machine: slopmax setup --hub {url} --key sm-"
+        )),
+        "{out:?}"
+    );
 
     let view: slopmax_client::api::tailnet::TailnetView =
         serde_json::from_str(&s.ts(&["tailscale", "status", "--json"]).ok().stdout).unwrap();

@@ -71,6 +71,12 @@ pub(super) async fn login(
     // its page shows, pasted at this terminal: refused before a link is
     // shown when nothing can be pasted.
     let pastes = spec.is_subscription() && options.no_browser && !spec.device_login();
+    if pastes && !std::io::stdin().is_terminal() && on_hub {
+        bail!(
+            "slopmax login {provider} needs a terminal to paste the code into; run it in an \
+             interactive shell"
+        );
+    }
     if pastes && !std::io::stdin().is_terminal() {
         let source = match provider {
             ProviderId::Claude => "claude-code",
