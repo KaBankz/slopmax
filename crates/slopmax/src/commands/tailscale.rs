@@ -184,11 +184,11 @@ async fn on(config: &Config, args: &Args<'_>) -> Result<()> {
         add_user(&mut tailnet.users, user)?;
     }
     if !args.admins.is_empty() {
-        let (_, peers) = ts.peers().await.map_err(fail)?;
+        let (here, peers) = ts.peers().await.map_err(fail)?;
         for machine in &args.admins {
             add_admin(
                 &mut tailnet.admins,
-                admin_of(&peers, machine, &tailnet.users)?,
+                admin_of(&here, &peers, machine, &tailnet.users)?,
             );
         }
     }
@@ -558,8 +558,16 @@ fn add_admin(admins: &mut Vec<AdminMachine>, admin: AdminMachine) {
 
 /// The admin entry for the machine of `peers` that `query` names. Only an
 /// untagged machine signed in as one of `users` may manage slopmax: the
-/// hub checks both whenever it asks.
-fn admin_of(peers: &[Peer], query: &str, users: &[String]) -> Result<AdminMachine> {
+/// hub checks both whenever it asks. The hub itself, `here`, is not among
+/// `peers`: it manages slopmax with its own key.
+fn admin_of(here: &Node, peers: &[Peer], query: &str, users: &[String]) -> Result<AdminMachine> {
+    if is_here(here, query) {
+        bail!(
+            "{} is this machine, the hub; it manages slopmax with its own key, so it needs no \
+             admin entry. Open the dashboard here with `slopmax dashboard`",
+            here.name
+        );
+    }
     let peer = tailscale::resolve_machine(peers, query).map_err(anyhow::Error::msg)?;
     if !peer.tags.is_empty() {
         bail!(
@@ -582,6 +590,16 @@ fn admin_of(peers: &[Peer], query: &str, users: &[String]) -> Result<AdminMachin
         machine: peer.name.clone(),
         id: peer.id.clone(),
     })
+}
+
+/// Whether `query` names this machine, as `resolve_machine` would a peer.
+fn is_here(here: &Node, query: &str) -> bool {
+    let query = query.trim();
+    let query = query.strip_suffix('.').unwrap_or(query);
+    let dns = here.dns_name.strip_suffix('.').unwrap_or(&here.dns_name);
+    [dns, here.name.as_str()]
+        .iter()
+        .any(|name| !name.is_empty() && name.eq_ignore_ascii_case(query))
 }
 
 /// Writes `[tailscale]`: through the proxy while it runs, as it is the
@@ -692,10 +710,10 @@ async fn admins(config: &Config, op: &str, given: &str) -> Result<()> {
         "add" => {
             let machines = names(given, "admins", op)?;
             let ts = Tailscale::find().map_err(fail)?;
-            let (_, peers) = ts.peers().await.map_err(fail)?;
+            let (here, peers) = ts.peers().await.map_err(fail)?;
             let mut added = Vec::new();
             for machine in machines {
-                let admin = admin_of(&peers, machine, &tailnet.users)?;
+                let admin = admin_of(&here, &peers, machine, &tailnet.users)?;
                 added.push(admin.machine.clone());
                 add_admin(&mut tailnet.admins, admin);
             }
@@ -811,6 +829,24 @@ mod tests {
             peer("work", Some("work@corp.com"), &[]),
         ];
         let users = vec!["Me@GitHub".to_owned()];
+        let here = Node {
+            backend_state: BackendState::Running,
+            dns_name: "hub.example.ts.net".into(),
+            name: "hub".into(),
+            ips: Vec::new(),
+            tags: Vec::new(),
+            login: Some("me@github".into()),
+            cert_domains: Vec::new(),
+            magic_dns_suffix: None,
+            version: "1.104.5".into(),
+            id: "nhubCNTRL".into(),
+        };
+        let admin_of =
+            |peers: &[Peer], query: &str, users: &[String]| admin_of(&here, peers, query, users);
+        for query in ["hub", "HUB", "hub.example.ts.net."] {
+            let itself = admin_of(&peers, query, &users).unwrap_err().to_string();
+            assert!(itself.contains("hub is this machine, the hub"), "{itself}");
+        }
         assert_eq!(
             admin_of(&peers, "mac", &users).unwrap(),
             AdminMachine {
