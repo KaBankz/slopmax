@@ -227,6 +227,24 @@ mod tests {
     }
 
     #[test]
+    fn each_request_pays_the_prices_for_its_own_prompt() {
+        let prices = BTreeMap::new();
+        let mut totals = Totals::default();
+        // Two prompts of 100,000 tokens, which together are over it.
+        totals.add(&entry("claude-haiku-5-5", 100_000), &prices);
+        totals.add(&entry("claude-haiku-5-5", 100_000), &prices);
+        assert!((totals.cost - 0.02).abs() < 1e-12, "{}", totals.cost);
+        // One token more, as a cache read, prices the whole request higher.
+        let long = Entry {
+            cache_read: 1,
+            ..entry("claude-haiku-5-5", 100_000)
+        };
+        let mut one = Totals::default();
+        one.add(&long, &prices);
+        assert!((one.cost - (100_000. * 0.50 + 0.05) / 1e6).abs() < 1e-12);
+    }
+
+    #[test]
     fn ranges_start_at_local_midnight() {
         let now = Timestamp::now();
         assert_eq!(since("all", now), Some(Timestamp::UNIX_EPOCH));

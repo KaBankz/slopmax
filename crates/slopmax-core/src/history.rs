@@ -394,6 +394,59 @@ mod tests {
     }
 
     #[test]
+    fn long_prompts_cost_each_request_at_its_own_prices() {
+        let now = Timestamp::now();
+        let since = summary::since("today", now).unwrap();
+        let at = since.max(now - SignedDuration::from_mins(1));
+        // Two short Haiku prompts, more than 100K tokens together, in the
+        // same hour as a long one that is mostly read from cache.
+        let short = entry(at, ProviderId::Claude, "claude-haiku-5-5", 60_000);
+        let long = Entry {
+            cache_read: 120_000,
+            cache_write: 10_000,
+            ..entry(at, ProviderId::Claude, "claude-haiku-5-5", 20_000)
+        };
+        let gpt = Entry {
+            cache_read: 250_000,
+            ..entry(at, ProviderId::Codex, "gpt-6-sol", 50_000)
+        };
+        let entries = [short.clone(), short, long, gpt];
+        let history = build(
+            &entries,
+            Range::Today,
+            since,
+            now,
+            &BTreeMap::new(),
+            &HashMap::new(),
+        );
+        let shorts = 2. * (60_000. * 0.10 + 10. * 0.50);
+        let long = 20_000. * 0.50 + 120_000. * 0.05 + 10_000. * 0.625 + 10. * 2.50;
+        let gpt = 50_000. * 4. + 250_000. * 0.40 + 10. * 15.;
+        let expected = (shorts + long + gpt) / 1e6;
+        assert!(
+            (history.total.cost - expected).abs() < 1e-12,
+            "{}",
+            history.total.cost
+        );
+        // The ledger summary costs them the same.
+        let mut totals = Totals::default();
+        for e in &entries {
+            totals.add(e, &BTreeMap::new());
+        }
+        assert!((totals.cost - history.total.cost).abs() < 1e-12);
+        let haiku = history
+            .models
+            .iter()
+            .find(|m| m.name == "claude-haiku-5-5")
+            .unwrap();
+        assert_eq!(haiku.totals.requests, 3);
+        assert!((haiku.totals.cost - (shorts + long) / 1e6).abs() < 1e-12);
+        // A cache read saved what the long prompt's input would have cost.
+        let saved = (120_000. * (0.50 - 0.05) + 250_000. * (4. - 0.40)) / 1e6;
+        assert!((history.cache_saved - saved).abs() < 1e-12);
+    }
+
+    #[test]
     fn caching_speed_sessions_and_agents() {
         let now = Timestamp::now();
         let since = summary::since("7d", now).unwrap();

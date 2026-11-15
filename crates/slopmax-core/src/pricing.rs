@@ -1,6 +1,8 @@
 //! API list prices, for estimating what subscription usage would have cost
 //! on the pay-as-you-go API. Estimates only: cache writes are priced at the
-//! 5-minute rate, and models without a known price are left unpriced.
+//! 5-minute rate, and models without a known price are left unpriced. A
+//! model priced by prompt length costs each request at the prices for its
+//! own prompt.
 
 use std::collections::BTreeMap;
 
@@ -17,8 +19,9 @@ pub struct Price {
     pub cache_write: f64,
 }
 
-/// A price set under `[prices]` in config.toml. Cache prices default to
-/// the usual ratios: reads at a tenth of input, writes at 1.25×.
+/// A price set under `[prices]` in config.toml, which every prompt pays
+/// whatever its length. Cache prices default to the usual ratios: reads at
+/// a tenth of input, writes at 1.25×.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Custom {
@@ -43,9 +46,8 @@ impl From<Custom> for Price {
 
 /// Anthropic first-party API list prices as of 2026-11-14, by model id
 /// prefix (dated ids such as `claude-haiku-4-5-20251001` match too). Cache
-/// writes are 1.25× input; cache reads vary by model. Haiku 5.5 costs five
-/// times as much on a prompt over 100K tokens; it is priced here at the
-/// rate for shorter ones, as are GPT models past 272K.
+/// writes are 1.25× input; cache reads vary by model. Haiku 5.5's are for
+/// prompts up to 100,000 tokens; [`LONG`] has its prices for longer ones.
 const CLAUDE: &[(&str, f64, f64, f64)] = &[
     // (model, input, output, cache read)
     ("claude-fable-5-2", 8.0, 40.0, 0.20),
@@ -81,6 +83,28 @@ const OPENAI: &[(&str, f64, f64, f64)] = &[
     ("gpt-5.6-sol", 4.0, 20.0, 0.40),
     ("gpt-5.6-terra", 2.0, 12.0, 0.20),
     ("gpt-5.6-luna", 0.20, 1.20, 0.02),
+];
+
+/// The models priced by prompt length, as of 2026-11-15: a request whose
+/// prompt is over `over` tokens pays these prices on all of its tokens,
+/// output included. A prompt counts all of the request's input tokens,
+/// cache reads and cache writes among them, and cache writes cost 1.25×
+/// input here too. Of Claude's models only Haiku 5.5 is; the rest are
+/// priced the same up to their full context window. OpenAI's cost twice
+/// as much input and half as much again output past 272K input tokens,
+/// which count cached input and cache writes, as OpenAI counts an input
+/// token as one of input, cached input or cache write.
+const LONG: &[(&str, u64, f64, f64, f64)] = &[
+    // (model, over, input, output, cache read)
+    ("claude-haiku-5-5", 100_000, 0.50, 2.50, 0.05),
+    ("gpt-6-astra", 272_000, 20.0, 75.0, 2.0),
+    ("gpt-6.1-sol", 272_000, 4.0, 15.0, 0.20),
+    ("gpt-6.1-terra", 272_000, 2.0, 7.5, 0.10),
+    ("gpt-6-sol", 272_000, 4.0, 15.0, 0.40),
+    ("gpt-6-luna", 272_000, 0.20, 0.75, 0.02),
+    ("gpt-5.6-sol", 272_000, 8.0, 30.0, 0.80),
+    ("gpt-5.6-terra", 272_000, 4.0, 18.0, 0.40),
+    ("gpt-5.6-luna", 272_000, 0.40, 1.80, 0.04),
 ];
 
 /// Subscription list prices in US dollars a month, by provider and the
@@ -149,22 +173,90 @@ pub fn shares(provider: ProviderId, plans: &[Option<&str>]) -> Option<Vec<f64>> 
 
 /// The price of `model`: the user's own if they set one, else the list
 /// price.
-pub fn price(model: &str, custom: &BTreeMap<String, Custom>) -> Option<Price> {
-    // Claude Code may tag a model with its context window, e.g. `[1m]`.
-    let model = model.split('[').next().unwrap_or(model);
+pub fn price(model: &str, custom: &BTreeMap<String, Custom>) -> Option<Pricing> {
+    let model = untagged(model);
     if let Some((_, price)) = custom.iter().find(|(id, _)| is_model(model, id)) {
-        return Some((*price).into());
+        return Some(Pricing {
+            base: (*price).into(),
+            long: None,
+        });
     }
-    CLAUDE
+    let base = CLAUDE
         .iter()
         .chain(OPENAI)
         .find(|(id, ..)| is_model(model, id))
-        .map(|&(_, input, output, cache_read)| Price {
-            input,
-            output,
-            cache_read,
-            cache_write: input * 1.25,
-        })
+        .map(|&(_, input, output, cache_read)| listed(input, output, cache_read))?;
+    let long = LONG.iter().find(|(id, ..)| is_model(model, id)).map(
+        |&(_, over, input, output, cache_read)| Long {
+            over,
+            price: listed(input, output, cache_read),
+        },
+    );
+    Some(Pricing { base, long })
+}
+
+/// A list price, whose cache writes cost 1.25× input.
+fn listed(input: f64, output: f64, cache_read: f64) -> Price {
+    Price {
+        input,
+        output,
+        cache_read,
+        cache_write: input * 1.25,
+    }
+}
+
+/// Whether a request to `model` with a prompt of `prompt` tokens pays the
+/// list's prices for a long prompt. A price the user set is the same at any
+/// length, so [`Pricing::tier`] gives it either way.
+pub fn is_long(model: &str, prompt: u64) -> bool {
+    LONG.iter()
+        .any(|(id, over, ..)| prompt > *over && is_model(untagged(model), id))
+}
+
+/// `model` without the context window Claude Code may tag it with, as in
+/// `claude-opus-5-5[1m]`.
+fn untagged(model: &str) -> &str {
+    model.split('[').next().unwrap_or(model)
+}
+
+/// What a model costs: one set of prices, or two for a model priced by
+/// prompt length.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pricing {
+    /// What every prompt pays, or with `long`, every prompt up to its
+    /// length.
+    pub base: Price,
+    pub long: Option<Long>,
+}
+
+/// What a request pays on all of its tokens once its prompt is over
+/// `over` tokens.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Long {
+    pub over: u64,
+    pub price: Price,
+}
+
+impl Pricing {
+    /// The prices a request pays whose prompt, its input, cache reads and
+    /// cache writes together, is `prompt` tokens.
+    pub fn at(&self, prompt: u64) -> Price {
+        self.tier(self.long.is_some_and(|l| prompt > l.over))
+    }
+
+    /// The prices for a long prompt, or for a short one.
+    pub fn tier(&self, long: bool) -> Price {
+        match self.long {
+            Some(l) if long => l.price,
+            _ => self.base,
+        }
+    }
+
+    /// The cost in dollars of one request, at the prices for its prompt.
+    pub fn cost(&self, input: u64, output: u64, cache_read: u64, cache_write: u64) -> f64 {
+        self.at(input + cache_read + cache_write)
+            .cost(input, output, cache_read, cache_write)
+    }
 }
 
 /// Whether `model` is `id` or a dated snapshot of it, such as
@@ -194,7 +286,115 @@ mod tests {
     use super::*;
 
     fn list(model: &str) -> Option<Price> {
-        price(model, &BTreeMap::new())
+        price(model, &BTreeMap::new()).map(|p| p.base)
+    }
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-12
+    }
+
+    #[test]
+    fn haiku_5_5_costs_five_times_as_much_over_100k_prompt_tokens() {
+        let haiku = price("claude-haiku-5-5", &BTreeMap::new()).unwrap();
+        let long = haiku.long.unwrap();
+        assert_eq!(long.over, 100_000);
+        assert_eq!(
+            (
+                long.price.input,
+                long.price.output,
+                long.price.cache_read,
+                long.price.cache_write
+            ),
+            (0.50, 2.50, 0.05, 0.625)
+        );
+        // A prompt of 100,000 tokens is still a short one.
+        assert!(close(
+            haiku.cost(100_000, 1_000, 0, 0),
+            (100_000. * 0.10 + 1_000. * 0.50) / 1e6
+        ));
+        // One more is a long one, and every token pays the higher price.
+        assert!(close(
+            haiku.cost(100_001, 1_000, 0, 0),
+            (100_001. * 0.50 + 1_000. * 2.50) / 1e6
+        ));
+        // Cache reads and writes count toward the prompt.
+        assert!(close(
+            haiku.cost(1_000, 1_000, 90_000, 9_000),
+            (1_000. * 0.10 + 1_000. * 0.50 + 90_000. * 0.01 + 9_000. * 0.125) / 1e6
+        ));
+        assert!(close(
+            haiku.cost(1_000, 1_000, 90_000, 9_001),
+            (1_000. * 0.50 + 1_000. * 2.50 + 90_000. * 0.05 + 9_001. * 0.625) / 1e6
+        ));
+        // Output is not part of the prompt.
+        assert_eq!(haiku.at(100_000), haiku.base);
+        assert!(close(
+            haiku.cost(50_000, 200_000, 0, 0),
+            (50_000. * 0.10 + 200_000. * 0.50) / 1e6
+        ));
+        assert!(is_long("claude-haiku-5-5-20261101", 100_001));
+        assert!(!is_long("claude-haiku-5-5", 100_000));
+    }
+
+    #[test]
+    fn gpt_models_cost_more_over_272k_input_tokens() {
+        let sol = price("gpt-6-sol", &BTreeMap::new()).unwrap();
+        assert_eq!(sol.long.unwrap().over, 272_000);
+        assert!(close(
+            sol.cost(72_000, 4_000, 200_000, 0),
+            (72_000. * 2. + 4_000. * 10. + 200_000. * 0.20) / 1e6
+        ));
+        // Cached input counts toward the 272K.
+        assert!(close(
+            sol.cost(72_001, 4_000, 200_000, 0),
+            (72_001. * 4. + 4_000. * 15. + 200_000. * 0.40) / 1e6
+        ));
+        assert!(is_long("gpt-6-sol", 272_001));
+        assert!(!is_long("gpt-6-sol", 272_000));
+        // Every GPT model slopmax prices doubles its input price there.
+        for &(model, ..) in OPENAI {
+            let p = price(model, &BTreeMap::new()).unwrap();
+            let long = p
+                .long
+                .unwrap_or_else(|| panic!("{model} has no long price"));
+            assert_eq!(long.over, 272_000, "{model}");
+            assert!(close(long.price.input, p.base.input * 2.), "{model}");
+            assert!(
+                close(long.price.cache_write, long.price.input * 1.25),
+                "{model}"
+            );
+        }
+    }
+
+    #[test]
+    fn other_claude_models_cost_the_same_at_any_length() {
+        for &(model, ..) in CLAUDE.iter().filter(|(m, ..)| *m != "claude-haiku-5-5") {
+            let p = price(model, &BTreeMap::new()).unwrap();
+            assert_eq!(p.long, None, "{model}");
+            assert_eq!(p.at(900_000), p.base);
+            assert!(!is_long(model, 900_000), "{model}");
+        }
+        // Every long price is for a model with a short one.
+        for &(model, ..) in LONG {
+            assert!(list(model).is_some(), "{model}");
+        }
+    }
+
+    #[test]
+    fn a_price_the_user_sets_holds_at_any_length() {
+        let custom = BTreeMap::from([(
+            "claude-haiku-5-5".to_owned(),
+            Custom {
+                input: 1.0,
+                output: 2.0,
+                cache_read: None,
+                cache_write: None,
+            },
+        )]);
+        let mine = price("claude-haiku-5-5", &custom).unwrap();
+        assert_eq!(mine.long, None);
+        assert_eq!(mine.tier(true), mine.base);
+        assert!(close(mine.cost(500_000, 0, 0, 0), 0.5));
     }
 
     #[test]
@@ -310,9 +510,9 @@ mod tests {
                 },
             ),
         ]);
-        let gpt = price("gpt-6-sol", &custom).unwrap();
+        let gpt = price("gpt-6-sol", &custom).unwrap().base;
         assert_eq!((gpt.cache_read, gpt.cache_write), (0.2, 2.5));
-        let opus = price("claude-opus-5-5", &custom).unwrap();
+        let opus = price("claude-opus-5-5", &custom).unwrap().base;
         assert_eq!(
             (opus.input, opus.cache_read, opus.cache_write),
             (1.0, 0.5, 0.0)

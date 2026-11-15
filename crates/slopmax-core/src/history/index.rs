@@ -22,7 +22,7 @@ use super::{
     tokens,
 };
 use crate::ledger::Entry;
-use crate::pricing::{self, Price};
+use crate::pricing::{self, Price, Pricing};
 use crate::provider::ProviderId;
 use crate::summary::{self, Totals};
 use crate::time::Timestamp;
@@ -40,6 +40,9 @@ struct Cell {
     account: Arc<str>,
     model: Option<Arc<str>>,
     agent: Option<Arc<str>>,
+    /// Whether these requests' prompts were long enough for the model's
+    /// long-prompt prices, which each request pays on its own.
+    long: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -332,6 +335,10 @@ impl Index {
             account: self.name(&entry.account),
             model: entry.model.as_deref().map(|m| self.name(m)),
             agent: entry.agent.as_deref().map(|a| self.name(a)),
+            long: answered
+                && entry.model.as_deref().is_some_and(|m| {
+                    pricing::is_long(m, entry.input + entry.cache_read + entry.cache_write)
+                }),
         };
         let hour = hour_of(entry.at);
         // A late answer changes a day already rolled up.
@@ -437,12 +444,13 @@ impl Index {
             })
             .collect();
 
-        let mut priced: HashMap<Arc<str>, Option<Price>> = HashMap::new();
-        let mut price = |model: Option<&Arc<str>>| -> Option<Price> {
-            let model = model?;
-            *priced
+        let mut priced: HashMap<Arc<str>, Option<Pricing>> = HashMap::new();
+        let mut price = |cell: &Cell| -> Option<Price> {
+            let model = cell.model.as_ref()?;
+            let pricing = priced
                 .entry(model.clone())
-                .or_insert_with(|| pricing::price(model, prices.models))
+                .or_insert_with(|| pricing::price(model, prices.models));
+            pricing.map(|p| p.tier(cell.long))
         };
 
         struct Filling {
@@ -490,7 +498,7 @@ impl Index {
                 hist.merge_into(speeds.entry(model.clone()).or_default());
             }
             for (cell, sums) in &span.cells {
-                let price = price(cell.model.as_ref());
+                let price = price(cell);
                 let totals = sums.totals(price);
                 bucket.totals.merge(&totals);
                 total.merge(&totals);
