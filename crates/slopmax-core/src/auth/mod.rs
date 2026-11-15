@@ -542,8 +542,8 @@ mod tests {
         account
     }
 
-    fn store() -> Store {
-        Store::at(testkit::temp_dir("auth").join("accounts"))
+    fn store() -> testkit::InTemp<Store> {
+        testkit::store("auth")
     }
 
     /// Anthropic's token endpoint answering `status` and `token`, and its

@@ -165,7 +165,6 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[cfg(unix)]

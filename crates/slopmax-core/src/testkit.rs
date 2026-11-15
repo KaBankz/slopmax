@@ -3,7 +3,8 @@
 
 #![allow(dead_code)]
 
-use std::path::PathBuf;
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
@@ -15,11 +16,62 @@ use crate::ids;
 use crate::net::server::{self, Request, Response};
 use crate::net::{Client, Origins, body};
 
-/// A fresh, empty directory under the system's temp dir.
-pub fn temp_dir(name: &str) -> PathBuf {
+/// A fresh, empty directory under the system's temp dir, deleted with all
+/// it holds when the returned guard drops (a failing test's too: unwinding
+/// drops it). Keep the guard as long as the directory is used.
+pub fn temp_dir(name: &str) -> TempDir {
     let dir = std::env::temp_dir().join(format!("slopmax-{name}-{}", ids::token()));
     std::fs::create_dir_all(&dir).unwrap();
-    dir
+    TempDir(dir)
+}
+
+/// A directory from [`temp_dir`]; reads as its path.
+#[derive(Debug)]
+pub struct TempDir(PathBuf);
+
+impl Deref for TempDir {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for TempDir {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A value kept beside the temp directory it lives in, which goes when it
+/// does; reads as the value.
+#[derive(Debug)]
+pub struct InTemp<T> {
+    value: T,
+    _dir: TempDir,
+}
+
+impl<T> Deref for InTemp<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.value
+    }
+}
+
+/// An account store in a fresh temp directory.
+pub fn store(name: &str) -> InTemp<crate::account::Store> {
+    let dir = temp_dir(name);
+    InTemp {
+        value: crate::account::Store::at(dir.join("accounts")),
+        _dir: dir,
+    }
 }
 
 /// One request the mock received.
@@ -154,6 +206,10 @@ mod tests {
         assert_eq!(seen.len(), 1);
         assert_eq!(seen[0].path, "/v1/thing?x=1");
         assert_eq!(seen[0].method, Method::POST);
-        assert!(temp_dir("kit").is_dir());
+        let dir = temp_dir("kit");
+        assert!(dir.is_dir());
+        let path = dir.to_path_buf();
+        drop(dir);
+        assert!(!path.exists());
     }
 }

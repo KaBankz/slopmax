@@ -755,7 +755,8 @@ mod tests {
 
     #[test]
     fn an_agent_not_installed_is_installed_first() {
-        let home = Home::at(temp_dir("doctor-install"));
+        let dir = temp_dir("doctor-install");
+        let home = Home::at(dir.to_path_buf());
         let config = config_on(8318);
         let section = |title: &'static str, setup: &str| Section {
             title,
@@ -1167,7 +1168,6 @@ mod tests {
         let (level, text) = with(None);
         assert_eq!(level, Level::Note);
         assert!(text.starts_with("not wired in config.toml"));
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

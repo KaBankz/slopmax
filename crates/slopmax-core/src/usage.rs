@@ -75,8 +75,8 @@ mod tests {
         account
     }
 
-    fn store() -> Store {
-        Store::at(testkit::temp_dir("usage").join("accounts"))
+    fn store() -> testkit::InTemp<Store> {
+        testkit::store("usage")
     }
 
     /// Usage answers for `accepted` only (500 for `down`), and the token

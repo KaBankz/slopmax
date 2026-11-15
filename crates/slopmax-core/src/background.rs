@@ -396,7 +396,8 @@ mod tests {
         );
         assert!(mock.seen_at("/slopmax/api/shutdown").is_empty());
         // Starting would only fail to listen: it says the same.
-        let home = Home::at(temp_dir("foreign"));
+        let dir = temp_dir("foreign");
+        let home = Home::at(dir.to_path_buf());
         let exe = Path::new("/nonexistent/slopmax");
         let started = ensure_running(&other, &home, exe).await.unwrap_err();
         assert!(started.to_string().contains("pid 4242"), "{started}");
@@ -404,7 +405,8 @@ mod tests {
 
     #[test]
     fn a_proxy_that_does_not_start_shows_what_it_logged() {
-        let home = Home::at(temp_dir("not-started"));
+        let dir = temp_dir("not-started");
+        let home = Home::at(dir.to_path_buf());
         std::fs::create_dir_all(home.dir()).unwrap();
         std::fs::write(home.log(), "an old line from yesterday\n").unwrap();
         let logged = std::fs::metadata(home.log()).unwrap().len();

@@ -376,7 +376,7 @@ mod tests {
             Some("echo sm-test")
         );
         assert!(text.contains(r#"deployment_key = "d""#));
-        let home = Home::sandbox(&dir);
+        let home = Home::sandbox(dir.to_path_buf());
         fs::create_dir_all(home.grok()).unwrap();
         fs::copy(&file, home.grok().join("config.toml")).unwrap();
         assert_eq!(
@@ -396,7 +396,6 @@ mod tests {
         assert!(text.contains(r#"model = "grok-4.7""#));
         assert!(text.contains(r#"deployment_key = "d""#));
         assert!(!GrokBuild.has_login(&home));
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -424,7 +423,6 @@ mod tests {
         fs::write(&auth, "not json").unwrap();
         GrokBuild.setup(&config(), &file, &mut None).unwrap();
         assert_eq!(fs::read_to_string(&auth).unwrap(), "not json");
-        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -447,6 +445,5 @@ mod tests {
         let text = fs::read_to_string(&file).unwrap();
         assert!(text.contains(r#"auth_provider_command = "mine""#));
         assert!(text.contains(r#"cli_chat_proxy_base_url = "https://p""#));
-        fs::remove_dir_all(dir).unwrap();
     }
 }
