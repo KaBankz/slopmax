@@ -18,8 +18,10 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use serde_json::{Map, Value};
+use slopmax_api::tailnet::TailnetView;
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 
+use crate::config::Config;
 pub use crate::provider::BoxFuture;
 
 /// How long reads of Tailscale's state may take.
@@ -962,6 +964,86 @@ pub async fn inspect(ts: Option<&Tailscale>, targets: &[Target], port_hint: u16)
         inspection.serve = Some(serve);
     }
     inspection
+}
+
+impl Inspection {
+    /// slopmax on the tailnet as the API shows it, before the config's say
+    /// on who may use it ([`with_config`] adds that). The daemon's
+    /// `GET /tailnet` and `slopmax tailscale status --json` both answer
+    /// with this, so the two never disagree.
+    pub fn view(&self) -> TailnetView {
+        use slopmax_api::tailnet::{Problem, TailscaleState as State};
+        let state = match &self.node {
+            Ok(node) => match node.backend_state {
+                BackendState::Running => State::Running,
+                BackendState::NeedsLogin => State::SignedOut,
+                BackendState::Stopped => State::Off,
+                BackendState::NeedsMachineAuth => State::NeedsApproval,
+                BackendState::NoState => State::Down,
+                BackendState::Starting | BackendState::Other(_) => State::Unknown,
+            },
+            Err(TsError::Missing) => State::Missing,
+            Err(TsError::DaemonDown) => State::Down,
+            Err(TsError::LoggedOut) => State::SignedOut,
+            Err(TsError::Off) => State::Off,
+            Err(TsError::NeedsApproval) => State::NeedsApproval,
+            Err(_) => State::Unknown,
+        };
+        let published = self.published.first();
+        let funnel = self.published.iter().find(|p| p.funnel);
+        let problem = match &self.node {
+            Err(e) => Some(e.clone()),
+            Ok(node) => state_error(node)
+                .or_else(|| {
+                    let https_off =
+                        node.backend_state == BackendState::Running && node.cert_domains.is_empty();
+                    https_off.then_some(TsError::NoHttps)
+                })
+                .or_else(|| funnel.map(|p| TsError::Funnel { port: p.port })),
+        };
+        TailnetView {
+            tailscale: state,
+            url: published.map(|p| p.url.clone()),
+            transport: published.map(|p| match p.transport {
+                Transport::Socket => slopmax_api::tailnet::Transport::Socket,
+                Transport::Loopback => slopmax_api::tailnet::Transport::Loopback,
+            }),
+            identity: false,
+            host: self
+                .node
+                .as_ref()
+                .ok()
+                .map(|node| node.name.clone())
+                .filter(|name| !name.is_empty()),
+            users: Vec::new(),
+            admins: Vec::new(),
+            funnel: funnel.is_some(),
+            problem: problem.map(|e| Problem {
+                text: e.message(),
+                fix: e.fix(),
+            }),
+        }
+    }
+}
+
+/// `view` with who may use slopmax as `config` says. Logins are taken
+/// without a key when tailscaled reaches slopmax through its socket, which
+/// names them, and some login is listed.
+pub fn with_config(mut view: TailnetView, config: &Config) -> TailnetView {
+    let tailnet = config.tailscale.clone().unwrap_or_default();
+    view.identity = cfg!(unix)
+        && view.transport == Some(slopmax_api::tailnet::Transport::Socket)
+        && !tailnet.users.is_empty();
+    view.users = tailnet.users;
+    view.admins = tailnet
+        .admins
+        .into_iter()
+        .map(|admin| slopmax_api::tailnet::AdminMachine {
+            machine: admin.machine,
+            id: admin.id,
+        })
+        .collect();
+    view
 }
 
 /// Why slopmax couldn't do something with Tailscale.
@@ -2152,5 +2234,107 @@ mod tests {
         }
         assert!(!alive(), "pid {pid} still runs");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// What `inspect` would find with these answers from Tailscale, for
+    /// slopmax at the socket of `/home/me/.slopmax` or port 7567.
+    fn inspected(status: &str, serve: &str) -> Inspection {
+        let targets = [
+            Target::Socket("/home/me/.slopmax/tailnet.sock".into()),
+            Target::Loopback(7567),
+        ];
+        let node = parse_status(status).map(|(node, _)| node);
+        let serve = parse_serve(serve).unwrap();
+        Inspection {
+            exe: Some("/usr/bin/tailscale".into()),
+            published: match &node {
+                Ok(node) => published(&serve, node, &targets),
+                Err(_) => Vec::new(),
+            },
+            stale: stale(&serve, 7567, &targets),
+            serve: Some(serve),
+            node,
+            operator: None,
+        }
+    }
+
+    #[test]
+    fn the_tailnet_view_reads_tailscale_and_the_config() {
+        use slopmax_api::tailnet::{TailscaleState, Transport};
+        let missing = Inspection {
+            exe: None,
+            node: Err(TsError::Missing),
+            serve: None,
+            published: Vec::new(),
+            stale: Vec::new(),
+            operator: None,
+        }
+        .view();
+        assert_eq!(missing.tailscale, TailscaleState::Missing);
+        assert_eq!(
+            (missing.url, missing.transport, missing.host),
+            (None, None, None)
+        );
+        let problem = missing.problem.unwrap();
+        assert_eq!(problem.text, "Tailscale isn't installed here");
+        assert!(problem.fix.unwrap().contains("tailscale.com/download"));
+
+        let ours = inspected(
+            fixture!("status-running.json"),
+            fixture!("serve-ours-socket.json"),
+        )
+        .view();
+        assert_eq!(ours.tailscale, TailscaleState::Running);
+        assert_eq!(ours.url.as_deref(), Some("https://hub.example.ts.net:7567"));
+        assert_eq!(ours.transport, Some(Transport::Socket));
+        assert_eq!(ours.host.as_deref(), Some("hub"));
+        assert!(!ours.funnel && ours.problem.is_none());
+        // Identity needs a login to take, as well as the socket.
+        assert!(!with_config(ours.clone(), &crate::config::Config::default()).identity);
+        let config = crate::config::Config {
+            tailscale: Some(crate::config::Tailnet {
+                users: vec!["me@github".into()],
+                admins: vec![crate::config::AdminMachine {
+                    machine: "mac".into(),
+                    id: "nMAC".into(),
+                }],
+            }),
+            ..Config::default()
+        };
+        let told = with_config(ours, &config);
+        assert_eq!(told.identity, cfg!(unix));
+        assert_eq!(told.users, ["me@github"]);
+        assert_eq!(told.admins[0].id, "nMAC");
+
+        let funnel = inspected(
+            fixture!("status-running.json"),
+            fixture!("serve-funnel.json"),
+        )
+        .view();
+        assert!(funnel.funnel);
+        assert_eq!(funnel.transport, Some(Transport::Loopback));
+        assert_eq!(funnel.url.as_deref(), Some("https://hub.example.ts.net"));
+        assert!(!with_config(funnel.clone(), &config).identity);
+        let problem = funnel.problem.unwrap();
+        assert!(problem.text.contains("Funnel"), "{}", problem.text);
+        assert_eq!(
+            problem.fix.as_deref(),
+            Some("tailscale funnel --https=443 off")
+        );
+
+        let signed_out = inspected(
+            fixture!("status-needslogin.json"),
+            fixture!("serve-empty.json"),
+        )
+        .view();
+        assert_eq!(signed_out.tailscale, TailscaleState::SignedOut);
+        assert!(signed_out.problem.is_some() && signed_out.url.is_none());
+
+        let no_certs = inspected(
+            fixture!("status-nocerts.json"),
+            fixture!("serve-empty.json"),
+        )
+        .view();
+        assert_eq!(no_certs.problem.unwrap().text, TsError::NoHttps.message());
     }
 }

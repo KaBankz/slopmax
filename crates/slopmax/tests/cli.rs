@@ -2940,10 +2940,18 @@ fn a_machine_uses_another_as_its_hub() {
     let env = client.run(&["env", "claude"]).ok().stdout;
     assert!(env.contains(&at), "{env}");
 
+    assert!(
+        out.stdout.contains("It knows this machine as laptop: use."),
+        "{out:?}"
+    );
     // A client key may use the hub, not see its accounts: the hub says so.
-    let out = client.run(&["status"]);
-    assert_eq!(out.code, 1, "{out:?}");
-    assert!(out.stderr.contains("hub"), "{out:?}");
+    client.run(&["status"]).fails(
+        1,
+        &format!(
+            "the hub at {at} takes this machine's key for its agents only, not for \
+             `slopmax status`; run it on the hub"
+        ),
+    );
 
     // Nothing runs a proxy here.
     let refusal = format!("This machine uses the hub at {at} and runs no proxy of its own.");

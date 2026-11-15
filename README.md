@@ -411,7 +411,7 @@ What crosses: text, images, documents, tool definitions and calls, tool results,
 | `slopmax run <agent> [args…]`        | Launch Claude Code, Codex, or Grok Build through the proxy                    |
 | `slopmax env <agent>`                | Print shell setup for `eval`                                                  |
 | `slopmax setup <agent> [--undo]`     | Point one agent's own config at the proxy, or restore it                      |
-| `slopmax setup --hub <machine\|url\|off>` | Use a hub's accounts from this machine, or go back to its own (`--key`, `--name`, `--yes`) |
+| `slopmax setup --hub <machine\|url\|off>` | Use a hub's accounts from this machine, or go back to its own (`--find-hub` looks for one; `--key`, `--name`, `--yes`) |
 | `slopmax config [name] [value]`      | Show the routing and redeem settings, or change one while the proxy runs      |
 | `slopmax usage [range]`              | Token totals and API-equivalent cost (`--by day\|model\|account\|machine`, `--json`) |
 | `slopmax dashboard`                  | Open the dashboard in a browser (`--print` shows its address)                 |

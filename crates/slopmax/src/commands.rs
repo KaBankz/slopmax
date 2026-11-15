@@ -928,6 +928,15 @@ fn from_hub(e: anyhow::Error, url: &str, command: &str) -> anyhow::Error {
     };
     let url = url.trim_end_matches('/');
     match error {
+        // The daemon's 403 to a client key, which reaches its proxy only.
+        slopmax_client::Error::Api(ApiError::Unauthorized { message })
+            if message.contains("reaches the proxy only") =>
+        {
+            anyhow::anyhow!(
+                "the hub at {url} takes this machine's key for its agents only, not for \
+                 `slopmax {command}`; run it on the hub"
+            )
+        }
         slopmax_client::Error::Api(ApiError::Unauthorized { message })
             if !message.contains("hub") =>
         {

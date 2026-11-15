@@ -82,7 +82,8 @@ slopmax/src/
 slopmax-core/src/
   config.rs     ~/.slopmax/config.toml, with a commented template; [tailscale] and [hub]
   tailscale.rs  the `tailscale` CLI: finding it, running it with a timeout, reading its
-                status, serve config and whois as JSON, publishing and unpublishing
+                status, serve config and whois as JSON, publishing and unpublishing, and
+                the tailnet view the API and `tailscale status --json` both show
   account.rs    Account (OAuth tokens or a key, optional Endpoint and Link), the file Store, pins
   auth/         sign-in events, browser and device logins, PKCE, the callback server, refresh under a file lock
   import.rs     logins from Claude Code, Codex, and CLIProxyAPI (linked or copied)

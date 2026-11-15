@@ -10,13 +10,13 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
 use slopmax_client::api::ApiError;
-use slopmax_client::api::tailnet::{self as api, Problem, TailnetPatch, TailnetView};
+use slopmax_client::api::tailnet::{self as api, TailnetPatch};
 
 use super::home;
 use crate::ui;
 use slopmax_core::config::{AdminMachine, Config, TAILNET_TOKEN, Tailnet};
 use slopmax_core::tailscale::{
-    self, BackendState, Inspection, Node, Peer, Port, Tailscale, Target, Transport, TsError,
+    self, BackendState, Node, Peer, Port, Tailscale, Target, Transport, TsError,
 };
 
 /// What `slopmax tailscale` was given.
@@ -393,7 +393,7 @@ async fn status(config: &Config, json: bool) -> Result<()> {
             Ok(Some(client)) => client.tailnet().await.ok(),
             _ => None,
         };
-        let view = from_daemon.unwrap_or_else(|| view(config, &inspection));
+        let view = from_daemon.unwrap_or_else(|| tailscale::with_config(inspection.view(), config));
         println!("{}", serde_json::to_string_pretty(&view)?);
         return Ok(());
     }
@@ -496,75 +496,6 @@ async fn status(config: &Config, json: bool) -> Result<()> {
         },
     );
     Ok(())
-}
-
-/// slopmax on the tailnet as the API shows it, from what this machine
-/// read: the daemon maps its own reading the same way.
-pub fn view(config: &Config, inspection: &Inspection) -> TailnetView {
-    let problem = |e: &TsError| Problem {
-        text: e.message(),
-        fix: e.fix(),
-    };
-    let first = inspection.published.first();
-    let (tailscale, mut problem, host) = match &inspection.node {
-        Err(e) => (state_of(e), Some(problem(e)), None),
-        Ok(node) => match tailscale::state_error(node) {
-            Some(e) => (state_of(&e), Some(problem(&e)), Some(node.name.clone())),
-            None if node.backend_state == BackendState::Running => {
-                let https = node
-                    .cert_domains
-                    .is_empty()
-                    .then(|| problem(&TsError::NoHttps));
-                (api::TailscaleState::Running, https, Some(node.name.clone()))
-            }
-            None => (api::TailscaleState::Unknown, None, Some(node.name.clone())),
-        },
-    };
-    let funnel = inspection.published.iter().any(|p| p.funnel);
-    if problem.is_none()
-        && let Some(open) = inspection.published.iter().find(|p| p.funnel)
-    {
-        problem = Some(Problem {
-            text: TsError::Funnel { port: open.port }.message(),
-            fix: TsError::Funnel { port: open.port }.fix(),
-        });
-    }
-    let transport = first.map(|p| match p.transport {
-        Transport::Socket => api::Transport::Socket,
-        Transport::Loopback => api::Transport::Loopback,
-    });
-    let users = config.tailnet_users().to_vec();
-    TailnetView {
-        tailscale,
-        url: first.map(|p| p.url.clone()),
-        transport,
-        identity: cfg!(unix) && transport == Some(api::Transport::Socket) && !users.is_empty(),
-        host: host.filter(|h| !h.is_empty()),
-        users,
-        admins: config
-            .tailscale
-            .iter()
-            .flat_map(|t| &t.admins)
-            .map(|a| api::AdminMachine {
-                machine: a.machine.clone(),
-                id: a.id.clone(),
-            })
-            .collect(),
-        funnel,
-        problem,
-    }
-}
-
-/// Tailscale's state, as an error from reading it says.
-fn state_of(e: &TsError) -> api::TailscaleState {
-    match e {
-        TsError::Missing => api::TailscaleState::Missing,
-        TsError::DaemonDown => api::TailscaleState::Down,
-        TsError::LoggedOut => api::TailscaleState::SignedOut,
-        TsError::Off => api::TailscaleState::Off,
-        TsError::NeedsApproval => api::TailscaleState::NeedsApproval,
-        _ => api::TailscaleState::Unknown,
-    }
 }
 
 /// Checks that `login` reads as a tailnet login.
@@ -887,38 +818,5 @@ mod tests {
         add_admin(&mut admins, mac("mac"));
         add_admin(&mut admins, mac("macbook"));
         assert_eq!(admins, [mac("macbook")]);
-    }
-
-    #[test]
-    fn the_view_maps_what_was_read() {
-        let config = Config {
-            tailscale: Some(Tailnet {
-                users: vec!["me@github".into()],
-                admins: Vec::new(),
-            }),
-            ..Config::default()
-        };
-        let missing = Inspection {
-            exe: None,
-            node: Err(TsError::Missing),
-            serve: None,
-            published: Vec::new(),
-            stale: Vec::new(),
-            operator: None,
-        };
-        let view = view(&config, &missing);
-        assert_eq!(view.tailscale, api::TailscaleState::Missing);
-        assert!(!view.identity && view.url.is_none());
-        assert_eq!(view.problem.unwrap().text, "Tailscale isn't installed here");
-        assert_eq!(view.users, ["me@github"]);
-
-        let down = Inspection {
-            node: Err(TsError::DaemonDown),
-            ..missing.clone()
-        };
-        assert_eq!(
-            super::view(&config, &down).tailscale,
-            api::TailscaleState::Down
-        );
     }
 }

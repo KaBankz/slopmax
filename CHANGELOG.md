@@ -19,6 +19,8 @@ Your other machines can now use one machine's accounts over your Tailscale tailn
 
 - Tailscale and forwarding headers (`Tailscale-*`, `X-Forwarded-*`, `Forwarded`) are no longer sent on to providers.
 - The dashboard and `/slopmax/api` need view or admin access per endpoint: the owner key has both, a machine's tailnet identity may have either, and client keys have neither, as before.
+- A client key sent to `/slopmax/api` now gets 403 instead of 401: slopmax knows the key, and it reaches the proxy only.
+- Requests that come through Tailscale Funnel are refused with 403, even with a key.
 - An older slopmax can't read a config.toml with `[tailscale]` or `[hub]`. Remove those tables before going back to one.
 
 
