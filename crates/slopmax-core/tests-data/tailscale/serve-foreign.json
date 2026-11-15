@@ -1,0 +1,29 @@
+{
+  "TCP": {
+    "443": {
+      "HTTPS": true
+    },
+    "7567": {
+      "HTTPS": true
+    }
+  },
+  "Web": {
+    "hub.example.ts.net:443": {
+      "Handlers": {
+        "/": {
+          "Path": "/srv/www"
+        },
+        "/hello": {
+          "Text": "hello"
+        }
+      }
+    },
+    "hub.example.ts.net:7567": {
+      "Handlers": {
+        "/": {
+          "Proxy": "http://127.0.0.1:3000"
+        }
+      }
+    }
+  }
+}

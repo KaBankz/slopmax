@@ -1,0 +1,194 @@
+{
+  "Version": "1.104.5-t788384763-gd9218e278",
+  "TUN": true,
+  "BackendState": "Running",
+  "HaveNodeKey": true,
+  "AuthURL": "",
+  "TailscaleIPs": [
+    "100.64.0.1",
+    "fd7a:115c:a1e0::1"
+  ],
+  "Self": {
+    "ID": "nSELF1CNTRL",
+    "NodeID": 1000000000000001,
+    "PublicKey": "nodekey:0000000000000000000000000000000000000000000000000000000000000001",
+    "HostName": "hub",
+    "DNSName": "hub.example.ts.net.",
+    "OS": "linux",
+    "UserID": 1000000000000000,
+    "TailscaleIPs": [
+      "100.64.0.1",
+      "fd7a:115c:a1e0::1"
+    ],
+    "AllowedIPs": [
+      "100.64.0.1/32",
+      "fd7a:115c:a1e0::1/128"
+    ],
+    "Addrs": [
+      "192.0.2.10:41641"
+    ],
+    "CurAddr": "",
+    "Relay": "iad",
+    "PeerRelay": "",
+    "RxBytes": 0,
+    "TxBytes": 0,
+    "Created": "2026-10-31T14:13:28.958717708Z",
+    "LastWrite": "0001-01-01T00:00:00Z",
+    "LastSeen": "0001-01-01T00:00:00Z",
+    "LastHandshake": "0001-01-01T00:00:00Z",
+    "Online": true,
+    "ExitNode": false,
+    "ExitNodeOption": false,
+    "Active": false,
+    "PeerAPIURL": [
+      "http://100.64.0.1:38229",
+      "http://[fd7a:115c:a1e0::1]:64957"
+    ],
+    "TaildropTarget": 0,
+    "NoFileSharingReason": "",
+    "Capabilities": [
+      "funnel",
+      "https",
+      "https://tailscale.com/cap/file-sharing",
+      "https://tailscale.com/cap/funnel-ports?ports=443,8443,10000",
+      "https://tailscale.com/cap/is-admin",
+      "https://tailscale.com/cap/is-owner"
+    ],
+    "CapMap": {
+      "funnel": null,
+      "https": null
+    },
+    "InNetworkMap": true,
+    "InMagicSock": false,
+    "InEngine": false
+  },
+  "Health": [],
+  "MagicDNSSuffix": "example.ts.net",
+  "CurrentTailnet": {
+    "Name": "me.github",
+    "StableID": "TEXAMPLE1CNTRL",
+    "MagicDNSSuffix": "example.ts.net",
+    "MagicDNSEnabled": true
+  },
+  "CertDomains": [
+    "hub.example.ts.net"
+  ],
+  "Peer": {
+    "nodekey:0000000000000000000000000000000000000000000000000000000000000002": {
+      "ID": "nMAC1CNTRL",
+      "NodeID": 1000000000000002,
+      "PublicKey": "nodekey:0000000000000000000000000000000000000000000000000000000000000002",
+      "HostName": "Me’s MacBook Pro",
+      "DNSName": "me-macbook-pro.example.ts.net.",
+      "OS": "macOS",
+      "UserID": 1000000000000000,
+      "TailscaleIPs": [
+        "100.64.0.2",
+        "fd7a:115c:a1e0::2"
+      ],
+      "AllowedIPs": [
+        "100.64.0.2/32",
+        "fd7a:115c:a1e0::2/128"
+      ],
+      "Addrs": null,
+      "CurAddr": "198.51.100.7:41641",
+      "Relay": "nyc",
+      "PeerRelay": "",
+      "RxBytes": 5120892,
+      "TxBytes": 13349548,
+      "Created": "2025-10-07T14:11:08.780190454Z",
+      "LastWrite": "2026-11-15T17:55:11.217218798Z",
+      "LastSeen": "2026-11-15T14:50:00.1Z",
+      "LastHandshake": "2026-11-15T17:54:28.937808356Z",
+      "Online": true,
+      "ExitNode": false,
+      "ExitNodeOption": false,
+      "Active": true,
+      "PeerAPIURL": [
+        "http://100.64.0.2:51452"
+      ],
+      "TaildropTarget": 1,
+      "NoFileSharingReason": "",
+      "InNetworkMap": true,
+      "InMagicSock": true,
+      "InEngine": true,
+      "KeyExpiry": "2027-04-03T14:19:39Z"
+    },
+    "nodekey:0000000000000000000000000000000000000000000000000000000000000003": {
+      "ID": "nCI1CNTRL",
+      "NodeID": 1000000000000003,
+      "PublicKey": "nodekey:0000000000000000000000000000000000000000000000000000000000000003",
+      "HostName": "ci-runner",
+      "DNSName": "ci-runner.example.ts.net.",
+      "OS": "linux",
+      "UserID": 1000000000000099,
+      "TailscaleIPs": [
+        "100.64.0.3",
+        "fd7a:115c:a1e0::3"
+      ],
+      "Tags": [
+        "tag:ci"
+      ],
+      "Online": true,
+      "Active": false,
+      "KeyExpiry": "0001-01-01T00:00:00Z"
+    },
+    "nodekey:0000000000000000000000000000000000000000000000000000000000000004": {
+      "ID": "nOLD1CNTRL",
+      "NodeID": 1000000000000004,
+      "PublicKey": "nodekey:0000000000000000000000000000000000000000000000000000000000000004",
+      "HostName": "old-laptop",
+      "DNSName": "old-laptop.example.ts.net.",
+      "OS": "windows",
+      "UserID": 1000000000000000,
+      "TailscaleIPs": [
+        "100.64.0.4"
+      ],
+      "Online": false,
+      "Active": false,
+      "LastSeen": "2026-09-01T10:00:00Z"
+    },
+    "nodekey:0000000000000000000000000000000000000000000000000000000000000005": {
+      "ID": "nDEV1CNTRL",
+      "NodeID": 1000000000000005,
+      "PublicKey": "nodekey:0000000000000000000000000000000000000000000000000000000000000005",
+      "HostName": "Dev Box",
+      "DNSName": "dev-box.example.ts.net.",
+      "OS": "linux",
+      "UserID": 1000000000000000,
+      "TailscaleIPs": [
+        "100.64.0.5"
+      ],
+      "Online": true
+    },
+    "nodekey:0000000000000000000000000000000000000000000000000000000000000006": {
+      "ID": "nDEV2CNTRL",
+      "NodeID": 1000000000000006,
+      "PublicKey": "nodekey:0000000000000000000000000000000000000000000000000000000000000006",
+      "HostName": "dev box",
+      "DNSName": "dev-box-1.example.ts.net.",
+      "OS": "linux",
+      "UserID": 1000000000000000,
+      "TailscaleIPs": [
+        "100.64.0.6"
+      ],
+      "Online": true
+    }
+  },
+  "ExtraRecords": null,
+  "User": {
+    "1000000000000000": {
+      "ID": 1000000000000000,
+      "LoginName": "me@github",
+      "DisplayName": "Me",
+      "ProfilePicURL": "https://example.com/avatar.png"
+    },
+    "1000000000000099": {
+      "ID": 1000000000000099,
+      "LoginName": "tagged-devices",
+      "DisplayName": "Tagged Devices",
+      "ProfilePicURL": ""
+    }
+  },
+  "ClientVersion": null
+}

@@ -1,0 +1,46 @@
+{
+  "Node": {
+    "ID": 1000000000000002,
+    "StableID": "nMAC1CNTRL",
+    "Name": "me-macbook-pro.example.ts.net.",
+    "User": 1000000000000000,
+    "Key": "nodekey:0000000000000000000000000000000000000000000000000000000000000002",
+    "KeyExpiry": "2027-04-03T14:19:39Z",
+    "DiscoKey": "discokey:0000000000000000000000000000000000000000000000000000000000000002",
+    "Addresses": [
+      "100.64.0.2/32",
+      "fd7a:115c:a1e0::2/128"
+    ],
+    "AllowedIPs": [
+      "100.64.0.2/32",
+      "fd7a:115c:a1e0::2/128"
+    ],
+    "Endpoints": [
+      "198.51.100.7:41641"
+    ],
+    "HomeDERP": 1,
+    "Hostinfo": {
+      "OS": "macOS",
+      "Hostname": "Me’s MacBook Pro",
+      "Services": [
+        {
+          "Proto": "peerapi4",
+          "Port": 51452
+        }
+      ]
+    },
+    "Created": "2025-10-07T14:11:08.780190454Z",
+    "Cap": 148,
+    "LastSeen": "2026-11-15T14:50:00.1Z",
+    "Online": true,
+    "ComputedName": "me-macbook-pro",
+    "ComputedNameWithHost": "me-macbook-pro"
+  },
+  "UserProfile": {
+    "ID": 1000000000000000,
+    "LoginName": "me@github",
+    "DisplayName": "Me",
+    "ProfilePicURL": "https://example.com/avatar.png"
+  },
+  "CapMap": null
+}

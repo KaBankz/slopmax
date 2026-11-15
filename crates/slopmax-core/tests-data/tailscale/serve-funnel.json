@@ -1,0 +1,19 @@
+{
+  "TCP": {
+    "443": {
+      "HTTPS": true
+    }
+  },
+  "Web": {
+    "hub.example.ts.net:443": {
+      "Handlers": {
+        "/": {
+          "Proxy": "http://localhost:7567"
+        }
+      }
+    }
+  },
+  "AllowFunnel": {
+    "hub.example.ts.net:443": true
+  }
+}

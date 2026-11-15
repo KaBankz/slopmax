@@ -1,0 +1,96 @@
+{
+  "Version": "1.104.5-t788384763-gd9218e278",
+  "TUN": true,
+  "BackendState": "Running",
+  "HaveNodeKey": true,
+  "AuthURL": "",
+  "TailscaleIPs": [
+    "100.64.0.1",
+    "fd7a:115c:a1e0::1"
+  ],
+  "Self": {
+    "ID": "nSELF1CNTRL",
+    "NodeID": 1000000000000001,
+    "PublicKey": "nodekey:0000000000000000000000000000000000000000000000000000000000000001",
+    "HostName": "hub",
+    "DNSName": "hub.example.ts.net.",
+    "OS": "linux",
+    "UserID": 1000000000000099,
+    "TailscaleIPs": [
+      "100.64.0.1",
+      "fd7a:115c:a1e0::1"
+    ],
+    "AllowedIPs": [
+      "100.64.0.1/32",
+      "fd7a:115c:a1e0::1/128"
+    ],
+    "Addrs": [
+      "192.0.2.10:41641"
+    ],
+    "CurAddr": "",
+    "Relay": "iad",
+    "PeerRelay": "",
+    "RxBytes": 0,
+    "TxBytes": 0,
+    "Created": "2026-10-31T14:13:28.958717708Z",
+    "LastWrite": "0001-01-01T00:00:00Z",
+    "LastSeen": "0001-01-01T00:00:00Z",
+    "LastHandshake": "0001-01-01T00:00:00Z",
+    "Online": true,
+    "ExitNode": false,
+    "ExitNodeOption": false,
+    "Active": false,
+    "PeerAPIURL": [
+      "http://100.64.0.1:38229",
+      "http://[fd7a:115c:a1e0::1]:64957"
+    ],
+    "TaildropTarget": 0,
+    "NoFileSharingReason": "",
+    "Capabilities": [
+      "funnel",
+      "https",
+      "https://tailscale.com/cap/file-sharing",
+      "https://tailscale.com/cap/funnel-ports?ports=443,8443,10000",
+      "https://tailscale.com/cap/is-admin",
+      "https://tailscale.com/cap/is-owner"
+    ],
+    "CapMap": {
+      "funnel": null,
+      "https": null
+    },
+    "InNetworkMap": true,
+    "InMagicSock": false,
+    "InEngine": false,
+    "Tags": [
+      "tag:server"
+    ]
+  },
+  "Health": [],
+  "MagicDNSSuffix": "example.ts.net",
+  "CurrentTailnet": {
+    "Name": "me.github",
+    "StableID": "TEXAMPLE1CNTRL",
+    "MagicDNSSuffix": "example.ts.net",
+    "MagicDNSEnabled": true
+  },
+  "CertDomains": [
+    "hub.example.ts.net"
+  ],
+  "Peer": null,
+  "ExtraRecords": null,
+  "User": {
+    "1000000000000000": {
+      "ID": 1000000000000000,
+      "LoginName": "me@github",
+      "DisplayName": "Me",
+      "ProfilePicURL": "https://example.com/avatar.png"
+    },
+    "1000000000000099": {
+      "ID": 1000000000000099,
+      "LoginName": "tagged-devices",
+      "DisplayName": "Tagged Devices",
+      "ProfilePicURL": ""
+    }
+  },
+  "ClientVersion": null
+}
