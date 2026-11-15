@@ -4,6 +4,10 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-15
+
+Claude requests count their tokens again, and moving the Linux login service to a new version no longer leaves the proxy stopped.
+
 ### Fixed
 
 - Claude requests count their tokens again. Anthropic now sends Claude Code's answers gzip-compressed, and slopmax passed compressed answers through unread, so every Claude request showed 0 tokens in `slopmax status`, the dashboard's costs and value figures, and the history. slopmax now reads a decompressed copy of gzip and deflate answers. What Claude Code receives is unchanged.
