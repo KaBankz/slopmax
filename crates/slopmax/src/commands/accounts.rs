@@ -15,7 +15,7 @@ use super::daemon;
 use crate::term;
 use crate::ui;
 use slopmax_core::account::{self, Store};
-use slopmax_core::auth::{self, LoginOptions};
+use slopmax_core::auth::{self, LoginOptions, callback};
 use slopmax_core::config::Config;
 use slopmax_core::import::{self, Source};
 use slopmax_core::net::Origins;
@@ -38,6 +38,12 @@ pub(super) async fn login(
             "--device works for ChatGPT accounts; {} signs in with a browser",
             spec.title
         );
+    }
+    if spec.is_subscription() && !callback::has_browser() {
+        // Decided here rather than by the proxy, which may run where a
+        // browser would open on a screen nobody at this terminal sees.
+        options.no_browser = true;
+        options.device |= spec.device_login();
     }
     if let Credential::Key { optional } = spec.credential {
         let prompt = if optional {

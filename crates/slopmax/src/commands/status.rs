@@ -11,7 +11,7 @@ use anyhow::Result;
 
 use super::StatusArgs;
 use crate::ui;
-use slopmax_client::api::report::{AccountView, PoolView, Report, Window};
+use slopmax_client::api::report::{AccountView, Condition, PoolView, Report, Window};
 use slopmax_client::api::{Provider, Span};
 use slopmax_core::account::Store;
 use slopmax_core::config::Config;
@@ -189,6 +189,28 @@ fn render(report: &Report, now: Timestamp) -> String {
             }
         ))
     );
+    // Only the proxy keeps usage current, so with it stopped an account
+    // never read stays blank.
+    let unknown = report
+        .accounts
+        .iter()
+        .filter(|a| {
+            a.provider.is_subscription()
+                && !a.disabled
+                && a.windows.is_empty()
+                && !matches!(a.condition, Condition::SignInNeeded { .. })
+        })
+        .count();
+    if !report.live && unknown > 0 {
+        let _ = writeln!(
+            out,
+            "{}",
+            ui::dim(format!(
+                "no usage known yet for {unknown} account{}: `slopmax status --refresh` reads it now, `slopmax start` keeps it current",
+                if unknown == 1 { "" } else { "s" }
+            ))
+        );
+    }
     out
 }
 
@@ -431,6 +453,32 @@ mod tests {
         assert!(text.contains(" 47%"));
         assert!(text.contains("└ 7d Fable"));
         assert!(text.contains("limited · back in 1h00m"), "{text}");
+    }
+
+    #[test]
+    fn a_stopped_proxy_says_how_to_read_unknown_usage() {
+        let account = |email: &str| {
+            let mut account = Account::new(ProviderId::Codex, Tokens::default());
+            account.email = Some(email.into());
+            account.account_id = Some(email.into());
+            account.assign_id();
+            account
+        };
+        let accounts = vec![account("a@x.dev"), account("b@x.dev")];
+        let hint = "no usage known yet for 2 accounts: `slopmax status --refresh`";
+        for (live, shown) in [(false, true), (true, false)] {
+            let report = build(
+                accounts.clone(),
+                |_| AccountState::default(),
+                &Pins::new(),
+                &HashMap::new(),
+                Strategy::FillFirst,
+                live,
+                ts(1000),
+            );
+            let text = render(&report, ts(1000));
+            assert_eq!(text.contains(hint), shown, "{text}");
+        }
     }
 
     #[test]

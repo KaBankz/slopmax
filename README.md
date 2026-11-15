@@ -62,7 +62,7 @@ Or by hand:
 
 ```sh
 slopmax login claude    # opens the sign-in page; repeat for each account
-slopmax login codex     # --device signs in with a code instead
+slopmax login codex     # with no browser here, it shows a code to enter on any device
 slopmax setup claude    # point Claude Code (and every app that runs it) at slopmax
 slopmax setup codex
 slopmax service install # keep the proxy running
@@ -162,7 +162,7 @@ Every response carries rate-limit headers (`anthropic-ratelimit-unified-*`, `x-c
 
 Each account is a private TOML file in `~/.slopmax/accounts/`, named after a hash of the account's identity, so signing in again or re-importing updates the account instead of adding a copy.
 
-- **Subscriptions.** `slopmax login claude` and `slopmax login codex` run the same OAuth flow as the official clients: PKCE with a localhost callback, a pasted redirect URL on a machine without a browser, or a device code for Codex. The proxy refreshes tokens ahead of expiry (an hour early for Claude, a day for Codex) under a file lock, so no two processes spend the same refresh token. When a provider rejects a refresh, the account is flagged for re-login and leaves the rotation.
+- **Subscriptions.** `slopmax login claude` and `slopmax login codex` run the same OAuth flow as the official clients: PKCE with a localhost callback. On a machine without a browser, Claude's page shows a code to paste back and Codex shows a device code to enter on any device (`--device` asks for one anywhere). The proxy refreshes tokens ahead of expiry (an hour early for Claude, four days for Codex, whose sign-ins ChatGPT ends early) under a file lock, so no two processes spend the same refresh token. When a provider rejects a refresh, the account is flagged for re-login and leaves the rotation.
 - **API keys.** `slopmax login anthropic`, `openai`, or `xai` asks for the key at a hidden prompt, or reads it from stdin (`slopmax login xai < key.txt`), so it never lands in your shell history. It is checked against the provider's model list before it is saved.
 - **Compatible endpoints.** `slopmax login compat --url http://localhost:11434/v1` adds any API that speaks OpenAI Chat Completions (the default), Responses (`--dialect responses`), or Anthropic Messages (`--dialect messages`). Its models are read from the endpoint, or named with `--models 'qwen3-*,llama4'`.
 - **Imports.** `slopmax import` reads Claude Code's `~/.claude/.credentials.json` (or the macOS keychain), Codex's `~/.codex/auth.json`, and CLIProxyAPI's `~/.cli-proxy-api/*.json`. An imported login shares its refresh token with the tool it came from, and refresh tokens rotate on use, so whichever refreshes first signs the other out. Logins from CLIProxyAPI are therefore *linked*: slopmax follows the file CLIProxyAPI keeps refreshing and never refreshes them itself, so both can run while you switch over. Once CLIProxyAPI is stopped, `slopmax own all` hands refreshing to slopmax.

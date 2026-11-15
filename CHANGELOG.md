@@ -4,6 +4,20 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Added
+
+- While the proxy is stopped, `slopmax status` says how to fill in the accounts it knows no usage for: `slopmax status --refresh` reads it once, and `slopmax start` keeps it current. Such accounts showed only dashes.
+
+### Changed
+
+- `slopmax login codex --device` falls back to signing in at the address, then pasting back the one the browser ends on, when the workspace has device codes turned off, rather than failing.
+- `slopmax login claude --no-browser` signs in with the code Anthropic's page shows, as it does on a machine without a browser, since the address may be opened on another machine.
+
+### Fixed
+
+- Signing in to ChatGPT on a machine without a browser, such as a server reached over SSH, shows a device code to enter on any device, from `slopmax login codex` and from the dashboard as `slopmax setup` already did. It used to send the browser to a localhost page that cannot load.
+- Over SSH, a sign-in no longer opens a browser on the far machine's screen, which nobody at the terminal sees, even when that machine has a desktop. It takes a code instead. The terminal decides this, not the proxy, which runs without SSH in its environment.
+
 ## [0.6.0] - 2026-11-14
 
 ### Added

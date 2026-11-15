@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use crate::account::Account;
 use crate::auth::pkce::Pkce;
-use crate::auth::{self, Grant, LoginEvent, LoginOptions, Prompt, RefreshError, jwt};
+use crate::auth::{self, Grant, LoginEvent, LoginOptions, Prompt, RefreshError, callback, jwt};
 use crate::ids;
 use crate::net::{Client, form};
 use crate::provider::ProviderId;
@@ -54,9 +54,28 @@ pub fn authorize_url(pkce: &Pkce, state: &str) -> String {
 }
 
 /// Signs in through auth.openai.com, in a browser or with a device code.
+/// With no browser on this machine, a browser elsewhere could not come back
+/// to localhost:1455, so the sign-in takes a device code, as it does when
+/// asked for one.
 pub async fn login(http: &Client, options: LoginOptions, prompt: Prompt) -> Result<Account> {
-    if options.device {
-        return device_login(http, &prompt).await;
+    login_via(http, !callback::has_browser(), options, prompt).await
+}
+
+async fn login_via(
+    http: &Client,
+    headless: bool,
+    options: LoginOptions,
+    prompt: Prompt,
+) -> Result<Account> {
+    if options.device || headless {
+        // A workspace can turn device codes off; the address the browser
+        // ends on can still be pasted back then.
+        match user_code(http).await {
+            Ok(code) => return device_grant(http, &prompt, code).await,
+            Err(e) => prompt.tell(LoginEvent::Notice(format!(
+                "{e:#}; sign in at the address instead, then paste the address it ends on"
+            ))),
+        }
     }
     let pkce = Pkce::generate();
     let state = ids::token();
@@ -191,10 +210,9 @@ struct DeviceGrant {
     code_verifier: String,
 }
 
-/// Logs in with a short code entered at auth.openai.com, for machines
-/// without a browser.
-pub async fn device_login(http: &Client, prompt: &Prompt) -> Result<Account> {
-    let code: DeviceCode = http
+/// Asks auth.openai.com for a code to enter.
+async fn user_code(http: &Client) -> Result<DeviceCode> {
+    let code = http
         .post(format!("{ISSUER}/api/accounts/deviceauth/usercode"))
         .json(&json!({ "client_id": CLIENT_ID }))
         .send()
@@ -203,6 +221,12 @@ pub async fn device_login(http: &Client, prompt: &Prompt) -> Result<Account> {
         .context("device login is unavailable")?
         .json()
         .await?;
+    Ok(code)
+}
+
+/// Shows `code`, entered at auth.openai.com on any device, and waits until
+/// it is approved.
+async fn device_grant(http: &Client, prompt: &Prompt, code: DeviceCode) -> Result<Account> {
     let interval = code
         .interval
         .as_ref()
@@ -466,7 +490,9 @@ mod tests {
     async fn device_logins_report_failures() {
         // Approval never comes: the first poll fails outright.
         let mock = openai(200, tokens(), 0).await;
-        let err = device_login(&mock.client(&[ISSUER]), &Prompt::new(|_| {}))
+        let http = mock.client(&[ISSUER]);
+        let code = user_code(&http).await.unwrap();
+        let err = device_grant(&http, &Prompt::new(|_| {}), code)
             .await
             .unwrap_err();
         assert_eq!(
@@ -475,19 +501,19 @@ mod tests {
         );
 
         let missing = Mock::start(|_| testkit::reply(404, "")).await;
-        let err = device_login(&missing.client(&[ISSUER]), &Prompt::new(|_| {}))
-            .await
-            .unwrap_err();
+        let err = user_code(&missing.client(&[ISSUER])).await.unwrap_err();
         assert_eq!(err.to_string(), "device login is unavailable");
     }
 
-    #[tokio::test]
-    async fn browser_logins_accept_a_pasted_redirect() {
-        let mock = openai(200, tokens(), 1).await;
+    /// Signs in at the address, pasting the redirect back as soon as it is
+    /// shown; returns what the person was told.
+    async fn sign_in_by_pasting(mock: &Mock, headless: bool, device: bool) -> Vec<LoginEvent> {
         let (paste, pasted) = tokio::sync::mpsc::unbounded_channel();
+        let events: Arc<Mutex<Vec<LoginEvent>>> = Arc::default();
+        let log = events.clone();
         let prompt = Prompt::new(move |event| {
-            if let LoginEvent::Authorize { url, title, .. } = event {
-                assert_eq!(title, "ChatGPT");
+            if let LoginEvent::Authorize { url, title, .. } = &event {
+                assert_eq!(*title, "ChatGPT");
                 let state = url
                     .split('&')
                     .find_map(|p| p.strip_prefix("state="))
@@ -500,20 +526,85 @@ mod tests {
                     ))
                     .unwrap();
             }
+            log.lock().unwrap().push(event);
         })
         .with_pasted(pasted);
         let options = LoginOptions {
+            device,
             no_browser: true,
             ..LoginOptions::default()
         };
-        let account = ProviderId::Codex
-            .get()
-            .login(&mock.client(&[ISSUER]), options, prompt)
+        let account = login_via(&mock.client(&[ISSUER]), headless, options, prompt)
             .await
             .unwrap();
         assert_eq!(account.email.as_deref(), Some("me@x.dev"));
         let form: Vec<(String, String)> = form::decode(mock.seen_at("/oauth/token")[0].text());
         assert!(form.contains(&("code".into(), "browser-code".into())));
         assert!(form.contains(&("redirect_uri".into(), redirect_uri())));
+        events.lock().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn browser_logins_accept_a_pasted_redirect() {
+        let mock = openai(200, tokens(), 1).await;
+        let events = sign_in_by_pasting(&mock, false, false).await;
+        assert!(matches!(
+            events[0],
+            LoginEvent::Authorize {
+                port: CALLBACK_PORT,
+                ..
+            }
+        ));
+        assert!(mock.seen_at("/api/accounts/deviceauth/usercode").is_empty());
+    }
+
+    #[tokio::test]
+    async fn without_a_browser_here_the_sign_in_takes_a_device_code() {
+        let mock = openai(200, tokens(), 1).await;
+        let (prompt, events) = recording();
+        let account = login_via(
+            &mock.client(&[ISSUER]),
+            true,
+            LoginOptions::default(),
+            prompt,
+        )
+        .await
+        .unwrap();
+        assert_eq!(account.account_id.as_deref(), Some("ws-1"));
+        assert_eq!(
+            *events.lock().unwrap(),
+            [LoginEvent::DeviceCode {
+                url: DEVICE_VERIFY_URL.into(),
+                code: "ABCD-1234".into()
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn without_device_codes_the_address_is_pasted_back() {
+        // A workspace with device codes turned off.
+        let tokens = tokens();
+        let mock = Mock::start(move |seen| match seen.route() {
+            "/oauth/token" => testkit::json(200, tokens.clone()),
+            _ => testkit::reply(403, ""),
+        })
+        .await;
+        for (headless, device) in [(true, false), (false, true)] {
+            let events = sign_in_by_pasting(&mock, headless, device).await;
+            let LoginEvent::Notice(notice) = &events[0] else {
+                panic!("{events:?}");
+            };
+            assert!(
+                notice.starts_with("device login is unavailable"),
+                "{notice}"
+            );
+            assert!(matches!(
+                events[1],
+                LoginEvent::Authorize {
+                    port: CALLBACK_PORT,
+                    ..
+                }
+            ));
+        }
     }
 }

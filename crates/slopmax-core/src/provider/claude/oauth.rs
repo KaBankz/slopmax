@@ -149,11 +149,12 @@ impl Profile {
     }
 }
 
-/// Signs in through claude.ai. With no browser on this machine, the person
-/// authorizes on another one, where a redirect to this machine's localhost
-/// cannot arrive: Anthropic's page shows the code to paste instead.
+/// Signs in through claude.ai. With no browser on this machine, or none to
+/// open, the person may authorize on another one, where a redirect to this
+/// machine's localhost cannot arrive: Anthropic's page shows the code to
+/// paste instead.
 pub async fn login(http: &Client, options: LoginOptions, prompt: Prompt) -> Result<Account> {
-    let shows_code = prompt.can_paste() && !callback::has_browser();
+    let shows_code = prompt.can_paste() && (options.no_browser || !callback::has_browser());
     login_via(http, shows_code, options, prompt).await
 }
 

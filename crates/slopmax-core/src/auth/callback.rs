@@ -199,11 +199,14 @@ async fn serve(listener: TcpListener, path: &'static str, tx: mpsc::Sender<Resul
     server::serve(listener, handler, std::future::pending()).await;
 }
 
-/// Whether this machine can show a browser (it has a desktop session).
+/// Whether a browser opened here would be in front of the person: this
+/// machine has a desktop session, and they are not reaching it over SSH,
+/// where it would open on a screen they cannot see.
 pub fn has_browser() -> bool {
-    cfg!(any(target_os = "macos", windows))
-        || std::env::var_os("DISPLAY").is_some()
-        || std::env::var_os("WAYLAND_DISPLAY").is_some()
+    let var = |name| std::env::var_os(name).is_some();
+    let over_ssh = var("SSH_CONNECTION") || var("SSH_TTY");
+    !over_ssh
+        && (cfg!(any(target_os = "macos", windows)) || var("DISPLAY") || var("WAYLAND_DISPLAY"))
 }
 
 /// Opens `url` in the default browser; returns false when none is available.
@@ -281,7 +284,10 @@ mod tests {
 
     #[test]
     fn desktops_have_a_browser() {
-        if cfg!(target_os = "macos") {
+        let over_ssh = ["SSH_CONNECTION", "SSH_TTY"]
+            .iter()
+            .any(|v| std::env::var_os(v).is_some());
+        if cfg!(target_os = "macos") && !over_ssh {
             assert!(has_browser());
         }
     }

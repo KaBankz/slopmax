@@ -17,12 +17,12 @@ use crate::ui;
 use slopmax_core::account::{Endpoint, Store};
 use slopmax_core::agent::{self, AGENTS, Agent, Wiring};
 use slopmax_core::auth;
-use slopmax_core::auth::{LoginOptions, callback};
+use slopmax_core::auth::LoginOptions;
 use slopmax_core::background::{self, Daemon};
 use slopmax_core::config::{Config, Strategy};
 use slopmax_core::import::{self, Source};
 use slopmax_core::net::Origins;
-use slopmax_core::provider::{Credential, ProviderId};
+use slopmax_core::provider::ProviderId;
 use slopmax_core::service::Manager;
 use slopmax_core::wire::Dialect;
 
@@ -380,13 +380,6 @@ async fn add(
     loop {
         println!("\n  {}", ui::bold(title));
         let mut options = LoginOptions::default();
-        if let Credential::OAuth { .. } = provider.spec().credential {
-            // On a machine without a browser, Codex signs in with a code and
-            // Claude by pasting the final URL back.
-            let headless = !callback::has_browser();
-            options.device = headless && provider.spec().device_login();
-            options.no_browser = headless;
-        }
         if provider == ProviderId::Compat {
             if answers == Answers::Defaults {
                 bail!("a compatible endpoint needs `slopmax login compat --url <base url>`");
