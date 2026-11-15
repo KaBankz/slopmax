@@ -191,13 +191,13 @@ Left on the table: $39.74, 20% unused on average, across 16 weekly windows
   me@example.com                  $9.05  49% unused over 4
 ```
 
-`slopmax usage`, the dashboard, and the app show it; the `reset-first` strategy and the `quota-unused` notification below are there to keep it small.
+`slopmax usage` and the dashboard show it; the `reset-first` strategy and the `quota-unused` notification below are there to keep it small.
 
 ## Dashboard
 
 `slopmax dashboard` opens a page that shows every account's windows and reset countdowns, usage and cost by day, model, or account, and a live feed of answered requests. It can enable, disable, pin, reprioritize, and redeem. The page is built into the binary and loads nothing from elsewhere. It takes the slopmax key from its address's `#fragment`, which browsers never send to a server. On a remote machine, forward the port first (`ssh -L 7567:127.0.0.1:7567 host`).
 
-The same data is available as JSON under `/slopmax/api`, with the slopmax key as a bearer token. It is slopmax's one API: the CLI, the dashboard and the apps all use it, and `contract/fixtures/` holds an answer from each endpoint.
+The same data is available as JSON under `/slopmax/api`, with the slopmax key as a bearer token. It is slopmax's one API: the CLI and the dashboard both use it, and `contract/fixtures/` holds an answer from each endpoint.
 
 | Endpoint                         | Gives                                                                    |
 | -------------------------------- | ------------------------------------------------------------------------ |
@@ -213,10 +213,6 @@ The same data is available as JSON under `/slopmax/api`, with the slopmax key as
 | `GET`, `POST keys`, `DELETE keys/<name>` | client keys for other machines, as `slopmax key` makes them (shown once) |
 | `GET agents`, `POST agents/<id>/connect` | how Claude Code and Codex are wired, and wiring them |
 | `GET doctor`                     | the findings `slopmax doctor` prints                                     |
-
-### Desktop apps
-
-The desktop apps are on their way and not yet released: a SwiftUI app for macOS (`apple/`) and a GPUI app for Windows and Linux (`crates/slopmax-desktop-gpui`), each with a menu bar or tray item. Both are clients of the API above and nothing more, so anything they change the CLI can change too, and they post the proxy's [notices](#notifications) as the system's notifications. The CLI is what ships, on every platform.
 
 ### Tools built for CLIProxyAPI
 
@@ -235,7 +231,7 @@ A webhook or a command hears when every account of a kind is limited (so request
 - `reset-expiring`: a limit reset lapses within the day, and slopmax won't redeem it by itself (`redeem_expiring_credits` is off);
 - `quota-unused`: a week resets within the day with a quarter or more of it unused, and what that is worth.
 
-Add `limited` and `available` to `events` to hear about each account too. `slopmax status`, the dashboard, and the app list the current nudges, and the app posts them as notifications.
+Add `limited` and `available` to `events` to hear about each account too. `slopmax status` and the dashboard list the current nudges.
 
 ```toml
 [notify]
@@ -380,7 +376,7 @@ The proxy applies a changed config.toml within two seconds, without a restart; o
 | Usage data             | Usage endpoints and response headers; agents are shown the pool's combined usage | Response headers, kept for display                                          | Usage endpoint and response headers                |
 | Session stickiness     | Built in; off for the proxy or one request (`x-slopmax-affinity`)                | Opt-in                                                                      | Built in                                           |
 | Retries                | Failover on limits, revoked logins, and server errors (after one retry on the same account) | Retries on listed statuses across accounts                    | Failover on limits                                 |
-| Config changes         | Applied live, also from the dashboard and the app                                | Hot reload                                                                  | From its app                                       |
+| Config changes         | Applied live, also from the dashboard                                            | Hot reload                                                                  | From its app                                       |
 | Translation            | Through one common form: Messages, Responses, and Chat clients                   | Pairwise translators between many formats                                   | Responses-centered, with Claude Code inbound       |
 | Claude requests        | From Claude Code only, unchanged but for the credential                          | From any client, rewritten to pass as Claude Code                           | From any client, with Claude Code's identity added |
 | Limit resets           | Claude's and ChatGPT's: on request, before expiry, and when spent (opt-in)       | —                                                                           | Before expiry (opt-in), plus Claude reset grants   |

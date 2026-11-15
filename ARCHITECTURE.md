@@ -58,6 +58,8 @@ The engine's errors at these boundaries are typed (`error.rs`: `StoreError`, `Co
 
 ### The desktop app
 
+On hold: the CLI, with the dashboard it serves, is slopmax's only interface. The code below and `apple/` stay in the tree, and their CI workflows (`apple`, `Desktop`) run only when started by hand.
+
 `slopmax-app` is the app without a toolkit. `App::start` finds the daemon through the CLI, starts it if none runs, and follows its event stream on its own tokio runtime, keeping a `Snapshot` current: the proxy's state, the report, how the agents are wired, the login service, a sign-in in progress, and how the last action went. Every action is one API call. `view` turns a snapshot into what a window draws, and the menu bar's line; it reads the API's report, whose words come from the daemon.
 
 A UI subscribes to the snapshot through a tokio `watch` channel, which any executor can await, draws it, and calls `App`'s methods; it holds no logic of its own. The GPUI crate draws the window this way.
