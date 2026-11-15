@@ -239,6 +239,20 @@ async fn answer(
             let stopping = Stopping {
                 status: StoppingStatus::Stopping,
             };
+            // Both name this machine's processes and files: a binary to run,
+            // a daemon to make way for. Only its own slopmax may ask.
+            let elsewhere =
+                asked.make_way || asked.exe.as_ref().is_some_and(|e| !e.trim().is_empty());
+            if elsewhere && !asker.here {
+                return Ok(json(
+                    StatusCode::FORBIDDEN,
+                    &ApiError::Unauthorized {
+                        message:
+                            "only slopmax on the hub itself may move its proxy to another process"
+                                .into(),
+                    },
+                ));
+            }
             if asked.make_way {
                 return match crate::handoff::make_way(app).await {
                     Ok(()) => ok(&stopping),

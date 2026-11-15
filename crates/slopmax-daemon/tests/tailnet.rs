@@ -665,6 +665,31 @@ async fn the_user_s_machines_look_and_admin_machines_manage() {
 }
 
 #[tokio::test]
+async fn only_the_hub_itself_moves_its_proxy_to_another_binary() {
+    let home = temp_home();
+    let hub = Hub::start(&home).await;
+    for body in [r#"{"exe":"/bin/sh"}"#, r#"{"makeWay":true}"#] {
+        let (status, refused) = hub
+            .ask(with(
+                member(Method::POST, "/slopmax/api/shutdown", MAC),
+                body,
+            ))
+            .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}: {refused}");
+        assert_eq!(
+            refused["message"],
+            "only slopmax on the hub itself may move its proxy to another process"
+        );
+    }
+    // Still serving.
+    let (status, _) = hub
+        .ask(empty(member(Method::GET, "/slopmax/api/status", MAC)))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    std::fs::remove_dir_all(hub.stop().await).unwrap();
+}
+
+#[tokio::test]
 async fn health_says_who_the_tailnet_asker_is() {
     let home = temp_home();
     let hub = Hub::start(&home).await;
