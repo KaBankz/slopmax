@@ -131,7 +131,8 @@ describe("opened over the tailnet without a key", () => {
     const page = await fromTailnet({ health: overTailnet("admin") })
     expect(shows("Read-only from this machine")).toBe(false)
     page.stub.setHealth(overTailnet("view"))
-    page.stub.failNext("events", new Unauthorized({ message: "this machine may not change slopmax" }))
+    // The daemon refuses a machine it knows with 403, not 401.
+    page.stub.failNext("events", new Unauthorized({ message: "this machine may not change slopmax" }), 403)
     page.stub.endStreams()
     await showsSoon("Read-only from this machine", 5_000)
     expect(page.stub.calls.filter((call) => call.endpoint === "healthz").length).toBe(2)

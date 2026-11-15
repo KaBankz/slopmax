@@ -99,8 +99,12 @@ export interface Stub {
   readonly report: () => Report
   /** Replaces the report, telling watchers. */
   readonly setReport: (report: Report) => void
-  /** Makes the next call to an endpoint fail with this error, as the daemon would send it. */
-  readonly failNext: (endpoint: string, error: Refusal) => void
+  /**
+   * Makes the next call to an endpoint fail with this error, as the daemon
+   * would send it: with its own status, or `status` (403 for an
+   * `Unauthorized` to a caller the daemon knows but that may not do this).
+   */
+  readonly failNext: (endpoint: string, error: Refusal, status?: number) => void
   /** Changes what `/healthz` answers from now on. */
   readonly setHealth: (health: Record<string, unknown>) => void
   /** Refuses every API call from now on (401), as the daemon does once it stops taking the caller. */
@@ -140,7 +144,7 @@ export const makeStub = (options: StubOptions = {}): Stub => {
   let agents: ReadonlyArray<AgentWiring> = fixtureAgents()
   const doctor: ReadonlyArray<Section> = fixtureDoctor()
   const calls: Array<Call> = []
-  const failures = new Map<string, Refusal>()
+  const failures = new Map<string, { readonly error: Refusal; readonly status: number }>()
   let health: Record<string, unknown> = options.health ?? { status: "ok", service: "slopmax", version, pid: 4242 }
   let refusing = false
   let ended = Deferred.makeUnsafe<void>()
@@ -168,10 +172,11 @@ export const makeStub = (options: StubOptions = {}): Stub => {
       const failure = failures.get(endpoint)
       if (failure === undefined) return yield* effect
       failures.delete(endpoint)
+      const { error, status } = failure
       // Sent as the daemon encodes it, so the client decodes it into the endpoint's own error.
       return HttpServerResponse.jsonUnsafe(
-        { _tag: failure._tag, message: failure.message, ...("what" in failure ? { what: failure.what } : {}) },
-        { status: statuses[failure._tag] },
+        { _tag: error._tag, message: error.message, ...("what" in error ? { what: error.what } : {}) },
+        { status },
       )
     })
 
@@ -664,8 +669,8 @@ export const makeStub = (options: StubOptions = {}): Stub => {
     setReport: (next) => {
       change(next)
     },
-    failNext: (endpoint, error) => {
-      failures.set(endpoint, error)
+    failNext: (endpoint, error, status) => {
+      failures.set(endpoint, { error, status: status ?? statuses[error._tag] })
     },
     setHealth: (next) => {
       health = next

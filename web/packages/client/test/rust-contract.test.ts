@@ -5,7 +5,18 @@
 // package (the web UI, the desktop window) agree on every field.
 import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
-import { ApiErrors, Event, History, KeyInfo, NewKey, Report, SettingsView, Summary, TailnetView } from "../src/index.ts"
+import {
+  ApiErrors,
+  Event,
+  Forbidden,
+  History,
+  KeyInfo,
+  NewKey,
+  Report,
+  SettingsView,
+  Summary,
+  TailnetView,
+} from "../src/index.ts"
 import { strict } from "../src/settings.ts"
 
 const dir = `${import.meta.dir}/../../../../contract/fixtures`
@@ -68,7 +79,11 @@ describe("the Rust daemon's answers", () => {
       }
       const error = Schema.decodeUnknownSync(Schema.Union(ApiErrors), strict)(body)
       expect(error._tag.toLowerCase()).toBe(outcome.toLowerCase())
-      expect(status).toBeGreaterThanOrEqual(400)
+      // Sent with a status the client declares for it, or the client could not read it.
+      const declared = [...ApiErrors, Forbidden].filter(
+        (schema) => Schema.is(schema)(error) && Schema.resolveAnnotations(schema)?.["httpApiStatus"] === status,
+      )
+      expect(declared.length).toBeGreaterThan(0)
     })
   }
 })

@@ -5,9 +5,7 @@
 // through a static `of` (a Schema class keeps its own constructor, which
 // decoding uses); one decoded from the wire keeps the message it came with.
 import { Effect, Schema, SchemaIssue } from "effect"
-// For the `httpApiStatus` annotation.
-// oxlint-disable-next-line import/no-empty-named-blocks, unicorn/require-module-specifiers
-import type {} from "effect/http-api"
+import { HttpApiSchema } from "effect/http-api"
 import { AccountId } from "./ids.ts"
 
 /** The owner key was missing or wrong. Client keys reach the proxy, never slopmax's own API. */
@@ -20,6 +18,14 @@ export class Unauthorized extends Schema.TaggedError<Unauthorized>()(
   },
   { httpApiStatus: 401 },
 ) {}
+
+/**
+ * `Unauthorized`, sent with 403: the caller is known, but may not do this. A
+ * machine on the tailnet that may only look gets it from what manages
+ * slopmax, as a client key does from slopmax's own API. It decodes to an
+ * `Unauthorized`.
+ */
+export const Forbidden = Unauthorized.pipe(HttpApiSchema.status(403))
 
 /** Nothing by that name: `no such account`, `no such key`, `no such slopmax endpoint`. */
 export class NotFound extends Schema.TaggedError<NotFound>()(

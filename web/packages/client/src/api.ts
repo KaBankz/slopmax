@@ -16,7 +16,16 @@ import {
 } from "effect/http-api"
 import { AgentWiring } from "./agents.ts"
 import { Section } from "./doctor.ts"
-import { BadRequest, Conflict, Internal, issueText, NotFound, Unauthorized, UpstreamFailed } from "./errors.ts"
+import {
+  BadRequest,
+  Conflict,
+  Forbidden,
+  Internal,
+  issueText,
+  NotFound,
+  Unauthorized,
+  UpstreamFailed,
+} from "./errors.ts"
 import { Event } from "./events.ts"
 import { AccountId, AgentId, Dialect, KeyName, ProviderId, SubscriptionId, withDefault } from "./ids.ts"
 import { History, HistoryRange, Summary, SummaryBy, SummaryRange } from "./ledger.ts"
@@ -49,16 +58,19 @@ export const ownerKeyMatches = (given: Redacted.Redacted<string>, key: Redacted.
 
 /**
  * The owner key, as `Authorization: Bearer <key>` or `x-api-key: <key>`,
- * compared in constant time. Client keys reach the proxy but get 401 here.
- * A page opened over the tailnet sends `Bearer tailnet` instead
- * (`tailnetToken`); the daemon takes it for the machine's identity.
+ * compared in constant time. A page opened over the tailnet sends `Bearer
+ * tailnet` instead (`tailnetToken`); the daemon takes it for the machine's
+ * identity. A caller it knows but that may not do something, a client key
+ * (which reaches the proxy only) or a machine that may only look, gets
+ * `Unauthorized` with 403 (`Forbidden`) rather than 401.
  */
 export class OwnerKey extends HttpApiMiddleware.Service<OwnerKey>()("@slopmax/client/OwnerKey", {
   security: {
     bearer: HttpApiSecurity.bearer,
     header: HttpApiSecurity.apiKey({ in: "header", key: "x-api-key" }),
   },
-  error: Unauthorized,
+  // Unauthorized first: it is what this middleware answers with.
+  error: [Unauthorized, Forbidden],
 }) {
   /** Checks each call against the owner key `current` reads, so a server always uses the key in force. */
   static readonly layer = (current: Effect.Effect<Redacted.Redacted<string>>): Layer.Layer<OwnerKey> => {

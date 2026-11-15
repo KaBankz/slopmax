@@ -553,6 +553,24 @@ async fn every_endpoint_answers_as_its_fixture_says() {
         StatusCode::CONFLICT,
     )
     .await;
+    // A key slopmax knows, but that reaches the proxy only: 403.
+    let forbidden = Client::builder()
+        .build()
+        .get(format!("{base}/settings"))
+        .header(
+            "authorization",
+            format!("Bearer {}", made["key"].as_str().unwrap()),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+    fixture(
+        "config.settings.clientKey.unauthorized",
+        StatusCode::FORBIDDEN,
+        forbidden.json().await.unwrap(),
+        &home.dir,
+    );
     call.send(
         "config.removeKey.ok",
         Method::DELETE,
