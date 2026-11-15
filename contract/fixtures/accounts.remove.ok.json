@@ -237,7 +237,7 @@
         "provider": "codex",
         "account": "codex@example.com",
         "until": "2026-11-01T12:00:00Z",
-        "message": "A limit reset on codex@example.com expires in 9h59m (01:37); redeem it with `slopmax redeem codex@example.com` before it is lost.",
+        "message": "A limit reset on codex@example.com expires in 9h59m (<clock>); redeem it with `slopmax redeem codex@example.com` before it is lost.",
         "at": "2026-11-01T12:00:00Z"
       }
     ]

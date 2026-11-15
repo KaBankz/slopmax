@@ -227,6 +227,8 @@ fn steady(value: &mut Value, home: &str) {
                 *text = "sm-<secret>".into();
             } else if text.contains(home) {
                 *text = text.replace(home, "<home>");
+            } else {
+                *text = without_clock(text);
             }
         }
         Value::Array(items) => items.iter_mut().for_each(|v| steady(v, home)),
@@ -255,6 +257,33 @@ fn steady(value: &mut Value, home: &str) {
         }
         _ => {}
     }
+}
+
+/// `text` with each time of day it gives, `(HH:MM)`, as `(<clock>)`:
+/// messages say when something happens by the clock the test runs at.
+fn without_clock(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('(') {
+        let (before, from) = rest.split_at(at);
+        out.push_str(before);
+        let clock = from.as_bytes().get(..7).is_some_and(|b| {
+            b[0] == b'('
+                && b[1..3].iter().all(u8::is_ascii_digit)
+                && b[3] == b':'
+                && b[4..6].iter().all(u8::is_ascii_digit)
+                && b[6] == b')'
+        });
+        if clock {
+            out.push_str("(<clock>)");
+            rest = &from[7..];
+        } else {
+            out.push('(');
+            rest = &from[1..];
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Checks (or, blessing, writes) one fixture.
