@@ -54,20 +54,25 @@ pub fn authorize_url(pkce: &Pkce, state: &str) -> String {
 }
 
 /// Signs in through auth.openai.com, in a browser or with a device code.
-/// With no browser on this machine, a browser elsewhere could not come back
-/// to localhost:1455, so the sign-in takes a device code, as it does when
-/// asked for one.
+/// With no browser on this machine, or none to open, the address may be
+/// opened on another machine, which could not come back to localhost:1455,
+/// so the sign-in takes a device code, entered on any device.
 pub async fn login(http: &Client, options: LoginOptions, prompt: Prompt) -> Result<Account> {
-    login_via(http, !callback::has_browser(), options, prompt).await
+    let elsewhere = options.no_browser || !callback::has_browser();
+    login_via(http, elsewhere, options, prompt).await
 }
 
 async fn login_via(
     http: &Client,
-    headless: bool,
+    elsewhere: bool,
     options: LoginOptions,
     prompt: Prompt,
 ) -> Result<Account> {
-    if options.device || headless {
+    if options.device {
+        let code = user_code(http).await?;
+        return device_grant(http, &prompt, code).await;
+    }
+    if elsewhere {
         // A workspace can turn device codes off; the address the browser
         // ends on can still be pasted back then.
         match user_code(http).await {
@@ -507,7 +512,7 @@ mod tests {
 
     /// Signs in at the address, pasting the redirect back as soon as it is
     /// shown; returns what the person was told.
-    async fn sign_in_by_pasting(mock: &Mock, headless: bool, device: bool) -> Vec<LoginEvent> {
+    async fn sign_in_by_pasting(mock: &Mock, elsewhere: bool) -> Vec<LoginEvent> {
         let (paste, pasted) = tokio::sync::mpsc::unbounded_channel();
         let events: Arc<Mutex<Vec<LoginEvent>>> = Arc::default();
         let log = events.clone();
@@ -530,11 +535,10 @@ mod tests {
         })
         .with_pasted(pasted);
         let options = LoginOptions {
-            device,
             no_browser: true,
             ..LoginOptions::default()
         };
-        let account = login_via(&mock.client(&[ISSUER]), headless, options, prompt)
+        let account = login_via(&mock.client(&[ISSUER]), elsewhere, options, prompt)
             .await
             .unwrap();
         assert_eq!(account.email.as_deref(), Some("me@x.dev"));
@@ -547,7 +551,7 @@ mod tests {
     #[tokio::test]
     async fn browser_logins_accept_a_pasted_redirect() {
         let mock = openai(200, tokens(), 1).await;
-        let events = sign_in_by_pasting(&mock, false, false).await;
+        let events = sign_in_by_pasting(&mock, false).await;
         assert!(matches!(
             events[0],
             LoginEvent::Authorize {
@@ -589,22 +593,30 @@ mod tests {
             _ => testkit::reply(403, ""),
         })
         .await;
-        for (headless, device) in [(true, false), (false, true)] {
-            let events = sign_in_by_pasting(&mock, headless, device).await;
-            let LoginEvent::Notice(notice) = &events[0] else {
-                panic!("{events:?}");
-            };
-            assert!(
-                notice.starts_with("device login is unavailable"),
-                "{notice}"
-            );
-            assert!(matches!(
-                events[1],
-                LoginEvent::Authorize {
-                    port: CALLBACK_PORT,
-                    ..
-                }
-            ));
-        }
+        let events = sign_in_by_pasting(&mock, true).await;
+        let LoginEvent::Notice(notice) = &events[0] else {
+            panic!("{events:?}");
+        };
+        assert!(
+            notice.starts_with("device login is unavailable"),
+            "{notice}"
+        );
+        assert!(matches!(
+            events[1],
+            LoginEvent::Authorize {
+                port: CALLBACK_PORT,
+                ..
+            }
+        ));
+
+        // Asked for a device code, it says why there is none.
+        let options = LoginOptions {
+            device: true,
+            ..LoginOptions::default()
+        };
+        let err = login_via(&mock.client(&[ISSUER]), true, options, Prompt::new(|_| {}))
+            .await
+            .unwrap_err();
+        assert_eq!(err.to_string(), "device login is unavailable");
     }
 }

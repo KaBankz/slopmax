@@ -42,8 +42,8 @@ pub(super) async fn login(
     if spec.is_subscription() && !callback::has_browser() {
         // Decided here rather than by the proxy, which may run where a
         // browser would open on a screen nobody at this terminal sees.
+        // With none to open, the sign-ins take codes.
         options.no_browser = true;
-        options.device |= spec.device_login();
     }
     if let Credential::Key { optional } = spec.credential {
         let prompt = if optional {

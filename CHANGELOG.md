@@ -4,6 +4,20 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Added
+
+- `slopmax setup` asks what to do with CLIProxyAPI's logins: follow them while CLIProxyAPI keeps renewing them, take them over so slopmax renews them (signing CLIProxyAPI's copies out), or skip them. It used to offer only following. Unattended, `--own` takes them over.
+- `slopmax status` says when accounts follow CLIProxyAPI, and that `slopmax own all` takes them over once it is stopped.
+
+### Changed
+
+- `slopmax login codex --no-browser` signs in with a device code, as on a machine without a browser, since the address may be opened on another machine. With device codes turned off for the workspace, it signs in at the address instead.
+
+### Fixed
+
+- `slopmax login codex --device` fails again when device codes are unavailable, as it did before 0.7.0, rather than waiting for an address nobody can paste when there is no terminal.
+- A model refused at its limit is set aside on that account however its name is capitalized, so a request for `Claude-Fable-5-2` no longer goes back to the account that just refused `claude-fable-5-2`.
+
 ## [0.7.0] - 2026-11-15
 
 ### Added

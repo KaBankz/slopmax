@@ -101,7 +101,7 @@ impl AccountState {
         let model_block = self
             .model_blocks
             .iter()
-            .filter(|b| model.is_some_and(|m| m == b.model))
+            .filter(|b| model.is_some_and(|m| m.eq_ignore_ascii_case(&b.model)))
             .map(|b| b.until);
         let quota = self.limits.is_exhausted(now).then(|| {
             self.limits
@@ -715,10 +715,16 @@ impl Pool {
         let state = inner.states.entry(id.to_owned()).or_default();
         match model {
             Some(model) => {
+                // One model however it is spelled: `Claude-Fable-5-2` is
+                // `claude-fable-5-2`.
                 state
                     .model_blocks
-                    .retain(|b| b.model != model || b.until > until);
-                if !state.model_blocks.iter().any(|b| b.model == model) {
+                    .retain(|b| !b.model.eq_ignore_ascii_case(model) || b.until > until);
+                if !state
+                    .model_blocks
+                    .iter()
+                    .any(|b| b.model.eq_ignore_ascii_case(model))
+                {
                     state.model_blocks.push(ModelBlock {
                         model: model.to_owned(),
                         until,
@@ -1429,7 +1435,13 @@ mod tests {
             exclude: &[],
         };
         assert!(pool.pick(&req("claude-fable"), ts(1000)).is_err());
+        assert!(pool.pick(&req("Claude-Fable"), ts(1000)).is_err());
         assert!(pool.pick(&req("claude-sonnet"), ts(1000)).is_ok());
+        // The same model in other letters extends the one block.
+        pool.block(&a.id, ts(9500), Some("CLAUDE-FABLE"), "overage cap");
+        let blocks = pool.lock().states[&a.id].model_blocks.clone();
+        assert_eq!(blocks.len(), 1, "{blocks:?}");
+        assert_eq!(blocks[0].until, ts(9500));
     }
 
     #[test]

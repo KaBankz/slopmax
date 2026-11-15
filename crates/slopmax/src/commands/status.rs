@@ -189,6 +189,29 @@ fn render(report: &Report, now: Timestamp) -> String {
             }
         ))
     );
+    let following: Vec<&str> = report
+        .accounts
+        .iter()
+        .filter_map(|a| a.follows.as_deref())
+        .collect();
+    if let Some(tool) = following.first() {
+        let n = following.len();
+        let _ = writeln!(
+            out,
+            "{}",
+            ui::dim(format!(
+                "{n} account{} follow{} {tool}, which renews {}: `slopmax own all` takes {} over once it is stopped",
+                if n == 1 { "" } else { "s" },
+                if n == 1 { "s" } else { "" },
+                if n == 1 {
+                    "its sign-in"
+                } else {
+                    "their sign-ins"
+                },
+                if n == 1 { "it" } else { "them" },
+            ))
+        );
+    }
     // Only the proxy keeps usage current, so with it stopped an account
     // never read stays blank.
     let unknown = report
@@ -479,6 +502,38 @@ mod tests {
             let text = render(&report, ts(1000));
             assert_eq!(text.contains(hint), shown, "{text}");
         }
+    }
+
+    #[test]
+    fn followed_accounts_say_how_to_take_them_over() {
+        let mut account = Account::new(ProviderId::Codex, Tokens::default());
+        account.email = Some("a@x.dev".into());
+        account.account_id = Some("a".into());
+        account.assign_id();
+        let render_with = |account: Account| {
+            let report = build(
+                vec![account],
+                |_| AccountState::default(),
+                &Pins::new(),
+                &HashMap::new(),
+                Strategy::FillFirst,
+                true,
+                ts(1000),
+            );
+            render(&report, ts(1000))
+        };
+        assert!(!render_with(account.clone()).contains("slopmax own all"));
+        account.link = Some(slopmax_core::account::Link {
+            tool: "cliproxyapi".into(),
+            path: "/cpa/codex-a.json".into(),
+        });
+        let text = render_with(account);
+        assert!(
+            text.contains(
+                "1 account follows cliproxyapi, which renews its sign-in: `slopmax own all`"
+            ),
+            "{text}"
+        );
     }
 
     #[test]

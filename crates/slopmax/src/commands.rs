@@ -198,6 +198,11 @@ pub static APP: App = App {
                     Kind::Value(None, "SOURCES"),
                 ),
                 arg(
+                    "own",
+                    "With --import cliproxyapi: refresh its logins here instead of following its files",
+                    Kind::Flag(None),
+                ),
+                arg(
                     "login",
                     "Sign in to these subscriptions: claude, codex",
                     Kind::Value(None, "PROVIDERS"),
@@ -495,6 +500,7 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
             };
             let plan = init::Plan {
                 import: m.value("import").map(init::sources).transpose()?,
+                own: m.flag("own"),
                 login: m.value("login").map(init::subscriptions).transpose()?,
                 keys_from_env: m.flag("keys-from-env"),
                 strategy: m

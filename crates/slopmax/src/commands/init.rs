@@ -51,6 +51,8 @@ impl Answers {
 pub struct Plan {
     /// `--import`: where to take logins from.
     pub import: Option<Vec<Source>>,
+    /// `--own`: refresh CLIProxyAPI's logins here rather than follow them.
+    pub own: bool,
     /// `--login`: subscriptions to sign in to.
     pub login: Option<Vec<ProviderId>>,
     /// `--keys-from-env`: add the API keys set in ANTHROPIC_API_KEY,
@@ -225,7 +227,7 @@ async fn accounts(
         Some(sources) => {
             for source in sources {
                 let found = import::discover(&http, *source, super::home()).await;
-                if report_saved(import::save(store, found, false)) == 0 {
+                if report_saved(import::save(store, found, plan.own)) == 0 {
                     let name = match source {
                         Source::All => "all",
                         Source::ClaudeCode => "claude-code",
@@ -309,8 +311,8 @@ async fn accounts(
     Ok(missed)
 }
 
-/// Offers the logins found on this machine: CLIProxyAPI's (linked, so
-/// both can run) and the agents' own.
+/// Offers the logins found on this machine: CLIProxyAPI's, followed while
+/// it runs or taken over, and the agents' own.
 async fn offer_imports(
     store: &Store,
     answers: Answers,
@@ -319,13 +321,35 @@ async fn offer_imports(
     let cliproxy = import::discover(http, Source::Cliproxyapi, super::home()).await;
     let found = cliproxy.iter().filter(|f| f.account.is_ok()).count();
     if found > 0 {
+        let them = if found == 1 { "it" } else { "them" };
         println!(
-            "  CLIProxyAPI has {found} account{} here. slopmax can follow them while\n  \
-             CLIProxyAPI keeps refreshing, so nothing gets signed out.",
+            "  CLIProxyAPI has {found} account{} here. Only one tool can renew a sign-in:\n  \
+             renewing spends a token the other still holds, which signs that one out.",
             if found == 1 { "" } else { "s" }
         );
-        if answers.confirm("Import them?", true)? {
-            report_saved(import::save(store, cliproxy, false));
+        let follow = format!("CLIProxyAPI keeps renewing {them}, and slopmax reads the result");
+        let own = format!("slopmax renews {them} itself, and CLIProxyAPI's copy stops working");
+        let options = [
+            ("Follow", follow.as_str()),
+            ("Take over", own.as_str()),
+            ("Skip", "leave them to CLIProxyAPI alone"),
+        ];
+        let choice = match answers {
+            Answers::Defaults => 0,
+            Answers::Ask => term::choose(
+                "  Keep using CLIProxyAPI too, or switch to slopmax?",
+                &options,
+                0,
+            )?,
+        };
+        if choice < 2 {
+            report_saved(import::save(store, cliproxy, choice == 1));
+        }
+        if choice == 0 {
+            println!(
+                "    {}",
+                ui::dim("`slopmax own all` takes them over once CLIProxyAPI is stopped")
+            );
         }
     }
     for agent in AGENTS {

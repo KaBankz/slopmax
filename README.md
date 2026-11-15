@@ -43,8 +43,8 @@ slopmax setup       # or just `slopmax`, the first time
 
 `slopmax setup` walks through it step by step:
 
-1. It finds the logins Claude Code, Codex, and CLIProxyAPI hold, and offers to bring them over. CLIProxyAPI's are linked rather than copied (see [Accounts](#accounts)), so both can run while you switch.
-2. You choose which kinds of accounts to pool (Claude, ChatGPT, API keys, compatible endpoints), and it signs you in or takes the keys. Without a browser, Codex signs in with a code and Claude by pasting the final URL back.
+1. It finds the logins Claude Code, Codex, and CLIProxyAPI hold, and offers to bring them over. For CLIProxyAPI's it asks whether you keep using CLIProxyAPI: slopmax then follows them, reading what CLIProxyAPI renews, so both can run; or it takes them over, renewing them itself, which signs CLIProxyAPI's copies out (see [Accounts](#accounts)).
+2. You choose which kinds of accounts to pool (Claude, ChatGPT, API keys, compatible endpoints), and it signs you in or takes the keys. Without a browser, or over SSH, Codex shows a device code and Claude's page shows a code to paste back.
 3. You choose how requests are routed: the [strategy](#resets) and whether sessions keep their account.
 4. It points Claude Code and Codex at the proxy, keeping a backup for `--undo`.
 5. It installs the proxy as a service that starts at login, and starts it.
@@ -56,7 +56,7 @@ slopmax setup --yes --import claude-code,codex --keys-from-env \
   --strategy reset-first --affinity on --agents claude,codex
 ```
 
-`--import` takes over the logins this machine has (`claude-code`, `codex`, `cliproxyapi`, `all`, or `none`); `--login claude,codex` signs in to more subscriptions (with a device code when there is no browser); `--keys-from-env` adds the keys in `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `XAI_API_KEY`; `--agents none` and `--no-service` leave the agents and the login service alone.
+`--import` brings over the logins this machine has (`claude-code`, `codex`, `cliproxyapi`, `all`, or `none`), following CLIProxyAPI's unless `--own` takes them over; `--login claude,codex` signs in to more subscriptions (with a device code when there is no browser); `--keys-from-env` adds the keys in `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and `XAI_API_KEY`; `--agents none` and `--no-service` leave the agents and the login service alone.
 
 Or by hand:
 
@@ -165,7 +165,7 @@ Each account is a private TOML file in `~/.slopmax/accounts/`, named after a has
 - **Subscriptions.** `slopmax login claude` and `slopmax login codex` run the same OAuth flow as the official clients: PKCE with a localhost callback. On a machine without a browser, Claude's page shows a code to paste back and Codex shows a device code to enter on any device (`--device` asks for one anywhere). The proxy refreshes tokens ahead of expiry (an hour early for Claude, four days for Codex, whose sign-ins ChatGPT ends early) under a file lock, so no two processes spend the same refresh token. When a provider rejects a refresh, the account is flagged for re-login and leaves the rotation.
 - **API keys.** `slopmax login anthropic`, `openai`, or `xai` asks for the key at a hidden prompt, or reads it from stdin (`slopmax login xai < key.txt`), so it never lands in your shell history. It is checked against the provider's model list before it is saved.
 - **Compatible endpoints.** `slopmax login compat --url http://localhost:11434/v1` adds any API that speaks OpenAI Chat Completions (the default), Responses (`--dialect responses`), or Anthropic Messages (`--dialect messages`). Its models are read from the endpoint, or named with `--models 'qwen3-*,llama4'`.
-- **Imports.** `slopmax import` reads Claude Code's `~/.claude/.credentials.json` (or the macOS keychain), Codex's `~/.codex/auth.json`, and CLIProxyAPI's `~/.cli-proxy-api/*.json`. An imported login shares its refresh token with the tool it came from, and refresh tokens rotate on use, so whichever refreshes first signs the other out. Logins from CLIProxyAPI are therefore *linked*: slopmax follows the file CLIProxyAPI keeps refreshing and never refreshes them itself, so both can run while you switch over. Once CLIProxyAPI is stopped, `slopmax own all` hands refreshing to slopmax.
+- **Imports.** `slopmax import` reads Claude Code's `~/.claude/.credentials.json` (or the macOS keychain), Codex's `~/.codex/auth.json`, and CLIProxyAPI's `~/.cli-proxy-api/*.json`. An imported login shares its refresh token with the tool it came from, and refresh tokens rotate on use, so whichever refreshes first signs the other out. Logins from CLIProxyAPI are therefore *linked*: slopmax follows the file CLIProxyAPI keeps refreshing and never refreshes them itself, so both can run while you switch over. `slopmax status` says which accounts it follows. Once CLIProxyAPI is stopped, `slopmax own all` hands refreshing to slopmax.
 
 ## Usage and cost
 

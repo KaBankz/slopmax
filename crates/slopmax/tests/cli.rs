@@ -1316,6 +1316,29 @@ fn unattended_setup_leaves_alone_an_agent_it_has_no_account_for() {
 }
 
 #[test]
+fn setup_follows_cliproxyapi_or_takes_over_with_own() {
+    for own in [false, true] {
+        let s = Sandbox::new(if own { "init-own" } else { "init-follow" });
+        write(
+            &s.home.join(".cli-proxy-api/codex-a.json"),
+            &json!({"type": "codex", "access_token": "tok-a", "refresh_token": "ref-a",
+                    "email": "a@x.dev", "account_id": "ws-a"})
+            .to_string(),
+        );
+        let mut args = vec!["setup", "--yes", "--import", "cliproxyapi"];
+        if own {
+            args.push("--own");
+        }
+        args.extend(["--agents", "none", "--no-service"]);
+        s.run(&args).ok();
+        s.run(&["stop"]);
+        let status = s.run(&["status"]).ok().stdout;
+        let hint = "1 account follows cliproxyapi, which renews its sign-in: `slopmax own all`";
+        assert_eq!(status.contains(hint), !own, "{status}");
+    }
+}
+
+#[test]
 fn unattended_setup_that_misses_part_of_what_was_asked_says_so() {
     let s = Sandbox::new("init-partial");
     write(
