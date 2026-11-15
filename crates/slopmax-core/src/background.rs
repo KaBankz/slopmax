@@ -60,7 +60,7 @@ pub async fn ensure_running(config: &Config, home: &Home, exe: &Path) -> Result<
 /// supervised, else as a detached process logging to the home's log.
 pub async fn launch(config: &Config, home: &Home, exe: &Path) -> Result<()> {
     match Manager::detect().filter(|m| m.status(home).installed) {
-        Some(manager) => manager.start()?,
+        Some(manager) => manager.start(exe, home)?,
         None => spawn(exe, home)?,
     }
     wait_until_running(config, home).await

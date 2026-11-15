@@ -6,6 +6,7 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ### Added
 
+- On Windows, `slopmax service install` (and `slopmax setup`) starts the proxy at login, as systemd and launchd do elsewhere. It adds `slopmaxw.exe`, which the Windows release archives now carry, to your login programs, with no administrator rights needed. `slopmaxw.exe` runs the proxy without a console window and starts it again 5 seconds after a failure; `slopmax stop` stops both. Before, the proxy on Windows ran only until it was stopped or you logged out.
 - `slopmax setup` asks what to do with CLIProxyAPI's logins: follow them while CLIProxyAPI keeps renewing them, take them over so slopmax renews them (signing CLIProxyAPI's copies out), or skip them. It used to offer only following. Unattended, `--own` takes them over.
 - `slopmax status` says when accounts follow CLIProxyAPI, and that `slopmax own all` takes them over once it is stopped.
 

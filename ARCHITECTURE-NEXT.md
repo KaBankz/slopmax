@@ -695,7 +695,7 @@ Each phase ships as its own version with a signed tag and a release.
 
 **Gates:** §5.3 on real hardware. On failure, build the wry shell and delete GPUI and `slopmax-app`.
 
-**Not in this phase:** the Windows daemon release (named pipe or schtasks). That is a separate later milestone, because robust's "one week" estimate for it was not credible.
+**Not in this phase:** the Windows daemon release (named pipe or schtasks). That is a separate later milestone, because robust's "one week" estimate for it was not credible. Done 2026-11-15 without either: the daemon stays on TCP, and `slopmax service install` puts `slopmaxw.exe` (crates/slopmax-launcher) in the user's Run key, which needs no administrator, where a logon task needs one or a stored password, and keeps the proxy in the user's session, where it can open a browser for a sign-in.
 
 ---
 

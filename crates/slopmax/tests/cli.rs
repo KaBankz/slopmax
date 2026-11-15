@@ -1149,6 +1149,56 @@ fn serve_runs_in_the_foreground_until_stopped() {
     }
 }
 
+/// The Windows login service for real: it writes this user's Run key and
+/// starts slopmaxw.exe, so it runs only on CI, whose runner is thrown away.
+#[cfg(windows)]
+#[test]
+fn windows_login_service_runs_and_supervises_the_proxy() {
+    if std::env::var_os("CI").is_none() {
+        eprintln!("skipped: it changes this user's login programs; CI runs it");
+        return;
+    }
+    let s = Sandbox::new("winservice");
+    let run = |args: &[&str]| {
+        let mut command = s.command(args);
+        command.env_remove("SLOPMAX_NO_SERVICE");
+        s.finish(command.spawn().unwrap())
+    };
+    let wait_for = |state: &str| {
+        for _ in 0..50 {
+            if run(&["service", "status"]).stdout.contains(state) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        panic!("service never {state}: {:?}", run(&["service", "status"]));
+    };
+
+    let out = run(&["service", "install"]).ok();
+    assert!(
+        out.stdout.contains("slopmax now starts at login"),
+        "{out:?}"
+    );
+    assert!(
+        out.stdout.contains(r"CurrentVersion\Run\slopmax"),
+        "{out:?}"
+    );
+    wait_for("installed and running");
+    assert!(run(&["status"]).ok().stdout.contains("proxy running"));
+
+    // A clean stop ends the launcher too, as `systemctl stop` would.
+    run(&["stop"]).ok();
+    wait_for("installed, not running");
+    // `start` goes through the service again.
+    run(&["start"]).ok();
+    wait_for("installed and running");
+
+    let out = run(&["service", "uninstall"]).ok();
+    assert!(out.stdout.contains("Removed the service"), "{out:?}");
+    wait_for("not installed");
+    assert!(!run(&["status"]).ok().stdout.contains("proxy running"));
+}
+
 #[test]
 fn service_commands_find_no_manager_in_the_sandbox() {
     let s = Sandbox::new("service");

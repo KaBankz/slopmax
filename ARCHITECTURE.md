@@ -28,6 +28,8 @@ crates/
   slopmax          the CLI: the `slopmax` binary, its parser, questions, and printing
   slopmax-daemon   the daemon: the proxy, /slopmax/api and its event stream, the web UI,
                    and the background jobs, on the engine
+  slopmax-launcher slopmaxw.exe, which runs the proxy at login on Windows with no console
+                   window and starts it again after a failure; std only
   slopmax-core     the engine: accounts, sign-in, providers, the pool, the ledger, the report
   slopmax-api      the API's types, as every client sees them
   slopmax-client   a typed client of /slopmax/api and its event stream

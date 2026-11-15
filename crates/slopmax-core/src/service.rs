@@ -1,5 +1,7 @@
 //! Running the proxy as a background service that starts at login: a
-//! systemd user unit on Linux, a launchd agent on macOS.
+//! systemd user unit on Linux, a launchd agent on macOS, and on Windows
+//! `slopmaxw.exe` in the user's Run key, which supervises the proxy as the
+//! other two do (crates/slopmax-launcher).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -11,12 +13,19 @@ use crate::paths::Home;
 
 const NAME: &str = "slopmax";
 const LABEL: &str = "dev.slopmax";
+/// Windows: the programs this user starts at login. Writing here takes no
+/// administrator, unlike a scheduled task or a service.
+const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+/// Windows: the windowed program that runs the proxy, beside slopmax.exe.
+const LAUNCHER: &str = "slopmaxw.exe";
 
 /// The service manager on this machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Manager {
     Systemd,
     Launchd,
+    /// The user's Run key starting `slopmaxw.exe`.
+    Windows,
 }
 
 /// What the service manager knows about slopmax.
@@ -39,6 +48,8 @@ impl Manager {
         }
         if cfg!(target_os = "macos") {
             Some(Self::Launchd)
+        } else if cfg!(windows) {
+            Some(Self::Windows)
         } else if cfg!(target_os = "linux") && succeeds("systemctl", &["--user", "--version"]) {
             Some(Self::Systemd)
         } else {
@@ -55,6 +66,9 @@ impl Manager {
                 .user()
                 .join("Library/LaunchAgents")
                 .join(format!("{LABEL}.plist")),
+            // A registry value rather than a file, named the way regedit
+            // shows it.
+            Self::Windows => PathBuf::from(format!("{RUN_KEY}\\{NAME}")),
         }
     }
 
@@ -63,9 +77,23 @@ impl Manager {
         let file = self.file(home);
         let log = home.log();
         let home = std::env::var_os("SLOPMAX_HOME").map(PathBuf::from);
+        if self == Self::Windows {
+            let line = windows_command(&launcher(exe)?, exe, &log, home.as_deref());
+            run(
+                "reg",
+                &[
+                    "add", RUN_KEY, "/v", NAME, "/t", "REG_SZ", "/d", &line, "/f",
+                ],
+            )?;
+            // Replacing a running one, as launchd's bootout does.
+            stop_launcher();
+            spawn_launcher(exe, &log, home.as_deref())?;
+            return Ok(file);
+        }
         let text = match self {
             Self::Systemd => systemd_unit(exe, &log, home.as_deref()),
             Self::Launchd => launchd_plist(exe, &log, home.as_deref()),
+            Self::Windows => unreachable!("Windows keeps no file"),
         };
         fsx::write_private(&file, text.as_bytes())
             .with_context(|| format!("writing {}", file.display()))?;
@@ -79,12 +107,22 @@ impl Manager {
                 let _ = launchctl(&["bootout", &launchd_target()]);
                 launchctl(&["bootstrap", &launchd_domain(), &file.to_string_lossy()])?;
             }
+            Self::Windows => {}
         }
         Ok(file)
     }
 
     pub fn uninstall(self, home: &Home) -> Result<PathBuf> {
         let file = self.file(home);
+        if self == Self::Windows {
+            if !run_key_set() {
+                bail!("no service installed");
+            }
+            // The proxy with it, as `systemctl disable --now` stops it.
+            stop_launcher();
+            run("reg", &["delete", RUN_KEY, "/v", NAME, "/f"])?;
+            return Ok(file);
+        }
         match self {
             Self::Systemd => {
                 let _ = run("systemctl", &["--user", "disable", "--now", NAME]);
@@ -92,6 +130,7 @@ impl Manager {
             Self::Launchd => {
                 let _ = launchctl(&["bootout", &launchd_target()]);
             }
+            Self::Windows => {}
         }
         match std::fs::remove_file(&file) {
             Ok(()) => {}
@@ -105,6 +144,14 @@ impl Manager {
     }
 
     pub fn status(self, home: &Home) -> Status {
+        if self == Self::Windows {
+            let installed = run_key_set();
+            return Status {
+                installed,
+                running: installed && launcher_running(),
+                lingering: None,
+            };
+        }
         let installed = self.file(home).exists();
         match self {
             Self::Systemd => Status {
@@ -118,13 +165,23 @@ impl Manager {
                 running: installed && launchctl(&["print", &launchd_target()]).is_ok(),
                 lingering: None,
             },
+            Self::Windows => unreachable!("answered above"),
         }
     }
 
-    pub fn start(self) -> Result<()> {
+    /// Starts the installed service, which runs `exe` (the one it was
+    /// installed with, on Linux and macOS).
+    pub fn start(self, exe: &Path, home: &Home) -> Result<()> {
         match self {
             Self::Systemd => run("systemctl", &["--user", "start", NAME]),
             Self::Launchd => launchctl(&["kickstart", &launchd_target()]),
+            // One already running starts the proxy itself, once its pause
+            // after a failure is over.
+            Self::Windows if launcher_running() => Ok(()),
+            Self::Windows => {
+                let home_dir = std::env::var_os("SLOPMAX_HOME").map(PathBuf::from);
+                spawn_launcher(exe, &home.log(), home_dir.as_deref())
+            }
         }
     }
 }
@@ -209,6 +266,68 @@ fn launchd_plist(exe: &Path, log: &Path, home: Option<&Path>) -> String {
     )
 }
 
+/// Windows: `slopmaxw.exe` beside `exe`, which the release archive ships.
+fn launcher(exe: &Path) -> Result<PathBuf> {
+    let launcher = exe.with_file_name(LAUNCHER);
+    if !launcher.is_file() {
+        bail!(
+            "{LAUNCHER}, which runs slopmax at login, is not beside {}; it comes in slopmax's Windows release archive",
+            exe.display()
+        );
+    }
+    Ok(launcher)
+}
+
+/// Windows: the Run key's command line. Windows paths cannot hold `"`, so
+/// quoting each is enough.
+fn windows_command(launcher: &Path, exe: &Path, log: &Path, home: Option<&Path>) -> String {
+    let mut line = format!(
+        "\"{}\" \"{}\" --log \"{}\"",
+        launcher.display(),
+        exe.display(),
+        log.display()
+    );
+    if let Some(home) = home {
+        line.push_str(&format!(" --home \"{}\"", home.display()));
+    }
+    line
+}
+
+/// Windows: starts `slopmaxw.exe` now, as logging in would. It has no
+/// window, and outlives this process.
+fn spawn_launcher(exe: &Path, log: &Path, home: Option<&Path>) -> Result<()> {
+    let mut command = Command::new(launcher(exe)?);
+    command.arg(exe).arg("--log").arg(log);
+    if let Some(home) = home {
+        command.arg("--home").arg(home);
+    }
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .with_context(|| format!("starting {LAUNCHER}"))?;
+    Ok(())
+}
+
+/// Windows: ends this user's `slopmaxw.exe` and the proxy it runs (`/T`,
+/// its child), if one runs.
+fn stop_launcher() {
+    let _ = run("taskkill", &["/IM", LAUNCHER, "/T", "/F"]);
+}
+
+fn run_key_set() -> bool {
+    succeeds("reg", &["query", RUN_KEY, "/v", NAME])
+}
+
+fn launcher_running() -> bool {
+    let filter = format!("IMAGENAME eq {LAUNCHER}");
+    Command::new("tasklist")
+        .args(["/FI", &filter, "/NH"])
+        .output()
+        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains(LAUNCHER))
+}
+
 /// Linux: whether user services outlive the login session.
 fn lingering() -> Option<bool> {
     let user = std::env::var("USER").ok()?;
@@ -278,6 +397,43 @@ mod tests {
             Some(Path::new("/srv/slopmax")),
         );
         assert!(custom.contains("Environment=\"SLOPMAX_HOME=/srv/slopmax\"\n"));
+    }
+
+    #[test]
+    fn windows_runs_the_launcher_with_the_proxy_and_its_log() {
+        let line = windows_command(
+            Path::new(r"C:\Program Files\slopmax\slopmaxw.exe"),
+            Path::new(r"C:\Program Files\slopmax\slopmax.exe"),
+            Path::new(r"C:\Users\me\.slopmax\slopmax.log"),
+            None,
+        );
+        assert_eq!(
+            line,
+            r#""C:\Program Files\slopmax\slopmaxw.exe" "C:\Program Files\slopmax\slopmax.exe" --log "C:\Users\me\.slopmax\slopmax.log""#
+        );
+        let moved = windows_command(
+            Path::new("w.exe"),
+            Path::new("s.exe"),
+            Path::new("l"),
+            Some(Path::new(r"D:\pool")),
+        );
+        assert!(moved.ends_with(r#" --home "D:\pool""#), "{moved}");
+        assert_eq!(
+            Manager::Windows.file(&Home::sandbox("/home/someone")),
+            PathBuf::from(r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run\slopmax")
+        );
+    }
+
+    #[test]
+    fn windows_needs_the_launcher_beside_the_cli() {
+        let dir = std::env::temp_dir().join(format!("slopmax-launcher-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("slopmax.exe");
+        let error = launcher(&exe).unwrap_err().to_string();
+        assert!(error.starts_with("slopmaxw.exe, which runs slopmax at login, is not beside"));
+        std::fs::write(dir.join(LAUNCHER), b"").unwrap();
+        assert_eq!(launcher(&exe).unwrap(), dir.join(LAUNCHER));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -19,6 +19,8 @@ On Linux and macOS, the install script fetches the latest release, checks its ch
 curl -fsSL https://raw.githubusercontent.com/KaBankz/slopmax/master/install.sh | sh
 ```
 
+On Windows, download `slopmax-x86_64-pc-windows-msvc.zip` (or the `aarch64` one) from the [latest release](https://github.com/KaBankz/slopmax/releases/latest) and keep its two programs together, in a folder on your `PATH`: `slopmax.exe`, and `slopmaxw.exe`, which runs the proxy at login.
+
 Or build it with Cargo (Rust 1.89 or newer):
 
 ```sh
@@ -320,7 +322,7 @@ What crosses: text, images, documents, tool definitions and calls, tool results,
 | `slopmax enable\|disable <account>`  | Put an account in or take it out of rotation                                  |
 | `slopmax remove <account>`           | Forget an account                                                             |
 | `slopmax redeem <account>`           | Redeem a Claude or ChatGPT limit reset (`--yes` skips the prompt)             |
-| `slopmax service install\|uninstall\|status` | Run the proxy as a systemd user unit or launchd agent                 |
+| `slopmax service install\|uninstall\|status` | Run the proxy at login: a systemd user unit, a launchd agent, or on Windows `slopmaxw.exe` in the user's Run key |
 | `slopmax start\|stop`                | Run the proxy in the background (through the service, if installed), or stop it |
 | `slopmax serve`                      | Run the proxy in the foreground                                               |
 | `slopmax run <agent> [args…]`        | Launch Claude Code or Codex through the proxy                                 |

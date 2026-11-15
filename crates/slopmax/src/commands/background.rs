@@ -41,7 +41,7 @@ pub(super) async fn ensure_running(config: &Config) -> Result<()> {
 
 pub(super) async fn service(config: &Config, action: &str) -> Result<()> {
     let manager = Manager::detect().context(
-        "no supported service manager here (systemd user services or launchd); \
+        "no supported service manager here (systemd user services, launchd, or Windows); \
          run `slopmax start` from a login script instead",
     )?;
     match action {

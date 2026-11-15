@@ -35,8 +35,8 @@ jobs:
           - { target: aarch64-unknown-linux-musl, os: ubuntu-latest }
           - { target: x86_64-apple-darwin, os: macos-latest }
           - { target: aarch64-apple-darwin, os: macos-latest }
-          - { target: x86_64-pc-windows-msvc, os: windows-latest }
-          - { target: aarch64-pc-windows-msvc, os: windows-latest }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest, bin: "slopmax,slopmaxw" }
+          - { target: aarch64-pc-windows-msvc, os: windows-latest, bin: "slopmax,slopmaxw" }
     steps:
       - uses: actions/checkout@v7
       # The Rust that mise.toml pins, as in development and CI.
@@ -47,7 +47,8 @@ jobs:
         env:
           SLOPMAX_UI_REQUIRED: "1"
         with:
-          bin: slopmax
+          # Windows also ships slopmaxw.exe, which runs the proxy at login.
+          bin: ${{ matrix.bin || 'slopmax' }}
           target: ${{ matrix.target }}
           archive: slopmax-$target
           checksum: sha256

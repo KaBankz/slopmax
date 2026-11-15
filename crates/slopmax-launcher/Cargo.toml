@@ -1,0 +1,16 @@
+[package]
+name = "slopmax-launcher"
+description = "slopmaxw.exe: runs the proxy at login on Windows, with no console window, and restarts it when it fails"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "slopmaxw"
+path = "src/main.rs"
+
+[lints]
+workspace = true
