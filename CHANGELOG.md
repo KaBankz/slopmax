@@ -14,6 +14,10 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 - When every account is rate limited, the agent's error says when the first frees up as `(reset after 2h 5m 12s)`, to the second, so T3 Code and other apps running Claude Code show the time.
 - A limit reset redeemed from T3 Code goes to ChatGPT with T3's own request id, so a retry from any machine is answered as the first was, and a redemption that names no reset spends the soonest to expire, as ChatGPT does.
 
+### Fixed
+
+- An account's last error, such as `usage poll: refresh token rejected`, no longer stays in `slopmax status` and the dashboard after you sign in again. Signing in again or a successful usage check now clears it. Before, only a request served by the account did, so an account that fill-first wasn't using kept the old error.
+
 ## [0.9.0] - 2026-11-15
 
 New sessions now fill accounts in an order you set, and limit resets are no longer redeemed by themselves. Both are new defaults: a config that names its own keeps it. Errors and empty states across the CLI, the proxy and the dashboard now say what happened and what to run.

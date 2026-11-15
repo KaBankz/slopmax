@@ -409,6 +409,15 @@ impl Inner {
         }
         self.states.get_mut(id).expect("inserted above")
     }
+
+    /// Forgets the error the account last showed, once it is known past.
+    fn clear_error(&mut self, id: &str) {
+        if let Some(state) = self.states.get_mut(id)
+            && state.last_error.take().is_some()
+        {
+            self.dirty = true;
+        }
+    }
 }
 
 /// Thread-safe pool shared by the proxy and its background tasks.
@@ -470,12 +479,27 @@ impl Pool {
     }
 
     /// Replaces the account list (from disk). Sessions bound to a removed
-    /// account are released.
+    /// account are released, and an account signed in again drops the error
+    /// that signed it out.
     pub fn sync(&self, accounts: Vec<Account>) {
         let mut inner = self.lock();
         let ids: Vec<&str> = accounts.iter().map(|a| a.id.as_str()).collect();
         for sessions in inner.sessions.values_mut() {
             sessions.retain(|_, binding| ids.contains(&binding.account.as_str()));
+        }
+        let signed_in: Vec<String> = accounts
+            .iter()
+            .filter(|a| {
+                a.auth_error.is_none()
+                    && inner
+                        .accounts
+                        .iter()
+                        .any(|held| held.id == a.id && held.auth_error.is_some())
+            })
+            .map(|a| a.id.clone())
+            .collect();
+        for id in signed_in {
+            inner.clear_error(&id);
         }
         inner.accounts = accounts.into_iter().map(Arc::new).collect();
     }
@@ -774,6 +798,13 @@ impl Pool {
         state.throttled_until = None;
         state.last_error = None;
         inner.dirty = true;
+    }
+
+    /// Records a usage poll's reading. The poll got through, so the error
+    /// the account last showed (a failed poll, a refused sign-in) is past.
+    pub fn record_reading(&self, id: &str, limits: Limits, now: Timestamp) {
+        self.observe(id, limits, now);
+        self.lock().clear_error(id);
     }
 
     /// Folds a usage reading into the account's limits.
@@ -1657,6 +1688,44 @@ mod tests {
         assert_eq!(
             pick(&none, None, 1000).unwrap_err().reason,
             "slopmax has no Claude account connected yet; run `slopmax login claude` (or `slopmax import`)"
+        );
+    }
+
+    #[test]
+    fn a_usage_reading_clears_the_last_error() {
+        let a = account(ProviderId::Claude, "a", 1);
+        let pool = pool(Strategy::FillFirst, &[&a]);
+        pool.record_error(
+            &a.id,
+            "usage poll: refresh token rejected (400 Bad Request)",
+        );
+        // Headers on an answer fold in limits but say nothing of the error.
+        pool.observe(&a.id, limits(vec![window("5h", 10.0, None)]), ts(1000));
+        assert!(pool.state(&a.id).last_error.is_some());
+        pool.record_reading(&a.id, limits(vec![window("5h", 10.0, None)]), ts(1000));
+        assert_eq!(pool.state(&a.id).last_error, None);
+    }
+
+    #[test]
+    fn signing_in_again_clears_the_last_error() {
+        let mut a = account(ProviderId::Claude, "a", 1);
+        let b = account(ProviderId::Claude, "b", 2);
+        a.auth_error = Some("refresh token rejected (400 Bad Request)".into());
+        let pool = pool(Strategy::FillFirst, &[&a, &b]);
+        pool.record_error(
+            &a.id,
+            "usage poll: refresh token rejected (400 Bad Request)",
+        );
+        pool.record_error(&b.id, "server error 500");
+        // A rescan that changes nothing keeps both.
+        pool.sync(vec![a.clone(), b.clone()]);
+        assert!(pool.state(&a.id).last_error.is_some());
+        a.auth_error = None;
+        pool.sync(vec![a.clone(), b.clone()]);
+        assert_eq!(pool.state(&a.id).last_error, None);
+        assert_eq!(
+            pool.state(&b.id).last_error.as_deref(),
+            Some("server error 500")
         );
     }
 
