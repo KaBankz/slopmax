@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-15
+
 The login service keeps the proxy's listening socket open, so a crash or a restart no longer refuses a single connection, and on macOS an update leaves no stand-in process behind. One change to rely on: on macOS, `slopmax stop` now unloads the login agent until `slopmax start` or the next login.
 
 ### Changed
