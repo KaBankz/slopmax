@@ -33,20 +33,16 @@ crates/
   slopmax-core     the engine: accounts, sign-in, providers, the pool, the ledger, the report
   slopmax-api      the API's types, as every client sees them
   slopmax-client   a typed client of /slopmax/api and its event stream
-  slopmax-app      the desktop app apart from any UI toolkit: a client of the API
-  slopmax-desktop-gpui
-                   the desktop app's window and menu bar icon, drawn with GPUI over slopmax-app
   slopmax-wire     the API formats and translation between them; no I/O
   slopmax-net      HTTP/1.1 client and server on hyper and rustls, WebSocket frames, and
                    which headers cross the proxy
   slopmax-common   time, ids, the logger, short formats for people, and slopmax's home
-apple/             the macOS app (SwiftUI) and SlopmaxKit, its client of the API
 web/               the web UI the daemon serves (React), and @slopmax/client, its client
                    of the API
 contract/          the API's answers as the daemon gives them, which every client decodes
 ```
 
-Dependencies point one way: `slopmax-common` under `slopmax-net`, `slopmax-wire` and `slopmax-api`; those under `slopmax-core` and `slopmax-client`; the core under the daemon; and the daemon, the core and the client under the CLI. The core re-exports the crates beneath it (`slopmax_core::net`, `::wire`, `::time`, `::log`). The apps link neither the core nor the daemon: `cargo tree -p slopmax-app -e normal` has no `slopmax-core`, so they cannot write what the daemon holds.
+Dependencies point one way: `slopmax-common` under `slopmax-net`, `slopmax-wire` and `slopmax-api`; those under `slopmax-core` and `slopmax-client`; the core under the daemon; and the daemon, the core and the client under the CLI. The core re-exports the crates beneath it (`slopmax_core::net`, `::wire`, `::time`, `::log`).
 
 ### One writer, many clients
 
@@ -54,21 +50,13 @@ While a daemon serves a home it is the only process that writes what it holds: a
 
 - The CLI checks for a daemon at the address config.toml gives (`commands::daemon`) and, when one answers, sends each change through `slopmax-client`: `use`, `label`, `priority`, `enable`, `disable`, `remove`, `own`, `redeem`, `import`, `login` (a subscription's sign-in follows `Event::Login` on the event stream), `key` and `config`. With none running it calls the engine itself: `account::pin`, `state::change` under the serve lock, `auth::connect`, `import::save`.
 - `status` reads the API's `Report`, from the daemon or mapped from disk (`api::report`); `--watch` redraws as the event stream pushes it.
-- The desktop apps (SwiftUI on macOS, `slopmax-app` under GPUI elsewhere) and the web UI are API clients and nothing more. What the API cannot answer while no daemon runs (where it listens, starting it, installing the login service, the report from disk) they ask of the CLI they ship with: `daemon-info --json`, `start`, `service install`, `status --json`.
+- The web UI is an API client and nothing more.
 
 ### Hub mode
 
 A machine with `[hub] url` in config.toml uses another machine's slopmax, the hub, and runs no proxy of its own. `Config::agent_base()` and `Config::agent_token()` give the hub's URL and its key, or the placeholder token `tailnet` when the hub knows the machine by its tailnet identity; Claude Code's and Codex's wiring and the doctor's agent checks read them. `Config::base_url()` stays this machine's own address, so `start`, `stop`, `serve`, `service` and the background client never aim at the hub: they refuse in hub mode (`Config::hub_refusal`). Every other command goes to the hub's API through `Client::remote`, which speaks HTTPS with the system's roots and allows the first handshake 30 seconds, because `tailscale serve` makes its certificate then. A hub that doesn't answer is an error, never a reason to read this machine's files: the hub is the one writer of its accounts, and refreshing a login on two machines signs one of them out.
 
 The engine's errors at these boundaries are typed (`error.rs`: `StoreError`, `ConfigError`, `LoginError`, `ProviderError`, `ListenError`), and `api.rs` turns each into the API's error once. Nothing in the engine reads the terminal, prints, or reads the environment: paths come from a `Home`, made once by the CLI or the daemon.
-
-### The desktop app
-
-On hold: the CLI, with the dashboard it serves, is slopmax's only interface. The code below and `apple/` stay in the tree, and their CI workflows (`apple`, `Desktop`) run only when started by hand.
-
-`slopmax-app` is the app without a toolkit. `App::start` finds the daemon through the CLI, starts it if none runs, and follows its event stream on its own tokio runtime, keeping a `Snapshot` current: the proxy's state, the report, how the agents are wired, the login service, a sign-in in progress, and how the last action went. Every action is one API call. `view` turns a snapshot into what a window draws, and the menu bar's line; it reads the API's report, whose words come from the daemon.
-
-A UI subscribes to the snapshot through a tokio `watch` channel, which any executor can await, draws it, and calls `App`'s methods; it holds no logic of its own. The GPUI crate draws the window this way.
 
 ### Modules
 
@@ -294,7 +282,6 @@ The login service runs `~/.slopmax/bin/slopmax`, a link the handoff and `slopmax
   setup-backup.json         what `setup` replaced
   tailnet.sock              the owner-only socket `tailscale serve` reaches slopmax through
                             (unix; bound while the daemon runs)
-  app.toml                  the desktop app's own choices (whether it posts notifications)
   slopmax.log
 ```
 

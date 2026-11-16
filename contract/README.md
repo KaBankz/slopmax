@@ -11,4 +11,3 @@ fixtures, not by generated code.
 - `web/packages/client/test/rust-contract.test.ts` decodes every fixture with `@slopmax/client`, the
   TypeScript client the web UI is built on, strictly (`onExcessProperty: "error"`), so a field Rust
   adds, renames or drops fails there.
-- The Swift app decodes them too (`apple/Tests/ContractTests.swift`).

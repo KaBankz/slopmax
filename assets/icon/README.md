@@ -14,11 +14,8 @@ is unlit.
 | `base.py`                        | Shared studio setup: Cycles on CPU, the curved backdrop, the world, the glass and emission helpers, `render()`. |
 | `build.ts`                       | `draft`, `render` and `derive` (below).                                                                         |
 | `icon.png`                       | The 1024 px master, cut to the squircle. Everything else derives from it.                                       |
-| `mark.svg`                       | The flat mark for small sizes (favicon, the apps' small logo, the tray): the same ⌥ on the same cobalt.         |
-| `tray-template.svg`              | The macOS menu bar glyph: black, alpha only, the unlit bar at 45%.                                              |
-| `icon-macos.png`, `icon.icns`    | macOS: the tile on Apple's grid (824 of 1024) with its shadow.                                                  |
+| `mark.svg`                       | The flat mark for small sizes (the favicon, the UI's small logo): the same ⌥ on the same cobalt.                |
 | `icon.ico`                       | Windows: 16 to 256 px.                                                                                          |
-| `trayTemplate*.png`, `tray*.png` | The macOS menu bar template and the Windows and Linux tray, at 1x and 2x.                                       |
 
 ## Where it is used
 
@@ -28,8 +25,6 @@ is unlit.
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `README.md`                                              | `icon.png` at the top.                                                                           |
 | `web/apps/ui/src/{logo.svg,icon-128.png}` (copies)       | The web UI's favicon and small logo, and its large logo.                                         |
-| `apple/Slopmax/Assets.xcassets` (copies)                 | The macOS app's icon (from `icon-macos.png`), its menu bar glyph, and the cobalt as its accent.  |
-| `crates/slopmax-desktop-gpui`                            | `mark.svg` as its logo and its Windows and Linux tray, `trayTemplate@2x.png` in the menu bar, and `icon.icns` in the bundle `macos/bundle.sh` makes. |
 | `crates/slopmax/build.rs`                                | `icon.ico` in `slopmax.exe`, for Explorer and the taskbar.                                       |
 
 ## Colors

@@ -1,7 +1,7 @@
 //! The API's contract: every endpoint's answers, successes and errors, as
 //! the fixtures in `contract/fixtures/` hold them. The TypeScript client
-//! (`web/packages/client/test/rust-contract.test.ts`) and the Swift app
-//! decode the same fixtures strictly, so a field added, renamed or dropped
+//! (`web/packages/client/test/rust-contract.test.ts`) decodes the same
+//! fixtures strictly, so a field added, renamed or dropped
 //! here fails there.
 //!
 //! `SLOPMAX_BLESS=1 cargo test --test contract` rewrites the fixtures;

@@ -1,6 +1,5 @@
 //! A client of slopmax's API (`/slopmax/api`), for the front ends written
-//! in Rust: the CLI, when a daemon serves its home, and the desktop app,
-//! always. It speaks the [`slopmax_api`] types and nothing of the engine,
+//! in Rust: the CLI, when a daemon serves its home. It speaks the [`slopmax_api`] types and nothing of the engine,
 //! so a front end built on it changes nothing on disk: the daemon is the
 //! only writer while it runs.
 //!

@@ -582,7 +582,7 @@ pub static APP: App = App {
         command("doctor", "Check the setup and say how to fix problems", &[]),
         command(
             "daemon-info",
-            "Where the proxy listens and its key, for the apps that drive it",
+            "Where the proxy listens and its key, for scripts that drive it",
             &[arg("json", "As JSON (the only form)", Kind::Flag(None))],
         ),
         command(
