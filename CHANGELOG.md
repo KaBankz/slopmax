@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-16
+
 slopmax is its CLI and the dashboard it serves: the desktop apps are gone. `slopmax tailscale on` no longer needs root: Tailscale now reaches the hub at a private path on the proxy's port rather than at its socket, which Tailscale lets only root publish. Your machines still need no key, and a hub on Windows or Tailscale's macOS app now needs none either. Run `slopmax tailscale on` again on a hub published before, to move it.
 
 ### Changed
