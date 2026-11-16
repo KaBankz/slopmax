@@ -113,7 +113,7 @@ const KeyProvider = Schema.Literals(ProviderId.literals)
       const facts = providerFacts[provider]
       if (facts.signIn === "key") return true
       if (facts.signIn === "endpoint") return "a compatible endpoint is added with its url, as an Endpoint"
-      return `${facts.title} accounts sign in with a browser: \`slopmax login ${provider}\`, or the app`
+      return `${facts.title} accounts sign in with a browser, through \`slopmax login ${provider}\` or the dashboard`
     }),
   )
 

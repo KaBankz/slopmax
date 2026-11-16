@@ -531,7 +531,6 @@ mod tests {
             assert_eq!(named.as_str(), id.as_str());
             assert_eq!(named.title(), id.spec().title);
             assert_eq!(named.is_subscription(), id.spec().is_subscription());
-            assert_eq!(named.grants_resets(), id.get().credits().is_some());
         }
     }
 
@@ -566,37 +565,6 @@ mod tests {
         // The chain, as the CLI prints it.
         assert_eq!(failed.to_string(), "signing in: denied");
         assert_eq!(status(failed.into()), 502);
-    }
-
-    /// The words `slopmax status` and the apps show agree with the engine's.
-    #[test]
-    fn conditions_and_notes_read_as_the_engine_words_them() {
-        let now = Timestamp::from_second(10_000).unwrap();
-        let until = now + crate::time::SignedDuration::from_mins(90);
-        let pairs = [
-            (
-                report::Condition::Limited(until),
-                api::report::Condition::Limited { until },
-            ),
-            (
-                report::Condition::Active(3),
-                api::report::Condition::Active { sessions: 3 },
-            ),
-            (report::Condition::Ready, api::report::Condition::Ready),
-        ];
-        for (engine, wire) in pairs {
-            assert_eq!(engine.describe(now), wire.describe(now));
-        }
-        assert_eq!(
-            report::Note::ResetCredits(2).describe(),
-            api::report::Note::Resets { count: 2 }.describe()
-        );
-        // A limit whose time has passed is over.
-        let later = until + crate::time::SignedDuration::from_mins(1);
-        assert_eq!(
-            api::report::Condition::Limited { until }.at(later),
-            api::report::Condition::Ready
-        );
     }
 
     #[test]

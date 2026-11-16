@@ -1604,8 +1604,6 @@ fn a_broken_config_still_lets_the_proxy_be_stopped_and_diagnosed() {
     );
     s.run(&["completions", "bash"]).ok();
     s.run(&["logs", "-n", "1"]).ok();
-    let out = s.run(&["daemon-info"]).ok();
-    assert!(out.stdout.contains("\"running\":true"), "{out:?}");
 
     // And it stops, with the config's own key.
     let out = s.run(&["stop"]).ok();
@@ -1742,9 +1740,9 @@ fn windows_login_service_runs_and_supervises_the_proxy() {
     );
     wait_for("installed and running");
     let answers = || {
-        let info: Value =
-            serde_json::from_str(&run(&["daemon-info", "--json"]).ok().stdout).unwrap();
-        info["running"] == json!(true)
+        run(&["doctor"])
+            .stdout
+            .contains(&format!("running on http://127.0.0.1:{}", s.port))
     };
     assert!(answers(), "the proxy does not answer");
 
@@ -2092,8 +2090,7 @@ async fn handing_the_proxy_to_another_binary_refuses_and_cuts_off_nothing() {
         .unwrap()
     };
     assert_eq!(login.code, 0, "{login:?}");
-    let info: Value = serde_json::from_str(&s.run(&["daemon-info", "--json"]).ok().stdout).unwrap();
-    let key = info["key"].as_str().unwrap().to_owned();
+    let key = owner_key(&s);
     let base = format!("http://127.0.0.1:{}", s.port);
 
     let mut first = s.command(&["serve"]).spawn().unwrap();
@@ -2296,8 +2293,7 @@ async fn a_proxy_started_on_the_kept_socket_takes_over_without_refusing_a_connec
         .unwrap()
     };
     assert_eq!(login.code, 0, "{login:?}");
-    let info: Value = serde_json::from_str(&s.run(&["daemon-info", "--json"]).ok().stdout).unwrap();
-    let key = info["key"].as_str().unwrap().to_owned();
+    let key = owner_key(&s);
     let base = format!("http://127.0.0.1:{}", s.port);
 
     // The socket the service manager keeps, and where it hears from the

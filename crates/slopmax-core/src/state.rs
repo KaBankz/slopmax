@@ -3,7 +3,7 @@
 //! the nudges already told, and what was last seen of Codex.
 //!
 //! While a daemon serves a home, it is the only writer: the CLI and the
-//! apps change state through its API. With none serving, [`change`] edits
+//! dashboard change state through its API. With none serving, [`change`] edits
 //! the file under the same serve lock, so a daemon starting meanwhile
 //! waits for it rather than reading half of it.
 

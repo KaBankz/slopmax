@@ -1,8 +1,9 @@
-//! The ledger as a window charts it: what went through slopmax over a
+//! The ledger as the dashboard charts it: what went through slopmax over a
 //! range, hour by hour or day by day; by provider, model, account, and
 //! agent; what failover saved and what failed; what caching saved; how soon
 //! answers began and how fast they came; and when the work happens. Worked
-//! out once for every UI, as `view` is for the accounts.
+//! out here, as [`crate::report`] is for the accounts, so the dashboard
+//! only draws it.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -37,19 +38,6 @@ pub enum Range {
 
 impl Range {
     pub const ALL: [Range; 3] = [Range::Today, Range::Week, Range::Month];
-
-    pub fn title(self) -> &'static str {
-        match self {
-            Range::Today => "Today",
-            Range::Week => "7 Days",
-            Range::Month => "30 Days",
-        }
-    }
-
-    /// The range `summary` knows as `key`: `today`, `7d`, or `30d`.
-    pub fn parse(key: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|r| r.key() == key)
-    }
 
     /// The name `summary` knows it by.
     pub fn key(self) -> &'static str {

@@ -1,6 +1,6 @@
 //! Checks of the whole setup, each saying how to fix what is wrong: what
-//! `slopmax doctor` prints and the app shows. Findings never include a key
-//! or token.
+//! `slopmax doctor` prints and the dashboard shows. Findings never include
+//! a key or token.
 
 use std::net::{SocketAddr, TcpListener};
 use std::path::Path;

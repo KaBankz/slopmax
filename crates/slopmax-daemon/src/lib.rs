@@ -3,7 +3,7 @@
 //! changes, keeping tokens fresh, polling usage, redeeming limit resets,
 //! telling notices) and saves its state. It is built on the engine,
 //! [`slopmax_core`], and is the only process that writes what it holds while
-//! it runs; the CLI and the apps reach it through `/slopmax/api`.
+//! it runs; the CLI and the dashboard reach it through `/slopmax/api`.
 
 pub mod handoff;
 pub mod proxy;
@@ -216,8 +216,8 @@ pub async fn serve_with(
     let _ = app.handles.set(handoff::Handles {});
     *app.serving.lock().unwrap_or_else(|p| p.into_inner()) = Some(serving);
 
-    // Logins, removals and `slopmax use` from the CLI and the apps are told
-    // to the daemon at once (`/slopmax/api/sync`); the rescan catches the rest.
+    // Logins, removals and `slopmax use` from the CLI are told to the
+    // daemon at once (`/slopmax/api/sync`); the rescan catches the rest.
     // Each job asks the config as it runs, so a changed config.toml turns it
     // on or off without a restart. Every period is a multiple of 30 s, so the
     // jobs share their wakeups: each costs tokio's timer wheel about three,
@@ -840,9 +840,9 @@ async fn shutdown(app: Arc<App>) -> server::Stop {
 }
 
 /// Watches the accounts' conditions, telling each change: in the log, on
-/// the API's event stream (which the apps post as notifications), and to
-/// the configured webhook or command. The nudges told are kept with the
-/// state, so a restart does not tell them again.
+/// the API's event stream (which the dashboard posts as notifications),
+/// and to the configured webhook or command. The nudges told are kept with
+/// the state, so a restart does not tell them again.
 struct Watch {
     watcher: notify::Watcher,
 }

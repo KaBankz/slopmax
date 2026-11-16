@@ -508,7 +508,7 @@ async fn add_account(app: &App, add: AddAccount) -> Answer {
             let provider = api::provider_id(provider);
             if provider.spec().is_subscription() {
                 return Err(ApiError::bad_request(format!(
-                    "{} accounts sign in with a browser: `slopmax login {provider}`, or the app",
+                    "{} accounts sign in with a browser, through `slopmax login {provider}` or the dashboard",
                     provider.spec().title
                 )));
             }
@@ -1080,9 +1080,6 @@ fn events(app: &Arc<App>, asker: Asker) -> Response {
     app.clone().spawn(async move {
         let hello = Event::Hello {
             version: env!("CARGO_PKG_VERSION").into(),
-            exe: std::env::current_exe()
-                .ok()
-                .map(|p| p.display().to_string()),
         };
         let (mut last, first) = status(&app);
         if tx.send(hello.frame().into()).await.is_err() || tx.send(first).await.is_err() {
@@ -1367,7 +1364,6 @@ mod tests {
             Event::Ping {},
             Event::Hello {
                 version: "1".into(),
-                exe: None,
             },
         ] {
             assert!(!other.frame().starts_with(LOGIN_FRAME));

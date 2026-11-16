@@ -1,6 +1,6 @@
 //! The proxy in the background: talking to a running one, and starting it
-//! detached or as a login service. The CLI and the app both manage it
-//! through here; `exe` is always the slopmax binary that runs `serve`.
+//! detached or as a login service. The CLI manages it through here; `exe`
+//! is always the slopmax binary that runs `serve`.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -124,7 +124,7 @@ pub fn foreign(listen: SocketAddr, pid: Option<u32>) -> String {
     )
 }
 
-/// The binary this process runs as, for front ends that are slopmax itself.
+/// The binary this process runs as, which the proxy it starts runs too.
 pub fn current_exe() -> Result<PathBuf> {
     std::env::current_exe().context("locating the slopmax binary")
 }

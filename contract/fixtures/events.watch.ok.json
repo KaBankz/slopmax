@@ -3,8 +3,7 @@
   "body": [
     {
       "_tag": "Hello",
-      "version": "<version>",
-      "exe": "<exe>"
+      "version": "<version>"
     },
     {
       "_tag": "Status",

@@ -11,12 +11,7 @@ publish = false
 [dependencies]
 anyhow.workspace = true
 base64.workspace = true
-bytes.workspace = true
 http.workspace = true
-http-body-util.workspace = true
-hyper.workspace = true
-hyper-util.workspace = true
-memchr.workspace = true
 # SHA-256 of downloaded releases; already rustls's.
 ring.workspace = true
 serde.workspace = true
@@ -38,6 +33,8 @@ toml_edit.workspace = true
 workspace = true
 
 [dev-dependencies]
+# The bodies of the stand-in servers in tests.
+bytes.workspace = true
 # Release archives built in tests.
 flate2.workspace = true
 # Paused time, for timeouts tested without waiting them out.

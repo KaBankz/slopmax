@@ -1,10 +1,10 @@
-//! Account status: what `slopmax status` and the app show, and what
-//! `/slopmax/status` serves.
+//! Account status as the engine reads it: every account, how it stands,
+//! and each subscription's accounts read as one pool. [`crate::api::report`]
+//! makes it the report `slopmax status` and the dashboard show.
 
 use std::collections::{BTreeMap, HashMap};
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 
 use crate::account::{Account, Store};
 use crate::auth;
@@ -14,9 +14,9 @@ use crate::net::Origins;
 use crate::pool::{AccountState, Pins, Pool, State};
 use crate::provider::ProviderId;
 use crate::time::{SignedDuration, Timestamp};
-use crate::{fsx, human, log, usage};
+use crate::{fsx, log, usage};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Report {
     pub version: String,
     pub strategy: Strategy,
@@ -25,17 +25,12 @@ pub struct Report {
     pub generated_at: Timestamp,
     pub accounts: Vec<AccountReport>,
     /// Each subscription's working accounts read as one, as agents see them.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pools: Vec<PoolReport>,
-    /// What is worth doing before it is lost: limit resets about to lapse
-    /// unredeemed, and weeks about to reset with quota to spare.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub nudges: Vec<crate::notify::Event>,
 }
 
 /// A provider's working accounts (enabled and signed in) read as one: each
 /// window's average use, and the soonest reset that frees capacity.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct PoolReport {
     pub provider: ProviderId,
     pub accounts: usize,
@@ -43,17 +38,15 @@ pub struct PoolReport {
     /// Claude model), which stop only that model's requests.
     pub windows: Vec<Window>,
     /// The account a new session would get now, when one can serve.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next: Option<NextReport>,
     /// Each account's share of the pool's capacity, by id, when every
     /// plan's size is known; the windows are then weighted by it. Empty,
     /// they are a plain average of the accounts.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub shares: BTreeMap<String, f64>,
 }
 
 /// Where a new session would go, and why, worded for people.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct NextReport {
     pub account: String,
     pub reason: crate::pool::Reason,
@@ -61,25 +54,6 @@ pub struct NextReport {
 }
 
 impl Report {
-    /// Adds the [nudges](crate::notify::nudges) the accounts call for now.
-    pub fn with_nudges(mut self, config: &Config, now: Timestamp) -> Self {
-        let subjects: Vec<crate::notify::Subject> = self
-            .accounts
-            .iter()
-            .map(crate::notify::Subject::of)
-            .collect();
-        self.nudges = crate::notify::nudges(
-            &subjects,
-            config.redeem_expiring_credits,
-            &config.plan_prices,
-            now,
-        )
-        .into_iter()
-        .map(|(_, event)| event)
-        .collect();
-        self
-    }
-
     /// Says, for each pool, which account `pool` would give a new session.
     pub fn with_next(mut self, pool: &Pool, now: Timestamp) -> Self {
         for report in &mut self.pools {
@@ -93,36 +67,28 @@ impl Report {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct AccountReport {
     pub id: String,
     pub provider: ProviderId,
     pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
     pub disabled: bool,
     pub priority: i32,
     pub pinned: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_error: Option<String>,
     /// The tool whose copy of the tokens slopmax follows.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub follows: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_expires_at: Option<Timestamp>,
     /// For keys and endpoints: where requests go and the models served.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<String>,
     pub sessions: usize,
     pub state: AccountState,
 }
 
-/// Where an account stands, most pressing first: what the status column of
-/// `slopmax status` and the app shows.
+/// Where an account stands, most pressing first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Condition {
     /// Its sign-in stopped working; only signing in again fixes it.
@@ -135,42 +101,6 @@ pub enum Condition {
     /// Serving this many sessions.
     Active(usize),
     Ready,
-}
-
-impl Condition {
-    /// How it reads, the same in every front end.
-    pub fn describe(&self, now: Timestamp) -> String {
-        match self {
-            Self::SignInNeeded(error) => format!("sign in again ({error})"),
-            Self::Disabled => "disabled".into(),
-            Self::Limited(until) => format!("limited · back in {}", human::until(*until, now)),
-            Self::Throttled => "throttled".into(),
-            Self::Active(1) => "● active · 1 session".into(),
-            Self::Active(sessions) => format!("● active · {sessions} sessions"),
-            Self::Ready => "ready".into(),
-        }
-    }
-
-    pub fn tone(&self) -> Tone {
-        match self {
-            Self::SignInNeeded(_) => Tone::Bad,
-            Self::Disabled => Tone::Muted,
-            Self::Limited(_) | Self::Throttled => Tone::Warn,
-            Self::Active(_) | Self::Ready => Tone::Good,
-        }
-    }
-}
-
-/// How a front end colors a window's use or an account's condition, so
-/// every one colors them alike.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tone {
-    Good,
-    Muted,
-    /// Worth noticing without being a problem, such as a pin.
-    Accent,
-    Warn,
-    Bad,
 }
 
 /// A note beside an account's condition.
@@ -189,40 +119,6 @@ pub enum Note {
     LastError(String),
 }
 
-impl Note {
-    pub fn describe(&self) -> String {
-        match self {
-            Self::Pinned => "pinned".into(),
-            Self::Priority(priority) => format!("priority {priority}"),
-            Self::Follows(tool) => format!("follows {tool}"),
-            Self::ResetCredits(1) => "1 limit reset".into(),
-            Self::ResetCredits(credits) => format!("{credits} limit resets"),
-            Self::Served { requests, tokens } => {
-                format!("{requests} req · {} tok", human::compact(*tokens))
-            }
-            Self::LastError(error) => format!("last error: {error}"),
-        }
-    }
-
-    pub fn tone(&self) -> Tone {
-        match self {
-            Self::Pinned | Self::ResetCredits(_) => Tone::Accent,
-            _ => Tone::Muted,
-        }
-    }
-}
-
-impl Tone {
-    /// For a window's use: a warning from 70%, bad from 90%.
-    pub fn of_use(used: f64) -> Self {
-        match used {
-            u if u >= 90.0 => Self::Bad,
-            u if u >= 70.0 => Self::Warn,
-            _ => Self::Good,
-        }
-    }
-}
-
 impl AccountReport {
     pub fn condition(&self, now: Timestamp) -> Condition {
         let state = &self.state;
@@ -239,25 +135,6 @@ impl AccountReport {
         } else {
             Condition::Ready
         }
-    }
-
-    /// The window covering every request over `span` (`5h`, `7d`, `30d`).
-    pub fn window(&self, span: &str) -> Option<&Window> {
-        shared(&self.state.limits.windows, span)
-    }
-
-    /// The longer window: the week, or for plans without one, the month.
-    pub fn long_window(&self) -> Option<&Window> {
-        self.window("7d").or_else(|| self.window("30d"))
-    }
-
-    /// Windows that cover one model only.
-    pub fn scoped_windows(&self) -> impl Iterator<Item = &Window> {
-        self.state
-            .limits
-            .windows
-            .iter()
-            .filter(|w| w.model.is_some())
     }
 
     /// The notes beside its condition, in the order front ends show them.
@@ -294,22 +171,10 @@ impl AccountReport {
 }
 
 impl PoolReport {
-    pub fn window(&self, span: &str) -> Option<&Window> {
-        shared(&self.windows, span)
-    }
-
-    pub fn long_window(&self) -> Option<&Window> {
-        self.window("7d").or_else(|| self.window("30d"))
-    }
-
     /// Windows that cover one model only.
     pub fn scoped_windows(&self) -> impl Iterator<Item = &Window> {
         self.windows.iter().filter(|w| w.model.is_some())
     }
-}
-
-fn shared<'a>(windows: &'a [Window], span: &str) -> Option<&'a Window> {
-    windows.iter().find(|w| w.model.is_none() && w.span == span)
 }
 
 pub fn build(
@@ -364,7 +229,6 @@ pub fn build(
         generated_at: now,
         accounts,
         pools,
-        nudges: Vec::new(),
     }
 }
 
@@ -481,8 +345,7 @@ pub async fn offline(
         false,
         now,
     )
-    .with_next(&pool, now)
-    .with_nudges(config, now))
+    .with_next(&pool, now))
 }
 
 #[cfg(test)]
@@ -524,13 +387,6 @@ mod tests {
         assert_eq!(condition(&account), Condition::Active(2));
     }
 
-    #[test]
-    fn use_turns_yellow_at_70_and_red_at_90_percent() {
-        assert_eq!(Tone::of_use(69.9), Tone::Good);
-        assert_eq!(Tone::of_use(70.0), Tone::Warn);
-        assert_eq!(Tone::of_use(90.0), Tone::Bad);
-    }
-
     fn subscription(provider: ProviderId, email: &str) -> Account {
         let mut account = Account::new(provider, Tokens::default());
         account.email = Some(email.into());
@@ -567,64 +423,6 @@ mod tests {
     }
 
     use crate::limits::Limits;
-
-    #[test]
-    fn conditions_read_the_same_in_every_front_end() {
-        let now = ts(1_000);
-        let cases = [
-            (
-                Condition::SignInNeeded("revoked".into()),
-                "sign in again (revoked)",
-                Tone::Bad,
-            ),
-            (Condition::Disabled, "disabled", Tone::Muted),
-            (
-                Condition::Limited(ts(1_090)),
-                "limited · back in 1m30s",
-                Tone::Warn,
-            ),
-            (Condition::Throttled, "throttled", Tone::Warn),
-            (Condition::Active(1), "● active · 1 session", Tone::Good),
-            (Condition::Active(3), "● active · 3 sessions", Tone::Good),
-            (Condition::Ready, "ready", Tone::Good),
-        ];
-        for (condition, text, tone) in cases {
-            assert_eq!(condition.describe(now), text);
-            assert_eq!(condition.tone(), tone, "{text}");
-        }
-    }
-
-    #[test]
-    fn notes_read_the_same_in_every_front_end() {
-        let cases = [
-            (Note::Pinned, "pinned", Tone::Accent),
-            (Note::Priority(-2), "priority -2", Tone::Muted),
-            (
-                Note::Follows("cliproxyapi".into()),
-                "follows cliproxyapi",
-                Tone::Muted,
-            ),
-            (Note::ResetCredits(1), "1 limit reset", Tone::Accent),
-            (Note::ResetCredits(4), "4 limit resets", Tone::Accent),
-            (
-                Note::Served {
-                    requests: 12,
-                    tokens: 1_500_000,
-                },
-                "12 req · 1.5M tok",
-                Tone::Muted,
-            ),
-            (
-                Note::LastError("boom".into()),
-                "last error: boom",
-                Tone::Muted,
-            ),
-        ];
-        for (note, text, tone) in cases {
-            assert_eq!(note.describe(), text);
-            assert_eq!(note.tone(), tone, "{text}");
-        }
-    }
 
     #[test]
     fn limits_and_idle_accounts_have_their_own_conditions() {
@@ -712,26 +510,6 @@ mod tests {
         account.priority = 0;
         account.follows = None;
         assert!(account.notes(now).is_empty());
-    }
-
-    #[test]
-    fn windows_are_found_by_span_and_scope() {
-        let account = subscription(ProviderId::Claude, "a@x.com");
-        let id = account.id.clone();
-        let state = windowed(vec![
-            Window::new("5h", 10.0, None),
-            scoped("7d", "opus", 80.0, None),
-            Window::new("30d", 30.0, None),
-        ]);
-        let report = report_of(vec![account], HashMap::from([(id, state)]));
-        let account = &report.accounts[0];
-        assert_eq!(account.window("5h").unwrap().used, 10.0);
-        // The model's own weekly window is not the shared one.
-        assert!(account.window("7d").is_none());
-        assert_eq!(account.long_window().unwrap().span, "30d");
-        let scoped: Vec<_> = account.scoped_windows().collect();
-        assert_eq!(scoped.len(), 1);
-        assert_eq!(scoped[0].model.as_deref(), Some("opus"));
     }
 
     #[test]
@@ -826,23 +604,14 @@ mod tests {
         assert_eq!(report.pools.len(), 1);
         let pool = &report.pools[0];
         assert_eq!(pool.accounts, 2);
-        assert_eq!(pool.window("5h").unwrap().used, 30.0);
-        assert_eq!(pool.long_window().unwrap().span, "7d");
+        let five_hours = pool.windows.iter().find(|w| w.span == "5h").unwrap();
+        assert_eq!(five_hours.used, 30.0);
         let opus: Vec<_> = pool.scoped_windows().collect();
         assert_eq!(opus.len(), 1);
         assert_eq!(opus[0].model.as_deref(), Some("opus"));
         assert_eq!(opus[0].used, 30.0);
         assert_eq!(opus[0].resets_at, Some(ts(80_000)));
         assert!(opus[0].used_at(now) > 0.0);
-
-        // A pool with only a monthly window reads it as the long one.
-        let c = subscription(ProviderId::Codex, "c@x.com");
-        let id = c.id.clone();
-        let report = report_of(
-            vec![c],
-            HashMap::from([(id, windowed(vec![Window::new("30d", 10.0, None)]))]),
-        );
-        assert_eq!(report.pools[0].long_window().unwrap().span, "30d");
     }
 
     #[test]
@@ -877,23 +646,5 @@ mod tests {
         let next = report.pools[0].next.as_ref().unwrap();
         assert_eq!(next.account, id);
         assert_eq!(next.why, next.reason.text());
-    }
-
-    #[test]
-    fn reports_survive_a_json_round_trip() {
-        let account = subscription(ProviderId::Claude, "a@x.com");
-        let id = account.id.clone();
-        let state = windowed(vec![
-            Window::new("5h", 25.0, Some(ts(5_000))),
-            scoped("7d", "opus", 60.0, None),
-        ]);
-        let report = report_of(vec![account], HashMap::from([(id, state)]));
-        let json = serde_json::to_string(&report).unwrap();
-        let back: Report = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.accounts.len(), 1);
-        assert_eq!(back.accounts[0].email.as_deref(), Some("a@x.com"));
-        assert_eq!(back.accounts[0].state.limits.windows.len(), 2);
-        assert_eq!(back.pools[0].windows.len(), report.pools[0].windows.len());
-        assert_eq!(serde_json::to_string(&back).unwrap(), json);
     }
 }

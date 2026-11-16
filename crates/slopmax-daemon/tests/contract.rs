@@ -242,8 +242,7 @@ fn steady(value: &mut Value, home: &str) {
         Value::Object(fields) => {
             for (name, value) in fields.iter_mut() {
                 match name.as_str() {
-                    // The program and the release: true of any build.
-                    "exe" => *value = "<exe>".into(),
+                    // The release: true of any build.
                     "version" if value.is_string() => *value = "<version>".into(),
                     // What depends on the day and hour the test runs.
                     "label" if value.is_string() => *value = "<day>".into(),

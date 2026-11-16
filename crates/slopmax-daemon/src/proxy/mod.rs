@@ -593,7 +593,6 @@ impl App {
             now,
         )
         .with_next(&self.pool, now)
-        .with_nudges(&self.config(), now)
     }
 }
 

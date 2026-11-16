@@ -581,11 +581,6 @@ pub static APP: App = App {
         ),
         command("doctor", "Check the setup and say how to fix problems", &[]),
         command(
-            "daemon-info",
-            "Where the proxy listens and its key, for scripts that drive it",
-            &[arg("json", "As JSON (the only form)", Kind::Flag(None))],
-        ),
-        command(
             "completions",
             "Print a shell completion script",
             &[arg("shell", "Which shell", Kind::Required(SHELLS))],
@@ -627,7 +622,7 @@ pub async fn run(args: impl IntoIterator<Item = String>) -> Result<i32> {
     let (config, broken) = match Config::load(home()) {
         Ok(config) => (config, None),
         Err(error)
-            if matches!(m.command.name, "stop" | "logs" | "daemon-info" | "doctor")
+            if matches!(m.command.name, "stop" | "logs" | "doctor")
                 || m.command.name == "config"
                     && m.value("value").is_some_and(|v| !v.is_empty()) =>
         {
@@ -888,30 +883,6 @@ async fn dispatch(
             tailscale::run(&config, args).await?;
         }
         "doctor" => return doctor::run(&config, &store, broken.as_ref()).await,
-        "daemon-info" => {
-            // What an app needs to reach the proxy, and to tell a daemon it
-            // started (this binary) from one another install runs.
-            let running = slopmax_client::Client::new(config.base_url(), &config.api_key)
-                .health()
-                .await
-                .map(|h| h.version);
-            // The login service, for an app that offers to install it.
-            let service = slopmax_core::service::Manager::detect().map(|m| {
-                let status = m.status(home());
-                serde_json::json!({ "installed": status.installed, "running": status.running })
-            });
-            let info = serde_json::json!({
-                "base": config.base_url(),
-                "key": config.api_key,
-                "version": env!("CARGO_PKG_VERSION"),
-                "exe": std::env::current_exe().ok().map(|p| p.display().to_string()),
-                "home": home().dir().display().to_string(),
-                "running": running.is_some(),
-                "runningVersion": running,
-                "service": service,
-            });
-            println!("{info}");
-        }
         "completions" => unreachable!("answered before the config is read"),
         name => unreachable!("`{name}` is in the command table but not dispatched"),
     }
@@ -990,7 +961,6 @@ pub(super) fn hub_health() -> Option<&'static slopmax_client::Health> {
 
 static HUB: OnceLock<slopmax_client::Health> = OnceLock::new();
 
-/// The agent named by the `agent` argument.
 /// `slopmax key list|add|remove`.
 async fn key(config: &Config, action: &str, m: &args::Matches) -> Result<()> {
     use slopmax_client::api::{ApiError, requests::MakeKey, settings::KeyInfo};
@@ -1262,6 +1232,7 @@ fn on_off(flag: &str, value: &str) -> Result<bool> {
     }
 }
 
+/// The agent named by the `agent` argument.
 fn agent_named(m: &args::Matches) -> Result<&'static dyn Agent> {
     let name: String = m.get("agent")?;
     agent::find(&name).with_context(|| format!("unknown agent {name:?}"))
@@ -1382,7 +1353,6 @@ mod tests {
             "logs -f -n 100",
             "dashboard --print",
             "doctor",
-            "daemon-info --json",
             "completions fish",
         ];
         for line in lines {

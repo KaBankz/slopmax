@@ -39,7 +39,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
 smallvec = "1.16.2"
 thiserror = "2.0.21"
-tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync", "fs", "process", "io-util", "io-std"] }
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync", "process", "io-util"] }
 toml_edit = { version = "0.25.15", features = ["serde"] }
 tokio-util = { version = "0.7.19", default-features = false, features = ["rt"] }
 tower-service = "0.3.3"
@@ -53,12 +53,6 @@ tower-service = "0.3.3"
 # (slopmax-daemon's handoff), and taking the socket systemd or launchd keeps
 # and giving it to systemd to keep (slopmax-daemon's supervisor).
 unsafe_code = "deny"
-
-# Dependencies build optimized once and stay cached, so only a clean build is
-# slower, and debug builds and tests run closer to release speed; slopmax's
-# own crates still rebuild as fast.
-[profile.dev.package."*"]
-opt-level = 2
 
 [profile.release]
 lto = "fat"

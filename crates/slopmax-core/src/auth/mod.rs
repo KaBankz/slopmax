@@ -120,8 +120,8 @@ pub struct LoginOptions {
     pub no_browser: bool,
     /// For a compatible endpoint: where it is and what it serves.
     pub endpoint: Option<crate::account::Endpoint>,
-    /// For API keys and compatible endpoints: the key, which the CLI or app
-    /// asks for before signing in.
+    /// For API keys and compatible endpoints: the key, which the CLI or the
+    /// dashboard asks for before signing in.
     pub key: Option<String>,
 }
 
@@ -156,7 +156,7 @@ pub enum LoginEvent {
 
 /// The person's side of a sign-in: where its [`LoginEvent`]s go, and the
 /// redirect addresses pasted by hand. The CLI connects it to the terminal,
-/// the app to its window.
+/// the daemon to its API's event stream for the dashboard.
 pub struct Prompt {
     events: Box<dyn Fn(LoginEvent) + Send + Sync>,
     pasted: Option<mpsc::UnboundedReceiver<String>>,
