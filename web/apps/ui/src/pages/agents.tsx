@@ -59,7 +59,7 @@ export function AgentsPage() {
                     detail={
                       <span className="flex flex-wrap gap-x-2">
                         {line.text !== undefined && <span>{line.text}</span>}
-                        <span className="font-mono text-caption text-faint">{agent.configPath}</span>
+                        <code className="font-mono text-xs text-muted-foreground">{agent.configPath}</code>
                       </span>
                     }
                   >
@@ -67,7 +67,7 @@ export function AgentsPage() {
                     {line.connected && <Label tone="good" text="Connected" />}
                     <Button
                       aria-label={`${verb} ${agent.title}`}
-                      variant={!agent.wired && agent.installed ? "primary" : "default"}
+                      variant={!agent.wired && agent.installed ? "default" : "outline"}
                       onClick={() => (agent.wired ? disconnect(agent.id) : connect(agent.id))}
                     >
                       {verb}

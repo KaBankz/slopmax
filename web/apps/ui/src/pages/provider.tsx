@@ -28,10 +28,21 @@ import {
 } from "../atoms.ts"
 import { useAsk } from "../components/ask.tsx"
 import { Dot, Empty, Label, Meter, Panel, Section, SegmentedBar } from "../components/parts.tsx"
+import { Tip } from "../components/tip.tsx"
 import { Badge } from "../components/ui/badge.tsx"
 import { Button } from "../components/ui/button.tsx"
-import { Menu, MenuItem, MenuLabel, MenuSeparator } from "../components/ui/menu.tsx"
-import { Tip } from "../components/ui/tooltip.tsx"
+import { CardFooter } from "../components/ui/card.tsx"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible.tsx"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "../components/ui/dropdown-menu.tsx"
+import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "../components/ui/item.tsx"
 import { askOwn, askPriority, askRedeem, askRemove, askRename, readPriority } from "../view/asks.ts"
 import { across, type Gauge, type Group, type Row } from "../view/groups.ts"
 import { cannotChange } from "../view/live.ts"
@@ -44,24 +55,26 @@ function PoolCells({ group }: { readonly group: Group }) {
         {group.overview.map((window) => (
           <div
             key={window.title}
-            className="flex min-w-48 flex-1 flex-col gap-2 border-l border-separator p-4 first:border-l-0"
+            className="flex min-w-48 flex-1 flex-col gap-2 border-l border-border p-4 first:border-l-0"
           >
-            <span className="text-small text-muted-foreground">{window.title}</span>
+            <span className="text-xs text-muted-foreground">{window.title}</span>
             <span className="flex items-baseline gap-1.5">
-              <span className="text-figure font-semibold tabular">{window.gauge.percent}</span>
-              <span className="text-small text-muted-foreground">used</span>
+              <span className="text-2xl font-semibold tabular-nums">{window.gauge.percent}</span>
+              <span className="text-xs text-muted-foreground">used</span>
             </span>
             <SegmentedBar window={window} weighted={group.weighted} />
-            <span className="text-caption text-faint tabular">
+            <span className="text-xs text-muted-foreground tabular-nums">
               {resetsLine(window.gauge.resetsIn, window.gauge.resetsAt)}
             </span>
           </div>
         ))}
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-separator px-4 py-2.5 text-small text-muted-foreground">
-        <span>{across(group)}</span>
-        {group.credits !== undefined && <span>{group.credits}</span>}
-      </div>
+      <CardFooter>
+        <div className="flex w-full flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-muted-foreground">
+          <span>{across(group)}</span>
+          {group.credits !== undefined && <span>{group.credits}</span>}
+        </div>
+      </CardFooter>
     </Panel>
   )
 }
@@ -72,7 +85,7 @@ const cellVariants = cva("flex min-w-30 flex-1 flex-col gap-1.5", {
 
 /** The window's name over its cell, where the table is too narrow for its header row. */
 function CellTitle({ title }: { readonly title: string }) {
-  return <span className="truncate text-caption text-muted-foreground @table:hidden">{title}</span>
+  return <span className="truncate text-xs text-muted-foreground @3xl:hidden">{title}</span>
 }
 
 function WindowCell({
@@ -88,21 +101,21 @@ function WindowCell({
     return (
       <div className="flex min-w-30 flex-1 flex-col gap-1.5">
         <CellTitle title={title} />
-        <span className="text-faint">—</span>
+        <span className="text-muted-foreground">—</span>
       </div>
     )
   }
   return (
     <div className={cellVariants({ faded })}>
       <CellTitle title={title} />
-      <span className="font-medium tabular">{gauge.percent}</span>
+      <span className="font-medium tabular-nums">{gauge.percent}</span>
       <Meter
         fraction={gauge.fraction}
         tone={gauge.tone}
         {...(gauge.pace === undefined ? {} : { marker: gauge.pace.elapsed })}
       />
-      <span className="flex min-w-0 flex-wrap gap-x-2 text-caption">
-        <span className="text-faint tabular">{resetsLine(gauge.resetsIn, gauge.resetsAt)}</span>
+      <span className="flex min-w-0 flex-wrap gap-x-2 text-xs">
+        <span className="text-muted-foreground tabular-nums">{resetsLine(gauge.resetsIn, gauge.resetsAt)}</span>
         {gauge.pace !== undefined && <Label tone={gauge.pace.label.tone} text={gauge.pace.label.text} raw />}
       </span>
     </div>
@@ -118,75 +131,88 @@ function AccountMenu({ row }: { readonly row: Row }) {
   const { account } = row
   const id = row.id
   return (
-    <Menu
-      trigger={
-        <Button variant="ghost" size="icon" aria-label={`More for ${row.name}`} disabled={!canChange}>
-          <Ellipsis />
-        </Button>
-      }
-    >
-      {row.pinned ? (
-        <MenuItem onClick={() => change({ _tag: "UnpinAll" })}>Stop pinning</MenuItem>
-      ) : (
-        <MenuItem disabled={row.disabled} onClick={() => change({ _tag: "Pin", id })}>
-          Use for new sessions
-        </MenuItem>
-      )}
-      <MenuItem onClick={() => change({ _tag: "Enable", id, on: row.disabled })}>
-        {row.disabled ? "Enable" : "Disable"}
-      </MenuItem>
-      <MenuSeparator />
-      <MenuLabel>Priority {row.priority}</MenuLabel>
-      <MenuItem onClick={() => change({ _tag: "Priority", id, priority: row.priority + 1 })}>Raise priority</MenuItem>
-      <MenuItem onClick={() => change({ _tag: "Priority", id, priority: row.priority - 1 })}>Lower priority</MenuItem>
-      <MenuItem
-        onClick={() =>
-          void ask(askPriority(account)).then((answer) => {
-            const priority = answer === null ? undefined : readPriority(answer)
-            if (priority !== undefined) change({ _tag: "Priority", id, priority })
-          })
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button variant="ghost" size="icon" aria-label={`More for ${row.name}`} disabled={!canChange}>
+            <Ellipsis />
+          </Button>
         }
-      >
-        Set priority…
-      </MenuItem>
-      <MenuSeparator />
-      <MenuItem
-        onClick={() =>
-          void ask(askRename(account)).then((answer) => {
-            if (answer !== null) change({ _tag: "Rename", id, label: answer })
-          })
-        }
-      >
-        Rename…
-      </MenuItem>
-      {row.follows !== undefined && (
-        <MenuItem
+      />
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuGroup>
+          {row.pinned ? (
+            <DropdownMenuItem onClick={() => change({ _tag: "UnpinAll" })}>Stop pinning</DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem disabled={row.disabled} onClick={() => change({ _tag: "Pin", id })}>
+              Use for new sessions
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuItem onClick={() => change({ _tag: "Enable", id, on: row.disabled })}>
+            {row.disabled ? "Enable" : "Disable"}
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Priority {row.priority}</DropdownMenuLabel>
+          <DropdownMenuItem onClick={() => change({ _tag: "Priority", id, priority: row.priority + 1 })}>
+            Raise priority
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => change({ _tag: "Priority", id, priority: row.priority - 1 })}>
+            Lower priority
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onClick={() =>
+              void ask(askPriority(account)).then((answer) => {
+                const priority = answer === null ? undefined : readPriority(answer)
+                if (priority !== undefined) change({ _tag: "Priority", id, priority })
+              })
+            }
+          >
+            Set priority…
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          <DropdownMenuItem
+            onClick={() =>
+              void ask(askRename(account)).then((answer) => {
+                if (answer !== null) change({ _tag: "Rename", id, label: answer })
+              })
+            }
+          >
+            Rename…
+          </DropdownMenuItem>
+          {row.follows !== undefined && (
+            <DropdownMenuItem
+              onClick={() =>
+                void ask(askOwn(account)).then((answer) => {
+                  if (answer !== null) change({ _tag: "Own", id })
+                })
+              }
+            >
+              Refresh here instead of {row.follows}
+            </DropdownMenuItem>
+          )}
+          {row.credits !== undefined && (
+            <DropdownMenuItem disabled={row.credits.held !== undefined} onClick={() => openCredits(Option.some(id))}>
+              Redeem a limit reset…
+            </DropdownMenuItem>
+          )}
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          variant="destructive"
           onClick={() =>
-            void ask(askOwn(account)).then((answer) => {
-              if (answer !== null) change({ _tag: "Own", id })
+            void ask(askRemove(account)).then((answer) => {
+              if (answer !== null) change({ _tag: "Remove", id })
             })
           }
         >
-          Refresh here instead of {row.follows}
-        </MenuItem>
-      )}
-      {row.credits !== undefined && (
-        <MenuItem disabled={row.credits.held !== undefined} onClick={() => openCredits(Option.some(id))}>
-          Redeem a limit reset…
-        </MenuItem>
-      )}
-      <MenuSeparator />
-      <MenuItem
-        tone="danger"
-        onClick={() =>
-          void ask(askRemove(account)).then((answer) => {
-            if (answer !== null) change({ _tag: "Remove", id })
-          })
-        }
-      >
-        Remove…
-      </MenuItem>
-    </Menu>
+          Remove…
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -211,55 +237,53 @@ function CreditsWell({ row, provider }: { readonly row: Row; readonly provider: 
     ? (cannotChange(proxy, "redeem one", unanswered, readOnly) ?? "Waiting for slopmax")
     : credits.held
   return (
-    <div className="mx-4 mb-3.5 flex animate-appear flex-col gap-3 rounded-md bg-well p-3.5">
-      <div className="flex items-start gap-4">
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="font-medium">Limit resets</span>
-          <span className="text-small text-muted-foreground">
-            Each one resets this account's {credits.clears} windows at once.
-          </span>
-        </div>
-        {busy ? (
-          <span className="text-small text-muted-foreground">Redeeming…</span>
-        ) : (
-          <span className="flex items-center gap-3">
-            {held !== undefined && <span className="text-small text-muted-foreground">{held}</span>}
-            <Button
-              variant="primary"
-              disabled={held !== undefined}
-              aria-label={`Redeem a limit reset on ${row.name}…`}
-              onClick={() =>
-                void ask(askRedeem(row.account, credits.credits[0]?.id, now, zone)).then((answer) => {
-                  if (answer === null) return
-                  const first = credits.credits[0]?.id
-                  spend(first === undefined ? { id: row.id } : { id: row.id, reset: first })
-                })
-              }
-            >
-              Redeem…
-            </Button>
-          </span>
-        )}
-      </div>
-      {credits.credits.length === 0 ? (
-        <span className="text-small text-muted-foreground">{resetsUnlisted(credits.count)}</span>
-      ) : (
-        <div className="flex flex-col">
-          {credits.credits.map((credit) => (
-            <div
-              key={credit.id}
-              className="flex items-center gap-2 border-t border-separator py-2 text-small first:border-t-0"
-            >
-              {credit.tone === "warn" && <Dot tone="warn" />}
-              <span className={credit.tone === "warn" ? "flex-1 text-warning" : "flex-1 text-foreground"}>
-                {credit.title === undefined ? credit.line : `${credit.title} · ${credit.line}`}
-              </span>
-              {credit.granted !== undefined && <span className="text-caption text-faint">{credit.granted}</span>}
+    <div className="flex animate-in fade-in slide-in-from-top-1 flex-col px-3 pb-2.5">
+      <Item variant="muted">
+        <ItemContent>
+          <ItemTitle>Limit resets</ItemTitle>
+          <ItemDescription>Each one resets this account's {credits.clears} windows at once.</ItemDescription>
+        </ItemContent>
+        <ItemActions>
+          {busy ? (
+            <span className="text-xs text-muted-foreground">Redeeming…</span>
+          ) : (
+            <>
+              {held !== undefined && <span className="text-xs text-muted-foreground">{held}</span>}
+              <Button
+                disabled={held !== undefined}
+                aria-label={`Redeem a limit reset on ${row.name}…`}
+                onClick={() =>
+                  void ask(askRedeem(row.account, credits.credits[0]?.id, now, zone)).then((answer) => {
+                    if (answer === null) return
+                    const first = credits.credits[0]?.id
+                    spend(first === undefined ? { id: row.id } : { id: row.id, reset: first })
+                  })
+                }
+              >
+                Redeem…
+              </Button>
+            </>
+          )}
+        </ItemActions>
+        <div className="flex basis-full flex-col gap-2.5 text-xs">
+          {credits.credits.length === 0 ? (
+            <span className="text-muted-foreground">{resetsUnlisted(credits.count)}</span>
+          ) : (
+            <div className="flex flex-col">
+              {credits.credits.map((credit) => (
+                <div key={credit.id} className="flex items-center gap-2 border-t py-2 first:border-t-0">
+                  {credit.tone === "warn" && <Dot tone="warn" />}
+                  <span className={credit.tone === "warn" ? "flex-1 text-warning" : "flex-1 text-foreground"}>
+                    {credit.title === undefined ? credit.line : `${credit.title} · ${credit.line}`}
+                  </span>
+                  {credit.granted !== undefined && <span className="text-muted-foreground">{credit.granted}</span>}
+                </div>
+              ))}
             </div>
-          ))}
+          )}
+          {Option.isSome(policy) && <span className="text-muted-foreground">{policy.value}</span>}
         </div>
-      )}
-      {Option.isSome(policy) && <span className="text-caption text-faint">{policy.value}</span>}
+      </Item>
     </div>
   )
 }
@@ -274,7 +298,9 @@ function SignInAgain({ row }: { readonly row: Row }) {
   if (!needs || !isSubscription(provider)) return null
   return (
     <Button
+      variant="outline"
       size="sm"
+      className="self-start"
       disabled={!canChange}
       aria-label={`Sign in to ${row.name} again`}
       onClick={() => start({ provider })}
@@ -289,91 +315,85 @@ const isSubscription = Schema.is(SubscriptionId)
 /** Where an account's windows go, before slopmax has read any of the group's. */
 function UnreadCell() {
   const pollOff = useAtomValue(pollOffAtom)
-  return <span className="min-w-0 flex-1 text-small text-muted-foreground">{limitsNotRead(pollOff)}</span>
+  return <span className="min-w-0 flex-1 text-xs text-muted-foreground">{limitsNotRead(pollOff)}</span>
 }
 
 function AccountRow({ row, group }: { readonly row: Row; readonly group: Group }) {
   const [open, setOpen] = useAtom(openCreditsAtom)
   const isOpen = Option.isSome(open) && open.value === row.id
-  const toggle = () => setOpen(isOpen ? Option.none() : Option.some(row.id))
   const metered = !group.subscription
   // Wide, the account is a row of the table. Narrow, its name takes a line of
   // its own, its windows wrap beneath with their names, and its menu stays at
   // the top right, in reach at any width.
   return (
-    <div className="border-t border-separator first:border-t-0">
-      <div className="relative flex flex-col gap-3 px-4 py-3.5 @table:flex-row @table:items-start @table:gap-4">
-        <div className="flex min-w-0 flex-col gap-1 pr-9 @table:w-60 @table:shrink-0 @table:pr-0">
-          <span className={row.disabled ? "truncate font-medium text-muted-foreground" : "truncate font-medium"}>
-            {row.name}
-          </span>
-          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-small">
-            <Label tone={row.status.tone} text={row.status.text} wrap />
-            {row.plan !== "" && <span className="text-faint">{row.plan}</span>}
-            {row.next && <Badge tone="brand">Next</Badge>}
-          </span>
-          <span className="empty:hidden">
-            <SignInAgain row={row} />
-          </span>
-          {row.lastUsed !== undefined && <span className="text-caption text-faint">{row.lastUsed}</span>}
-        </div>
-        {metered ? (
-          <div className="flex min-w-0 flex-1 flex-col gap-1 text-small">
-            {row.account.endpoint !== undefined && (
-              <span className="truncate font-mono text-caption text-muted-foreground">{row.account.endpoint}</span>
-            )}
-            <span className="text-muted-foreground">
-              {row.account.models.length === 0 ? "Any model" : row.account.models.join(", ")}
+    <div className="border-t first:border-t-0">
+      <Collapsible open={isOpen} onOpenChange={(next) => setOpen(next ? Option.some(row.id) : Option.none())}>
+        <Item className="relative flex-col items-stretch @3xl:flex-row @3xl:flex-nowrap @3xl:items-start">
+          <ItemContent className="mr-8 min-w-0 @3xl:mr-0 @3xl:w-60 @3xl:flex-none">
+            <ItemTitle className="max-w-full">
+              <span className={row.disabled ? "truncate text-muted-foreground" : "truncate"}>{row.name}</span>
+            </ItemTitle>
+            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+              <Label tone={row.status.tone} text={row.status.text} wrap />
+              {row.plan !== "" && <span className="text-muted-foreground">{row.plan}</span>}
+              {row.next && <Badge>Next</Badge>}
             </span>
-          </div>
-        ) : group.unread ? (
-          <UnreadCell />
-        ) : (
-          <div className="flex flex-wrap gap-x-4 gap-y-3 @table:contents">
-            {row.gauges.map((gauge, i) => (
-              <WindowCell
-                key={group.columns[i] ?? i}
-                title={group.columns[i] ?? ""}
-                gauge={gauge}
-                faded={row.faded[i] ?? false}
-              />
+            <SignInAgain row={row} />
+            {row.lastUsed !== undefined && <span className="text-xs text-muted-foreground">{row.lastUsed}</span>}
+          </ItemContent>
+          {metered ? (
+            <div className="flex min-w-0 flex-1 flex-col gap-1 text-xs">
+              {row.account.endpoint !== undefined && (
+                <span className="truncate font-mono text-xs text-muted-foreground">{row.account.endpoint}</span>
+              )}
+              <span className="text-muted-foreground">
+                {row.account.models.length === 0 ? "Any model" : row.account.models.join(", ")}
+              </span>
+            </div>
+          ) : group.unread ? (
+            <UnreadCell />
+          ) : (
+            <div className="flex flex-wrap gap-x-4 gap-y-3 @3xl:contents">
+              {row.gauges.map((gauge, i) => (
+                <WindowCell
+                  key={group.columns[i] ?? i}
+                  title={group.columns[i] ?? ""}
+                  gauge={gauge}
+                  faded={row.faded[i] ?? false}
+                />
+              ))}
+            </div>
+          )}
+          <ItemActions className="absolute top-2 right-2 @3xl:static">
+            <AccountMenu row={row} />
+          </ItemActions>
+        </Item>
+        {(row.notes.length > 0 || row.credits !== undefined) && (
+          <div className="-mt-1 flex min-w-0 items-center gap-3 px-3 pb-2.5 text-xs">
+            {row.credits !== undefined && (
+              <CollapsibleTrigger
+                render={<Button variant="ghost" size="xs" className="-ml-2" />}
+                aria-label={`${row.credits.title} on ${row.name}`}
+              >
+                {row.credits.title}
+                {isOpen ? (
+                  <ChevronDown aria-hidden data-icon="inline-end" />
+                ) : (
+                  <ChevronRight aria-hidden data-icon="inline-end" />
+                )}
+              </CollapsibleTrigger>
+            )}
+            {row.notes.map((note, i) => (
+              <span key={note.text} className={i === row.notes.length - 1 ? "min-w-0 truncate" : "shrink-0"}>
+                <Label tone={note.tone} text={note.text} />
+              </span>
             ))}
           </div>
         )}
-        <div className="absolute top-3 right-3 w-7 @table:static @table:shrink-0">
-          <AccountMenu row={row} />
-        </div>
-      </div>
-      {(row.notes.length > 0 || row.credits !== undefined) && (
-        <div className="-mt-1.5 flex min-w-0 items-center gap-3 px-4 pb-3 text-small">
-          {row.credits !== undefined && (
-            <button
-              type="button"
-              aria-expanded={isOpen}
-              aria-label={`${row.credits.title} on ${row.name}`}
-              onClick={toggle}
-              className={
-                isOpen
-                  ? "inline-flex shrink-0 cursor-default items-center gap-0.5 rounded-sm font-medium text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  : "inline-flex shrink-0 cursor-default items-center gap-0.5 rounded-sm font-medium text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-              }
-            >
-              {row.credits.title}
-              {isOpen ? (
-                <ChevronDown aria-hidden className="size-3.5" />
-              ) : (
-                <ChevronRight aria-hidden className="size-3.5" />
-              )}
-            </button>
-          )}
-          {row.notes.map((note, i) => (
-            <span key={note.text} className={i === row.notes.length - 1 ? "min-w-0 truncate" : "shrink-0"}>
-              <Label tone={note.tone} text={note.text} />
-            </span>
-          ))}
-        </div>
-      )}
-      {isOpen && <CreditsWell row={row} provider={group.provider} />}
+        <CollapsibleContent>
+          <CreditsWell row={row} provider={group.provider} />
+        </CollapsibleContent>
+      </Collapsible>
     </div>
   )
 }
@@ -404,7 +424,7 @@ export function ProviderPage({ provider }: { readonly provider: ProviderId }) {
         title="Accounts"
         trailing={
           pinned ? (
-            <Button size="sm" disabled={!canChange} onClick={() => change({ _tag: "UnpinAll" })}>
+            <Button variant="outline" size="sm" disabled={!canChange} onClick={() => change({ _tag: "UnpinAll" })}>
               Let slopmax choose
             </Button>
           ) : undefined
@@ -412,7 +432,8 @@ export function ProviderPage({ provider }: { readonly provider: ProviderId }) {
       >
         <Panel>
           {g.subscription && !g.unread && (
-            <div className="hidden items-center gap-4 border-b border-separator px-4 py-2 text-small text-muted-foreground @table:flex">
+            // Spaced as an Item, so each title sits over its column.
+            <div className="hidden items-center gap-2.5 border-x border-b border-x-transparent px-3 py-2 text-xs text-muted-foreground @3xl:flex">
               <span className="w-60 shrink-0">Account</span>
               {g.columns.map((column) => (
                 <Fragment key={column}>
@@ -421,7 +442,7 @@ export function ProviderPage({ provider }: { readonly provider: ProviderId }) {
                   </Tip>
                 </Fragment>
               ))}
-              <span className="w-7 shrink-0" />
+              <span className="w-8 shrink-0" />
             </div>
           )}
           {g.rows.map((row) => (

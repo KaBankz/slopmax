@@ -5,13 +5,17 @@
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react"
 import type { History, HistoryRange } from "@slopmax/client"
 import { compact, grouped, providerTitle } from "@slopmax/client/format"
+import { cva } from "class-variance-authority"
 import { Option } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import type { ReactNode } from "react"
 import { historyAtom, machinesAtom, rangeAtom } from "../atoms.ts"
 import { Columns, Heatmap, type Ink, Legend, Lines, SplitBar, Swatch } from "../components/charts.tsx"
-import { Loaded, Meter, Panel, Section, Skeleton, Stats } from "../components/parts.tsx"
+import { Loaded, Meter, Section, Skeleton, Stats } from "../components/parts.tsx"
 import { Quiet } from "../components/quiet.tsx"
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.tsx"
+import { Separator } from "../components/ui/separator.tsx"
+import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx"
 import {
   cacheAxis,
   cacheTip,
@@ -43,9 +47,9 @@ import {
 } from "../view/usage.ts"
 import { dollars, leftLine } from "../view/words.ts"
 
-const providerInks: ReadonlyArray<Ink> = ["series-1", "series-2", "series-3", "series-4"]
+const providerInks: ReadonlyArray<Ink> = ["chart-1", "chart-2", "chart-3", "chart-4"]
 
-/** A chart's panel: its title and legend over the plot. */
+/** A chart's Card: its title and legend over the plot. */
 function ChartPanel({
   title,
   legend,
@@ -56,15 +60,15 @@ function ChartPanel({
   readonly children: ReactNode
 }) {
   return (
-    <Panel>
-      <div className="flex flex-col gap-3 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="font-medium">{title}</h3>
-          {legend}
-        </div>
-        {children}
-      </div>
-    </Panel>
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <h3>{title}</h3>
+        </CardTitle>
+        {legend !== undefined && <CardAction>{legend}</CardAction>}
+      </CardHeader>
+      <CardContent>{children}</CardContent>
+    </Card>
   )
 }
 
@@ -116,16 +120,18 @@ function Bars({
   return (
     <div className="flex flex-col gap-2.5">
       {rows.map((row) => (
-        <div key={row.name} className="flex items-center gap-3 text-small">
-          <span className={mono ? "w-40 shrink-0 truncate font-mono text-caption" : "w-28 shrink-0 truncate"}>
+        <div key={row.name} className="flex items-center gap-3 text-xs">
+          <span className={mono ? "w-40 shrink-0 truncate font-mono text-xs" : "w-28 shrink-0 truncate"}>
             {row.name}
           </span>
           <span className="min-w-0 flex-1">
             <Meter fraction={row.fraction} tone="muted" />
           </span>
-          <span className="w-14 shrink-0 text-right tabular">{row.tokens}</span>
-          {requests && <span className="w-28 shrink-0 text-right text-muted-foreground tabular">{row.requests}</span>}
-          <span className="w-16 shrink-0 text-right text-muted-foreground tabular">{row.value}</span>
+          <span className="w-14 shrink-0 text-right tabular-nums">{row.tokens}</span>
+          {requests && (
+            <span className="w-28 shrink-0 text-right text-muted-foreground tabular-nums">{row.requests}</span>
+          )}
+          <span className="w-16 shrink-0 text-right text-muted-foreground tabular-nums">{row.value}</span>
         </div>
       ))}
     </div>
@@ -144,86 +150,125 @@ function TokenMix({ history }: { readonly history: History }) {
           title: part.title,
         }))}
       />
-      <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-small">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
         {mix.map((part) => (
           <span key={part.title} className="flex items-center gap-2">
             <Swatch ink={providerInks[part.series - 1] ?? "meter"} />
             <span className="flex-1 text-muted-foreground">{part.title}</span>
-            <span className="tabular">{compact(part.tokens)}</span>
+            <span className="tabular-nums">{compact(part.tokens)}</span>
           </span>
         ))}
       </div>
-      <div className="h-px bg-separator" />
-      <div className="grid grid-cols-2 gap-x-4 text-small">
+      <Separator />
+      <div className="grid grid-cols-2 gap-x-4 text-xs">
         <span className="flex justify-between gap-2">
           <span className="text-muted-foreground">Context per request</span>
-          <span className="tabular">{per.context}</span>
+          <span className="tabular-nums">{per.context}</span>
         </span>
         <span className="flex justify-between gap-2">
           <span className="text-muted-foreground">Output per request</span>
-          <span className="tabular">{per.output}</span>
+          <span className="tabular-nums">{per.output}</span>
         </span>
       </div>
     </div>
   )
 }
 
+const figureVariants = cva("text-right tabular-nums", {
+  variants: { muted: { true: "text-muted-foreground", false: "" } },
+})
+
+/** A figure in a table cell, right-aligned so the column's digits line up. */
+function Figure({ children, muted = false }: { readonly children?: ReactNode; readonly muted?: boolean }) {
+  return <div className={figureVariants({ muted })}>{children}</div>
+}
+
 function AccountsTable({ history }: { readonly history: History }) {
   const { rows, unplaced, total } = accountRows(history)
-  const head = "w-16 shrink-0 text-right"
   return (
-    <Panel>
-      <div className="flex items-center gap-3 border-b border-separator px-4 py-2 text-small text-muted-foreground">
-        <span className="w-65 shrink-0">Account</span>
-        <span className="min-w-0 flex-1">Share of tokens</span>
-        <span className={head}>Tokens</span>
-        <span className="w-18 shrink-0 text-right">Requests</span>
-        <span className="w-14 shrink-0 text-right">Failed</span>
-        <span className="w-20 shrink-0 text-right">API value</span>
-      </div>
-      {rows.map((row) => (
-        <div
-          key={`${row.provider}-${row.name}`}
-          className="flex items-center gap-3 border-t border-separator px-4 py-2.5 text-small first:border-t-0"
-        >
-          <span className="flex w-65 shrink-0 items-baseline gap-2 truncate">
-            <span className="truncate">{row.name}</span>
-            <span className="text-caption text-muted-foreground">{row.provider}</span>
-          </span>
-          <span className="flex min-w-0 flex-1 items-center gap-2">
-            <span className="min-w-0 flex-1">
-              <Meter fraction={row.fraction} tone="muted" />
-            </span>
-            <span className="w-10 shrink-0 text-right text-muted-foreground tabular">{row.share}</span>
-          </span>
-          <span className={`${head} tabular`}>{row.tokens}</span>
-          <span className="w-18 shrink-0 text-right tabular">{row.requests}</span>
-          <span className="w-14 shrink-0 text-right text-muted-foreground tabular">{row.failed}</span>
-          <span className="w-20 shrink-0 text-right tabular">{row.value}</span>
-        </div>
-      ))}
-      {unplaced > 0 && (
-        <div className="flex items-center gap-3 border-t border-separator px-4 py-2.5 text-small text-muted-foreground">
-          <span className="flex w-65 shrink-0 flex-col">
-            <span>No account could take it</span>
-            <span className="text-caption text-faint">Every account was limited or out of rotation</span>
-          </span>
-          <span className="min-w-0 flex-1" />
-          <span className={head} />
-          <span className="w-18 shrink-0" />
-          <span className="w-14 shrink-0 text-right tabular">{grouped(unplaced)}</span>
-          <span className="w-20 shrink-0" />
-        </div>
-      )}
-      <div className="flex items-center gap-3 border-t border-separator px-4 py-2.5 text-small font-medium">
-        <span className="w-65 shrink-0">Total</span>
-        <span className="min-w-0 flex-1" />
-        <span className={`${head} tabular`}>{total.tokens}</span>
-        <span className="w-18 shrink-0 text-right tabular">{total.requests}</span>
-        <span className="w-14 shrink-0 text-right tabular">{total.failed}</span>
-        <span className="w-20 shrink-0 text-right tabular">{total.value}</span>
-      </div>
-    </Panel>
+    <Card>
+      <CardContent>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-65">Account</TableHead>
+              <TableHead className="w-full">Share of tokens</TableHead>
+              <TableHead className="w-16 text-right">Tokens</TableHead>
+              <TableHead className="w-18 text-right">Requests</TableHead>
+              <TableHead className="w-14 text-right">Failed</TableHead>
+              <TableHead className="w-20 text-right">API value</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((row) => (
+              <TableRow key={`${row.provider}-${row.name}`}>
+                <TableCell>
+                  <span className="flex max-w-65 items-baseline gap-2">
+                    <span className="truncate">{row.name}</span>
+                    <span className="text-xs text-muted-foreground">{row.provider}</span>
+                  </span>
+                </TableCell>
+                <TableCell>
+                  <span className="flex min-w-24 items-center gap-2">
+                    <span className="min-w-0 flex-1">
+                      <Meter fraction={row.fraction} tone="muted" />
+                    </span>
+                    <span className="w-10 shrink-0 text-right text-muted-foreground tabular-nums">{row.share}</span>
+                  </span>
+                </TableCell>
+                <TableCell>
+                  <Figure>{row.tokens}</Figure>
+                </TableCell>
+                <TableCell>
+                  <Figure>{row.requests}</Figure>
+                </TableCell>
+                <TableCell>
+                  <Figure muted>{row.failed}</Figure>
+                </TableCell>
+                <TableCell>
+                  <Figure>{row.value}</Figure>
+                </TableCell>
+              </TableRow>
+            ))}
+            {unplaced > 0 && (
+              <TableRow>
+                <TableCell>
+                  <span className="flex flex-col text-muted-foreground">
+                    <span>No account could take it</span>
+                    <span className="text-xs">Every account was limited or out of rotation</span>
+                  </span>
+                </TableCell>
+                <TableCell />
+                <TableCell />
+                <TableCell />
+                <TableCell>
+                  <Figure muted>{grouped(unplaced)}</Figure>
+                </TableCell>
+                <TableCell />
+              </TableRow>
+            )}
+          </TableBody>
+          <TableFooter>
+            <TableRow>
+              <TableCell>Total</TableCell>
+              <TableCell />
+              <TableCell>
+                <Figure>{total.tokens}</Figure>
+              </TableCell>
+              <TableCell>
+                <Figure>{total.requests}</Figure>
+              </TableCell>
+              <TableCell>
+                <Figure>{total.failed}</Figure>
+              </TableCell>
+              <TableCell>
+                <Figure>{total.value}</Figure>
+              </TableCell>
+            </TableRow>
+          </TableFooter>
+        </Table>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -231,53 +276,69 @@ function LeftOnTheTable({ history }: { readonly history: History }) {
   const left = history.left
   if (left.windows === 0) {
     return (
-      <Panel>
-        <div className="px-4 py-3.5 text-small text-muted-foreground">No weekly window reset in this range</div>
-      </Panel>
+      <Card size="sm">
+        <CardHeader>
+          <CardDescription>No weekly window reset in this range</CardDescription>
+        </CardHeader>
+      </Card>
     )
   }
   return (
     <div className="flex flex-col gap-2">
-      <Panel>
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-4 pt-3.5 pb-3">
-          <span className="text-figure font-semibold tabular">{dollars(left.dollars)}</span>
-          <span className="text-small text-muted-foreground">{leftLine(left.windows, left.unused)}</span>
-          <span className="flex-1" />
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-2xl tabular-nums">{dollars(left.dollars)}</CardTitle>
+          <CardDescription>{leftLine(left.windows, left.unused)}</CardDescription>
           {left.unpriced > 0 && (
-            <span className="text-caption text-faint">
-              {left.unpriced === 1 ? "1 weekly window" : `${left.unpriced} weekly windows`} on plans without a known
-              price left out
-            </span>
+            <CardAction>
+              <span className="text-xs text-muted-foreground">
+                {left.unpriced === 1 ? "1 weekly window" : `${left.unpriced} weekly windows`} on plans without a known
+                price left out
+              </span>
+            </CardAction>
           )}
-        </div>
-        <div className="flex items-center gap-3 border-y border-separator px-4 py-2 text-small text-muted-foreground">
-          <span className="min-w-0 flex-1">Account</span>
-          <span className="w-30 shrink-0">Unused at reset</span>
-          <span className="w-28 shrink-0 text-right">Weekly windows</span>
-          <span className="w-16 shrink-0 text-right">Unused</span>
-          <span className="w-18 shrink-0 text-right">Left</span>
-        </div>
-        {left.accounts.map((account) => (
-          <div
-            key={`${account.provider}-${account.name}`}
-            className="flex items-center gap-3 border-t border-separator px-4 py-2.5 text-small first:border-t-0"
-          >
-            <span className="flex min-w-0 flex-1 items-baseline gap-2">
-              <span className="truncate">{account.name}</span>
-              <span className="text-caption text-muted-foreground">{providerTitle(account.provider)}</span>
-            </span>
-            <span className="w-30 shrink-0">
-              <Meter fraction={account.unused / 100} tone="muted" />
-            </span>
-            <span className="w-28 shrink-0 text-right tabular">{account.windows}</span>
-            <span className="w-16 shrink-0 text-right text-muted-foreground tabular">
-              {percentTick(account.unused)}
-            </span>
-            <span className="w-18 shrink-0 text-right tabular">{dollars(account.dollars)}</span>
-          </div>
-        ))}
-      </Panel>
-      <p className="text-caption text-faint">
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-full">Account</TableHead>
+                <TableHead className="w-30">Unused at reset</TableHead>
+                <TableHead className="w-28 text-right">Weekly windows</TableHead>
+                <TableHead className="w-16 text-right">Unused</TableHead>
+                <TableHead className="w-18 text-right">Left</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {left.accounts.map((account) => (
+                <TableRow key={`${account.provider}-${account.name}`}>
+                  <TableCell>
+                    <span className="flex max-w-0 min-w-full items-baseline gap-2">
+                      <span className="truncate">{account.name}</span>
+                      <span className="text-xs text-muted-foreground">{providerTitle(account.provider)}</span>
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    <span className="flex w-30">
+                      <Meter fraction={account.unused / 100} tone="muted" />
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    <Figure>{account.windows}</Figure>
+                  </TableCell>
+                  <TableCell>
+                    <Figure muted>{percentTick(account.unused)}</Figure>
+                  </TableCell>
+                  <TableCell>
+                    <Figure>{dollars(account.dollars)}</Figure>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+      <p className="text-xs text-muted-foreground">
         The share of each plan's weekly fee that resets threw away, at plan list prices or planPrices in config.json.
       </p>
     </div>
@@ -453,14 +514,14 @@ function PerformanceBody({ history, range }: { readonly history: History; readon
       <Pair>
         <ChartPanel title="Output speed">
           {speeds.length === 0 ? (
-            <span className="text-small text-muted-foreground">No answers long enough to time yet.</span>
+            <span className="text-xs text-muted-foreground">No answers long enough to time yet.</span>
           ) : (
             <div className="flex flex-col gap-2.5">
               {speeds.map((row) => (
-                <div key={row.model} className="flex items-center gap-3 text-small">
-                  <span className="min-w-0 flex-1 truncate font-mono text-caption">{row.model}</span>
+                <div key={row.model} className="flex items-center gap-3 text-xs">
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs">{row.model}</span>
                   <span className="w-20 shrink-0 text-muted-foreground">{row.provider}</span>
-                  <span className="w-20 shrink-0 text-right tabular">{row.speed}</span>
+                  <span className="w-20 shrink-0 text-right tabular-nums">{row.speed}</span>
                 </div>
               ))}
             </div>
@@ -472,7 +533,7 @@ function PerformanceBody({ history, range }: { readonly history: History; readon
             <Legend
               items={[
                 { ink: "meter", title: "Median" },
-                { ink: "series-3", title: "Slowest 5%" },
+                { ink: "chart-3", title: "Slowest 5%" },
               ]}
             />
           }
@@ -485,7 +546,7 @@ function PerformanceBody({ history, range }: { readonly history: History; readon
             tips={history.buckets.map(firstByteTip)}
             series={[
               {
-                ink: "series-3",
+                ink: "chart-3",
                 values: history.buckets.map((b) => (b.firstByte === undefined ? undefined : b.firstByte[1] / 1000)),
               },
               {

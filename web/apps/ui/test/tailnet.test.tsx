@@ -19,6 +19,12 @@ afterEach(async () => {
 })
 
 /** What `/healthz` answers a machine on the tailnet that sent the tailnet token. */
+/** A button on the page itself, not the sidebar: the sidebar has a "Claude" of its own. */
+const inPage = (name: string) =>
+  [...document.querySelectorAll<HTMLElement>("main button")].find(
+    (button) => button.getAttribute("aria-label") === name || button.textContent?.trim() === name,
+  )
+
 const overTailnet = (access: string) => ({
   status: "ok",
   service: "slopmax",
@@ -67,7 +73,7 @@ describe("opened over the tailnet without a key", () => {
     const page = await fromTailnet({ health: overTailnet("view"), tailnet: published }, "#/access")
     await showsSoon("Add an account")
     for (const name of ["Claude", "ChatGPT with a code", "Import", "Add key", "Create key"]) {
-      expect([name, control(name).hasAttribute("disabled")]).toEqual([name, true])
+      expect([name, inPage(name)?.hasAttribute("disabled")]).toEqual([name, true])
     }
     expect(shows("Read-only from this machine.")).toBe(true)
     await showsSoon("Other machines")

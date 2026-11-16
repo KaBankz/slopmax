@@ -6,21 +6,24 @@
   "//": {
     "@effect/atom-react": "React hooks over effect/reactivity atoms: the report, settings and history are atoms fed by the API client and the event stream.",
     "@base-ui/react": "Accessible headless primitives (menus, dialogs, switches, tooltips, toasts) under the shadcn/ui components in src/components/ui.",
-    "@fontsource/ibm-plex-sans": "IBM Plex Sans 400/500/600, Latin subset, bundled so the app reads the same offline and in both hosts (OFL).",
+    "@fontsource-variable/geist": "Geist, shadcn/ui's font: one variable file, Latin subset, shipped beside the CSS by build.ts so the page's CSP never sees it inlined (OFL).",
+    "cn": "shadcn/ui's class helper (clsx and tailwind-merge compiled into one), behind src/lib/utils.ts as components.json expects.",
     "class-variance-authority": "Typed component variants (cva), so a misspelled variant is a type error.",
-    "clsx": "Joins conditional class names inside cn().",
     "lucide-react": "The icon set; each icon is a tree-shaken component.",
     "react": "The UI.",
     "react-dom": "The UI's renderer.",
-    "tailwind-merge": "Settles conflicting Tailwind classes when a component takes a className, inside cn().",
+    "recharts": "The charts under shadcn/ui's Chart (src/components/ui/chart.tsx); the version shadcn's chart targets.",
+    "sonner": "The toasts, as shadcn/ui's Sonner. It inserts one <style> at load, which the daemon's CSP allows by hash (test/csp.test.ts keeps the hash honest).",
+    "tw-animate-css": "The enter and exit animations shadcn/ui's components use (animate-in, fade-in, zoom-in-95, …), imported by src/index.css.",
     "@happy-dom/global-registrator": "Puts happy-dom's window on globalThis for component tests under bun test.",
     "@tailwindcss/node": "Tailwind's compiler, driven by build.ts's small Bun plugin (the published Bun plugin vendors an older Tailwind).",
     "@tailwindcss/oxide": "Tailwind's class scanner, for the same plugin.",
     "@types/react": "Types.",
     "@types/react-dom": "Types.",
     "happy-dom": "A light DOM for component tests.",
-    "tailwindcss": "Styling (STYLING.md).",
-    "size": "Measured 2026-10-31 (bun build.ts): app.js 836 KB minified, 232 KB brotli, 272 KB gzip (effect 254 KB, react-dom 207 KB, @base-ui/react 137 KB, the app and @slopmax/client about 60 KB of it); CSS 29 KB, 6 KB brotli; three IBM Plex Sans fonts 71 KB. About 310 KB crosses the wire with brotli."
+    "shadcn": "The shadcn/ui CLI (bunx shadcn add …, see components.json) and its shadcn/tailwind.css, which src/index.css imports at build time.",
+    "tailwindcss": "Styling, on shadcn/ui's design system (DESIGN.md).",
+    "size": "Measured 2026-11-16 (bun build.ts) after the move to shadcn/ui: app.js 1,309 KB minified, 347 KB brotli, 413 KB gzip (recharts is most of the 473 KB added since 2026-10-31); CSS 120 KB, 15 KB brotli (shadcn/tailwind.css and tw-animate-css); Geist 29 KB. About 391 KB crosses the wire with brotli, up from 310 KB; the daemon's embedded copy sends gzip and the system font, about 431 KB."
   },
   "exports": {
     ".": "./src/index.ts"
@@ -32,15 +35,17 @@
   "dependencies": {
     "@base-ui/react": "1.9.0",
     "@effect/atom-react": "4.1.1",
-    "@fontsource/ibm-plex-sans": "5.3.0",
+    "@fontsource-variable/geist": "5.3.0",
     "@slopmax/client": "workspace:*",
     "class-variance-authority": "0.7.1",
-    "clsx": "2.1.1",
+    "cn": "0.5.2",
     "effect": "4.1.1",
     "lucide-react": "1.66.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
-    "tailwind-merge": "3.7.0"
+    "recharts": "3.8.0",
+    "sonner": "2.0.8",
+    "tw-animate-css": "1.4.0"
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "21.0.4",
@@ -50,6 +55,7 @@
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "happy-dom": "21.0.4",
+    "shadcn": "4.23.0",
     "tailwindcss": "4.3.3"
   }
 }

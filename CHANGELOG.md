@@ -22,7 +22,15 @@ Your other machines can now use one machine's accounts over your Tailscale tailn
 - A client key sent to `/slopmax/api` now gets 403 instead of 401: slopmax knows the key, and it reaches the proxy only.
 - Requests that come through Tailscale Funnel are refused with 403, even with a key.
 - An older slopmax can't read a config.toml with `[tailscale]` or `[hub]`. Remove those tables before going back to one.
+- The web dashboard is rebuilt on shadcn/ui: its components, its neutral theme and the Geist font, in light and dark. The page content is centred, up to 1152 px wide.
+- The usage and performance charts are Recharts charts. Each bar or point shows its figures on hover.
+- The sidebar collapses to the edge and becomes a sheet on a narrow window. Its edge still drags to resize it, and `\` still shows or hides it.
+- Toasts use Sonner. The dashboard's content security policy now allows Sonner's stylesheet by its hash, and nothing else inline.
+- The dashboard's scripts are larger: about 390 KB with brotli, up from 310 KB, mostly the charts.
 
+### Fixed
+
+- The dashboard's sidebar had been drawn in the page's background color instead of its own.
 
 ## [0.12.0] - 2026-11-15
 

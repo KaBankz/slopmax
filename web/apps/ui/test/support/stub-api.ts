@@ -588,9 +588,14 @@ export const makeStub = (options: StubOptions = {}): Stub => {
         "events",
         undefined,
         Effect.sync(() =>
-          Stream.concat(
-            Stream.make(Event.cases.Hello.make({ version }), Event.cases.Status.make({ report })),
-            Stream.fromPubSub(events),
+          // Subscribed before Hello, as the daemon does: what is published once the first report is in reaches the page.
+          Stream.unwrap(
+            Effect.map(PubSub.subscribe(events), (subscription) =>
+              Stream.concat(
+                Stream.make(Event.cases.Hello.make({ version }), Event.cases.Status.make({ report })),
+                Stream.fromSubscription(subscription),
+              ),
+            ),
           ).pipe(Stream.interruptWhen(Deferred.await(ended))),
         ),
       ),

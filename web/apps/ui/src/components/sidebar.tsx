@@ -1,10 +1,9 @@
-// The sidebar: every page in order, a row per provider with accounts, and at
-// its foot how the proxy stands. The arrow keys move through the pages while
-// the list has focus; its edge drags to resize it, and dragging it far left
-// hides it.
+// The sidebar, on shadcn/ui's Sidebar: every page in order, a row per
+// provider with accounts, and at its foot how the proxy stands. The arrow
+// keys move through the pages while the list has focus; its edge drags to
+// resize it, and dragging it far left hides it.
 import { useAtomSet, useAtomValue } from "@effect/atom-react"
 import type { ProviderId, Tone } from "@slopmax/client"
-import { cva } from "class-variance-authority"
 import { Option } from "effect"
 import {
   Activity,
@@ -13,28 +12,39 @@ import {
   KeyRound,
   LayoutDashboard,
   type LucideIcon,
-  PanelLeft,
   Settings,
   Stethoscope,
   Users,
   Zap,
 } from "lucide-react"
-import { type KeyboardEvent, type PointerEvent, useRef, useState } from "react"
 import {
-  attentionAtom,
-  go,
-  prefsAtom,
-  proxyStatusAtom,
-  routeAtom,
-  savePrefs,
-  shownReportAtom,
-  sidebarInstantAtom,
-} from "../atoms.ts"
+  createContext,
+  type KeyboardEvent,
+  type PointerEvent,
+  type ReactNode,
+  useContext,
+  useRef,
+  useState,
+} from "react"
+import { attentionAtom, go, prefsAtom, proxyStatusAtom, routeAtom, savePrefs, shownReportAtom } from "../atoms.ts"
 import { worstTone } from "../view/attention.ts"
 import { clampWidth, dragSidebar, movePage, type Page, pageOrder, Pages, pageTitle, samePage } from "../view/pages.ts"
 import { Dot, Logo } from "./parts.tsx"
-import { Button } from "./ui/button.tsx"
-import { Tip } from "./ui/tooltip.tsx"
+import {
+  Sidebar as SidebarRoot,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuBadge,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarMenuSkeleton,
+  SidebarProvider,
+} from "./ui/sidebar.tsx"
 
 const icons: { readonly [K in Page["_tag"]]: LucideIcon } = {
   Overview: LayoutDashboard,
@@ -50,22 +60,6 @@ const icons: { readonly [K in Page["_tag"]]: LucideIcon } = {
 
 export const pageIcon = (page: Page): LucideIcon => icons[page._tag]
 
-const rowVariants = cva(
-  "flex h-7.5 w-full shrink-0 cursor-default items-center gap-2.5 rounded-md px-2.5 text-left text-body outline-none select-none focus-visible:ring-2 focus-visible:ring-ring",
-  {
-    variants: {
-      selected: {
-        true: "bg-selected font-medium text-foreground",
-        false: "text-muted-foreground hover:bg-hover hover:text-foreground",
-      },
-    },
-  },
-)
-
-function Heading({ children }: { readonly children: string }) {
-  return <div className="shrink-0 px-2.5 pt-4 pb-1 text-small font-medium text-faint">{children}</div>
-}
-
 function Row({
   page,
   current,
@@ -80,24 +74,34 @@ function Row({
   const Icon = pageIcon(page)
   const selected = samePage(page, current)
   return (
-    <button
-      type="button"
-      data-page={page._tag === "Provider" ? page.provider : page._tag}
-      aria-current={selected ? "page" : undefined}
-      tabIndex={selected ? 0 : -1}
-      className={rowVariants({ selected })}
-      onPointerDown={() => onSelect(page)}
-      onClick={() => onSelect(page)}
-    >
-      <Icon aria-hidden className="size-4 shrink-0" />
-      <span className="min-w-0 flex-1 truncate">{pageTitle(page)}</span>
-      {trailing !== undefined &&
-        ("tone" in trailing ? (
-          <Dot tone={trailing.tone} />
-        ) : (
-          <span className="text-caption text-faint tabular">{trailing.count}</span>
-        ))}
-    </button>
+    <SidebarMenuItem data-page={page._tag === "Provider" ? page.provider : page._tag}>
+      <SidebarMenuButton
+        isActive={selected}
+        aria-current={selected ? "page" : undefined}
+        tabIndex={selected ? 0 : -1}
+        onPointerDown={() => onSelect(page)}
+        onClick={() => onSelect(page)}
+      >
+        <Icon aria-hidden />
+        <span>{pageTitle(page)}</span>
+      </SidebarMenuButton>
+      {trailing !== undefined && (
+        <SidebarMenuBadge>
+          {"tone" in trailing ? <Dot tone={trailing.tone} /> : <span className="tabular-nums">{trailing.count}</span>}
+        </SidebarMenuBadge>
+      )}
+    </SidebarMenuItem>
+  )
+}
+
+function Group({ label, children }: { readonly label?: string; readonly children: ReactNode }) {
+  return (
+    <SidebarGroup>
+      {label !== undefined && <SidebarGroupLabel>{label}</SidebarGroupLabel>}
+      <SidebarGroupContent>
+        <SidebarMenu>{children}</SidebarMenu>
+      </SidebarGroupContent>
+    </SidebarGroup>
   )
 }
 
@@ -105,35 +109,55 @@ function Row({
 function ProxyFoot({ address }: { readonly address: string }) {
   const label = useAtomValue(proxyStatusAtom)
   return (
-    <button
-      type="button"
-      aria-label={`Proxy: ${label.text}`}
-      onClick={() => go(Pages.settings)}
-      className="flex w-full cursor-default items-center gap-2.5 border-t border-separator px-4 py-3 text-left outline-none hover:bg-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-    >
-      <Dot tone={label.tone === "accent" ? "muted" : label.tone} />
-      <span className="flex min-w-0 flex-col">
-        <span className="truncate text-small font-medium">{label.text}</span>
-        <span className="truncate text-caption text-faint tabular">{address}</span>
-      </span>
-    </button>
+    <SidebarMenu>
+      <SidebarMenuItem>
+        <SidebarMenuButton size="lg" aria-label={`Proxy: ${label.text}`} onClick={() => go(Pages.settings)}>
+          <Dot tone={label.tone === "accent" ? "muted" : label.tone} />
+          <span className="flex min-w-0 flex-col">
+            <span className="truncate font-medium">{label.text}</span>
+            <span className="truncate text-xs text-muted-foreground tabular-nums">{address}</span>
+          </span>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    </SidebarMenu>
   )
 }
 
-const paneVariants = cva("h-full shrink-0 overflow-hidden border-r border-border w-(--shown)", {
-  variants: { instant: { true: "", false: "slide" }, hidden: { true: "border-r-0", false: "" } },
-})
+/** The sidebar's width while its edge is dragged, shared by the frame and the edge. */
+const DragContext = createContext<{
+  readonly width: number
+  readonly setDragged: (width: number | undefined) => void
+}>({ width: 0, setDragged: () => {} })
 
-export function Sidebar({ address, onToggle }: { readonly address: string; readonly onToggle: () => void }) {
+/**
+ * The window's frame: shadcn/ui's SidebarProvider, open unless the
+ * preferences hide it, as wide as they say (or as the edge is dragged to).
+ */
+export function SidebarFrame({ onToggle, children }: { readonly onToggle: () => void; readonly children: ReactNode }) {
+  const prefs = useAtomValue(prefsAtom)
+  const [dragged, setDragged] = useState<number | undefined>(undefined)
+  const width = dragged ?? clampWidth(prefs.sidebarWidth)
+  return (
+    <SidebarProvider
+      open={!prefs.sidebarHidden}
+      onOpenChange={(open) => {
+        if (open === prefs.sidebarHidden) onToggle()
+      }}
+      style={{ "--sidebar-width": `${width}px` }}
+      className="h-full min-h-0"
+    >
+      <DragContext.Provider value={{ width, setDragged }}>{children}</DragContext.Provider>
+    </SidebarProvider>
+  )
+}
+
+export function Sidebar({ address }: { readonly address: string }) {
   const route = useAtomValue(routeAtom)
   const report = Option.getOrUndefined(useAtomValue(shownReportAtom))
   const items = useAtomValue(attentionAtom)
-  const prefs = useAtomValue(prefsAtom)
   const save = useAtomSet(savePrefs)
-  const instant = useAtomValue(sidebarInstantAtom)
+  const { width, setDragged } = useContext(DragContext)
   const list = useRef<HTMLDivElement>(null)
-  const [dragged, setDragged] = useState<number | undefined>(undefined)
-  const width = dragged ?? clampWidth(prefs.sidebarWidth)
   const current = route._tag === "Page" ? route.page : Pages.overview
   const order = pageOrder(report)
   const providers = order.flatMap((page) => (page._tag === "Provider" ? [page] : []))
@@ -147,7 +171,7 @@ export function Sidebar({ address, onToggle }: { readonly address: string; reado
     const next = movePage(order, current, event.key === "ArrowDown" ? 1 : -1)
     select(next)
     const key = next._tag === "Provider" ? next.provider : next._tag
-    list.current?.querySelector<HTMLElement>(`[data-page="${key}"]`)?.focus()
+    list.current?.querySelector<HTMLElement>(`[data-page="${key}"] [data-sidebar="menu-button"]`)?.focus()
   }
   const trailing = (provider: ProviderId) => {
     const tone = worstTone(items, provider)
@@ -178,38 +202,26 @@ export function Sidebar({ address, onToggle }: { readonly address: string; reado
   }
 
   return (
-    <div
-      className={paneVariants({ instant: instant || dragged !== undefined, hidden: prefs.sidebarHidden })}
-      style={{ "--shown": prefs.sidebarHidden ? "0px" : `${width}px`, "--sidebar": `${width}px` }}
-    >
-      <nav
-        aria-label="Sidebar"
-        inert={prefs.sidebarHidden}
-        className="relative flex h-full w-(--sidebar) flex-col bg-sidebar"
-      >
-        <div className="drag flex h-13 shrink-0 items-center gap-2 pr-2 pl-4 mac:pl-22">
+    <SidebarRoot aria-label="Sidebar">
+      <SidebarHeader className="drag mac:mt-7">
+        <div className="flex h-8 items-center gap-2 px-2">
           <Logo />
-          <span className="min-w-0 flex-1 truncate text-body font-semibold">slopmax</span>
-          <Tip content="Hide Sidebar">
-            <Button variant="ghost" size="icon" aria-label="Hide Sidebar" className="no-drag" onClick={onToggle}>
-              <PanelLeft />
-            </Button>
-          </Tip>
+          <span className="truncate text-sm font-semibold">slopmax</span>
         </div>
-        <div
-          ref={list}
-          role="list"
-          onKeyDown={onKey}
-          className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-2 pb-3"
-        >
+      </SidebarHeader>
+      <SidebarContent ref={list} onKeyDown={onKey}>
+        <Group>
           <Row page={Pages.overview} current={current} onSelect={select} />
-          <Heading>Accounts</Heading>
+        </Group>
+        <Group label="Accounts">
           {report === undefined ? (
-            <div aria-hidden className="flex h-7.5 shrink-0 items-center px-2.5">
-              <div className="h-3 w-24 animate-pulse rounded-sm bg-track" />
-            </div>
+            <SidebarMenuItem>
+              <SidebarMenuSkeleton />
+            </SidebarMenuItem>
           ) : providers.length === 0 ? (
-            <div className="flex h-7.5 shrink-0 items-center px-2.5 text-body text-faint">None yet</div>
+            <SidebarMenuItem>
+              <span className="flex h-8 items-center px-2 text-sm text-muted-foreground">None yet</span>
+            </SidebarMenuItem>
           ) : (
             providers.map((page) => (
               <Row
@@ -221,23 +233,27 @@ export function Sidebar({ address, onToggle }: { readonly address: string; reado
               />
             ))
           )}
-          <Heading>Activity</Heading>
+        </Group>
+        <Group label="Activity">
           <Row page={Pages.usage} current={current} onSelect={select} />
           <Row page={Pages.performance} current={current} onSelect={select} />
           <Row page={Pages.requests} current={current} onSelect={select} />
-          <Heading>Setup</Heading>
+        </Group>
+        <Group label="Setup">
           <Row page={Pages.agents} current={current} onSelect={select} />
           <Row page={Pages.access} current={current} onSelect={select} />
           <Row page={Pages.diagnostics} current={current} onSelect={select} />
           <Row page={Pages.settings} current={current} onSelect={select} />
-        </div>
+        </Group>
+      </SidebarContent>
+      <SidebarFooter>
         <ProxyFoot address={address} />
-        <div
-          aria-hidden
-          onPointerDown={startDrag}
-          className="absolute inset-y-0 -right-0.75 z-10 w-1.5 cursor-col-resize"
-        />
-      </nav>
-    </div>
+      </SidebarFooter>
+      <div
+        aria-hidden
+        onPointerDown={startDrag}
+        className="absolute inset-y-0 -right-1 z-20 hidden w-2 cursor-col-resize md:block"
+      />
+    </SidebarRoot>
   )
 }

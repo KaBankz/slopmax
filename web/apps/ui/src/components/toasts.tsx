@@ -1,39 +1,39 @@
-// The toasts at the bottom right: what the app just did, or why it could
-// not. They rise in as they arrive; a failure stays until dismissed.
+// The toasts at the bottom right, through shadcn/ui's Sonner: what the app
+// just did, or why it could not. The toasts atom stays the record of what
+// shows; this hands each new one to Sonner and takes back each that closes.
+// A failure stays until dismissed.
 import { useAtomSet, useAtomValue } from "@effect/atom-react"
-import { DateTime } from "effect"
-import { CircleCheck, CircleX, X } from "lucide-react"
-import { dismissToast, nowAtom, toastsAtom } from "../atoms.ts"
-import { visibleToasts } from "../view/toasts.ts"
-import { Button } from "./ui/button.tsx"
+import { Duration } from "effect"
+import { useEffect, useRef } from "react"
+import { toast } from "sonner"
+import { dismissToast, prefsAtom, toastsAtom } from "../atoms.ts"
+import { toastLife, toastLimit } from "../view/toasts.ts"
+import { Toaster } from "./ui/sonner.tsx"
 
 export function Toasts() {
   const toasts = useAtomValue(toastsAtom)
-  const now = DateTime.toEpochMillis(useAtomValue(nowAtom))
+  const prefs = useAtomValue(prefsAtom)
   const dismiss = useAtomSet(dismissToast)
-  const shown = visibleToasts(toasts, now)
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      className="pointer-events-none fixed right-5 bottom-5 z-40 flex w-100 max-w-full flex-col items-stretch gap-2"
-    >
-      {shown.map((toast) => (
-        <div
-          key={toast.id}
-          className="pointer-events-auto flex animate-rise items-start gap-2.5 rounded-xl border bg-popover py-2.5 pr-2.5 pl-3.5 shadow-popover"
-        >
-          {toast.error ? (
-            <CircleX aria-hidden className="mt-px size-4 shrink-0 text-danger" />
-          ) : (
-            <CircleCheck aria-hidden className="mt-px size-4 shrink-0 text-success" />
-          )}
-          <span className="min-w-0 flex-1 text-body break-words">{toast.text}</span>
-          <Button variant="ghost" size="icon-sm" aria-label="Dismiss" onClick={() => dismiss(toast.id)}>
-            <X />
-          </Button>
-        </div>
-      ))}
-    </div>
-  )
+  const shown = useRef(new Set<number>())
+  useEffect(() => {
+    const live = new Set(toasts.map((item) => item.id))
+    for (const item of toasts) {
+      if (shown.current.has(item.id)) continue
+      shown.current.add(item.id)
+      const options = {
+        id: item.id,
+        duration: item.error ? Number.POSITIVE_INFINITY : Duration.toMillis(toastLife),
+        onDismiss: () => dismiss(item.id),
+        onAutoClose: () => dismiss(item.id),
+      }
+      if (item.error) toast.error(item.text, options)
+      else toast.success(item.text, options)
+    }
+    for (const id of shown.current) {
+      if (live.has(id)) continue
+      toast.dismiss(id)
+      shown.current.delete(id)
+    }
+  }, [toasts, dismiss])
+  return <Toaster theme={prefs.appearance} position="bottom-right" closeButton visibleToasts={toastLimit} />
 }
