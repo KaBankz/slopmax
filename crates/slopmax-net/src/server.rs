@@ -8,6 +8,7 @@
 use std::convert::Infallible;
 use std::future::Future;
 use std::io;
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -64,6 +65,16 @@ pub enum Channel {
     Tailnet,
 }
 
+/// Both ends of a TCP connection, in the extensions of each request that
+/// came over it: who connected is found from them ([`crate::peer`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TcpEnds {
+    /// The client's end.
+    pub peer: SocketAddr,
+    /// The server's end.
+    pub local: SocketAddr,
+}
+
 /// Where a server accepts connections.
 pub enum Listener {
     Tcp(TcpListener),
@@ -89,24 +100,28 @@ pub fn tailnet(listener: UnixListener, owner: u32) -> Listener {
 }
 
 impl Listener {
-    /// The next connection and its channel. `None` is a connection that
-    /// was refused and dropped.
-    async fn accept(&self) -> io::Result<Option<(Conn, Channel)>> {
+    /// The next connection, its channel, and for TCP its ends. `None` is a
+    /// connection that was refused and dropped.
+    async fn accept(&self) -> io::Result<Option<(Conn, Channel, Option<TcpEnds>)>> {
         match self {
             Listener::Tcp(listener) => {
-                let (stream, _) = listener.accept().await?;
+                let (stream, peer) = listener.accept().await?;
                 // Streamed answers are many small writes. Nagle's algorithm
                 // would hold each until the client acknowledges the last,
                 // and clients delay acknowledgments by up to 40 ms.
                 let _ = stream.set_nodelay(true);
-                Ok(Some((Conn::Tcp(stream), Channel::Tcp)))
+                let ends = stream
+                    .local_addr()
+                    .ok()
+                    .map(|local| TcpEnds { peer, local });
+                Ok(Some((Conn::Tcp(stream), Channel::Tcp, ends)))
             }
             #[cfg(unix)]
             Listener::Tailnet { listener, owner } => {
                 let (stream, _) = listener.accept().await?;
                 match stream.peer_cred() {
                     Ok(peer) if peer.uid() == 0 || peer.uid() == *owner => {
-                        Ok(Some((Conn::Unix(stream), Channel::Tailnet)))
+                        Ok(Some((Conn::Unix(stream), Channel::Tailnet, None)))
                     }
                     Ok(peer) => {
                         let uid = peer.uid();
@@ -241,7 +256,7 @@ where
     let (stop, stopping) = watch::channel(None::<Stop>);
     tokio::pin!(shutdown);
     let how = loop {
-        let (stream, channel) = tokio::select! {
+        let (stream, channel, ends) = tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok(Some(accepted)) => accepted,
                 Ok(None) => continue,
@@ -260,6 +275,9 @@ where
         tokio::spawn(async move {
             let service = service_fn(move |mut request: Request| {
                 request.extensions_mut().insert(channel);
+                if let Some(ends) = ends {
+                    request.extensions_mut().insert(ends);
+                }
                 let response = handler(request);
                 let closing = closing.clone();
                 async move {
@@ -330,6 +348,24 @@ mod tests {
             .await
             .expect("server stops")
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn tcp_requests_carry_both_ends() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let url = format!("http://{addr}/x");
+        tokio::spawn(serve(
+            listener,
+            |request: Request| async move {
+                let ends = request.extensions().get::<TcpEnds>().copied().unwrap();
+                Response::new(full(format!("{} {}", ends.local, ends.peer.ip())))
+            },
+            std::future::pending(),
+        ));
+        let client = Client::builder().build();
+        let text = client.get(&url).send().await.unwrap().text().await.unwrap();
+        assert_eq!(text, format!("{addr} 127.0.0.1"));
     }
 
     /// Answers with the channel the request came in on.

@@ -5,6 +5,7 @@ pub mod client;
 mod dial;
 pub mod form;
 pub mod headers;
+pub mod peer;
 mod pool;
 pub mod server;
 pub mod ws;

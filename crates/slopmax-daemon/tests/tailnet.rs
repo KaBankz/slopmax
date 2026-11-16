@@ -451,6 +451,61 @@ async fn tailnet_headers_over_tcp_are_believed_for_nothing() {
     std::fs::remove_dir_all(hub.stop().await).unwrap();
 }
 
+/// tailscaled publishing the proxy's port under the owner key's private
+/// path: what comes under it from tailscaled (here, this user, whose
+/// connection Linux names as such) is the tailnet's.
+#[tokio::test]
+async fn the_private_path_on_the_port_is_the_tailnet_too() {
+    let home = temp_home();
+    let hub = Hub::start(&home).await;
+    let private = slopmax_core::tailscale::private_path(KEY);
+    let via = |path: &str| {
+        hub.local(Method::GET, path)
+            .header("authorization", "Bearer tailnet")
+            .header("tailscale-user-login", "me@test")
+            .header("x-forwarded-for", PHONE)
+            .header("x-forwarded-host", HUB)
+            .header("x-forwarded-proto", "https")
+    };
+    let health: Value = via(&format!("{private}/healthz"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        (&health["via"], &health["access"], &health["machine"]),
+        (&json!("tailnet"), &json!("view"), &json!("phone")),
+        "{health}"
+    );
+    let status = via(&format!("{private}/slopmax/api/status"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(status.status(), StatusCode::OK);
+    let answer = via(&format!("{private}/v1/messages"))
+        .header("user-agent", "claude-cli/2.1.287 (external, cli)")
+        .header("content-type", "application/json")
+        .body(CLAUDE_BODY)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(answer.status(), StatusCode::OK);
+    // The path went no further than slopmax.
+    let sent = hub.log.lock().unwrap()[0].0.clone();
+    assert!(!sent.contains(".slopmax-tailnet-"), "{sent}");
+
+    // Another key's path is no secret of this hub's: nothing is believed.
+    let other = slopmax_core::tailscale::private_path("sm-other");
+    let answer = via(&format!("{other}/slopmax/api/status"))
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(answer.status(), StatusCode::OK);
+    std::fs::remove_dir_all(hub.stop().await).unwrap();
+}
+
 #[tokio::test]
 async fn the_user_s_machines_use_the_proxy_without_a_key() {
     let home = temp_home();

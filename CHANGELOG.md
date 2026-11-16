@@ -4,18 +4,24 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+slopmax is its CLI and the dashboard it serves: the desktop apps are gone. `slopmax tailscale on` no longer needs root: Tailscale now reaches the hub at a private path on the proxy's port rather than at its socket, which Tailscale lets only root publish. Your machines still need no key, and a hub on Windows or Tailscale's macOS app now needs none either. Run `slopmax tailscale on` again on a hub published before, to move it.
+
+### Changed
+
+- `slopmax tailscale on` publishes the proxy's port under a private path made from the owner key, which only Tailscale is told, instead of slopmax's socket. Tailscale's operator may publish it, so on Linux `sudo tailscale set --operator=$USER` once is all the setup, and `on` and `off` need no sudo after. A request under the path is the tailnet's when it came from Tailscale: on Linux its connection must belong to root or you, so another user of the machine, who can read the path back from Tailscale, can't pass for your tailnet. On a hub published at the socket or the bare port before, `on` moves it to the path. `--socket` still publishes the socket, and `--loopback` the bare port.
+- Machines need no key for a hub on Windows, or one that uses Tailscale's macOS app.
+- Adding a Claude or ChatGPT subscription by key is refused with "…through `slopmax login <provider>` or the dashboard" rather than "…, or the app".
+
 ### Removed
 
 - The desktop apps: the macOS app (`apple/`), `slopmax-app` and the GPUI app, with their CI workflows, the icon files only they used, and the dashboard's code for running in a desktop window (its menu bar panel, start and stop buttons, and the bridge to an app). The CLI, with the dashboard it serves, is slopmax's interface. A `~/.slopmax/app.toml` left by the app is no longer read and can be deleted.
 - `slopmax daemon-info`, which the apps ran to find the proxy and its key.
 - The `exe` field of the event stream's `Hello`, which the apps compared with the CLI they shipped.
 
-### Changed
-
-- Adding a Claude or ChatGPT subscription by key is refused with "…through `slopmax login <provider>` or the dashboard" rather than "…, or the app".
-
 ### Fixed
 
+- `slopmax tailscale on --socket` says what to run when Tailscale refuses to publish slopmax's socket. Tailscale lets only root publish a socket: it lets an operator too only when the operator may run `sudo tailscale`, which it checks under the account's full name rather than its login (so it fails where the two differ, such as `ec2-user`, "EC2 Default User"), and its next release drops the operator altogether. slopmax showed Tailscale's raw 401; it now gives the one `sudo tailscale serve` command.
+- `slopmax tailscale on` finishes when slopmax is already published, by hand or by an earlier run: it no longer asks Tailscale to publish it again, which needed root just to change nothing.
 - The dashboard said it could not open a link, such as the release notes or a sign-in address, even when the browser had opened it.
 
 ## [0.13.1] - 2026-11-16

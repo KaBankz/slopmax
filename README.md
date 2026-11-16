@@ -292,7 +292,7 @@ It runs `tailscale serve` for you, and the proxy itself keeps listening on 127.0
 sudo tailscale set --operator=$USER
 ```
 
-slopmax never runs sudo itself. Then, on each of your other machines:
+slopmax never runs sudo itself. Tailscale sends your machines' requests to the proxy's port under a private path, made from slopmax's owner key, which Tailscale alone is told; a request that comes under it, from Tailscale's own process, is your tailnet's. Then, on each of your other machines:
 
 ```sh
 slopmax setup --hub <machine>   # the hub's name on your tailnet, or its URL
@@ -309,7 +309,7 @@ List only your own logins. The hub is for your own machines.
 
 When the hub is down, agents on your other machines fail. They don't fall back to accounts of their own, because that would bring the sign-outs back.
 
-Some machines need a key: tagged machines, which Tailscale doesn't tie to a login, and every machine when the hub runs on Windows or uses Tailscale's macOS app rather than Homebrew's tailscaled, where Tailscale can't tell slopmax who is asking. Make one on the hub, then give it to setup:
+Some machines need a key: tagged machines, which Tailscale doesn't tie to a login, and every machine when the hub is published with `--loopback`, where Tailscale can't tell slopmax who is asking. Make one on the hub, then give it to setup:
 
 ```sh
 slopmax key add ci                                                  # on the hub; prints the key
@@ -317,6 +317,8 @@ slopmax setup --hub https://hub.example.ts.net:7567 --key <the key>   # on the o
 ```
 
 slopmax serves your tailnet, never the internet: `tailscale on` won't publish a port Tailscale Funnel exposes, and the hub refuses every request that comes through Funnel, even with a key.
+
+Any user of the hub can ask Tailscale for the private path. On Linux slopmax also checks that a request under it came from root (Tailscale) or you, so another user of the machine can't pass for your tailnet; on macOS and Windows the path alone decides, so keep a hub there to yourself, or publish it with `--loopback`. `slopmax tailscale on --socket` instead serves an owner-only socket, which Tailscale lets only root publish: it prints the `sudo tailscale serve` command to run once, then picks up from there.
 
 The Docker image has no Tailscale. Run `tailscale serve --bg --https=7567 http://127.0.0.1:7567` on the host or in a Tailscale sidecar container; every machine then needs a key.
 

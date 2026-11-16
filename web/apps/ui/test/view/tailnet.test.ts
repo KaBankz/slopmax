@@ -58,6 +58,12 @@ describe("the Other machines card", () => {
     expect(card.start).toBeUndefined()
   })
 
+  test("through a private path, machines need no key, as through the socket", () => {
+    const rows = machinesCard(new TailnetView({ ...published, transport: "private" })).rows
+    expect(rows.find((row) => row.title === "Reached through")?.value).toBe("a private path on 127.0.0.1")
+    expect(rows.find((row) => row.title === "No key for")?.value).toBe("you@github")
+  })
+
   test("over loopback, or with no logins, every machine needs a key", () => {
     const loopback = machinesCard(
       new TailnetView({ ...published, transport: "loopback", identity: false, admins: [] }),

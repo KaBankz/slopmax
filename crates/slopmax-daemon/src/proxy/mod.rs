@@ -659,6 +659,14 @@ impl App {
 
 /// Answers one request: slopmax's own endpoints, else the proxy.
 pub async fn handle(app: Arc<App>, mut request: Request) -> Response {
+    if request
+        .uri()
+        .path()
+        .starts_with(crate::tailscale::PRIVATE_PREFIX)
+    {
+        let private = crate::tailscale::private_path(&app.config().api_key);
+        tailnet::route(&mut request, &private);
+    }
     let seen = tailnet::take(&mut request);
     // Funnel opens the port to the internet, and slopmax serves the user's
     // own machines only: nothing is answered, not even the page.

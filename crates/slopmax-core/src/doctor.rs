@@ -17,7 +17,7 @@ use crate::net::{Client, Origins, server};
 use crate::paths::Home;
 use crate::provider::ProviderId;
 use crate::service::{Manager, Status};
-use crate::tailscale::{self, Inspection, Peer, Target, Transport, TsError};
+use crate::tailscale::{self, Inspection, Peer, Transport, TsError};
 use crate::time::{SignedDuration, Timestamp};
 use crate::{auth, human};
 use slopmax_client::Health;
@@ -182,10 +182,7 @@ async fn tailnet_checks(
 ) -> Option<Section> {
     let ts = ts?;
     let port = config.listen.port();
-    let targets = [
-        Target::Socket(home.tailnet_socket()),
-        Target::Loopback(port),
-    ];
+    let targets = tailscale::targets(home, config);
     let inspection = tailscale::inspect(Some(&ts), &targets, port).await;
     if inspection.published.is_empty() && config.tailscale.is_none() {
         return None;
@@ -284,10 +281,7 @@ pub fn tailnet(config: &Config, home: &Home, facts: &TailnetFacts<'_>) -> Option
         failed(&mut s, &TsError::NoHttps);
     }
     for p in &inspection.published {
-        let to = match &p.target {
-            Target::Socket(path) => home.show(path),
-            Target::Loopback(port) => format!("http://127.0.0.1:{port}"),
-        };
+        let to = p.target.shown(home);
         s.add(
             Level::Ok,
             format!("served to your tailnet at {} (to {to})", p.url),
@@ -298,6 +292,18 @@ pub fn tailnet(config: &Config, home: &Home, facts: &TailnetFacts<'_>) -> Option
         }
     }
     for h in &inspection.stale {
+        if tailscale::older_private(h, config.listen.port()) {
+            s.add(
+                Level::Fail,
+                format!(
+                    "port {} serves slopmax at a private path made from an older owner key, so \
+                     the tailnet's requests don't reach it",
+                    h.port
+                ),
+                Some("slopmax tailscale on"),
+            );
+            continue;
+        }
         s.add(
             Level::Fail,
             format!(
@@ -335,7 +341,7 @@ pub fn tailnet(config: &Config, home: &Home, facts: &TailnetFacts<'_>) -> Option
             Some("slopmax stop && slopmax start"),
         );
     }
-    if cfg!(unix) && socket.as_os_str().len() > 100 {
+    if over(Transport::Socket) && socket.as_os_str().len() > 100 {
         s.add(
             Level::Warn,
             format!(
@@ -349,8 +355,9 @@ pub fn tailnet(config: &Config, home: &Home, facts: &TailnetFacts<'_>) -> Option
     if over(Transport::Loopback) {
         s.add(
             Level::Note,
-            "machines need a key; Tailscale here can't tell slopmax who is asking",
-            Some("slopmax key add <name>"),
+            "machines need a key: Tailscale reaches the proxy's port, where slopmax can't tell \
+             who is asking; `slopmax tailscale on` moves it to a private path that can",
+            Some("slopmax tailscale on"),
         );
     }
     let users = config.tailnet_users();
@@ -1692,7 +1699,7 @@ mod tests {
     mod tailnet {
         use super::*;
         use crate::config::{AdminMachine, HubLink, Tailnet};
-        use crate::tailscale::{BackendState, Handler, HandlerTarget, Node, Published};
+        use crate::tailscale::{BackendState, Handler, HandlerTarget, Node, Published, Target};
 
         fn home() -> Home {
             Home::sandbox("/home/me")

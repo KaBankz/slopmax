@@ -22,6 +22,7 @@ use slopmax_api::tailnet::TailnetView;
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 
 use crate::config::Config;
+use crate::paths::Home;
 pub use crate::provider::BoxFuture;
 
 /// How long reads of Tailscale's state may take.
@@ -598,18 +599,33 @@ pub fn parse_whois(json: &str) -> Result<Machine, TsError> {
 /// What `tailscale serve` passes requests to, as slopmax publishes it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Target {
-    /// A unix socket (Linux and macOS).
+    /// A unix socket (Linux and macOS). Tailscale lets only root publish
+    /// one.
     Socket(PathBuf),
+    /// A private path on a port on this machine's loopback address
+    /// ([`private_path`]): only Tailscale is told it, so what comes under
+    /// it came through Tailscale. Tailscale's operator may publish it.
+    Private { port: u16, path: String },
     /// A port on this machine's loopback address.
     Loopback(u16),
 }
 
 impl Target {
-    /// The target as `tailscale serve` takes it: `unix:<path>` or
-    /// `http://127.0.0.1:<port>`.
+    /// The target as `tailscale serve` takes it: `unix:<path>`,
+    /// `http://127.0.0.1:<port><path>` or `http://127.0.0.1:<port>`.
     pub fn arg(&self) -> String {
         match self {
             Self::Socket(path) => format!("unix:{}", path.display()),
+            Self::Private { port, path } => format!("http://127.0.0.1:{port}{path}"),
+            Self::Loopback(port) => format!("http://127.0.0.1:{port}"),
+        }
+    }
+
+    /// The target as people are shown it: the private path left out.
+    pub fn shown(&self, home: &Home) -> String {
+        match self {
+            Self::Socket(path) => home.show(path),
+            Self::Private { port, .. } => format!("a private path on http://127.0.0.1:{port}"),
             Self::Loopback(port) => format!("http://127.0.0.1:{port}"),
         }
     }
@@ -618,6 +634,7 @@ impl Target {
     pub fn transport(&self) -> Transport {
         match self {
             Self::Socket(_) => Transport::Socket,
+            Self::Private { .. } => Transport::Private,
             Self::Loopback(_) => Transport::Loopback,
         }
     }
@@ -625,6 +642,7 @@ impl Target {
     fn local(&self) -> Local {
         match self {
             Self::Socket(path) => Local::Socket(path.clone()),
+            Self::Private { port, path } => Local::Path(*port, path.clone()),
             Self::Loopback(port) => Local::Loopback(*port),
         }
     }
@@ -635,8 +653,62 @@ impl Target {
 pub enum Transport {
     /// Through slopmax's unix socket, which tells it who is asking.
     Socket,
+    /// Through a private path on its TCP port, which tells it too.
+    Private,
     /// Through its TCP port on loopback, where it can't tell.
     Loopback,
+}
+
+impl Transport {
+    /// Whether Tailscale tells slopmax who is asking this way, so tailnet
+    /// logins may use it without a key.
+    pub fn names_caller(self) -> bool {
+        match self {
+            Self::Socket | Self::Private => true,
+            Self::Loopback => false,
+        }
+    }
+}
+
+/// What every [`private_path`] starts with, so slopmax knows one written
+/// for an earlier owner key as its own.
+pub const PRIVATE_PREFIX: &str = "/.slopmax-tailnet-";
+
+/// The private path Tailscale sends the tailnet's requests under, from the
+/// owner key: a secret only this machine knows, which changes with the key.
+pub fn private_path(api_key: &str) -> String {
+    let digest = ring::digest::digest(
+        &ring::digest::SHA256,
+        format!("slopmax tailnet path\n{api_key}").as_bytes(),
+    );
+    let hex: String = digest.as_ref()[..16]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!("{PRIVATE_PREFIX}{hex}")
+}
+
+/// Where Tailscale may send requests for this home's slopmax: its socket,
+/// a private path on its port, or its port.
+pub fn targets(home: &Home, config: &Config) -> [Target; 3] {
+    let port = config.listen.port();
+    [
+        Target::Socket(home.tailnet_socket()),
+        Target::Private {
+            port,
+            path: private_path(&config.api_key),
+        },
+        Target::Loopback(port),
+    ]
+}
+
+/// Whether `handler` passes requests to a private path on `port` written
+/// for an owner key slopmax no longer has: its own, from before.
+pub fn older_private(handler: &Handler, port: u16) -> bool {
+    let HandlerTarget::Proxy(proxy) = &handler.target else {
+        return false;
+    };
+    matches!(local(proxy), Some(Local::Path(p, path)) if p == port && path.starts_with(PRIVATE_PREFIX))
 }
 
 /// What `tailscale serve` publishes from this machine.
@@ -815,12 +887,15 @@ fn handler_target(handler: &Value) -> HandlerTarget {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Local {
     Socket(PathBuf),
+    /// A path under a loopback port.
+    Path(u16, String),
     Loopback(u16),
 }
 
 /// Where on this machine a `serve` proxy target points, whichever of its
 /// forms it takes (`unix:/path`, `http://127.0.0.1:N`, `localhost:N`,
-/// `[::1]:N`, a bare port); `None` for anywhere else.
+/// `[::1]:N`, a bare port, any of those with a path); `None` for anywhere
+/// else.
 fn local(proxy: &str) -> Option<Local> {
     if let Some(path) = proxy.strip_prefix("unix:") {
         let path = path.strip_prefix("//").unwrap_or(path);
@@ -830,13 +905,26 @@ fn local(proxy: &str) -> Option<Local> {
     if rest.contains("://") {
         return None;
     }
-    let rest = rest.strip_suffix('/').unwrap_or(rest);
-    if let Ok(port) = rest.parse() {
-        return Some(Local::Loopback(port));
-    }
-    let (host, port) = rest.rsplit_once(':')?;
-    let loopback = host == "127.0.0.1" || host == "[::1]" || host.eq_ignore_ascii_case("localhost");
-    loopback.then_some(Local::Loopback(port.parse().ok()?))
+    let (rest, path) = match rest.find('/') {
+        Some(at) => (&rest[..at], rest[at..].trim_end_matches('/')),
+        None => (rest, ""),
+    };
+    let port = match rest.parse() {
+        Ok(port) => port,
+        Err(_) => {
+            let (host, port) = rest.rsplit_once(':')?;
+            let loopback =
+                host == "127.0.0.1" || host == "[::1]" || host.eq_ignore_ascii_case("localhost");
+            if !loopback {
+                return None;
+            }
+            port.parse().ok()?
+        }
+    };
+    Some(match path {
+        "" => Local::Loopback(port),
+        path => Local::Path(port, path.to_owned()),
+    })
 }
 
 /// The one of `targets` `handler` passes requests to, if any.
@@ -1039,6 +1127,7 @@ impl Inspection {
             url: published.map(|p| p.url.clone()),
             transport: published.map(|p| match p.transport {
                 Transport::Socket => slopmax_api::tailnet::Transport::Socket,
+                Transport::Private => slopmax_api::tailnet::Transport::Private,
                 Transport::Loopback => slopmax_api::tailnet::Transport::Loopback,
             }),
             identity: false,
@@ -1060,13 +1149,16 @@ impl Inspection {
 }
 
 /// `view` with who may use slopmax as `config` says. Logins are taken
-/// without a key when tailscaled reaches slopmax through its socket, which
-/// names them, and some login is listed.
+/// without a key when tailscaled reaches slopmax through its socket or its
+/// private path, which both name them, and some login is listed.
 pub fn with_config(mut view: TailnetView, config: &Config) -> TailnetView {
+    use slopmax_api::tailnet::Transport as Via;
     let tailnet = config.tailscale.clone().unwrap_or_default();
-    view.identity = cfg!(unix)
-        && view.transport == Some(slopmax_api::tailnet::Transport::Socket)
-        && !tailnet.users.is_empty();
+    view.identity = match view.transport {
+        Some(Via::Socket) => cfg!(unix),
+        Some(Via::Private) => true,
+        Some(Via::Loopback) | None => false,
+    } && !tailnet.users.is_empty();
     view.users = tailnet.users;
     view.admins = tailnet
         .admins
@@ -1094,6 +1186,11 @@ pub enum TsError {
     NeedsApproval,
     /// Only root may change what this machine serves.
     AccessDenied,
+    /// Only root may publish a socket. Tailscale lets an operator do it
+    /// only if the operator may `sudo tailscale` (which tailscaled checks
+    /// under the account's full name, not its login, so it fails wherever
+    /// the two differ), and Tailscale after 1.104 lets only root do it.
+    RootOnly,
     /// The tailnet has HTTPS certificates turned off.
     NoHttps,
     /// Something else is published on `port`.
@@ -1122,6 +1219,7 @@ impl TsError {
             Self::AccessDenied => {
                 "Tailscale lets only root change what this machine serves.".to_owned()
             }
+            Self::RootOnly => "Tailscale lets only root publish a socket.".to_owned(),
             Self::NoHttps => "your tailnet has HTTPS certificates turned off".to_owned(),
             Self::PortTaken { port, by } => {
                 format!("port {port} of this machine already serves {by} to your tailnet")
@@ -1157,7 +1255,11 @@ impl TsError {
                 format!("slopmax tailscale on --port {}", port.saturating_add(1))
             }
             Self::Funnel { port } => format!("tailscale funnel --https={port} off"),
-            Self::Timeout { .. } | Self::Unreadable { .. } | Self::Failed { .. } => return None,
+            // The command names the socket, which only the caller knows.
+            Self::RootOnly
+            | Self::Timeout { .. }
+            | Self::Unreadable { .. }
+            | Self::Failed { .. } => return None,
         };
         Some(fix)
     }
@@ -1176,6 +1278,12 @@ impl std::error::Error for TsError {}
 pub fn classify(output: &Output) -> TsError {
     let stderr = output.stderr.as_str();
     let lower = stderr.to_ascii_lowercase();
+    // "must be root, or be an operator and able to run 'sudo tailscale' to
+    // serve a path or Unix socket", "must be root to …" after 1.104, and
+    // "must be a Windows local admin to …".
+    if lower.contains("to serve a path or unix socket") {
+        return TsError::RootOnly;
+    }
     if stderr.contains("Access denied") || stderr.contains("--operator") {
         return TsError::AccessDenied;
     }
@@ -1444,9 +1552,17 @@ mod tests {
         Target::Socket(PathBuf::from("/home/me/.slopmax/tailnet.sock"))
     }
 
-    /// slopmax as it runs here: its socket, and its TCP port 7567.
+    fn private() -> Target {
+        Target::Private {
+            port: 7567,
+            path: private_path("sm-test"),
+        }
+    }
+
+    /// slopmax as it runs here: its socket, its private path, and its TCP
+    /// port 7567.
     fn targets() -> Vec<Target> {
-        vec![socket(), Target::Loopback(7567)]
+        vec![socket(), private(), Target::Loopback(7567)]
     }
 
     fn ip(text: &str) -> IpAddr {
@@ -1668,6 +1784,20 @@ mod tests {
         ] {
             assert!(ours(&at(proxy), &targets()), "{proxy}");
         }
+        let path = private_path("sm-test");
+        for proxy in [
+            format!("http://127.0.0.1:7567{path}"),
+            format!("http://localhost:7567{path}/"),
+            format!("7567{path}"),
+        ] {
+            let handler = at(&proxy);
+            assert_eq!(target_of(&handler, &targets()), Some(&private()), "{proxy}");
+            assert!(!older_private(&handler, 7000), "{proxy}");
+        }
+        let older = at(&format!("http://127.0.0.1:7567{}", private_path("sm-old")));
+        assert!(!ours(&older, &targets()));
+        assert!(older_private(&older, 7567));
+        assert!(!older_private(&at("http://127.0.0.1:7567/api"), 7567));
         for proxy in [
             "http://127.0.0.1:7568",
             "https://127.0.0.1:7567",
@@ -1812,6 +1942,21 @@ mod tests {
                 TsError::AccessDenied,
             ),
             (
+                "sending serve config: 401 Unauthorized: must be root, or be an operator and \
+                 able to run 'sudo tailscale' to serve a path or Unix socket",
+                TsError::RootOnly,
+            ),
+            (
+                "sending serve config: 401 Unauthorized: must be root to serve a path or Unix \
+                 socket",
+                TsError::RootOnly,
+            ),
+            (
+                "sending serve config: 401 Unauthorized: must be a Windows local admin to serve \
+                 a path or Unix socket",
+                TsError::RootOnly,
+            ),
+            (
                 "failed to connect to local tailscaled; it doesn't appear to be running",
                 TsError::DaemonDown,
             ),
@@ -1934,6 +2079,24 @@ mod tests {
         assert_eq!(socket().arg(), "unix:/home/me/.slopmax/tailnet.sock");
         assert_eq!(Target::Loopback(7567).arg(), "http://127.0.0.1:7567");
         assert_eq!(socket().transport(), Transport::Socket);
+        let path = private_path("sm-test");
+        assert_eq!(private().arg(), format!("http://127.0.0.1:7567{path}"));
+        assert_eq!(private().transport(), Transport::Private);
+        assert!(
+            !private()
+                .shown(&Home::at(PathBuf::from("/h")))
+                .contains(&path)
+        );
+    }
+
+    #[test]
+    fn the_private_path_is_a_secret_of_the_owner_key() {
+        let path = private_path("sm-test");
+        assert!(path.starts_with(PRIVATE_PREFIX), "{path}");
+        assert_eq!(path.len(), PRIVATE_PREFIX.len() + 32, "{path}");
+        assert!(!path.contains("sm-test"));
+        assert_eq!(path, private_path("sm-test"));
+        assert_ne!(path, private_path("sm-other"));
     }
 
     #[test]

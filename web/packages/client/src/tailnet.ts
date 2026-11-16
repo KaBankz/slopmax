@@ -34,11 +34,12 @@ export const TailscaleState = Schema.Literals([
 export type TailscaleState = typeof TailscaleState.Type
 
 /**
- * How tailscaled reaches slopmax on the hub: its owner-only socket, which
- * tells slopmax who is asking, or the proxy's port on 127.0.0.1, where only
- * keys work.
+ * How tailscaled reaches slopmax on the hub: its owner-only socket, or a
+ * private path on the proxy's port that only Tailscale knows, which both
+ * tell slopmax who is asking; or the proxy's bare port on 127.0.0.1, where
+ * only keys work.
  */
-export const Transport = Schema.Literals(["socket", "loopback"])
+export const Transport = Schema.Literals(["socket", "private", "loopback"])
 export type Transport = typeof Transport.Type
 
 /** A machine that may manage slopmax, matched by Tailscale's stable node id. */
