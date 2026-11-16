@@ -2,15 +2,7 @@
 // Connecting edits the agent's own settings; disconnecting puts back what
 // was there.
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
-import {
-  agentsAtom,
-  canChangeAtom,
-  connectAgent,
-  disconnectAgent,
-  proxyAtom,
-  readOnlyAtom,
-  unansweredAtom,
-} from "../atoms.ts"
+import { agentsAtom, canChangeAtom, connectAgent, disconnectAgent, readOnlyAtom, unansweredAtom } from "../atoms.ts"
 import { Empty, Label, Loaded, Panel, SettingRow, Skeleton } from "../components/parts.tsx"
 import { Button } from "../components/ui/button.tsx"
 import { agentLine, agentsInOrder, cannotChange } from "../view/live.ts"
@@ -21,7 +13,7 @@ export function AgentsPage() {
   const again = useAtomRefresh(agentsAtom)
   const canChange = useAtomValue(canChangeAtom)
   const unanswered = useAtomValue(unansweredAtom)
-  const waiting = cannotChange(useAtomValue(proxyAtom), unanswered, useAtomValue(readOnlyAtom))
+  const waiting = cannotChange(unanswered, useAtomValue(readOnlyAtom))
   const connect = useAtomSet(connectAgent)
   const disconnect = useAtomSet(disconnectAgent)
   return (

@@ -39,9 +39,8 @@ Tailwind's green and amber, 700 in light and 500 in dark.
 Type, spacing, radius, shadows and motion are Tailwind's and shadcn's: `text-sm`
 is body text, `text-xs` secondary text, `text-base` and up for headings;
 spacing on Tailwind's 4px steps; enter and exit motion from `tw-animate-css`
-(`animate-in fade-in slide-in-from-top-1`). The font is Geist (shadcn's),
-shipped as a file by `build.ts`; the daemon's embedded copy uses the system's
-sans instead.
+(`animate-in fade-in slide-in-from-top-1`). The font is the system's sans, so
+the page ships no font files.
 
 To change the look, change the theme's values, never the components. A theme
 from shadcn's theme pages pastes straight over `:root` and `.dark`; keep

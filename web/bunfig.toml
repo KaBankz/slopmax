@@ -1,7 +1,7 @@
-# Bun is the runtime and the toolchain (docs/DECISIONS.md).
+# Bun is the runtime and the toolchain: it installs, builds, formats and tests.
 
 [install]
-# Every dependency is pinned to the version ARCHITECTURE.md §14 checked.
+# Every dependency is pinned to an exact version.
 exact = true
 
 [fmt]
@@ -9,6 +9,6 @@ printWidth = 120
 semi = false
 
 [test]
-# `bun test` from ts/ finds every package's tests; `bun test <dir>` runs one package.
+# `bun test` from web/ finds every package's tests; `bun test <dir>` runs one package.
 root = "."
 coverageSkipTestFiles = true

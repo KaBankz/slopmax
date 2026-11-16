@@ -1,5 +1,5 @@
-// The web dashboard's host: it keeps its key for the tab, and its
-// preferences and told notices in the browser.
+// The web dashboard's host: it keeps its key for the tab, its preferences
+// and told notices in the browser, and opens links in a new tab.
 import { browser, useBrowser } from "./support/dom.ts"
 import { describe, expect, test } from "bun:test"
 import { Effect, Option, Schema } from "effect"
@@ -49,6 +49,30 @@ describe("the web dashboard's host", () => {
     browser.localStorage.setItem("slopmax-notified", "42")
     expect(Effect.runSync(webHost().prefs)).toEqual(UiPrefs.defaults)
     expect(Effect.runSync(webHost().told)).toEqual([])
+  })
+})
+
+describe("the web dashboard's links", () => {
+  test("open in a new tab cut off from the page, and say so only when the browser blocked it", () => {
+    const realOpen = browser.open
+    const calls: Array<ReadonlyArray<unknown>> = []
+    const tab: { opener: unknown } = { opener: browser }
+    let blocked = false
+    Object.defineProperty(browser, "open", {
+      value: (...args: ReadonlyArray<unknown>) => (calls.push(args), blocked ? null : tab),
+      configurable: true,
+      writable: true,
+    })
+    try {
+      const host = webHost()
+      expect(Effect.runSync(host.openExternal("https://example.com/"))).toBe(true)
+      expect(calls).toEqual([["https://example.com/", "_blank"]])
+      expect(tab.opener).toBeNull()
+      blocked = true
+      expect(Effect.runSync(host.openExternal("https://example.com/"))).toBe(false)
+    } finally {
+      Object.defineProperty(browser, "open", { value: realOpen, configurable: true, writable: true })
+    }
   })
 })
 

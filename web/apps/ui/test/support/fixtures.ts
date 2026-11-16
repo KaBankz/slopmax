@@ -8,7 +8,6 @@ import {
   AccountView,
   AgentWiring,
   Condition,
-  defaultSettings,
   Finding,
   History,
   HistoryBucket,
@@ -28,15 +27,13 @@ import {
   type ProviderId,
   Report,
   Section,
-  settingsView,
-  type SettingsView,
   Speed,
   Totals,
   UpdateView,
   Usage,
   Window,
 } from "@slopmax/client"
-import { DateTime, Duration } from "effect"
+import { DateTime } from "effect"
 
 export const ownerKey = "sm-dev-owner-key-0000000000000000000000000000"
 export const version = "0.4.0"
@@ -477,8 +474,6 @@ export const quietHistory = (range: HistoryRange): History =>
 
 // --- Setup ---------------------------------------------------------------------
 
-export const fixtureSettings = (): SettingsView => settingsView(defaultSettings(ownerKey))
-
 export const fixtureKeys = (): ReadonlyArray<KeyInfo> => [
   new KeyInfo({ name: KeyName.make("laptop"), models: [] }),
   new KeyInfo({ name: KeyName.make("ci"), models: ["gpt-*", "claude-haiku-*"] }),
@@ -537,7 +532,3 @@ export const fixtureDoctor = (): ReadonlyArray<Section> => [
     ],
   }),
 ]
-
-/** How long ago `then` was, for tests that check relative words. */
-export const minutesAgo = (now: DateTime.Utc, then: DateTime.Utc): number =>
-  Math.round(Duration.toMinutes(DateTime.distance(then, now)))

@@ -16,7 +16,6 @@ import { TrendChart } from "./charts.tsx"
 import { Segmented } from "./segmented.tsx"
 import { Tip } from "./tip.tsx"
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "./ui/card.tsx"
-import { Skeleton } from "./ui/skeleton.tsx"
 
 /** The pool's detail once read; nothing while it loads or when the pool has no working account. */
 export function usePoolDetail(provider: SubscriptionId): Option.Option<PoolDetail> {
@@ -79,21 +78,6 @@ export function PoolForecast({ group, detail }: { readonly group: Group; readonl
           ))}
         </div>
       </CardFooter>
-    </Card>
-  )
-}
-
-/** The forecast's place while the detail is first read. */
-export function PoolForecastSkeleton() {
-  return (
-    <Card>
-      <CardHeader>
-        <Skeleton className="h-5 w-48" />
-        <Skeleton className="h-4 w-72" />
-      </CardHeader>
-      <CardContent>
-        <Skeleton className="h-56 w-full" />
-      </CardContent>
     </Card>
   )
 }

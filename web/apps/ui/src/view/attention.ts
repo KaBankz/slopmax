@@ -69,7 +69,7 @@ const item = (account: AccountView, text: string, tone: Tone, remedy: Remedy): A
  * command, and its times as the window sets them: `in 19h59m (19:12)` reads
  * `in 19h59m · 19:12`.
  */
-export const firstSentence = (message: string): string =>
+const firstSentence = (message: string): string =>
   (message.split(". ")[0] ?? message)
     .replace(/\.+$/, "")
     .replaceAll("`", "")

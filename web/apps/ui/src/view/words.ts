@@ -1,6 +1,7 @@
 // The small words the app is made of: counts, lists, money, ranges, and the
 // sentences beside each setting. Pure, so a test reads them as people will.
 import type { HistoryRange, Level, LiveKey, LivePatch, Settings, Strategy, Tone } from "@slopmax/client"
+import type { ImportResult, ImportSource } from "@slopmax/client/api"
 import { fixed, grouped } from "@slopmax/client/format"
 import { Cause } from "effect"
 import { HttpClientError } from "effect/http"
@@ -305,3 +306,27 @@ export const updated = (seconds: number): string => {
 
 /** A release's notes on GitHub. */
 export const releaseNotes = (version: string): string => `https://github.com/KaBankz/slopmax/releases/tag/v${version}`
+
+/** Where an import found a login, as people call it. */
+const importSources: { readonly [K in ImportSource]: string } = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+  cliproxyapi: "CLIProxyAPI",
+}
+
+/** What importing logins says it did, and whether it reads as a failure. */
+export const importText = (result: ImportResult): { readonly text: string; readonly error: boolean } => {
+  const saved = result.outcomes.filter((outcome) => outcome._tag === "Saved").length
+  const found = result.outcomes.length
+  if (found === 0) {
+    return { text: "No logins found. Sign in with Claude Code or Codex first, or use Sign in above.", error: false }
+  }
+  const accounts = saved === 1 ? "1 account" : `${saved} accounts`
+  if (saved === found) return { text: `Imported ${accounts}.`, error: false }
+  const failed = result.outcomes.find((outcome) => outcome._tag === "Failed")
+  const why = failed === undefined ? "" : ` ${importSources[failed.source]}: ${failed.message}`
+  return {
+    text: `Imported ${accounts} of ${count(found, "login")} found.${why}`,
+    error: saved === 0,
+  }
+}

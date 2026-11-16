@@ -4,10 +4,8 @@ import { Redacted, Result, Schema } from "effect"
 import {
   AgentId,
   agentFacts,
-  agentOrder,
   isSubscription,
   matchesAny,
-  matchesModel,
   parseProviderId,
   providerFacts,
   providerOrder,
@@ -25,28 +23,28 @@ describe("ids", () => {
 
 describe("providers", () => {
   it("matches model patterns with wildcards", () => {
-    expect(matchesModel("claude-*", "claude-opus-5-5")).toBe(true)
-    expect(matchesModel("claude-*", "gpt-6-sol")).toBe(false)
-    expect(matchesModel("gpt-*", "gpt-6-sol")).toBe(true)
-    expect(matchesModel("o3*", "o3")).toBe(true)
-    expect(matchesModel("*-coder", "qwen3-coder")).toBe(true)
-    expect(matchesModel("a*b*c", "a-x-b-y-c")).toBe(true)
-    expect(matchesModel("a*b*c", "a-x-c")).toBe(false)
-    expect(matchesModel("exact", "exact")).toBe(true)
-    expect(matchesModel("exact", "exactly")).toBe(false)
-    expect(matchesModel("*", "anything")).toBe(true)
+    expect(matchesAny(["claude-*"], "claude-opus-5-5")).toBe(true)
+    expect(matchesAny(["claude-*"], "gpt-6-sol")).toBe(false)
+    expect(matchesAny(["gpt-*"], "gpt-6-sol")).toBe(true)
+    expect(matchesAny(["o3*"], "o3")).toBe(true)
+    expect(matchesAny(["*-coder"], "qwen3-coder")).toBe(true)
+    expect(matchesAny(["a*b*c"], "a-x-b-y-c")).toBe(true)
+    expect(matchesAny(["a*b*c"], "a-x-c")).toBe(false)
+    expect(matchesAny(["exact"], "exact")).toBe(true)
+    expect(matchesAny(["exact"], "exactly")).toBe(false)
+    expect(matchesAny(["*"], "anything")).toBe(true)
     expect(matchesAny(["grok-*", "gpt-*"], "gpt-6")).toBe(true)
     expect(matchesAny([], "gpt-6")).toBe(false)
   })
 
   it("matches the edge cases of patterns: empty, a bare star, and parts that may not overlap", () => {
-    expect(matchesModel("", "")).toBe(true)
-    expect(matchesModel("", "x")).toBe(false)
-    expect(matchesModel("a*", "a")).toBe(true)
-    expect(matchesModel("*abc", "bc")).toBe(false)
-    expect(matchesModel("*", "")).toBe(true)
+    expect(matchesAny([""], "")).toBe(true)
+    expect(matchesAny([""], "x")).toBe(false)
+    expect(matchesAny(["a*"], "a")).toBe(true)
+    expect(matchesAny(["*abc"], "bc")).toBe(false)
+    expect(matchesAny(["*"], "")).toBe(true)
     // The last part may not reuse characters a middle part matched.
-    expect(matchesModel("ab*b*ab", "abab")).toBe(false)
+    expect(matchesAny(["ab*b*ab"], "abab")).toBe(false)
   })
 
   it("lets metered providers back only a subscription", () => {
@@ -72,12 +70,12 @@ describe("providers", () => {
 
 describe("agents", () => {
   it("has one agent per subscription, each naming its provider", () => {
-    expect(new Set(agentOrder).size).toBe(agentOrder.length)
+    expect(new Set(AgentId.literals).size).toBe(AgentId.literals.length)
     for (const provider of providerOrder) {
-      const native = agentOrder.some((id) => agentFacts[id].provider === provider)
+      const native = AgentId.literals.some((id) => agentFacts[id].provider === provider)
       expect(native).toBe(isSubscription(provider))
       const only = providerFacts[provider].agentOnly
-      if (only !== undefined) expect(agentOrder).toContain(only)
+      if (only !== undefined) expect(AgentId.literals).toContain(only)
     }
     expect(agentFacts.codex.title).toBe("Codex")
     expect(agentFacts["claude-code"].title).toBe("Claude Code")

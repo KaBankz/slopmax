@@ -98,7 +98,7 @@ const useShortcuts = () => {
         if (page !== undefined) go(page)
       } else if (event.key === "r") {
         if (canChange && !refreshing) again()
-      } else if (event.key === "\\") toggle("keyboard")
+      } else if (event.key === "\\") toggle()
       else if (event.key === ",") go(Pages.settings)
       else return
       event.preventDefault()
@@ -256,7 +256,7 @@ function Window() {
     Option.match(host, { onNone: () => "", onSome: (h) => h.origin.replace(/^https?:\/\//, "") }),
   )
   return (
-    <SidebarFrame onToggle={() => toggle("button")}>
+    <SidebarFrame onToggle={() => toggle()}>
       <Sidebar address={address} />
       <SidebarInset className="min-w-0">
         <header className="flex h-14 shrink-0 items-center border-b">

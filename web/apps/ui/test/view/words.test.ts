@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Strategy } from "@slopmax/client"
-import { Cause, Schema } from "effect"
+import { ImportOutcome, ImportResult } from "@slopmax/client/api"
+import { Cause, DateTime, Schema } from "effect"
 import { HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http"
 import {
   autoRedeem,
@@ -26,9 +27,11 @@ import {
   titleCase,
   updated,
   failureText,
+  importText,
   poolBarTip,
   segmentsShown,
 } from "../../src/view/words.ts"
+import { emptyReport } from "../support/fixtures.ts"
 
 describe("small words", () => {
   test("lists read as English", () => {
@@ -195,5 +198,24 @@ describe("the pool's bar and failures", () => {
     })
     expect(failureText(Cause.fail(decode))).toBe("slopmax answered with an error (404).")
     expect(failureText(Cause.fail(status))).not.toContain("127.0.0.1")
+  })
+})
+
+describe("importing logins", () => {
+  test("an import that saved nothing is a failure that says why, and finding nothing says what to do", () => {
+    const report = emptyReport(DateTime.nowUnsafe())
+    const failed = ImportOutcome.cases.Failed.make({
+      source: "codex",
+      origin: "~/.codex",
+      message: "its login expired; sign in to Codex again",
+    })
+    expect(importText(new ImportResult({ outcomes: [], report }))).toEqual({
+      text: "No logins found. Sign in with Claude Code or Codex first, or use Sign in above.",
+      error: false,
+    })
+    expect(importText(new ImportResult({ outcomes: [failed, failed], report }))).toEqual({
+      text: "Imported 0 accounts of 2 logins found. Codex: its login expired; sign in to Codex again",
+      error: true,
+    })
   })
 })

@@ -14,11 +14,7 @@ import {
   agentsInOrder,
   anyWired,
   cannotChange,
-  feedRow,
   feedSize,
-  needsProxy,
-  type ProxyState,
-  proxyLabel,
   pushFeed,
   secs,
   shownProxy,
@@ -33,7 +29,6 @@ import { addToast, showing, visibleToasts } from "../../src/view/toasts.ts"
 import { fixtureAccounts } from "../support/fixtures.ts"
 
 const now = DateTime.makeUnsafe("2026-10-31T12:00:00Z")
-const zone = DateTime.zoneMakeNamedUnsafe("UTC")
 
 const agent = (wired: boolean, wiredTo?: string) =>
   new AgentWiring({
@@ -61,8 +56,6 @@ const record = (fields: Partial<RequestRecord> = {}) =>
     via: "http",
     ...fields,
   })
-
-const name = (id: string) => (id === "claude-1a2b3c4d" ? "ana@studio.dev" : id)
 
 const notice = (key: string, until?: string) =>
   new Notice({
@@ -136,31 +129,23 @@ describe("sign-in", () => {
   })
 })
 
-const checking: ProxyState = { _tag: "Checking" }
-const running: ProxyState = { _tag: "Running", version: "0.4.0" }
-
 describe("the proxy and agents", () => {
-  test("the proxy's label says how it stands, and what needs it running waits for it", () => {
-    expect(proxyLabel(checking)).toEqual({ text: "Looking for the proxy…", tone: "muted" })
-    expect(proxyLabel(running)).toEqual({ text: "Running 0.4.0", tone: "good" })
-    // While the window is still finding out, it waits rather than saying anything.
-    expect(needsProxy(checking)).toBeUndefined()
-    expect(needsProxy(running)).toBeUndefined()
+  test("what needs the proxy waits while the stream connects, and says so once it dropped", () => {
+    // While the stream is still connecting, it waits rather than saying anything.
+    expect(cannotChange(false, false)).toBeUndefined()
     // Once the stream has dropped, it says slopmax is not answering rather than pulse.
-    expect(needsProxy(checking, true)).toBe("slopmax is not answering")
+    expect(cannotChange(true, false)).toBe("slopmax is not answering")
   })
 
   test("a page that may only look says so before anything about the proxy", () => {
-    expect(cannotChange(running, false, true)).toBe("Read-only from this machine")
-    expect(cannotChange(checking, true, true)).toBe("Read-only from this machine")
-    expect(cannotChange(running, false, false)).toBeUndefined()
-    expect(cannotChange(checking, true, false)).toBe("slopmax is not answering")
+    expect(cannotChange(false, true)).toBe("Read-only from this machine")
+    expect(cannotChange(true, true)).toBe("Read-only from this machine")
   })
 
   test("the proxy's label follows the stream, the same in the sidebar and Settings", () => {
-    expect(shownProxy(checking, "Reconnecting")).toEqual({ text: "Reconnecting…", tone: "warn" })
-    expect(shownProxy(checking, "Connecting")).toEqual({ text: "Connecting…", tone: "muted" })
-    expect(shownProxy(running, "Running").text).toBe("Running 0.4.0")
+    expect(shownProxy({ _tag: "Reconnecting" })).toEqual({ text: "Reconnecting…", tone: "warn" })
+    expect(shownProxy({ _tag: "Connecting" })).toEqual({ text: "Connecting…", tone: "muted" })
+    expect(shownProxy({ _tag: "Running", version: "0.4.0" })).toEqual({ text: "Running 0.4.0", tone: "good" })
   })
 
   test("agents read plainly", () => {
@@ -182,28 +167,9 @@ describe("the proxy and agents", () => {
 })
 
 describe("live requests", () => {
-  test("each row says who sent it, where it went, and how it went", () => {
-    expect(feedRow(record(), name, zone)).toEqual({
-      time: "09:05:07",
-      who: "Claude Code",
-      model: "claude-sonnet-5",
-      status: "200",
-      failed: false,
-      detail: "ana@studio.dev",
-      tokens: "41.5k",
-      took: "840 ms · 6.02 s",
-    })
-    const rescued = feedRow(record({ attempts: 2, via: "socket", agent: "slopmax" }), name, zone)
-    expect(rescued.detail).toBe("ana@studio.dev · after failover · WebSocket")
-    // Another machine's request says which machine sent it.
-    expect(feedRow(record({ machine: "laptop", attempts: 2 }), name, zone).detail).toBe(
-      "ana@studio.dev · from laptop · after failover",
-    )
-    expect(rescued.who).toBe("Warmup")
-    const { account: _account, ...unplacedFields } = record({ status: 429, usage: Usage.zero })
-    const unplaced = feedRow(LedgerRecord.cases.Request.make(unplacedFields), name, zone)
-    expect(unplaced).toMatchObject({ failed: true, detail: "no account free", tokens: "—" })
+  test("times read in milliseconds under a second, and in seconds above", () => {
     expect(secs(420)).toBe("420 ms")
+    expect(secs(1_240)).toBe("1.24 s")
     expect(secs(12_340)).toBe("12.3 s")
   })
 

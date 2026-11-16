@@ -1,13 +1,12 @@
-// Numbers, times and states written for people, the same in every front end:
-// the CLI's tables, the dashboard, and the messages agents read. Times of day take the zone to show them in, so
-// tests and the CLI agree on what "local" is.
+// Numbers, times and states written for people, as the dashboard shows them.
+// Times of day take the zone to show them in, so tests and the page agree on
+// what "local" is.
 import { DateTime, Duration, Option } from "effect"
-import { agentFacts } from "./agents.ts"
 import type { Window } from "./limits.ts"
 import { upcomingReset, usedAt } from "./limits.ts"
 import type { Notice, NoticeKind } from "./notice.ts"
 import { providerFacts } from "./providers.ts"
-import type { Condition, NextReason, Note, Tone } from "./report.ts"
+import type { Condition, Note, Tone } from "./report.ts"
 
 const numbers = new Map<string, Intl.NumberFormat>()
 
@@ -203,19 +202,6 @@ export const noteText = (note: Note): string => {
   }
 }
 
-const nextReasons: { readonly [K in NextReason]: string } = {
-  pinned: "pinned for new sessions",
-  "only-one": "the only account ready",
-  "week-ending": "its week resets within the day with quota to spare",
-  "resets-first": "its quota resets soonest",
-  "fills-first": "first in priority order",
-  "most-room": "the most room left",
-  turn: "next in turn",
-}
-
-/** Why a new session would get an account, in a phrase. */
-export const nextReasonText = (reason: NextReason): string => nextReasons[reason]
-
 const noticeTitles: { readonly [K in NoticeKind]: string } = {
   "reset-expiring": "Limit reset expiring",
   "quota-unused": "Quota going unused",
@@ -235,6 +221,3 @@ export const noticeBody = (notice: Notice): string => notice.message.replaceAll(
 
 /** A provider's name for people. */
 export const providerTitle = (id: keyof typeof providerFacts): string => providerFacts[id].title
-
-/** An agent's name for people. */
-export const agentTitle = (id: keyof typeof agentFacts): string => agentFacts[id].title

@@ -18,7 +18,7 @@ export interface HostShape {
   readonly key: Effect.Effect<Option.Option<string>>
   readonly saveKey: (key: string) => Effect.Effect<void>
   readonly forgetKey: Effect.Effect<void>
-  /** Opens an address in the system's browser; false when it could not. */
+  /** Opens an address in a new tab; false when the browser would not. */
   readonly openExternal: (url: string) => Effect.Effect<boolean>
   readonly copy: (text: string) => Effect.Effect<boolean>
   /** Offers text to save as a file named `name`; false when it could not. */
@@ -115,6 +115,19 @@ const saveText = (name: string, text: string, type: string): Effect.Effect<boole
     return true
   }).pipe(Effect.orElseSucceed(() => false))
 
+/**
+ * Opens an address in a new tab that cannot reach back to this page. With the
+ * `noopener` feature `window.open` returns null even when it opened the tab,
+ * so the tab is cut off by hand instead. The page sends no referrer at all.
+ */
+const openTab = (url: string): Effect.Effect<boolean> =>
+  Effect.try(() => {
+    const opened = window.open(url, "_blank")
+    if (opened === null) return false
+    opened.opener = null
+    return true
+  }).pipe(Effect.orElseSucceed(() => false))
+
 const permissionNow = (): Permission => (typeof Notification === "undefined" ? "unsupported" : Notification.permission)
 
 /** The web dashboard's host. The key arrives once in the fragment (`#key=…`) and is kept for the tab. */
@@ -126,7 +139,7 @@ export const webHost = (): HostShape => {
     key: session.get(keyItem).pipe(Effect.map(Option.filter((key) => key !== ""))),
     saveKey: (key) => session.set(keyItem, key),
     forgetKey: session.remove(keyItem),
-    openExternal: (url) => Effect.sync(() => window.open(url, "_blank", "noopener,noreferrer") !== null),
+    openExternal: openTab,
     copy: copyText,
     save: saveText,
     permission: Effect.sync(permissionNow),

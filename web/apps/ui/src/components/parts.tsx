@@ -308,12 +308,12 @@ export function Skeleton({ lines = 3 }: { readonly lines?: number }) {
 
 /**
  * slopmax's logo: the Option key (⌥), traffic switched to another account.
- * Small sizes use the flat mark, which stays crisp at 16 px; the large one is
- * the app icon itself. Both come from assets/icon (`bun assets/icon/build.ts derive`).
+ * The small size uses the flat mark, which stays crisp at 20 px; the large
+ * one is the icon itself. Both come from assets/icon (`bun assets/icon/build.ts derive`).
  */
-export function Logo({ size = "md" }: { readonly size?: "sm" | "md" | "lg" }) {
+export function Logo({ size = "md" }: { readonly size?: "md" | "lg" }) {
   if (size === "lg") return <img src={appIcon} alt="" width={40} height={40} className="size-10" />
-  return <img src={mark} alt="" width={20} height={20} className={size === "sm" ? "size-4" : "size-5"} />
+  return <img src={mark} alt="" width={20} height={20} className="size-5" />
 }
 
 /** What went wrong reading something, with a way to try again: a destructive Alert. */

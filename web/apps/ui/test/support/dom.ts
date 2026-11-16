@@ -3,8 +3,8 @@
 //
 // `bun test` runs every package's files in one process, so the window must not
 // outlive the file that drew in it: happy-dom swaps in its own fetch,
-// AbortSignal, Request and the like, which the daemon's and the CLI's tests
-// would otherwise meet. A file that draws calls `useBrowser()` once.
+// AbortSignal, Request and the like, which the client's tests would otherwise
+// meet. A file that draws calls `useBrowser()` once.
 import { GlobalRegistrator } from "@happy-dom/global-registrator"
 import { afterAll, beforeAll } from "bun:test"
 

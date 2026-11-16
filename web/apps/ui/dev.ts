@@ -1,7 +1,8 @@
 // `bun dev.ts`: the web dashboard over the stub API, for working on the UI
-// without a daemon or accounts. It builds the web copy, serves it at
-// /slopmax/ and answers /slopmax/api/* from fixtures (changes stick until
-// it stops, and each one is pushed on the event stream as the daemon would).
+// without a daemon or accounts. It builds the dashboard as the daemon embeds
+// it (unminified, without the gzip copies), serves it at /slopmax/ and
+// answers /slopmax/api/* from fixtures (changes stick until it stops, and
+// each one is pushed on the event stream as the daemon would).
 // Run it with `bun --watch dev.ts` to rebuild on every change.
 //
 //   PORT       where to listen (default 7590; never slopmax's own ports)

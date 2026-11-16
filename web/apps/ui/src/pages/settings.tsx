@@ -13,7 +13,6 @@ import {
   copy,
   permissionAtom,
   prefsAtom,
-  proxyAtom,
   proxyStatusAtom,
   readOnlyAtom,
   savePrefs,
@@ -234,10 +233,9 @@ function LiveSections() {
 
 export function SettingsPage() {
   const settings = useAtomValue(settingsAtom)
-  const proxy = useAtomValue(proxyAtom)
   const listen = Option.getOrUndefined(Option.map(AsyncResult.value(settings), (view) => view.settings.listen))
   const readOnly = useAtomValue(readOnlyAtom)
-  const waiting = cannotChange(proxy, useAtomValue(unansweredAtom), readOnly)
+  const waiting = cannotChange(useAtomValue(unansweredAtom), readOnly)
   return (
     <>
       <AppearanceSection />

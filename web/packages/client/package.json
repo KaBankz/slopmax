@@ -6,8 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./api": "./src/api.ts",
-    "./format": "./src/format.ts",
-    "./version": "./src/version.ts"
+    "./format": "./src/format.ts"
   },
   "dependencies": {
     "effect": "4.1.1"

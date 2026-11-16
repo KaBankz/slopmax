@@ -15,7 +15,6 @@ import {
   issueText,
   LedgerRecord,
   Level,
-  levelOrder,
   LoginEvent,
   LoginId,
   Notice,
@@ -26,7 +25,6 @@ import {
   SettingsInvalid,
   Unauthorized,
   Usage,
-  worstLevel,
 } from "../src/index.ts"
 
 const ts = (seconds: number) => DateTime.makeUnsafe(seconds * 1000)
@@ -119,13 +117,8 @@ describe("notices", () => {
 })
 
 describe("the doctor's findings", () => {
-  it("order levels by severity", () => {
+  it("have levels from fine to broken", () => {
     expect(Level.literals).toEqual(["ok", "info", "warn", "fail"])
-    expect(levelOrder("ok", "info")).toBe(-1)
-    expect(levelOrder("warn", "info")).toBe(1)
-    expect(levelOrder("fail", "warn")).toBe(1)
-    expect(worstLevel(["info", "fail", "ok"])).toBe("fail")
-    expect(worstLevel([])).toBe("ok")
   })
 
   it("come in sections, with a fix only where one helps", () => {

@@ -24,8 +24,6 @@ import {
   type AddAccount,
   AccountPatch,
   ImportRequest,
-  type ImportResult,
-  type ImportSource,
   MakeKey,
   PasteAddress,
   RedeemRequest,
@@ -43,7 +41,7 @@ import { attention, type Attention } from "./view/attention.ts"
 import { type Group, groups } from "./view/groups.ts"
 import {
   type FeedEntry,
-  type ProxyState,
+  type Live,
   pushFeed,
   shownProxy,
   type SignIn,
@@ -52,12 +50,12 @@ import {
   stepSignIn,
   tell,
 } from "./view/live.ts"
-import { type Page, pageHash, parsePage, toggleSidebar as toggled } from "./view/pages.ts"
+import { type Page, pageHash, parsePage } from "./view/pages.ts"
 import { maskEmails, maskReport } from "./view/privacy.ts"
 import { tailnetAccess } from "./view/tailnet.ts"
 import { allRequests, csv, csvName, pageSize, type RequestFilter } from "./view/requests.ts"
 import { addToast, type Toast } from "./view/toasts.ts"
-import { count, defaultRange, failureText, sentenceCase, settingChanged } from "./view/words.ts"
+import { count, defaultRange, failureText, importText, sentenceCase, settingChanged } from "./view/words.ts"
 
 // --- Time ------------------------------------------------------------------------
 
@@ -76,11 +74,6 @@ const minuteAtom = Atom.make(Stream.tick("60 seconds").pipe(Stream.mapEffect(() 
 // --- What the stream and the actions keep ----------------------------------------------
 
 /** Whether the event stream is up, as the live indicator shows it. */
-export type Live =
-  | { readonly _tag: "Connecting" }
-  | { readonly _tag: "Running"; readonly version: string }
-  | { readonly _tag: "Reconnecting" }
-
 export const liveAtom = Atom.make<Live>({ _tag: "Connecting" }).pipe(Atom.keepAlive)
 
 /** The latest report from the proxy. */
@@ -361,18 +354,8 @@ export const eventsAtom = appRuntime.atom((get) =>
 
 // --- The proxy --------------------------------------------------------------------------
 
-/**
- * Where the proxy stands, as far as the dashboard knows: whether its stream
- * is up. The proxy serves the page, so while the stream is down the
- * dashboard is waiting for it, never sure it stopped.
- */
-export const proxyAtom = Atom.make((get): ProxyState => {
-  const live = get(liveAtom)
-  return live._tag === "Running" ? { _tag: "Running", version: live.version } : { _tag: "Checking" }
-})
-
 /** The proxy's state in a label, the same in the sidebar's foot and in Settings. */
-export const proxyStatusAtom = Atom.make((get) => shownProxy(get(proxyAtom), get(liveAtom)._tag))
+export const proxyStatusAtom = Atom.make((get) => shownProxy(get(liveAtom)))
 
 /** Whether the dashboard lost slopmax and is trying to reach it again. */
 export const unansweredAtom = Atom.make((get): boolean => get(liveAtom)._tag === "Reconnecting")
@@ -389,7 +372,7 @@ export const shownReportAtom = Atom.make((get): Option.Option<Report> =>
 export const readOnlyAtom = Atom.make((get): boolean => !reaches(get(accessAtom), "admin"))
 
 /** Whether changes can be made: only a running proxy takes them, and only from a page that may make them. */
-export const canChangeAtom = Atom.make((get): boolean => get(proxyAtom)._tag === "Running" && !get(readOnlyAtom))
+export const canChangeAtom = Atom.make((get): boolean => get(liveAtom)._tag === "Running" && !get(readOnlyAtom))
 
 /** The shown report's accounts by provider, worked out once a second for every part of the window that shows them. */
 export const groupsAtom = Atom.make((get): ReadonlyArray<Group> =>
@@ -704,30 +687,6 @@ export const addAccount = appRuntime.fn<AddAccount>()(
   concurrent,
 )
 
-/** Where an import found a login, as people call it. */
-const importSources: { readonly [K in ImportSource]: string } = {
-  "claude-code": "Claude Code",
-  codex: "Codex",
-  cliproxyapi: "CLIProxyAPI",
-}
-
-/** What importing logins says it did, and whether it reads as a failure. */
-export const importText = (result: ImportResult): { readonly text: string; readonly error: boolean } => {
-  const saved = result.outcomes.filter((outcome) => outcome._tag === "Saved").length
-  const found = result.outcomes.length
-  if (found === 0) {
-    return { text: "No logins found. Sign in with Claude Code or Codex first, or use Sign in above.", error: false }
-  }
-  const accounts = saved === 1 ? "1 account" : `${saved} accounts`
-  if (saved === found) return { text: `Imported ${accounts}.`, error: false }
-  const failed = result.outcomes.find((outcome) => outcome._tag === "Failed")
-  const why = failed === undefined ? "" : ` ${importSources[failed.source]}: ${failed.message}`
-  return {
-    text: `Imported ${accounts} of ${count(found, "login")} found.${why}`,
-    error: saved === 0,
-  }
-}
-
 export const importLogins = task(
   () =>
     Effect.gen(function* () {
@@ -1003,7 +962,7 @@ export const copy = act((input: { readonly text: string; readonly said?: string 
 export const openExternal = act((url: string) =>
   Effect.gen(function* () {
     const host = yield* Host
-    return (yield* host.openExternal(url)) ? {} : { text: "Could not open a browser.", error: true }
+    return (yield* host.openExternal(url)) ? {} : { text: "Could not open the link.", error: true }
   }),
 )
 
@@ -1029,11 +988,8 @@ export const askNotifications = task((store) =>
   }),
 )
 
-/** How the page looks, where its sidebar stands, and whether it posts notifications; loaded from the host at startup. */
+/** How the page looks and where its sidebar stands; loaded from the host at startup. */
 export const prefsAtom = Atom.make<UiPrefs>(UiPrefs.defaults).pipe(Atom.keepAlive)
-
-/** Whether the last show or hide of the sidebar was instant (the keyboard) rather than a slide. */
-export const sidebarInstantAtom = Atom.make(false).pipe(Atom.keepAlive)
 
 /**
  * The owner key, typed into the web dashboard's gate: kept for this tab, and
@@ -1103,19 +1059,14 @@ export const checkKey = keyCheckRuntime.fn<string>()((key) =>
 /** Whether a failure is slopmax refusing the key. */
 export const refusedKey = isUnauthorized
 
-/** Shows or hides the sidebar: the button slides it, the keyboard moves it at once. */
-export const toggleSidebar = appRuntime.fn<"button" | "keyboard">()(
-  (via) =>
+/** Shows or hides the sidebar, and keeps that for next time. */
+export const toggleSidebar = appRuntime.fn<void>()(
+  () =>
     Effect.gen(function* () {
       const store = yield* actionStore
       const host = yield* Host
       const prefs = store.read(prefsAtom)
-      const sidebar = toggled(
-        { hidden: prefs.sidebarHidden, width: prefs.sidebarWidth, instant: store.read(sidebarInstantAtom) },
-        via,
-      )
-      store.set(sidebarInstantAtom, sidebar.instant)
-      const next = new UiPrefs({ ...prefs, sidebarHidden: sidebar.hidden })
+      const next = new UiPrefs({ ...prefs, sidebarHidden: !prefs.sidebarHidden })
       store.set(prefsAtom, next)
       yield* host.savePrefs(next)
     }),

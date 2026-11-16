@@ -192,7 +192,7 @@ export function Sidebar({ address }: { readonly address: string }) {
     }
     const move = (e: globalThis.PointerEvent) => {
       if ((e.buttons & 1) === 0) return end()
-      last = dragSidebar({ hidden: false, width: start, instant: true }, e.clientX, start)
+      last = dragSidebar(e.clientX, start)
       if (last.hidden) return end()
       setDragged(last.width)
     }

@@ -3,7 +3,6 @@
 // a refused key, and browser notifications.
 import { afterEach, describe, expect, test } from "bun:test"
 import { BadRequest, Event, Internal, LedgerRecord, Notice, UpstreamFailed, Usage } from "@slopmax/client"
-import { ImportOutcome, ImportResult } from "@slopmax/client/api"
 import { DateTime, Effect, Option } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import { ownerKeyAtom } from "../src/api.ts"
@@ -17,13 +16,12 @@ import {
   eventsAtom,
   feedAtom,
   importLogins,
-  importText,
   keyRefusedAtom,
   liveAtom,
   makeKey,
   newKeyAtom,
   pasteAddress,
-  proxyAtom,
+  proxyStatusAtom,
   redeem,
   refresh,
   refusedKey,
@@ -57,7 +55,7 @@ describe("the event stream", () => {
   test("brings the proxy's version and its report, and then each answered request", async () => {
     const h = await started()
     expect(h.registry.get(liveAtom)).toEqual({ _tag: "Running", version: "0.4.0" })
-    expect(h.registry.get(proxyAtom)).toEqual({ _tag: "Running", version: "0.4.0" })
+    expect(h.registry.get(proxyStatusAtom)).toEqual({ text: "Running 0.4.0", tone: "good" })
     const record = LedgerRecord.cases.Request.make({
       at: DateTime.nowUnsafe(),
       provider: "claude",
@@ -84,7 +82,7 @@ describe("the event stream", () => {
     h.registry.mount(eventsAtom)
     await until(() => h.registry.get(liveAtom)._tag === "Reconnecting", "reconnecting")
     // The proxy serves the dashboard, so a dropped stream is a wait, never a stopped proxy.
-    expect(h.registry.get(proxyAtom)._tag).toBe("Checking")
+    expect(h.registry.get(proxyStatusAtom)).toEqual({ text: "Reconnecting…", tone: "warn" })
     await until(() => h.registry.get(liveAtom)._tag === "Running", "running again", 3_000)
   })
 
@@ -265,23 +263,6 @@ describe("actions", () => {
     h.run(importLogins, undefined)
     await until(() => toasts(h).length === 1, "the toast")
     expect(toasts(h)).toEqual([["Imported 1 account of 2 logins found. CLIProxyAPI: no logins there", false]])
-  })
-
-  test("an import that saved nothing is a failure that says why, and finding nothing says what to do", () => {
-    const report = emptyReport(DateTime.nowUnsafe())
-    const failed = ImportOutcome.cases.Failed.make({
-      source: "codex",
-      origin: "~/.codex",
-      message: "its login expired; sign in to Codex again",
-    })
-    expect(importText(new ImportResult({ outcomes: [], report }))).toEqual({
-      text: "No logins found. Sign in with Claude Code or Codex first, or use Sign in above.",
-      error: false,
-    })
-    expect(importText(new ImportResult({ outcomes: [failed, failed], report }))).toEqual({
-      text: "Imported 0 accounts of 2 logins found. Codex: its login expired; sign in to Codex again",
-      error: true,
-    })
   })
 })
 

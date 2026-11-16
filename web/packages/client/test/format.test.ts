@@ -3,7 +3,6 @@ import { it } from "@slopmax/test"
 import { DateTime, Duration, Option } from "effect"
 import { Notice, NoticeKind, Window } from "../src/index.ts"
 import {
-  agentTitle,
   ago,
   clock,
   compact,
@@ -139,6 +138,5 @@ describe("notifications", () => {
   it("name providers and agents as people know them", () => {
     expect(providerTitle("codex")).toBe("ChatGPT")
     expect(providerTitle("compat")).toBe("Compatible endpoint")
-    expect(agentTitle("claude-code")).toBe("Claude Code")
   })
 })

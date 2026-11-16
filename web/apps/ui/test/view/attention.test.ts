@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Condition, LimitReset, Notice, Report, Window } from "@slopmax/client"
 import { DateTime } from "effect"
-import { attention, firstSentence, standing, worstTone } from "../../src/view/attention.ts"
+import { attention, standing, worstTone } from "../../src/view/attention.ts"
 import { account, emptyReport, fixtureReport } from "../support/fixtures.ts"
 
 const now = DateTime.makeUnsafe("2026-10-31T12:00:00Z")
@@ -126,9 +126,5 @@ describe("what wants a look", () => {
     expect(items.map((item) => item.text)).toEqual([
       "A limit reset on a@x.dev expires in 10h00m · 22:00; auto-redeem is off",
     ])
-  })
-
-  test("a notice's first sentence reads without its marks", () => {
-    expect(firstSentence("Your week resets in 3h (19:12). Run `slopmax use a`.")).toBe("Your week resets in 3h · 19:12")
   })
 })

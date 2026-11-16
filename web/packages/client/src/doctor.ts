@@ -1,22 +1,10 @@
 // `slopmax doctor`'s findings, as the CLI prints them and the API and the
-// app show them. Findings never carry a key or a token.
-import { Order, Schema } from "effect"
+// dashboard show them. Findings never carry a key or a token.
+import { Schema } from "effect"
 
 /** How much a finding matters, from fine to broken. */
 export const Level = Schema.Literals(["ok", "info", "warn", "fail"])
 export type Level = typeof Level.Type
-
-/** Orders levels by severity: ok, info, warn, fail. */
-export const levelOrder: Order.Order<Level> = Order.mapInput(Order.Number, (level: Level) =>
-  Level.literals.indexOf(level),
-)
-
-/** The most severe of some levels; `ok` for none. */
-export const worstLevel = (levels: Iterable<Level>): Level => {
-  let worst: Level = "ok"
-  for (const level of levels) if (levelOrder(level, worst) > 0) worst = level
-  return worst
-}
 
 export class Finding extends Schema.Class<Finding>("Finding")({
   level: Level,

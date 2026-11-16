@@ -1,6 +1,6 @@
 // A host for tests: the web dashboard's, with storage in memory and every
-// link opened, text copied and notification posted recorded, so a test can
-// check what the app did outside the page.
+// link opened, text copied, notification posted and preference saved
+// recorded, so a test can check what the app did outside the page.
 import { Effect, Option } from "effect"
 import { type HostShape, type Permission, UiPrefs } from "../../src/host.ts"
 
@@ -10,6 +10,7 @@ export interface Recorded {
   /** Files offered to save. */
   readonly files: Array<{ readonly name: string; readonly text: string }>
   readonly notified: Array<{ readonly title: string; readonly body: string; readonly tag: string }>
+  /** Each time the preferences were saved, in order. */
   readonly saved: Array<UiPrefs>
 }
 
@@ -21,7 +22,6 @@ export interface TestHost {
 export interface TestHostOptions {
   readonly key?: string
   readonly permission?: Permission
-  readonly told?: ReadonlyArray<string>
   /** The dashboard's preferences as saved before it opened. */
   readonly prefs?: UiPrefs
 }
@@ -35,7 +35,7 @@ export const testHost = (options: TestHostOptions = {}): TestHost => {
     saved: [],
   }
   let key = Option.fromUndefinedOr(options.key)
-  let told = options.told ?? []
+  let told: ReadonlyArray<string> = []
   let prefs = options.prefs ?? UiPrefs.defaults
   const host: HostShape = {
     origin: "http://slopmax.test",

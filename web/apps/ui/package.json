@@ -6,7 +6,6 @@
   "//": {
     "@effect/atom-react": "React hooks over effect/reactivity atoms: the report, settings and history are atoms fed by the API client and the event stream.",
     "@base-ui/react": "Accessible headless primitives (menus, dialogs, switches, tooltips, toasts) under the shadcn/ui components in src/components/ui.",
-    "@fontsource-variable/geist": "Geist, shadcn/ui's font: one variable file, Latin subset, shipped beside the CSS by build.ts so the page's CSP never sees it inlined (OFL).",
     "cn": "shadcn/ui's class helper (clsx and tailwind-merge compiled into one), behind src/lib/utils.ts as components.json expects.",
     "class-variance-authority": "Typed component variants (cva), so a misspelled variant is a type error.",
     "lucide-react": "The icon set; each icon is a tree-shaken component.",
@@ -23,7 +22,7 @@
     "happy-dom": "A light DOM for component tests.",
     "shadcn": "The shadcn/ui CLI (bunx shadcn add …, see components.json) and its shadcn/tailwind.css, which src/index.css imports at build time.",
     "tailwindcss": "Styling, on shadcn/ui's design system (DESIGN.md).",
-    "size": "Measured 2026-11-16 (bun build.ts) after the move to shadcn/ui: app.js 1,309 KB minified, 347 KB brotli, 413 KB gzip (recharts is most of the 473 KB added since 2026-10-31); CSS 120 KB, 15 KB brotli (shadcn/tailwind.css and tw-animate-css); Geist 29 KB. About 391 KB crosses the wire with brotli, up from 310 KB; the daemon's embedded copy sends gzip and the system font, about 431 KB."
+    "size": "Measured 2026-11-16 (bun build.ts), as the daemon embeds it: app.js 1,382 KB minified, 435 KB gzip (recharts is most of the 473 KB added since 2026-10-31); CSS 124 KB, 18 KB gzip (shadcn/tailwind.css and tw-animate-css); no font files, as the page uses the system's font. About 455 KB crosses the wire."
   },
   "exports": {
     ".": "./src/index.ts"
@@ -35,7 +34,6 @@
   "dependencies": {
     "@base-ui/react": "1.9.0",
     "@effect/atom-react": "4.1.1",
-    "@fontsource-variable/geist": "5.3.0",
     "@slopmax/client": "workspace:*",
     "class-variance-authority": "0.7.1",
     "cn": "0.5.2",

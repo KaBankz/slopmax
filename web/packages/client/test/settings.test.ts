@@ -3,29 +3,23 @@ import { it } from "@slopmax/test"
 import { Effect, Exit, Redacted, Result, Schema } from "effect"
 import {
   ClientKey,
-  decodeSettings,
-  defaultListen,
   defaultPort,
   defaultSettings,
   issueText,
   liveKeys,
-  liveOf,
   LiveSettings,
-  liveTable,
-  liveText,
   NotifySettings,
   parseLive,
   restartNeeded,
   type Settings,
   Settings as SettingsSchema,
-  settingsFile,
-  settingsJsonSchema,
   SettingsPatch,
   settingsView,
-  strategySummaries,
   Strategy,
-  toPublic,
+  strict,
 } from "../src/index.ts"
+
+const decodeSettings = (input: unknown) => Schema.decodeUnknownEffect(SettingsSchema)(input, strict)
 
 const load = (input: unknown): Settings => Effect.runSync(decodeSettings(input))
 
@@ -36,9 +30,6 @@ const refusal = (input: unknown): string => {
   if (error?._tag !== "Fail") throw new Error("expected a schema failure")
   return issueText(error.error.issue)
 }
-
-const isObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
 
 describe("Settings", () => {
   it("loads a partial file with every missing setting at its default", () => {
@@ -68,7 +59,7 @@ describe("Settings", () => {
 
   it("listens on port 7567 of this machine unless told otherwise", () => {
     expect(defaultPort).toBe(7567)
-    expect(defaultListen).toBe("127.0.0.1:7567")
+    expect(defaultSettings("sm-key").listen).toBe("127.0.0.1:7567")
     expect(Redacted.value(defaultSettings("sm-key").apiKey)).toBe("sm-key")
   })
 
@@ -131,66 +122,9 @@ describe("Settings", () => {
   })
 })
 
-describe("config.schema.json", () => {
-  it("describes every setting and gives each one a default its file may leave out", () => {
-    const document = settingsJsonSchema()
-    expect(document["$schema"]).toBe("https://json-schema.org/draft/2020-12/schema")
-    expect(document["additionalProperties"]).toBe(false)
-    const properties = document["properties"]
-    if (!isObject(properties)) throw new Error("the schema has no properties")
-    expect(Object.keys(properties).toSorted()).toEqual(Object.keys(SettingsSchema.fields).toSorted())
-    for (const [name, property] of Object.entries(properties)) {
-      if (!isObject(property)) throw new Error(`${name} has no schema`)
-      expect(typeof property["description"]).toBe("string")
-    }
-    // Only the owner key is needed, and slopmax makes it on first run.
-    expect(document["required"]).toBeUndefined()
-    const defaults = settingsFile(defaultSettings("sm-key"))
-    for (const [name, value] of Object.entries(defaults)) {
-      if (name === "$schema" || name === "apiKey") continue
-      const property = properties[name]
-      expect([name, isObject(property) ? property["default"] : undefined]).toEqual([name, value])
-    }
-  })
-
-  it("is plain JSON an editor can load", () => {
-    const text = JSON.stringify(settingsJsonSchema())
-    expect(JSON.parse(text)).toEqual(settingsJsonSchema())
-    // The settings themselves are at the root, not behind a reference.
-    expect(text).not.toContain('"#/$defs/SettingsEncoded"')
-  })
-})
-
-describe("settings files", () => {
-  it("are written with their schema link, and without lists and tables nobody filled in", () => {
-    const file = settingsFile(defaultSettings("sm-key"))
-    expect(Object.keys(file)[0]).toBe("$schema")
-    expect(file["$schema"]).toBe("./config.schema.json")
-    expect(file["apiKey"]).toBe("sm-key")
-    for (const name of ["aliases", "fallbacks", "prices", "planPrices", "keys", "notify", "upstreamProxy"]) {
-      expect(name in file).toBe(false)
-    }
-    const set = settingsFile(
-      load({ apiKey: "sm-key", aliases: { fast: "gpt-6-sol-mini" }, notify: { webhook: "https://hook" } }),
-    )
-    expect(set["aliases"]).toEqual({ fast: "gpt-6-sol-mini" })
-    expect(set["notify"]).toEqual({ webhook: "https://hook", events: NotifySettings.empty.events })
-    // What is written reads back as the same settings.
-    expect(Schema.encodeSync(SettingsSchema)(load(set))).toEqual(
-      Schema.encodeSync(SettingsSchema)(
-        load({
-          $schema: "./config.schema.json",
-          apiKey: "sm-key",
-          aliases: { fast: "gpt-6-sol-mini" },
-          notify: { webhook: "https://hook" },
-        }),
-      ),
-    )
-  })
-})
-
 describe("live settings", () => {
   it("are exactly the settings annotated live, each with a summary", () => {
+    const liveTable = settingsView(defaultSettings("")).live
     const annotated = Object.entries(SettingsSchema.fields)
       .filter(([, field]) => Schema.resolveAnnotations(field)?.live !== undefined)
       .map(([name]) => name)
@@ -236,18 +170,6 @@ describe("live settings", () => {
     )
   })
 
-  it("read back as they are typed, and every default reads in again", () => {
-    const settings = load({})
-    expect(liveText(settings, "strategy")).toBe("fill-first")
-    expect(liveText(settings, "sessionMinutes")).toBe("60")
-    expect(liveText(settings, "sessionAffinity")).toBe("on")
-    expect(liveText(settings, "warmWindows")).toBe("off")
-    const live = liveOf(settings)
-    for (const row of liveTable) {
-      expect(row.parse(liveText(live, row.name))).toEqual(Result.succeed({ [row.name]: live[row.name] }))
-    }
-  })
-
   it("change through a patch that names only live settings, and at least one", () => {
     const decode = Schema.decodeUnknownResult(SettingsPatch)
     expect(decode({ strategy: "least-used", pollMinutes: 0 })).toEqual(
@@ -267,7 +189,8 @@ describe("live settings", () => {
 describe("strategies", () => {
   it("are offered in order with their summaries", () => {
     expect(Strategy.literals).toEqual(["reset-first", "fill-first", "least-used", "round-robin"])
-    expect(strategySummaries).toEqual({
+    const summaries = Object.fromEntries(settingsView(defaultSettings("")).strategies.map((s) => [s.id, s.summary]))
+    expect(summaries).toEqual({
       "reset-first": "Spend the quota that resets soonest, so none is lost",
       "fill-first": "Use accounts in order; fail over when one is limited",
       "least-used": "Balance load toward the least used account",
@@ -286,7 +209,7 @@ describe("SettingsView", () => {
     const served = JSON.stringify(view)
     expect(served).not.toContain("sm-owner")
     expect(served).not.toContain("sm-laptop")
-    expect(toPublic(settings).keys.map((key) => [String(key.name), key.models])).toEqual([["laptop", ["gpt-*"]]])
+    expect(view.settings.keys.map((key) => [String(key.name), key.models])).toEqual([["laptop", ["gpt-*"]]])
     expect(view.strategies.map((s) => s.id)).toEqual([...Strategy.literals])
     expect(view.live.map((row) => row.name)).toEqual([...liveKeys])
     expect(view.restartNeeded).toEqual([])

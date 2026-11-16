@@ -32,7 +32,7 @@ export const Pages = {
 } as const
 
 /** The providers that have accounts, in registry order: one sidebar row each. */
-export const providersWithAccounts = (report: Report | undefined): ReadonlyArray<ProviderId> =>
+const providersWithAccounts = (report: Report | undefined): ReadonlyArray<ProviderId> =>
   report === undefined ? [] : providerOrder.filter((id) => report.accounts.some((a) => a.provider === id))
 
 /** Every page in sidebar order. */
@@ -76,12 +76,10 @@ export const parsePage = (hash: string): Page => {
   return found ?? Pages.overview
 }
 
-/** Where the sidebar stands: shown or hidden, and whether the last change slides or is instant. */
+/** Where the sidebar stands: shown or hidden, and how wide. */
 export interface SidebarState {
   readonly hidden: boolean
   readonly width: number
-  /** The keyboard shows and hides it at once; the button slides it. */
-  readonly instant: boolean
 }
 
 export const sidebarWidth = { least: 190, most: 340, initial: 220 } as const
@@ -92,22 +90,13 @@ export const sidebarHideBelow = 130
 export const clampWidth = (width: number): number =>
   Math.min(sidebarWidth.most, Math.max(sidebarWidth.least, Number.isFinite(width) ? width : sidebarWidth.initial))
 
-/** Shows or hides the sidebar; `via` the keyboard or a menu it moves at once, `via` the button it slides. */
-export const toggleSidebar = (state: SidebarState, via: "button" | "keyboard"): SidebarState => ({
-  ...state,
-  hidden: !state.hidden,
-  instant: via === "keyboard",
-})
-
 /**
  * Where a drag of the sidebar's edge leaves it: the pointer's x sets the
  * width within its limits; past the hiding point the sidebar hides and keeps
  * the width the drag began with.
  */
-export const dragSidebar = (state: SidebarState, x: number, startWidth: number): SidebarState =>
-  x < sidebarHideBelow
-    ? { hidden: true, width: startWidth, instant: true }
-    : { hidden: false, width: clampWidth(x), instant: true }
+export const dragSidebar = (x: number, startWidth: number): SidebarState =>
+  x < sidebarHideBelow ? { hidden: true, width: startWidth } : { hidden: false, width: clampWidth(x) }
 
 /**
  * The owner key handed to the web dashboard in its address (`#key=sm-…`),

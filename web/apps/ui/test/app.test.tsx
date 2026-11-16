@@ -17,6 +17,9 @@ afterEach(async () => {
   drawn = undefined
 })
 
+/** Whether the sidebar is `expanded` or `collapsed`. */
+const sidebarState = () => document.querySelector("[data-slot=sidebar][data-state]")?.getAttribute("data-state")
+
 const web = async (at?: string) => {
   drawn = await draw({ stub: { key: ownerKey }, host: { key: ownerKey }, ...(at === undefined ? {} : { at }) })
   await showsSoon("Running 0.4.0")
@@ -212,6 +215,17 @@ describe("the web dashboard", () => {
     await settle(() => location.hash === "#/anthropic", "the next page")
     await key(",")
     await settle(() => location.hash === "#/settings", "settings")
+  })
+
+  test("\\ hides and shows the sidebar as its button does, and the page keeps that for next time", async () => {
+    const { host } = await web()
+    expect(sidebarState()).toBe("expanded")
+    await key("\\")
+    await settle(() => host.recorded.saved.at(-1)?.sidebarHidden === true, "the sidebar hidden")
+    expect(sidebarState()).toBe("collapsed")
+    await press("Toggle Sidebar")
+    await settle(() => host.recorded.saved.at(-1)?.sidebarHidden === false, "the sidebar shown")
+    expect(sidebarState()).toBe("expanded")
   })
 
   test("a slopmax with no accounts says how to add one", async () => {
