@@ -25,6 +25,15 @@ pub fn temp_dir(name: &str) -> TempDir {
     TempDir(dir)
 }
 
+/// Like [`temp_dir`], under `/tmp` and with a short name, for a unix
+/// socket: macOS's temp dir leaves too little of a socket path's 104 bytes.
+#[cfg(unix)]
+pub fn short_temp_dir() -> TempDir {
+    let dir = Path::new("/tmp").join(format!("sm-{}", &ids::token()[..12]));
+    std::fs::create_dir_all(&dir).unwrap();
+    TempDir(dir)
+}
+
 /// A directory from [`temp_dir`]; reads as its path.
 #[derive(Debug)]
 pub struct TempDir(PathBuf);

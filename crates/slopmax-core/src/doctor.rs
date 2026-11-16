@@ -1798,11 +1798,16 @@ mod tests {
             );
             let peers = [peer("nMAC1CNTRL", "mac", Some("me@github"))];
             let s = section(&config(&["me@github"]), &facts(&seen, &peers));
+            let socket = home().show(&home().tailnet_socket());
+            assert_eq!(socket.replace('\\', "/"), "~/.slopmax/tailnet.sock");
             assert_eq!(
                 texts(&s),
                 [(
                     Level::Ok,
-                    "served to your tailnet at https://hub.example.ts.net:7567 (to ~/.slopmax/tailnet.sock)"
+                    format!(
+                        "served to your tailnet at https://hub.example.ts.net:7567 (to {socket})"
+                    )
+                    .as_str()
                 )]
             );
         }
@@ -1891,7 +1896,8 @@ mod tests {
                     Some("tailscale serve --https=7567 off, then slopmax tailscale on")
                 )
             );
-            let f = finding(&s, "the proxy doesn't answer on ~/.slopmax/tailnet.sock");
+            let socket = home.show(&home.tailnet_socket());
+            let f = finding(&s, &format!("the proxy doesn't answer on {socket}"));
             assert_eq!(
                 (f.level, f.fix.as_deref()),
                 (Level::Fail, Some("slopmax stop && slopmax start"))
@@ -2140,7 +2146,8 @@ mod tests {
         #[tokio::test]
         async fn the_socket_answers_only_with_a_200() {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
-            let dir = temp_dir("doctor-socket");
+            // macOS's temp dir is too long a path for a socket.
+            let dir = testkit::short_temp_dir();
             let path = dir.join("t.sock");
             assert!(!socket_answers(&path, Duration::from_millis(200)).await);
             let listener = tokio::net::UnixListener::bind(&path).unwrap();
