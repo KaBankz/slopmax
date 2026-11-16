@@ -564,12 +564,12 @@ pub static APP: App = App {
                 ),
                 arg(
                     "loopback",
-                    "With on: serve the proxy's port, where every machine needs a key",
+                    "With on: serve the proxy's bare port, where every machine needs a key",
                     Kind::Flag(None),
                 ),
                 arg(
                     "socket",
-                    "With on: serve the proxy's socket, even from the Tailscale app on a Mac",
+                    "With on: serve the proxy's socket, which Tailscale lets only root publish",
                     Kind::Flag(None),
                 ),
                 arg(

@@ -1,15 +1,18 @@
 //! Requests from the user's tailnet: what tailscaled says about who sent
 //! one, and which machine is behind a tailnet address.
 //!
-//! tailscaled's `serve` passes each request to the owner-only socket with
-//! headers naming the login it came from (`Tailscale-User-Login`) and the
-//! address it came from (`X-Forwarded-For`). Those headers are believed only
-//! on the [`Channel::Tailnet`] the listener marks, and are taken off every
-//! request, whichever way it came, before anything else reads it. The one
-//! exception is Funnel's mark, believed on every channel: it only refuses.
+//! tailscaled's `serve` passes each request on with headers naming the
+//! login it came from (`Tailscale-User-Login`) and the address it came from
+//! (`X-Forwarded-For`): to the owner-only socket, or to the proxy's port
+//! under a private path only tailscaled is told ([`route`]). Those headers
+//! are believed only on the [`Channel::Tailnet`] such a request is marked
+//! with, and are taken off every request, whichever way it came, before
+//! anything else reads it. The one exception is Funnel's mark, believed on
+//! every channel: it only refuses.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -18,7 +21,7 @@ use http::{HeaderMap, header};
 use super::App;
 use crate::log;
 use crate::net::headers::strip_tailnet;
-use crate::net::server::Channel;
+use crate::net::server::{Channel, TcpEnds};
 use crate::tailscale;
 
 /// How long a machine found behind an address is believed.
@@ -64,8 +67,77 @@ impl Seen {
     }
 }
 
+/// A request under `private`, the path Tailscale is sent the tailnet's
+/// requests under: the path taken off, so it is answered as any other, and
+/// marked as the tailnet's when tailscaled sent it.
+///
+/// The path is a secret, but any user of this machine may read it back from
+/// tailscaled. So on Linux the request is the tailnet's only when the other
+/// end of its connection belongs to root (tailscaled) or this user, who
+/// holds the owner key anyway. Elsewhere the secret alone decides.
+pub(crate) fn route<B>(request: &mut http::Request<B>, private: &str) {
+    if request.extensions().get::<Channel>() != Some(&Channel::Tcp) {
+        return;
+    }
+    let path = request.uri().path();
+    let rest = match path.strip_prefix(private) {
+        Some("") => "/",
+        Some(rest) if rest.starts_with('/') => rest,
+        _ => return,
+    };
+    let rest = match request.uri().query() {
+        Some(query) => format!("{rest}?{query}"),
+        None => rest.to_owned(),
+    };
+    let mut parts = request.uri().clone().into_parts();
+    parts.path_and_query = rest.parse().ok();
+    let Ok(uri) = http::Uri::from_parts(parts) else {
+        return;
+    };
+    *request.uri_mut() = uri;
+    let ends = request.extensions().get::<TcpEnds>().copied();
+    let uid = ends.and_then(crate::net::peer::uid);
+    if from_tailscaled(uid) {
+        request.extensions_mut().insert(Channel::Tailnet);
+    } else {
+        static WARNED: AtomicBool = AtomicBool::new(false);
+        if !WARNED.swap(true, Ordering::Relaxed) {
+            let who = uid.map_or_else(|| "an unknown user".to_owned(), |uid| format!("uid {uid}"));
+            log::warn!(
+                "a request came to the tailnet's private path from {who}, not Tailscale; it is \
+                 answered as from this machine, where it needs a key"
+            );
+        }
+    }
+}
+
+/// Whether a connection whose client end belongs to `uid` may be
+/// tailscaled's: root, or this user. On Linux an unknown owner may not;
+/// elsewhere the owner is never known.
+fn from_tailscaled(uid: Option<u32>) -> bool {
+    match uid {
+        Some(uid) => uid == 0 || Some(uid) == own_uid(),
+        None => !cfg!(target_os = "linux"),
+    }
+}
+
+/// This process's uid, which owns `/proc/self`: Linux only, the one system
+/// where a connection's owner is known.
+fn own_uid() -> Option<u32> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::MetadataExt;
+        static UID: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+        *UID.get_or_init(|| std::fs::metadata("/proc/self").ok().map(|m| m.uid()))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
 /// What `request` says about where it came from, believed only when it
-/// came over the tailnet socket. Its tailnet headers are removed either
+/// came over the tailnet socket, or under the private path from tailscaled. Its tailnet headers are removed either
 /// way, so they reach nothing else: not the providers, not the logs.
 ///
 /// Funnel's mark is believed whichever way the request came: Tailscale
@@ -309,6 +381,83 @@ impl Peers {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const PRIVATE: &str = "/.slopmax-tailnet-0123456789abcdef0123456789abcdef";
+
+    fn tcp(uri: &str, ends: Option<TcpEnds>) -> http::Request<()> {
+        let mut request = http::Request::builder().uri(uri).body(()).unwrap();
+        request.extensions_mut().insert(Channel::Tcp);
+        if let Some(ends) = ends {
+            request.extensions_mut().insert(ends);
+        }
+        request
+    }
+
+    #[test]
+    fn route_takes_the_private_path_off() {
+        for (uri, want) in [
+            (
+                format!("{PRIVATE}/v1/messages?beta=true"),
+                "/v1/messages?beta=true",
+            ),
+            (format!("{PRIVATE}/"), "/"),
+            (PRIVATE.to_owned(), "/"),
+            (format!("{PRIVATE}/slopmax/"), "/slopmax/"),
+        ] {
+            let mut request = tcp(&uri, None);
+            route(&mut request, PRIVATE);
+            assert_eq!(request.uri().to_string(), want, "{uri}");
+        }
+        for uri in [
+            "/v1/messages".to_owned(),
+            format!("{PRIVATE}x/v1/messages"),
+            "/.slopmax-tailnet-ffff/v1/messages".to_owned(),
+        ] {
+            let mut request = tcp(&uri, None);
+            route(&mut request, PRIVATE);
+            assert_eq!(request.uri().to_string(), uri);
+            assert_eq!(request.extensions().get::<Channel>(), Some(&Channel::Tcp));
+        }
+        // The socket's requests have no private path to take off.
+        let mut request = http::Request::builder()
+            .uri(format!("{PRIVATE}/v1/messages"))
+            .body(())
+            .unwrap();
+        request.extensions_mut().insert(Channel::Tailnet);
+        route(&mut request, PRIVATE);
+        assert!(request.uri().path().starts_with(PRIVATE));
+    }
+
+    #[test]
+    fn only_tailscaled_or_this_user_is_the_tailnet() {
+        assert!(from_tailscaled(Some(0)));
+        #[cfg(target_os = "linux")]
+        assert!(from_tailscaled(own_uid()));
+        assert!(!from_tailscaled(Some(own_uid().unwrap_or(0) + 4242)));
+        assert_eq!(from_tailscaled(None), !cfg!(target_os = "linux"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_request_from_this_user_under_the_private_path_is_the_tailnet() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = tokio::net::TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server, peer) = listener.accept().await.unwrap();
+        let ends = TcpEnds {
+            peer,
+            local: server.local_addr().unwrap(),
+        };
+        let mut request = tcp(&format!("{PRIVATE}/healthz"), Some(ends));
+        route(&mut request, PRIVATE);
+        assert_eq!(request.uri().path(), "/healthz");
+        assert_eq!(
+            request.extensions().get::<Channel>(),
+            Some(&Channel::Tailnet)
+        );
+        drop(client);
+    }
 
     fn request(channel: Option<Channel>, headers: &[(&str, &str)]) -> http::Request<()> {
         let mut request = http::Request::new(());

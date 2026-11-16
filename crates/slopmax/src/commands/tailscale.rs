@@ -15,9 +15,7 @@ use slopmax_client::api::tailnet::{self as api, TailnetPatch};
 use super::home;
 use crate::ui;
 use slopmax_core::config::{AdminMachine, Config, TAILNET_TOKEN, Tailnet};
-use slopmax_core::tailscale::{
-    self, BackendState, Node, Peer, Port, Tailscale, Target, Transport, TsError,
-};
+use slopmax_core::tailscale::{self, BackendState, Node, Peer, Port, Tailscale, Target, TsError};
 
 /// What `slopmax tailscale` was given.
 pub struct Args<'a> {
@@ -59,12 +57,9 @@ pub async fn run(config: &Config, args: Args<'_>) -> Result<()> {
 }
 
 /// Where Tailscale may send requests for this home's slopmax: its socket,
-/// or its TCP port on loopback.
-pub fn targets(config: &Config) -> [Target; 2] {
-    [
-        Target::Socket(home().tailnet_socket()),
-        Target::Loopback(config.listen.port()),
-    ]
+/// a private path on its port, or its port.
+pub fn targets(config: &Config) -> [Target; 3] {
+    tailscale::targets(home(), config)
 }
 
 /// A Tailscale error as the CLI reports it: what went wrong, then on the
@@ -87,12 +82,12 @@ fn access_denied(again: &str, by_hand: &str) -> anyhow::Error {
 }
 
 /// Only root may publish the socket: the one command that does it, or the
-/// proxy's port, which needs no root once the user is Tailscale's operator.
+/// private path, which needs no root once the user is Tailscale's operator.
 fn root_only(again: &str, by_hand: &str) -> anyhow::Error {
     anyhow!(
         "{}\nPublish it once yourself, then run `slopmax tailscale {again}` again:\n  sudo \
-         {by_hand}\nOr serve the proxy's port instead, where every machine needs a key: slopmax \
-         tailscale on --loopback\n(slopmax never runs sudo itself.)",
+         {by_hand}\nOr leave out --socket: `slopmax tailscale on` publishes a private path on \
+         the proxy's port, which needs no root.\n(slopmax never runs sudo itself.)",
         TsError::RootOnly.message()
     )
 }
@@ -100,39 +95,29 @@ fn root_only(again: &str, by_hand: &str) -> anyhow::Error {
 /// The longest socket path slopmax listens on: macOS takes 104 bytes.
 const SOCKET_PATH_MAX: usize = 100;
 
-/// Which way Tailscale should reach slopmax here, and why when it isn't
-/// the socket.
-fn transport(config: &Config, ts: &Tailscale, args: &Args<'_>) -> (Target, Option<String>) {
-    let [socket, loopback] = targets(config);
-    if !cfg!(unix) {
-        return (
-            loopback,
-            Some("Windows has no socket for Tailscale to reach slopmax through.".into()),
-        );
-    }
+/// Which way Tailscale should reach slopmax here: a private path on the
+/// proxy's port, which Tailscale's operator may publish and which tells
+/// slopmax who is asking; the socket, which only root may publish; or the
+/// bare port, where every machine needs a key.
+fn transport(config: &Config, args: &Args<'_>) -> Result<Target> {
+    let [socket, private, loopback] = targets(config);
     if args.loopback {
-        return (loopback, None);
+        return Ok(loopback);
+    }
+    if !args.socket {
+        return Ok(private);
+    }
+    if !cfg!(unix) {
+        bail!("Windows has no socket for Tailscale to reach slopmax through; leave out --socket");
     }
     if home().tailnet_socket().as_os_str().len() > SOCKET_PATH_MAX {
-        return (
-            loopback,
-            Some(format!(
-                "{} is too long a path for a socket; move SLOPMAX_HOME somewhere shorter for \
-                 machines to use slopmax without a key.",
-                home().tailnet_socket().display()
-            )),
+        bail!(
+            "{} is too long a path for a socket; move SLOPMAX_HOME somewhere shorter, or leave \
+             out --socket",
+            home().tailnet_socket().display()
         );
     }
-    if tailscale::in_app_bundle(&ts.exe) && !args.socket {
-        return (
-            loopback,
-            Some(
-                "The Tailscale app can't reach a socket in your home; `--socket` tries anyway."
-                    .into(),
-            ),
-        );
-    }
-    (socket, None)
+    Ok(socket)
 }
 
 /// `slopmax tailscale on`.
@@ -153,7 +138,24 @@ async fn on(config: &Config, args: &Args<'_>) -> Result<()> {
     }
     let port = args.port.unwrap_or(config.listen.port());
     let serve = ts.serve_state().await.map_err(fail)?;
-    if let Port::Taken { by } = tailscale::port_use(&serve, port, &targets(config)) {
+    // slopmax at a private path made from an older owner key: replaced.
+    let older = |h: &tailscale::Handler| {
+        h.port == port && tailscale::older_private(h, config.listen.port())
+    };
+    let taken = match tailscale::port_use(&serve, port, &targets(config)) {
+        Port::Taken { .. }
+            if serve
+                .handlers
+                .iter()
+                .filter(|h| h.port == port)
+                .all(|h| older(h) || tailscale::ours(h, &targets(config))) =>
+        {
+            None
+        }
+        Port::Taken { by } => Some(by),
+        _ => None,
+    };
+    if let Some(by) = taken {
         let e = TsError::PortTaken { port, by };
         if !tailscale::stale(&serve, port, &targets(config)).is_empty() {
             // Something on this machine, perhaps slopmax from another home
@@ -171,7 +173,8 @@ async fn on(config: &Config, args: &Args<'_>) -> Result<()> {
     if serve.funnel_ports.contains(&port) {
         return Err(fail(TsError::Funnel { port }));
     }
-    let (mut target, mut why) = transport(config, &ts, args);
+    let mut target = transport(config, args)?;
+    let mut why: Option<String> = None;
     let by_hand =
         |target: &Target| format!("tailscale serve --bg --yes --https={port} {}", target.arg());
     let again = match args.port {
@@ -191,7 +194,9 @@ async fn on(config: &Config, args: &Args<'_>) -> Result<()> {
             // The operator may publish the proxy's port, but not a socket.
             return Err(match target {
                 Target::Socket(_) => root_only(&again, &by_hand(&target)),
-                Target::Loopback(_) => access_denied(&again, &by_hand(&target)),
+                Target::Private { .. } | Target::Loopback(_) => {
+                    access_denied(&again, &by_hand(&target))
+                }
             });
         }
     }
@@ -240,15 +245,16 @@ async fn on(config: &Config, args: &Args<'_>) -> Result<()> {
         Reached::Status(502)
             if cfg!(target_os = "macos") && matches!(target, Target::Socket(_)) =>
         {
-            // Tailscale here can't open the socket: the TCP port instead,
-            // where keys work.
+            // Tailscale here can't open the socket: the private path on
+            // the proxy's port instead, which names the caller too.
             ts.unpublish(port).await.map_err(fail)?;
-            target = Target::Loopback(config.listen.port());
+            let [_, private, _] = targets(config);
+            target = private;
             publish(&ts, port, &target, &again, &by_hand).await?;
             url = check_published(&ts, &node, port, &target).await?;
             why = Some(
-                "Tailscale here couldn't reach slopmax's socket, so it serves the proxy's port \
-                 instead."
+                "Tailscale here couldn't reach slopmax's socket, so it serves a private path on \
+                 the proxy's port instead."
                     .into(),
             );
         }
@@ -271,7 +277,7 @@ async fn on(config: &Config, args: &Args<'_>) -> Result<()> {
     println!("Your machines reach slopmax at {}", ui::bold(&url));
     let users = &tailnet.users;
     match (&target, users.is_empty()) {
-        (Target::Socket(_), false) => {
+        (Target::Socket(_) | Target::Private { .. }, false) => {
             println!(
                 "  Machines signed in as {} use it without a key and see its status read-only.",
                 users.join(" or ")
@@ -279,7 +285,7 @@ async fn on(config: &Config, args: &Args<'_>) -> Result<()> {
             println!("  To let a machine manage it too: slopmax tailscale admins add <machine>");
             println!("  Tagged machines need a key: slopmax key add <name>");
         }
-        (Target::Socket(_), true) => {
+        (Target::Socket(_) | Target::Private { .. }, true) => {
             println!(
                 "  This machine is tagged, so no login is let in without a key: every machine \
                  needs one (slopmax key add <name>)."
@@ -489,11 +495,10 @@ async fn status(config: &Config, json: bool) -> Result<()> {
         );
     }
     for p in &inspection.published {
-        let to = match &p.target {
-            Target::Socket(path) => home().show(path),
-            Target::Loopback(port) => format!("http://127.0.0.1:{port}"),
-        };
-        row("Published", format!("{} -> {to}", p.url));
+        row(
+            "Published",
+            format!("{} -> {}", p.url, p.target.shown(home())),
+        );
         if p.funnel {
             let e = TsError::Funnel { port: p.port };
             row(
@@ -503,6 +508,17 @@ async fn status(config: &Config, json: bool) -> Result<()> {
         }
     }
     for h in &inspection.stale {
+        if tailscale::older_private(h, config.listen.port()) {
+            row(
+                "Stale",
+                ui::yellow(format!(
+                    "port {} serves slopmax at an older owner key's private path: `slopmax \
+                     tailscale on`",
+                    h.port
+                )),
+            );
+            continue;
+        }
         row(
             "Stale",
             ui::yellow(format!(
@@ -521,11 +537,11 @@ async fn status(config: &Config, json: bool) -> Result<()> {
         );
     }
     let users = config.tailnet_users();
-    let by_socket = inspection
+    let named = inspection
         .published
         .iter()
-        .any(|p| p.transport == Transport::Socket);
-    let loopback_only = !inspection.published.is_empty() && !by_socket;
+        .any(|p| p.transport.names_caller());
+    let loopback_only = !inspection.published.is_empty() && !named;
     let identity = !users.is_empty() && !loopback_only;
     let no_key = if loopback_only {
         "nobody: Tailscale here can't tell slopmax who is asking".to_owned()
@@ -782,7 +798,7 @@ pub async fn published_url(config: &Config) -> Option<(String, bool)> {
     let first = tailscale::published(&serve, &node, &targets(config))
         .into_iter()
         .next()?;
-    let keyless = first.transport == Transport::Socket && !config.tailnet_users().is_empty();
+    let keyless = first.transport.names_caller() && !config.tailnet_users().is_empty();
     Some((first.url, keyless))
 }
 
@@ -808,7 +824,7 @@ pub async fn dashboard_hint(config: &Config) -> String {
     };
     match tailscale::published(&serve, &node, &targets(config)).first() {
         Some(p) => {
-            let keyless = p.transport == Transport::Socket && !config.tailnet_users().is_empty();
+            let keyless = p.transport.names_caller() && !config.tailnet_users().is_empty();
             format!(
                 "From your other machines and phone: {}/slopmax/ ({})",
                 p.url,

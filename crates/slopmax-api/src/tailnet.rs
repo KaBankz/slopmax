@@ -44,6 +44,9 @@ pub enum TailscaleState {
 pub enum Transport {
     /// slopmax's owner-only socket, which tells slopmax who is asking.
     Socket,
+    /// A private path on the proxy's TCP port that only Tailscale knows,
+    /// which tells slopmax who is asking too.
+    Private,
     /// The proxy's TCP port on 127.0.0.1, where only keys work.
     Loopback,
 }

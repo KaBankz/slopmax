@@ -68,11 +68,17 @@ export const machinesCard = (view: TailnetView): MachinesCard => {
             value: "slopmax's socket",
             detail: "Tailscale tells slopmax which machine is asking.",
           }
-        : {
-            title: "Reached through",
-            value: "127.0.0.1",
-            detail: "Tailscale here can't tell slopmax who is asking, so every machine needs a key.",
-          },
+        : view.transport === "private"
+          ? {
+              title: "Reached through",
+              value: "a private path on 127.0.0.1",
+              detail: "Tailscale tells slopmax which machine is asking.",
+            }
+          : {
+              title: "Reached through",
+              value: "127.0.0.1",
+              detail: "Tailscale here can't tell slopmax who is asking, so every machine needs a key.",
+            },
     )
   }
   if (view.url !== undefined) {

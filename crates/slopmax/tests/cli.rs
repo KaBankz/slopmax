@@ -2554,6 +2554,12 @@ impl Sandbox {
     fn socket_target(&self) -> String {
         format!("unix:{}", self.slopmax.join("tailnet.sock").display())
     }
+
+    /// The private path on the proxy's port, from the sandbox's owner key.
+    fn private_target(&self) -> String {
+        let path = slopmax_core::tailscale::private_path(&owner_key(self));
+        format!("http://127.0.0.1:{}{path}", self.port)
+    }
 }
 
 #[cfg(unix)]
@@ -2578,24 +2584,46 @@ fn tailscale_on_publishes_the_socket_and_off_takes_it_down() {
         s.socket_target()
     );
     let out = s
-        .ts(&["tailscale", "on"])
+        .ts(&["tailscale", "on", "--socket"])
         .fails(1, "Tailscale lets only root publish a socket.");
     assert!(out.stderr.contains(&by_hand), "{out:?}");
-    assert!(
-        out.stderr.contains("slopmax tailscale on --loopback"),
-        "{out:?}"
-    );
+    assert!(out.stderr.contains("Or leave out --socket"), "{out:?}");
     assert!(!out.stderr.contains("--operator"), "{out:?}");
     s.ts_file("serve.json", &s.serving(&s.socket_target()));
     s.clear_stub_log();
-    let out = s.ts(&["tailscale", "on"]).ok();
+    let out = s.ts(&["tailscale", "on", "--socket"]).ok();
     assert!(s.serve_changes().is_empty(), "{}", s.stub_calls());
     assert!(
         out.stdout
             .contains(&format!("https://hub.example.ts.net:{port}")),
         "{out:?}"
     );
+    // Plain `on` moves it to the private path, which needs no root.
+    s.clear_stub_log();
+    s.ts(&["tailscale", "on"]).ok();
+    assert_eq!(
+        s.serve_changes(),
+        [format!(
+            "tailscale serve --bg --yes --https={port} {}",
+            s.private_target()
+        )]
+    );
     s.ts_marker("root-only", false);
+    // A private path from an older owner key is slopmax's own: replaced.
+    let older = format!(
+        "http://127.0.0.1:{port}{}",
+        slopmax_core::tailscale::private_path("sm-older")
+    );
+    s.ts_file("serve.json", &s.serving(&older));
+    let table = s.ts(&["tailscale"]).ok().stdout;
+    assert!(
+        table.contains("an older owner key's private path"),
+        "{table}"
+    );
+    assert!(!table.contains(&older), "{table}");
+    s.clear_stub_log();
+    s.ts(&["tailscale", "on"]).ok();
+    assert_eq!(s.serve_changes().len(), 1, "{}", s.stub_calls());
     let _ = std::fs::remove_file(s.ts_dir().join("serve.json"));
     s.clear_stub_log();
 
@@ -2605,9 +2633,15 @@ fn tailscale_on_publishes_the_socket_and_off_takes_it_down() {
         s.serve_changes(),
         [format!(
             "tailscale serve --bg --yes --https={port} {}",
-            s.socket_target()
+            s.private_target()
         )]
     );
+    let table = s.ts(&["tailscale"]).ok().stdout;
+    assert!(
+        table.contains(&format!("-> http://127.0.0.1:{port} (a private path)")),
+        "{table}"
+    );
+    assert!(!table.contains(".slopmax-tailnet-"), "{table}");
     let url = format!("https://hub.example.ts.net:{port}");
     assert!(out.stdout.contains(&url), "{out:?}");
     assert!(
@@ -2815,9 +2849,19 @@ fn tailscale_on_without_operator_rights_says_how_to_get_them() {
     }
     s.fake_tailscale();
     s.ts_file("prefs.json", "{}");
+    // The private path needs only the operator.
+    let out = s.ts(&["tailscale", "on"]).fails(
+        1,
+        "Tailscale lets only root change what this machine serves.",
+    );
+    assert!(
+        out.stderr.contains("  sudo tailscale set --operator=$USER"),
+        "{out:?}"
+    );
+    assert!(out.stderr.contains(&s.private_target()), "{out:?}");
     // The socket needs root, which the operator wouldn't have either.
     let out = s
-        .ts(&["tailscale", "on"])
+        .ts(&["tailscale", "on", "--socket"])
         .fails(1, "Tailscale lets only root publish a socket.");
     assert!(
         out.stderr.contains(&format!(

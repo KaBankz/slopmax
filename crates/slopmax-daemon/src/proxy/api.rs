@@ -36,7 +36,7 @@ use crate::config::Config;
 use crate::net::body;
 use crate::net::server::{Channel, Request, Response};
 use crate::provider::credits::Outcome;
-use crate::tailscale::{self, Target};
+use crate::tailscale;
 use crate::time::Timestamp;
 use crate::{api, doctor, log, summary};
 
@@ -1191,10 +1191,7 @@ async fn tailnet_view(app: &App) -> TailnetView {
         Some(view) => view,
         None => {
             let port = config.listen.port();
-            let targets = [
-                Target::Socket(app.home.tailnet_socket()),
-                Target::Loopback(port),
-            ];
+            let targets = tailscale::targets(&app.home, &config);
             let cli = app.tailscale_cli();
             let inspection = tailscale::inspect(cli.as_ref(), &targets, port).await;
             let view = inspection.view();
