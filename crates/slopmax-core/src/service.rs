@@ -39,11 +39,20 @@ pub enum Manager {
     Windows,
 }
 
-/// What the service manager knows about slopmax.
+/// What the service manager knows about slopmax, for one home.
+///
+/// The service is the user's, one per machine, and runs the proxy for one
+/// home: the one `SLOPMAX_HOME` named when it was installed. To any other
+/// home it is not installed, so `start` there starts that home's proxy
+/// itself rather than the service, which would run another home's.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Status {
+    /// Installed for this home.
     pub installed: bool,
+    /// Installed for this home and running.
     pub running: bool,
+    /// Installed for another home.
+    pub elsewhere: bool,
     /// Linux: whether the user's services keep running after logout.
     pub lingering: Option<bool>,
 }
@@ -133,6 +142,14 @@ impl Manager {
 
     pub fn uninstall(self, home: &Home) -> Result<PathBuf> {
         let file = self.file(home);
+        if let Some(other) = self.served(home).filter(|dir| !same_dir(dir, home.dir())) {
+            bail!(
+                "the login service runs slopmax for {}, not this home; remove it from there: \
+                 SLOPMAX_HOME=\"{}\" slopmax service uninstall",
+                home.show(&other),
+                other.display()
+            );
+        }
         if self == Self::Windows {
             if !run_key_set() {
                 bail!("no service installed");
@@ -213,29 +230,75 @@ impl Manager {
     }
 
     pub fn status(self, home: &Home) -> Status {
-        if self == Self::Windows {
-            let installed = run_key_set();
-            return Status {
-                installed,
-                running: installed && launcher_running(),
-                lingering: None,
-            };
+        let served = self.served(home);
+        let installed = served
+            .as_deref()
+            .is_some_and(|dir| same_dir(dir, home.dir()));
+        let elsewhere = served.is_some() && !installed;
+        let (running, lingering) = match self {
+            Self::Windows => (installed && launcher_running(), None),
+            Self::Systemd => (
+                installed && succeeds("systemctl", &["--user", "is-active", "--quiet", NAME]),
+                lingering(),
+            ),
+            Self::Launchd => (
+                installed && launchctl(&["print", &launchd_target()]).is_ok(),
+                None,
+            ),
+        };
+        Status {
+            installed,
+            running,
+            elsewhere,
+            lingering,
         }
-        let installed = self.file(home).exists();
-        match self {
-            Self::Systemd => Status {
-                installed,
-                running: installed
-                    && succeeds("systemctl", &["--user", "is-active", "--quiet", NAME]),
-                lingering: lingering(),
-            },
-            Self::Launchd => Status {
-                installed,
-                running: installed && launchctl(&["print", &launchd_target()]).is_ok(),
-                lingering: None,
-            },
-            Self::Windows => unreachable!("answered above"),
-        }
+    }
+
+    /// The home whose proxy the installed service runs, if one is
+    /// installed: the `SLOPMAX_HOME` its definition sets, else the default
+    /// one, `~/.slopmax`.
+    pub fn served(self, home: &Home) -> Option<PathBuf> {
+        let definition = match self {
+            Self::Windows => {
+                let output = Command::new("reg")
+                    .args(["query", RUN_KEY, "/v", NAME])
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())?;
+                String::from_utf8_lossy(&output.stdout).into_owned()
+            }
+            _ => std::fs::read_to_string(self.file(home)).ok()?,
+        };
+        Some(
+            self.home_in(&definition)
+                .unwrap_or_else(|| home.user().join(".slopmax")),
+        )
+    }
+
+    /// The `SLOPMAX_HOME` a service definition sets, if it sets one.
+    fn home_in(self, definition: &str) -> Option<PathBuf> {
+        let value = match self {
+            Self::Systemd => definition.lines().find_map(|line| {
+                line.trim()
+                    .strip_prefix("Environment=\"SLOPMAX_HOME=")?
+                    .strip_suffix('"')
+                    .map(str::to_owned)
+            })?,
+            Self::Launchd => {
+                let (_, rest) = definition.split_once("<key>SLOPMAX_HOME</key>")?;
+                let (_, rest) = rest.split_once("<string>")?;
+                let (value, _) = rest.split_once("</string>")?;
+                value
+                    .replace("&lt;", "<")
+                    .replace("&gt;", ">")
+                    .replace("&amp;", "&")
+            }
+            Self::Windows => {
+                let (_, rest) = definition.split_once(" --home \"")?;
+                rest.split_once('"')?.0.to_owned()
+            }
+        };
+        Some(PathBuf::from(value))
     }
 
     /// Starts the installed service, which runs `exe` (the one it was
@@ -441,6 +504,15 @@ fn run_key_set() -> bool {
     succeeds("reg", &["query", RUN_KEY, "/v", NAME])
 }
 
+/// Whether `a` and `b` are one directory, written alike or not.
+fn same_dir(a: &Path, b: &Path) -> bool {
+    a == b
+        || matches!(
+            (a.canonicalize(), b.canonicalize()),
+            (Ok(a), Ok(b)) if a == b
+        )
+}
+
 fn launcher_running() -> bool {
     let filter = format!("IMAGENAME eq {LAUNCHER}");
     Command::new("tasklist")
@@ -644,6 +716,65 @@ mod tests {
         assert!(Manager::Systemd.outdated(&home, listen));
         assert!(!Manager::Systemd.refresh(&home, listen).unwrap());
         assert!(!Manager::Windows.outdated(&home, listen));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn each_definition_names_the_home_it_serves() {
+        let exe = Path::new("/u/.slopmax/bin/slopmax");
+        let log = Path::new("/u/.slopmax/slopmax.log");
+        let listen: SocketAddr = "127.0.0.1:7567".parse().unwrap();
+        let moved = Path::new("/srv/a <b> & c");
+        for manager in [Manager::Systemd, Manager::Launchd, Manager::Windows] {
+            let written = |home: Option<&Path>| match manager {
+                Manager::Systemd => systemd_unit(exe, log, home),
+                Manager::Launchd => launchd_plist(exe, log, home, listen),
+                Manager::Windows => format!(
+                    "\r\n{RUN_KEY}\r\n    {NAME}    REG_SZ    {}\r\n",
+                    windows_command(Path::new("C:\\s\\slopmaxw.exe"), exe, log, home)
+                ),
+            };
+            assert_eq!(manager.home_in(&written(None)), None, "{manager:?}");
+            assert_eq!(
+                manager.home_in(&written(Some(moved))).as_deref(),
+                Some(moved),
+                "{manager:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_service_is_installed_only_for_the_home_it_serves() {
+        let root = std::env::temp_dir().join(format!("slopmax-served-{}", std::process::id()));
+        let home = Home::sandbox(&root);
+        let file = Manager::Systemd.file(&home);
+        if !file.starts_with(&root) {
+            // XDG_CONFIG_HOME puts units elsewhere: the user's own.
+            return;
+        }
+        let unit = |moved: Option<&Path>| {
+            std::fs::write(&file, systemd_unit(&home.service_exe(), &home.log(), moved)).unwrap();
+        };
+        assert_eq!(Manager::Systemd.served(&home), None);
+        assert!(!Manager::Systemd.status(&home).elsewhere);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        // Written with no SLOPMAX_HOME: the default home's, which this is.
+        unit(None);
+        assert_eq!(Manager::Systemd.served(&home), Some(root.join(".slopmax")));
+        let status = Manager::Systemd.status(&home);
+        assert!(status.installed && !status.elsewhere);
+        // Written for another home.
+        let other = root.join("other");
+        unit(Some(&other));
+        assert_eq!(Manager::Systemd.served(&home), Some(other.clone()));
+        let status = Manager::Systemd.status(&home);
+        assert!(!status.installed && !status.running && status.elsewhere);
+        let error = Manager::Systemd.uninstall(&home).unwrap_err().to_string();
+        assert!(error.contains("runs slopmax for"), "{error}");
+        assert!(file.exists(), "another home's service is left be");
+        // This home, named outright.
+        unit(Some(home.dir()));
+        assert!(Manager::Systemd.status(&home).installed);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

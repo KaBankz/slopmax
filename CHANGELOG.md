@@ -23,6 +23,7 @@ slopmax is its CLI and the dashboard it serves: the desktop apps are gone. `slop
 - `slopmax tailscale on --socket` says what to run when Tailscale refuses to publish slopmax's socket. Tailscale lets only root publish a socket: it lets an operator too only when the operator may run `sudo tailscale`, which it checks under the account's full name rather than its login (so it fails where the two differ, such as `ec2-user`, "EC2 Default User"), and its next release drops the operator altogether. slopmax showed Tailscale's raw 401; it now gives the one `sudo tailscale serve` command.
 - `slopmax tailscale on` finishes when slopmax is already published, by hand or by an earlier run: it no longer asks Tailscale to publish it again, which needed root just to change nothing.
 - The dashboard said it could not open a link, such as the release notes or a sign-in address, even when the browser had opened it.
+- `slopmax start` with another `SLOPMAX_HOME` starts that home's proxy. The login service, one per machine, runs the proxy for the home it was installed from, but `start` from any home started the service instead, which ran the other home's proxy, and then waited in vain for its own. `slopmax stop`, `service status` and `doctor` now also tell the service's home from this one, and `service uninstall` refuses to remove another home's service.
 
 ## [0.13.1] - 2026-11-16
 

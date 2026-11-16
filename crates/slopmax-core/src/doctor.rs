@@ -654,6 +654,12 @@ fn proxy(config: &Config, probe: Probe, service: Option<Status>) -> Section {
     }
     if let Some(status) = service {
         match (status.installed, status.running) {
+            (false, _) if status.elsewhere => s.add(
+                Level::Note,
+                "the login service runs slopmax for another home; this one's proxy runs only \
+                 when started",
+                None,
+            ),
             (false, _) => s.add(
                 Level::Note,
                 "not installed as a service",
@@ -1251,6 +1257,7 @@ mod tests {
                 installed,
                 running,
                 lingering,
+                elsewhere: false,
             })
         };
         let s = proxy(&config, status(false, false, None)).await;
@@ -1266,6 +1273,16 @@ mod tests {
         assert_eq!(finding(&s, "installed but not running").level, Level::Warn);
         let f = finding(&s, "stops when you log out");
         assert_eq!(f.fix.as_deref(), Some("loginctl enable-linger $USER"));
+        // Another home's service is no fix for this one: installing it here
+        // would take it from that home.
+        let other = Status {
+            elsewhere: true,
+            ..Status::default()
+        };
+        let s = proxy(&config, Some(other)).await;
+        let f = finding(&s, "runs slopmax for another home");
+        assert_eq!((f.level, f.fix.as_deref()), (Level::Note, None));
+        assert!(!s.findings.iter().any(|f| f.text.contains("not installed")));
     }
 
     #[test]
