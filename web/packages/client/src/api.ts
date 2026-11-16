@@ -28,7 +28,17 @@ import {
 } from "./errors.ts"
 import { Event } from "./events.ts"
 import { AccountId, AgentId, Dialect, KeyName, ProviderId, SubscriptionId, withDefault } from "./ids.ts"
-import { History, HistoryRange, Summary, SummaryBy, SummaryRange } from "./ledger.ts"
+import {
+  History,
+  HistoryRange,
+  RequestOutcome,
+  RequestPage,
+  RequestSender,
+  Summary,
+  SummaryBy,
+  SummaryRange,
+} from "./ledger.ts"
+import { PoolDetail } from "./pools.ts"
 import { LoginId } from "./login.ts"
 import { providerFacts } from "./providers.ts"
 import { AccountView, RedeemResult, Report } from "./report.ts"
@@ -315,6 +325,14 @@ export class AccountsGroup extends HttpApiGroup.make("accounts")
     }),
   )
   .add(
+    // Lifts slopmax's hold on a limited or throttled account and reads its usage again.
+    HttpApiEndpoint.post("check", "/accounts/:id/check", {
+      params: accountParams,
+      success: Report,
+      error: [NotFound, Internal],
+    }),
+  )
+  .add(
     HttpApiEndpoint.post("redeem", "/accounts/:id/redeem", {
       params: accountParams,
       payload: [RedeemRequest, leftOut(RedeemRequest, Schema.decodeUnknownSync(RedeemRequest)({}))],
@@ -385,6 +403,28 @@ export class UsageGroup extends HttpApiGroup.make("usage")
       query: { range: HistoryRange.pipe(withDefault("7d")) },
       success: History,
       error: Internal,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get("requests", "/requests", {
+      query: {
+        range: HistoryRange.pipe(withDefault("today")),
+        account: Schema.optionalKey(AccountId),
+        model: Schema.optionalKey(Schema.String),
+        agent: Schema.optionalKey(RequestSender),
+        outcome: RequestOutcome.pipe(withDefault("all")),
+        offset: Schema.optionalKey(Schema.FiniteFromString),
+        limit: Schema.optionalKey(Schema.FiniteFromString),
+      },
+      success: RequestPage,
+      error: [BadRequest, Internal],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get("pool", "/pools/:provider", {
+      params: { provider: SubscriptionId },
+      success: PoolDetail,
+      error: [NotFound, Internal],
     }),
   ) {}
 

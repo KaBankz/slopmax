@@ -1,11 +1,26 @@
 // The charts, on shadcn/ui's Chart (Recharts): stacked and grouped columns,
-// lines, and the hours of a day; plus two small compositions Recharts has no
+// lines, the hours of a day, and a pool's use over time with where it is
+// heading; plus two small compositions Recharts has no
 // shape for, the "When you work" grid and the token mix. Series take the
 // theme's chart colors, and state colors where they mean a state (a failure
 // is destructive).
 import { cva } from "class-variance-authority"
-import { Bar, BarChart, CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts"
+import type { DateTime } from "effect"
+import { useId } from "react"
+import {
+  Area,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  ComposedChart,
+  Line,
+  LineChart,
+  ReferenceLine,
+  XAxis,
+  YAxis,
+} from "recharts"
 import { type Axis, activityTip, busiest, shade, shadeScale, tickValues, weekdays } from "../view/charts.ts"
+import { tickLabel, type TrendView } from "../view/forecast.ts"
 import { Tip } from "./tip.tsx"
 import { type ChartConfig, ChartContainer, ChartTooltip } from "./ui/chart.tsx"
 
@@ -213,6 +228,87 @@ export function Lines({
             />
           ))}
         </LineChart>
+      </ChartContainer>
+    </div>
+  )
+}
+
+const percents = [0, 25, 50, 75, 100]
+
+/**
+ * A pool's use over time: what was recorded, filled, then where it is
+ * heading, dashed (in the warning color when that runs it dry); the full
+ * line at 100%, now, and each account's reset ahead as a faint rule.
+ */
+export function TrendChart({ view, zone }: { readonly view: TrendView; readonly zone: DateTime.TimeZone }) {
+  const gradient = `trend-${useId().replaceAll(":", "")}`
+  const config: ChartConfig = {
+    recorded: { color: "var(--primary)" },
+    projected: { color: view.dry ? "var(--warning)" : "var(--muted-foreground)" },
+  }
+  return (
+    <div className={heights({ size: "lg" })}>
+      <ChartContainer config={config} className="aspect-auto size-full">
+        <ComposedChart accessibilityLayer data={[...view.data]} margin={{ top: 12, right: 12, bottom: 0, left: 0 }}>
+          <defs>
+            <linearGradient id={gradient} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--color-recorded)" stopOpacity={0.25} />
+              <stop offset="100%" stopColor="var(--color-recorded)" stopOpacity={0.02} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid vertical={false} />
+          <XAxis
+            dataKey="t"
+            type="number"
+            scale="time"
+            domain={[view.from, view.to]}
+            ticks={[...view.ticks]}
+            tickFormatter={(t: number) => tickLabel(t, view.span, zone)}
+            tickLine={false}
+            axisLine={false}
+            tickMargin={8}
+          />
+          <YAxis
+            domain={[0, 100]}
+            ticks={percents}
+            tickFormatter={(value: number) => `${value}%`}
+            interval={0}
+            tickLine={false}
+            axisLine={false}
+            width={44}
+          />
+          <ChartTooltip cursor={{ stroke: "var(--border)" }} content={TipContent} />
+          <ReferenceLine y={100} stroke="var(--destructive)" strokeOpacity={0.5} strokeDasharray="3 3" />
+          {view.resets.map((reset) => (
+            <ReferenceLine key={reset.t} x={reset.t} stroke="var(--border)" />
+          ))}
+          <ReferenceLine
+            x={view.now}
+            stroke="var(--muted-foreground)"
+            strokeDasharray="2 3"
+            label={{ value: "Now", position: "insideTopLeft", fill: "var(--muted-foreground)", fontSize: 11 }}
+          />
+          <Area
+            dataKey="recorded"
+            type="linear"
+            stroke="var(--color-recorded)"
+            strokeWidth={2}
+            fill={`url(#${gradient})`}
+            dot={false}
+            activeDot={{ r: 3 }}
+            isAnimationActive={false}
+          />
+          <Line
+            dataKey="projected"
+            type="linear"
+            stroke="var(--color-projected)"
+            strokeWidth={2}
+            strokeDasharray="5 4"
+            dot={false}
+            activeDot={{ r: 3 }}
+            isAnimationActive={false}
+          />
+        </ComposedChart>
       </ChartContainer>
     </div>
   )

@@ -41,7 +41,7 @@ tools = { rust = "1.89" }
 run = "cargo check --all-targets --all-features --locked"
 
 [tasks.budget]
-description = "Hold the binary's dependencies to 71 crates and the binary to 9 MiB"
+description = "Hold the binary's dependencies to 71 crates and the binary to 10 MiB"
 run = '''
 host=$(rustc -vV | sed -n 's/host: //p')
 # Third-party crates only: slopmax's own (path) crates are left out.
@@ -51,16 +51,18 @@ echo "$count crates for $host (budget 71)"
 [ "$count" -le 71 ] || { printf '%s\n' "$crates"; exit 1; }
 cargo build --release --locked -p slopmax
 bytes=$(wc -c < target/release/slopmax | tr -d ' ')
-# 9 MiB. v0.3.0 measured 6.52 MB and the typed API added 0.39 MB (the 7 MiB
+# 10 MiB. v0.3.0 measured 6.52 MB and the typed API added 0.39 MB (the 7 MiB
 # of phase 3). Phase 4 made the CLI a client of that API (D6), decoding the
 # API's types through slopmax-client (about 0.6 MB), and added the history
 # index (0.13 MB): 8.13 MB. Retiring /slopmax/* saved 0.17 MB; splitting
 # slopmax-daemon from the engine cost 0.45 MB, as each crate compiles its
 # own copies of the generic code it uses (serde, tokio, hyper), which LTO
-# cannot merge on stable Rust: 8.48 MB. Raising it needs the reason in the
-# commit.
-echo "$bytes bytes (budget 9437184)"
-[ "$bytes" -le 9437184 ]
+# cannot merge on stable Rust: 8.48 MB. The tailnet hub brought it to
+# 9.39 MB, and the pool forecast, the request history and their API types
+# to 9.62 MB, past 9 MiB: raised to 10 MiB. Raising it needs the reason in
+# the commit.
+echo "$bytes bytes (budget 10485760)"
+[ "$bytes" -le 10485760 ]
 '''
 
 [tasks.launchd]

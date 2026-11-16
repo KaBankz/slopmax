@@ -24,6 +24,7 @@ import {
   Notice,
   PoolView,
   PoolWindow,
+  PreviousTotals,
   type ProviderId,
   Report,
   Section,
@@ -31,6 +32,7 @@ import {
   type SettingsView,
   Speed,
   Totals,
+  UpdateView,
   Usage,
   Window,
 } from "@slopmax/client"
@@ -239,6 +241,7 @@ export const fixtureReport = (now: DateTime.Utc): Report =>
     accounts: fixtureAccounts(now),
     pools: fixturePools(now),
     nudges: fixtureNudges(now),
+    update: new UpdateView({ version: "0.5.0", command: "slopmax update" }),
   })
 
 /** slopmax before any account was added. */
@@ -359,6 +362,23 @@ export const fixtureHistory = (range: HistoryRange, now: DateTime.Utc): History 
     sessions: Math.max(1, Math.round(total.requests / 26)),
     firstByte: 840,
     ...(range === "7d" ? { monthly: total.cost * (30 / 7) } : {}),
+    ...(range === "30d"
+      ? {}
+      : {
+          previous: new PreviousTotals({
+            total: new Totals({
+              ...total,
+              requests: Math.round(total.requests * 0.86),
+              input: Math.round(total.input * 0.8),
+              output: Math.round(total.output * 0.8),
+              cacheRead: Math.round(total.cacheRead * 0.8),
+              cacheWrite: Math.round(total.cacheWrite * 0.8),
+              cost: total.cost * 1.07,
+            }),
+            rescued: 4,
+            sessions: 20,
+          }),
+        }),
     activity,
     models: [
       new NamedTotals({

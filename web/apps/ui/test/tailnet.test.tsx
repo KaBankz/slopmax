@@ -6,6 +6,7 @@ import { useBrowser } from "./support/dom.ts"
 import { afterEach, describe, expect, test } from "bun:test"
 import { Internal, SummaryRow, TailnetView, tailnetToken, Totals, Unauthorized } from "@slopmax/client"
 import { Effect, Option } from "effect"
+import { UiPrefs } from "../src/host.ts"
 import { ownerKey, version } from "./support/fixtures.ts"
 import { control, draw, type Drawn, press, settle, shows, showsSoon } from "./support/render.tsx"
 import type { StubOptions } from "./support/stub-api.ts"
@@ -177,6 +178,16 @@ describe("the Other machines card", () => {
     expect(shows("On the hub: slopmax tailscale on")).toBe(false)
     control("Copy slopmax setup --hub hub").click()
     await settle(() => page.host.recorded.copied.includes("slopmax setup --hub hub"), "the copy")
+  })
+
+  test("masks the logins that are email addresses while emails are hidden", async () => {
+    drawn = await draw({
+      stub: { key: ownerKey, tailnet: new TailnetView({ ...published, users: ["ana@studio.dev", "you@github"] }) },
+      host: { key: ownerKey, prefs: new UiPrefs({ ...UiPrefs.defaults, hideEmails: true }) },
+      at: "#/access",
+    })
+    await showsSoon("a•••@s•••.dev, you@github")
+    expect(document.querySelector("main")?.textContent).not.toContain("ana@studio.dev")
   })
 
   test("says what is wrong, and its fix", async () => {

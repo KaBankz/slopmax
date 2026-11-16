@@ -1,0 +1,544 @@
+{
+  "status": 200,
+  "body": {
+    "provider": "claude",
+    "generatedAt": "2026-11-01T12:00:00Z",
+    "trends": [
+      {
+        "span": "5h",
+        "used": 58.7,
+        "recorded": [
+          {
+            "at": "2026-11-01T12:00:00Z",
+            "used": 58.7
+          },
+          {
+            "at": "2026-11-01T12:00:00Z",
+            "used": 58.7
+          }
+        ],
+        "projected": [
+          {
+            "at": "2026-11-01T12:00:00Z",
+            "used": 58.7
+          },
+          {
+            "at": "2026-11-01T12:00:00Z",
+            "used": 58.7
+          },
+          {
+            "at": "2026-11-01T12:00:00Z",
+            "used": 4.0
+          },
+          {
+            "at": "2026-11-01T12:00:00Z",
+            "used": 4.0
+          },
+          {
+            "at": "2026-11-01T12:00:00Z",
+            "used": 0.0
+          },
+          {
+            "at": "2026-11-01T12:00:00Z",
+            "used": 0.0
+          }
+        ],
+        "resets": [
+          {
+            "at": "2026-11-01T12:00:00Z",
+            "account": "claude-df8fd9fa",
+            "givesBack": 54.7
+          },
+          {
+            "at": "2026-11-01T12:00:00Z",
+            "account": "claude-7cad1d23",
+            "givesBack": 4.0
+          }
+        ],
+        "burns": [],
+        "sustainable": 20.0
+      },
+      {
+        "span": "7d",
+        "used": 41.3,
+        "recorded": [
+          {
+            "at": "2026-11-01T12:00:00Z",
+            "used": 41.3
+          },
+          {
+            "at": "2026-11-01T12:00:00Z",
+            "used": 41.3
+          }
+        ],
+        "projected": [
+          {
+            "at": "2026-11-01T12:00:00Z",
+            "used": 41.3
+          },
+          {
+            "at": "2026-11-01T12:00:00Z",
+            "used": 41.3
+          },
+          {
+            "at": "2026-11-01T12:00:00Z",
+            "used": 10.0
+          },
+          {
+            "at": "2026-11-01T12:00:00Z",
+            "used": 10.0
+          }
+        ],
+        "resets": [
+          {
+            "at": "2026-11-01T12:00:00Z",
+            "account": "claude-df8fd9fa",
+            "givesBack": 31.3
+          }
+        ],
+        "burns": [],
+        "sustainable": 0.6
+      }
+    ],
+    "accounts": [
+      {
+        "id": "claude-7cad1d23",
+        "windows": [
+          {
+            "span": "5h",
+            "since": "2026-11-01T12:00:00Z",
+            "resetsAt": "2026-11-01T12:00:00Z",
+            "used": 12.0,
+            "requests": 0,
+            "tokens": 0,
+            "cost": 0.0
+          },
+          {
+            "span": "7d",
+            "since": "2026-11-01T12:00:00Z",
+            "resetsAt": "2026-11-01T12:00:00Z",
+            "used": 30.0,
+            "requests": 0,
+            "tokens": 0,
+            "cost": 0.0
+          }
+        ],
+        "health": [
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          }
+        ]
+      },
+      {
+        "id": "claude-df8fd9fa",
+        "windows": [
+          {
+            "span": "5h",
+            "since": "2026-11-01T12:00:00Z",
+            "resetsAt": "2026-11-01T12:00:00Z",
+            "used": 82.0,
+            "requests": 2,
+            "tokens": 101480,
+            "cost": 0.09895,
+            "perPercent": 0.001206707317073171
+          },
+          {
+            "span": "7d",
+            "since": "2026-11-01T12:00:00Z",
+            "resetsAt": "2026-11-01T12:00:00Z",
+            "used": 47.0,
+            "requests": 2,
+            "tokens": 101480,
+            "cost": 0.09895,
+            "perPercent": 0.0021053191489361703
+          }
+        ],
+        "health": [
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          },
+          {
+            "answered": 0,
+            "failed": 0
+          }
+        ]
+      }
+    ],
+    "healthSince": "2026-11-01T12:00:00Z",
+    "cellMinutes": 30
+  }
+}

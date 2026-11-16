@@ -25,6 +25,19 @@ pub struct Report {
     /// What is worth doing before it is lost: resets about to lapse, weeks
     /// about to reset with quota to spare.
     pub nudges: Vec<Notice>,
+    /// A newer release than the one serving, once the daemon has seen one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<UpdateView>,
+}
+
+/// A newer slopmax, and how this install takes it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateView {
+    pub version: String,
+    /// The command that updates this install: `slopmax update`, or the
+    /// package manager's.
+    pub command: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

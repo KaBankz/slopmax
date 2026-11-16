@@ -11,9 +11,9 @@ pub mod supervisor;
 
 // The engine's modules, under the names the daemon's code uses.
 pub(crate) use slopmax_core::{
-    account, agent, api, auth, blocking, config, doctor, error, fsx, history, import, ledger,
-    limits, notify, paths, pool, provider, report, route, state, summary, tailscale, update, usage,
-    waste,
+    account, agent, api, auth, blocking, browse, config, doctor, error, fsx, history, import,
+    ledger, limits, notify, paths, pool, provider, quota, report, route, state, summary, tailscale,
+    update, usage, waste,
 };
 pub(crate) use slopmax_core::{ids, log, net, time, wire};
 
@@ -245,6 +245,9 @@ pub async fn serve_with(
                 poll_all(&app, false).await;
             }
         }),
+        Job::new("record quota", crate::quota::EVERY, |app| async move {
+            blocking::run(move || app.sample_quota()).await;
+        }),
         Job::new("list credits", Duration::from_secs(60), |app| async move {
             list_credits(&app, false).await;
         }),
@@ -399,6 +402,7 @@ async fn look_for_releases(app: &Arc<App>) {
         checked_at: now,
         latest: latest.to_string(),
     };
+    app.saw_release(&checked);
     if let Some(newer) = checked.newer() {
         log::info!(
             "slopmax {newer} is out (this is {}); `slopmax update` installs it",

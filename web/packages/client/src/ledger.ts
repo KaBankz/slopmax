@@ -197,6 +197,13 @@ export class Speed extends Schema.Class<Speed>("Speed")({
   tokensPerSecond: Schema.Number,
 }) {}
 
+/** What the span before a history's came to: yesterday up to this hour, or the 7 days before. */
+export class PreviousTotals extends Schema.Class<PreviousTotals>("PreviousTotals")({
+  total: Totals,
+  rescued: NonNegativeInt,
+  sessions: NonNegativeInt,
+}) {}
+
 /** `GET /history`: what went through slopmax over a range, shaped for the app's charts. */
 export class History extends Schema.Class<History>("History")({
   range: HistoryRange,
@@ -219,6 +226,8 @@ export class History extends Schema.Class<History>("History")({
   firstByte: Schema.optionalKey(Schema.Number),
   /** A month at this pace, in dollars at API prices (the 7-day range only). */
   monthly: Schema.optionalKey(Schema.Number),
+  /** The same span before, for the changes since (today and the 7-day range). */
+  previous: Schema.optionalKey(PreviousTotals),
   /** Requests by local weekday (Monday first) and hour: 7 rows of 24. */
   activity: Schema.Array(Schema.Array(NonNegativeInt)),
   models: Schema.Array(NamedTotals),
@@ -227,4 +236,41 @@ export class History extends Schema.Class<History>("History")({
   agents: Schema.Array(NamedTotals),
   /** Fastest first. */
   speeds: Schema.Array(Speed),
+}) {}
+
+/** How a streamed answer ended, when not by completing. */
+export const RequestEnd = Schema.Literals(["upstream-error", "client-gone", "stalled", "cut"])
+export type RequestEnd = typeof RequestEnd.Type
+
+/** Which requests `GET /requests` lists by how they went; `rescued` were answered by another account after the first could not. */
+export const RequestOutcome = Schema.Literals(["all", "answered", "failed", "rescued"])
+export type RequestOutcome = typeof RequestOutcome.Type
+
+/** One request of the ledger, with what it was worth. */
+export class RequestRow extends Schema.Class<RequestRow>("RequestRow")({
+  record: LedgerRecord.cases.Request,
+  /** Dollars at API prices, for a model with a known price. */
+  cost: Schema.optionalKey(Schema.Number),
+  end: Schema.optionalKey(RequestEnd),
+}) {}
+
+/** Every account, model and agent that appears in a range, to filter it by. */
+export class RequestFacets extends Schema.Class<RequestFacets>("RequestFacets")({
+  accounts: Schema.Array(AccountId),
+  models: Schema.Array(Schema.String),
+  agents: Schema.Array(RequestSender),
+}) {}
+
+/** `GET /requests`: a page of the ledger's requests, newest first, and the totals of every match. */
+export class RequestPage extends Schema.Class<RequestPage>("RequestPage")({
+  range: HistoryRange,
+  since: Instant,
+  rows: Schema.Array(RequestRow),
+  offset: NonNegativeInt,
+  matched: NonNegativeInt,
+  failed: NonNegativeInt,
+  rescued: NonNegativeInt,
+  tokens: NonNegativeInt,
+  cost: Schema.Number,
+  facets: RequestFacets,
 }) {}

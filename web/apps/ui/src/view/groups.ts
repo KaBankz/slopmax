@@ -133,6 +133,8 @@ export interface Group {
   readonly subscription: boolean
   /** The column titles: `5-hour`, `Weekly`, then any limited to one model. */
   readonly columns: ReadonlyArray<string>
+  /** The window each column shows. */
+  readonly slots: ReadonlyArray<Slot>
   /** A subscription none of whose accounts has had a window read yet, so there are no columns. */
   readonly unread: boolean
   readonly rows: ReadonlyArray<Row>
@@ -156,13 +158,16 @@ export interface Group {
 export const expiringWithin: Duration.Duration = Duration.hours(72)
 
 /** A kind of usage window: its span and the one model it covers, if any. */
-interface Slot {
+export interface Slot {
   readonly span: Span
   readonly model?: string
 }
 
 const spanOrder: { readonly [K in Span]: number } = { "5h": 0, "7d": 1, "30d": 2 }
 const spanTitles: { readonly [K in Span]: string } = { "5h": "5-hour", "7d": "Weekly", "30d": "Monthly" }
+
+/** `5-hour`, `Weekly` or `Monthly`. */
+export const spanTitle = (span: Span): string => spanTitles[span]
 
 /** `5-hour`, `Weekly`, `Monthly`, or `Weekly · Fable` for a window that covers one model. */
 export const windowTitle = (slot: Slot): string =>
@@ -409,6 +414,7 @@ export const groups = (report: Report, now: DateTime.Utc, zone: DateTime.TimeZon
         title: providerFacts[provider].title,
         subscription: providerFacts[provider].billing === "subscription",
         columns: columns.map(windowTitle),
+        slots: columns,
         unread: providerFacts[provider].billing === "subscription" && columns.length === 0,
         rows: accounts.map((account) => row(account, columns, pool?.next?.account, now, zone)),
         overview,

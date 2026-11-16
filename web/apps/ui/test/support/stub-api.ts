@@ -63,6 +63,8 @@ import {
   quietHistory,
   version,
 } from "./fixtures.ts"
+import { fixturePool } from "./pools.ts"
+import { fixtureRequestPage } from "./requests.ts"
 
 export interface StubOptions {
   /** The clock the fixtures are drawn against. */
@@ -325,6 +327,20 @@ export const makeStub = (options: StubOptions = {}): Stub => {
           ),
         ),
       )
+      .handle("check", ({ params }) =>
+        answer(
+          "check",
+          params,
+          Effect.map(known(params.id), () =>
+            mapAccounts((account) =>
+              account.id === params.id &&
+              (account.condition._tag === "Limited" || account.condition._tag === "Throttled")
+                ? new AccountView({ ...account, condition: Condition.cases.Ready.make({}) })
+                : account,
+            ),
+          ),
+        ),
+      )
       .handle("remove", ({ params }) =>
         answer(
           "remove",
@@ -578,6 +594,25 @@ export const makeStub = (options: StubOptions = {}): Stub => {
           "history",
           query,
           Effect.sync(() => history(query.range)),
+        ),
+      )
+      .handle("requests", ({ query }) =>
+        answer(
+          "requests",
+          query,
+          Effect.sync(() => fixtureRequestPage(now(), scenario !== "full", query)),
+        ),
+      )
+      .handle("pool", ({ params }) =>
+        answer(
+          "pool",
+          params,
+          Effect.suspend(() => {
+            const pool = scenario === "full" ? fixturePool(params.provider, now()) : undefined
+            return pool === undefined
+              ? Effect.fail(NotFound.of({ what: `pool ${params.provider}` }))
+              : Effect.succeed(pool)
+          }),
         ),
       ),
   )

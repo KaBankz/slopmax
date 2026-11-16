@@ -108,6 +108,12 @@ export class PoolView extends Schema.Class<PoolView>("PoolView")({
   next: Schema.optionalKey(NextView),
 }) {}
 
+/** A newer slopmax than the one serving, and the command that updates this install. */
+export class UpdateView extends Schema.Class<UpdateView>("UpdateView")({
+  version: Schema.String,
+  command: Schema.String,
+}) {}
+
 export class Report extends Schema.Class<Report>("Report")({
   /** The version of the slopmax that built it. */
   version: Schema.String,
@@ -119,6 +125,8 @@ export class Report extends Schema.Class<Report>("Report")({
   pools: Schema.Array(PoolView),
   /** What is worth doing before it is lost: resets about to lapse, weeks about to reset with quota to spare. */
   nudges: Schema.Array(Notice),
+  /** A newer release, once the daemon has seen one. */
+  update: Schema.optionalKey(UpdateView),
 }) {}
 
 export const RedeemOutcome = Schema.Literals(["reset", "nothing-to-reset", "no-credit", "already-redeemed", "declined"])

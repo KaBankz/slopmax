@@ -13,6 +13,14 @@ public struct Report: Codable, Sendable, Equatable {
     public var pools: [PoolView]
     /// What is worth doing before it is lost.
     public var nudges: [Notice]
+    /// A newer release, once the daemon has seen one.
+    public var update: UpdateView?
+}
+
+/// A newer slopmax, and the command that updates this install.
+public struct UpdateView: Codable, Sendable, Equatable {
+    public var version: String
+    public var command: String
 }
 
 public struct AccountView: Codable, Sendable, Equatable, Identifiable {

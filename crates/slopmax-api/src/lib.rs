@@ -14,6 +14,7 @@
 
 pub mod events;
 pub mod ledger;
+pub mod pools;
 pub mod report;
 pub mod requests;
 pub mod settings;

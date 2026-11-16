@@ -66,6 +66,16 @@ function AppearanceSection() {
             onChange={(appearance) => save({ appearance })}
           />
         </SettingRow>
+        <SettingRow
+          title="Hide email addresses"
+          detail="Mask every address the dashboard shows, as a•••@s•••.dev, for screen sharing and streams."
+        >
+          <Switch
+            aria-label="Hide email addresses"
+            checked={prefs.hideEmails}
+            onCheckedChange={(hideEmails: boolean) => save({ hideEmails })}
+          />
+        </SettingRow>
       </Panel>
     </Section>
   )

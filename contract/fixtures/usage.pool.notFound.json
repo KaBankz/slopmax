@@ -1,0 +1,8 @@
+{
+  "status": 404,
+  "body": {
+    "_tag": "NotFound",
+    "what": "pool",
+    "message": "no such pool"
+  }
+}

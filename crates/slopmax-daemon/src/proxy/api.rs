@@ -17,7 +17,7 @@ use http::{HeaderValue, Method, StatusCode, header};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use slopmax_api::events::{Event, LoginEvent};
-use slopmax_api::ledger::{HistoryRange, SummaryBy, SummaryRange};
+use slopmax_api::ledger::{HistoryRange, RequestOutcome, Sender, SummaryBy, SummaryRange};
 use slopmax_api::report::{AgentWiring, Finding, Level, RedeemOutcome, RedeemResult, Section};
 use slopmax_api::requests::{
     AccountAdded, AccountPatch, AddAccount, AgentConnected, AgentDisconnected, ImportOutcome,
@@ -64,6 +64,7 @@ enum Route<'a> {
     Own(&'a str),
     RemoveAccount(&'a str),
     Redeem(&'a str),
+    Check(&'a str),
     Import,
     StartLogin,
     PasteLogin(&'a str),
@@ -78,6 +79,8 @@ enum Route<'a> {
     Disconnect(AgentId),
     Usage,
     History,
+    Pool(slopmax_api::Provider),
+    Requests,
     Events,
     NotifyTest,
     Tailnet,
@@ -89,6 +92,7 @@ impl<'a> Route<'a> {
     fn parse(method: &Method, path: &'a str) -> Option<Self> {
         let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
         let agent = |id: &str| serde_json::from_value::<AgentId>(id.into()).ok();
+        let provider = |id: &str| serde_json::from_value::<slopmax_api::Provider>(id.into()).ok();
         Some(match (method, segments.as_slice()) {
             (&Method::GET, ["status"]) => Self::Status,
             (&Method::POST, ["refresh"]) => Self::Refresh,
@@ -101,6 +105,7 @@ impl<'a> Route<'a> {
             (&Method::POST, ["accounts", id, "pin"]) => Self::Pin(id),
             (&Method::POST, ["accounts", id, "own"]) => Self::Own(id),
             (&Method::POST, ["accounts", id, "redeem"]) => Self::Redeem(id),
+            (&Method::POST, ["accounts", id, "check"]) => Self::Check(id),
             (&Method::DELETE, ["pins"]) => Self::UnpinAll,
             (&Method::POST, ["imports"]) => Self::Import,
             (&Method::POST, ["logins"]) => Self::StartLogin,
@@ -118,6 +123,8 @@ impl<'a> Route<'a> {
             (&Method::POST, ["agents", id, "disconnect"]) => Self::Disconnect(agent(id)?),
             (&Method::GET, ["usage"]) => Self::Usage,
             (&Method::GET, ["history"]) => Self::History,
+            (&Method::GET, ["pools", id]) => Self::Pool(provider(id)?),
+            (&Method::GET, ["requests"]) => Self::Requests,
             (&Method::GET, ["events"]) => Self::Events,
             (&Method::POST, ["notify", "test"]) => Self::NotifyTest,
             (&Method::GET, ["tailnet"]) => Self::Tailnet,
@@ -129,9 +136,13 @@ impl<'a> Route<'a> {
     /// What a caller may do to use it: look, or manage.
     fn needs(&self) -> Access {
         match self {
-            Self::Status | Self::Usage | Self::History | Self::Events | Self::Tailnet => {
-                Access::View
-            }
+            Self::Status
+            | Self::Usage
+            | Self::History
+            | Self::Pool(_)
+            | Self::Requests
+            | Self::Events
+            | Self::Tailnet => Access::View,
             Self::Refresh
             | Self::Sync
             | Self::Shutdown
@@ -142,6 +153,7 @@ impl<'a> Route<'a> {
             | Self::UnpinAll
             | Self::Own(_)
             | Self::RemoveAccount(_)
+            | Self::Check(_)
             | Self::Redeem(_)
             | Self::Import
             | Self::StartLogin
@@ -317,6 +329,21 @@ async fn answer(
             )
         }
         Route::Redeem(id) => redeem(app, id, optional(body)?).await,
+        Route::Check(id) => {
+            // Lifts slopmax's own hold on the account, then reads its usage
+            // again (when usage polling is on), so a limit that has passed
+            // shows at once and one that has not is set aside anew.
+            let account = find(app, id)?;
+            app.pool.clear_blocks(&account.id);
+            if app.config().poll_mins > 0
+                && account.auth_error.is_none()
+                && account.provider.spec().is_subscription()
+            {
+                crate::poll_one(app, &account).await;
+            }
+            crate::save_soon(app);
+            ok(&app.api_report())
+        }
         Route::Import => import(app, optional(body)?).await,
         Route::StartLogin => start_login(app, strict(body)?),
         Route::PasteLogin(id) => {
@@ -355,6 +382,11 @@ async fn answer(
         Route::Disconnect(id) => disconnect_agent(app, id).await,
         Route::Usage => usage(app, query, asker.here).await,
         Route::History => history(app, query).await,
+        Route::Requests => requests(app, query).await,
+        Route::Pool(provider) => match app.pool_detail(api::provider_id(provider)).await {
+            Some(detail) => ok(&detail),
+            None => Err(ApiError::not_found("pool")),
+        },
         Route::Events => Ok(events(app, asker)),
         Route::NotifyTest => notify_test(app).await,
         Route::Tailnet => ok(&tailnet_view(app).await),
@@ -942,6 +974,64 @@ async fn usage(app: &App, query: &str, here: bool) -> Answer {
     ok(&api::summary(&built, range, by))
 }
 
+/// A text parameter, if given and not blank.
+fn text(query: &str, name: &str) -> Option<String> {
+    crate::net::form::decode(query)
+        .into_iter()
+        .find(|(k, v)| k == name && !v.trim().is_empty())
+        .map(|(_, v)| v)
+}
+
+/// A whole-number parameter.
+fn whole(query: &str, name: &str, default: usize) -> Result<usize, ApiError> {
+    match text(query, name) {
+        None => Ok(default),
+        Some(value) => value
+            .parse()
+            .map_err(|_| ApiError::bad_request(format!("{name} is a whole number"))),
+    }
+}
+
+/// The ledger's requests over a range, filtered, newest first, a page at a
+/// time.
+async fn requests(app: &App, query: &str) -> Answer {
+    let range = param(
+        query,
+        "range",
+        HistoryRange::Today,
+        "range is today, 7d, or 30d",
+    )?;
+    let outcome = param(
+        query,
+        "outcome",
+        RequestOutcome::All,
+        "outcome is all, answered, failed, or rescued",
+    )?;
+    let agent = param::<Option<Sender>>(
+        query,
+        "agent",
+        None,
+        "agent is claude-code, codex, or slopmax",
+    )?;
+    let asked = crate::browse::Query {
+        account: text(query, "account"),
+        model: text(query, "model"),
+        agent,
+        outcome,
+        offset: whole(query, "offset", 0)?,
+        limit: whole(query, "limit", 100)?,
+    };
+    let since = summary::since(api::history_range(range).key(), Timestamp::now())
+        .expect("every range has a start");
+    let (dir, config) = (app.home.usage(), app.config());
+    let page = crate::blocking::run(move || {
+        let entries = crate::ledger::read(&dir, since);
+        crate::browse::page(&entries, &asked, range, since, &config.prices)
+    })
+    .await;
+    ok(&page)
+}
+
 async fn history(app: &Arc<App>, query: &str) -> Answer {
     let range = param(
         query,
@@ -1218,6 +1308,16 @@ mod tests {
             Some(Route::Connect(AgentId::ClaudeCode))
         );
         assert_eq!(at(Method::POST, "/agents/vim/connect"), None);
+        assert_eq!(
+            at(Method::GET, "/pools/claude"),
+            Some(Route::Pool(slopmax_api::Provider::Claude))
+        );
+        assert_eq!(at(Method::GET, "/pools/vim"), None);
+        assert_eq!(at(Method::GET, "/requests"), Some(Route::Requests));
+        assert_eq!(
+            at(Method::POST, "/accounts/a/check"),
+            Some(Route::Check("a"))
+        );
         assert_eq!(at(Method::GET, "/accounts/a"), None);
         assert_eq!(at(Method::POST, "/status"), None);
         assert_eq!(at(Method::GET, "/tailnet"), Some(Route::Tailnet));
@@ -1232,6 +1332,8 @@ mod tests {
             (Method::GET, "/status"),
             (Method::GET, "/usage"),
             (Method::GET, "/history"),
+            (Method::GET, "/pools/claude"),
+            (Method::GET, "/requests"),
             (Method::GET, "/events"),
             (Method::GET, "/tailnet"),
         ] {
@@ -1244,6 +1346,7 @@ mod tests {
             (Method::GET, "/agents"),
             (Method::POST, "/logins"),
             (Method::POST, "/refresh"),
+            (Method::POST, "/accounts/a/check"),
             (Method::POST, "/shutdown"),
             (Method::PATCH, "/settings"),
             (Method::PATCH, "/tailnet"),

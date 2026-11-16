@@ -730,6 +730,7 @@ impl Index {
             cached: cached(&work),
             sessions: distinct(&sessions),
             first_byte,
+            previous: None,
             activity,
             models: ranked(by_model),
             accounts: ranked(by_account),
@@ -853,6 +854,19 @@ impl Kept {
             r.ended_at >= now - crate::time::SignedDuration::from_hours(24 * KEPT_DAYS)
         });
         let mut history = ready.index.history(range, now, prices, names);
+        let before = match range {
+            Range::Today => Some(crate::time::SignedDuration::from_hours(24)),
+            Range::Week => Some(crate::time::SignedDuration::from_hours(24 * 7)),
+            Range::Month => None,
+        };
+        if let Some(before) = before {
+            let earlier = ready.index.history(range, now - before, prices, names);
+            history.previous = Some(super::Previous {
+                total: earlier.total,
+                rescued: earlier.rescued,
+                sessions: earlier.sessions,
+            });
+        }
         let lapsed: Vec<crate::waste::Record> = crate::waste::once(
             ready
                 .lapses

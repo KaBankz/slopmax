@@ -41,6 +41,8 @@ export interface HostShape {
   /** Opens an address in the system's browser; false when it could not. */
   readonly openExternal: (url: string) => Effect.Effect<boolean>
   readonly copy: (text: string) => Effect.Effect<boolean>
+  /** Offers text to save as a file named `name`; false when it could not. */
+  readonly save: (name: string, text: string, type: string) => Effect.Effect<boolean>
   readonly permission: Effect.Effect<Permission>
   readonly askPermission: Effect.Effect<Permission>
   /** Posts a notification, replacing an earlier one with the same tag. */
@@ -112,6 +114,19 @@ const copyText = (text: string): Effect.Effect<boolean> =>
     Effect.orElseSucceed(() => false),
   )
 
+/** Hands text to the browser as a download. */
+const saveText = (name: string, text: string, type: string): Effect.Effect<boolean> =>
+  Effect.try(() => {
+    const url = URL.createObjectURL(new Blob([text], { type }))
+    const link = document.createElement("a")
+    link.href = url
+    link.download = name
+    link.click()
+    // The download has its own copy by the time the page goes on.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    return true
+  }).pipe(Effect.orElseSucceed(() => false))
+
 const permissionNow = (): Permission => (typeof Notification === "undefined" ? "unsupported" : Notification.permission)
 
 /** The web dashboard's host. The key arrives once in the fragment (`#key=…`) and is kept for the tab. */
@@ -126,6 +141,7 @@ export const webHost = (): HostShape => {
     forgetKey: session.remove(keyItem),
     openExternal: (url) => Effect.sync(() => window.open(url, "_blank", "noopener,noreferrer") !== null),
     copy: copyText,
+    save: saveText,
     permission: Effect.sync(permissionNow),
     askPermission: Effect.tryPromise(async (): Promise<Permission> =>
       typeof Notification === "undefined" ? "unsupported" : Notification.requestPermission(),
@@ -224,6 +240,7 @@ export const desktopHost = (bridge: DesktopBridge): HostShape => {
         Effect.orElseSucceed(() => false),
       ),
     copy: copyText,
+    save: saveText,
     permission: Effect.succeed("unsupported"),
     askPermission: Effect.succeed("unsupported"),
     notify: () => Effect.void,

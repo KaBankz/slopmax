@@ -81,6 +81,11 @@ pub struct App {
     /// The last month of the ledger by hour, for histories, once one is
     /// asked for.
     pub hours: crate::history::index::Kept,
+    /// The last week of the pools' quota readings and of what each account
+    /// served, once a pool's detail is asked for.
+    pub quota: crate::quota::Kept,
+    /// The reading last written of each pool, to write only what changed.
+    quota_written: Mutex<HashMap<ProviderId, crate::quota::Sample>>,
     /// Reasoning state kept between turns of translated conversations.
     replay: Mutex<transcode::Replay>,
     /// Each account's model list, and when it was read.
@@ -127,6 +132,8 @@ pub struct App {
     pub successor_exit: Mutex<Option<i32>>,
     /// The binary this daemon runs, to notice a newer one installed.
     pub running: Option<crate::handoff::Running>,
+    /// A release newer than this binary, as the last lookup found.
+    release: Mutex<Option<String>>,
     /// What looking for a newer install has seen.
     pub install_seen: tokio::sync::Mutex<crate::handoff::Seen>,
     /// The machines behind the tailnet addresses requests came from.
@@ -165,6 +172,9 @@ impl App {
         let store = Store::at(home.accounts());
         let ledger = Ledger::at(home.usage());
         let config_text = std::fs::read_to_string(home.config()).ok();
+        let release = crate::update::Checked::read(&home)
+            .and_then(|c| c.newer())
+            .map(|v| v.to_string());
         let http = Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .read_timeout(Duration::from_secs(600))
@@ -189,6 +199,8 @@ impl App {
             refreshing: tokio::sync::Mutex::new(()),
             ledger,
             hours: Default::default(),
+            quota: Default::default(),
+            quota_written: Default::default(),
             replay: Default::default(),
             catalogs: Default::default(),
             warmed: Default::default(),
@@ -209,6 +221,7 @@ impl App {
             let_go: CancellationToken::new(),
             successor_exit: Mutex::default(),
             running: crate::handoff::Running::now(),
+            release: Mutex::new(release),
             install_seen: Default::default(),
             peers: tailnet::Peers::default(),
             tailscale: RwLock::new(Tailnet::default()),
@@ -455,6 +468,47 @@ impl App {
         .await
     }
 
+    /// Reads each pool's quota and writes the readings that changed, or
+    /// that were last written an hour ago, to the ledger.
+    pub fn sample_quota(&self) {
+        let now = Timestamp::now();
+        let samples = crate::quota::sample(&self.report(), now);
+        let mut written = self.quota_written.lock().unwrap_or_else(|p| p.into_inner());
+        let due = crate::quota::due(samples, &written);
+        if due.is_empty() {
+            return;
+        }
+        self.ledger
+            .record_samples_then(&due, |due| self.quota.sampled(due));
+        for sample in due {
+            written.insert(sample.provider, sample);
+        }
+    }
+
+    /// `provider`'s pool over time, from the readings and spending kept:
+    /// read from the ledger once, the first time. `None` when it has no
+    /// working account.
+    pub async fn pool_detail(
+        self: &Arc<Self>,
+        provider: ProviderId,
+    ) -> Option<slopmax_api::pools::PoolDetail> {
+        let app = Arc::clone(self);
+        crate::blocking::run(move || {
+            let report = app.report();
+            let now = Timestamp::now();
+            if let Some(detail) = app.quota.detail(provider, &report, now) {
+                return detail;
+            }
+            let config = app.config();
+            app.quota
+                .build(&app.home.usage(), now, &config.prices, |start| {
+                    app.ledger.mark(start)
+                });
+            app.quota.detail(provider, &report, now).flatten()
+        })
+        .await
+    }
+
     /// The model Codex asked for last.
     pub(crate) fn last_codex_model(&self) -> Option<String> {
         self.pool.codex().model
@@ -463,8 +517,11 @@ impl App {
     /// Writes a finished request to the usage ledger, tells the dashboard's
     /// live feed about it, and remembers the model of a Codex one.
     pub fn record(&self, entry: &crate::ledger::Entry) {
-        self.ledger
-            .record_then(entry, |entry| self.hours.add(entry));
+        let config = self.config();
+        self.ledger.record_then(entry, |entry| {
+            self.hours.add(entry);
+            self.quota.add(entry, &config.prices);
+        });
         if entry.provider == ProviderId::Codex
             && let Some(model) = &entry.model
         {
@@ -493,7 +550,30 @@ impl App {
 
     /// The status report in the API's types.
     pub fn api_report(&self) -> slopmax_api::report::Report {
-        crate::api::report(&self.report(), &self.config(), Timestamp::now())
+        let mut report = crate::api::report(&self.report(), &self.config(), Timestamp::now());
+        report.update = self.newer_release();
+        report
+    }
+
+    /// The newer release the last lookup found, and how this install takes
+    /// it.
+    fn newer_release(&self) -> Option<slopmax_api::report::UpdateView> {
+        let version = self
+            .release
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()?;
+        let command = self
+            .running
+            .as_ref()
+            .map_or_else(|| "slopmax update".to_owned(), |r| r.update_command());
+        Some(slopmax_api::report::UpdateView { version, command })
+    }
+
+    /// Notes the newest release, as `look_for_releases` found it.
+    pub fn saw_release(&self, checked: &crate::update::Checked) {
+        *self.release.lock().unwrap_or_else(|p| p.into_inner()) =
+            checked.newer().map(|v| v.to_string());
     }
 
     pub fn report(&self) -> Report {

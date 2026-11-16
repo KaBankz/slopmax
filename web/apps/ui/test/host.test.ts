@@ -13,7 +13,13 @@ useBrowser()
 describe("preferences", () => {
   test("missing settings take their defaults", () => {
     expect(Schema.decodeUnknownSync(UiPrefs)({})).toEqual(
-      new UiPrefs({ appearance: "system", sidebarWidth: 220, sidebarHidden: false, notifications: true }),
+      new UiPrefs({
+        appearance: "system",
+        sidebarWidth: 220,
+        sidebarHidden: false,
+        notifications: true,
+        hideEmails: false,
+      }),
     )
     expect(Schema.decodeUnknownSync(UiPrefs)({ sidebarHidden: true }).sidebarWidth).toBe(220)
   })
@@ -94,7 +100,13 @@ describe("the desktop window's host", () => {
     const host = desktopHost(bridge(saved))
     const prefs = await Effect.runPromise(host.prefs)
     expect(prefs).toEqual(
-      new UiPrefs({ appearance: "light", sidebarWidth: 260, sidebarHidden: false, notifications: false }),
+      new UiPrefs({
+        appearance: "light",
+        sidebarWidth: 260,
+        sidebarHidden: false,
+        notifications: false,
+        hideEmails: false,
+      }),
     )
     await Effect.runPromise(host.savePrefs(new UiPrefs({ ...prefs, sidebarHidden: true })))
     expect(Schema.decodeUnknownSync(DesktopPrefs)(saved[0])).toMatchObject({ sidebarHidden: true, sidebarWidth: 260 })

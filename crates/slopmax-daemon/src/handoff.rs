@@ -145,6 +145,13 @@ pub struct Running {
 }
 
 impl Running {
+    /// The command that updates the install this binary came from.
+    pub fn update_command(&self) -> String {
+        self.install
+            .update_command()
+            .unwrap_or_else(|| "slopmax update".to_owned())
+    }
+
     pub fn now() -> Option<Self> {
         let path = std::env::current_exe().ok()?.canonicalize().ok()?;
         Some(Self {

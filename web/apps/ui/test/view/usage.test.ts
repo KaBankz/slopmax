@@ -3,6 +3,7 @@ import { History, NamedTotals, Summary, SummaryRow, Totals } from "@slopmax/clie
 import { DateTime } from "effect"
 import {
   accountRows,
+  change,
   hourly,
   isQuiet,
   machineRows,
@@ -160,5 +161,28 @@ describe("usage by machine", () => {
     expect(machineRows(summary([row("this machine", 9, 900)]))).toEqual([])
     expect(machineRows(summary([row("hub", 9, 900)]))).toEqual([])
     expect(machineRows(summary([row("this machine", 9, 900), row("laptop", 1, 10)])).length).toBe(2)
+  })
+})
+
+describe("changes since the span before", () => {
+  test("read as a signed percent, finer under ten, flat within half a point", () => {
+    expect(change(125, 100, "100", "the 7 days before")).toEqual({
+      text: "+25%",
+      direction: "up",
+      tip: "100 the 7 days before",
+    })
+    expect(change(93.5, 100, "$100", "yesterday by this hour")?.text).toBe("−6.5%")
+    expect(change(100.2, 100, "100", "")?.direction).toBe("flat")
+    expect(change(5, 0, "0", "")).toBeUndefined()
+  })
+
+  test("the usage figures carry them when the history has a span before", () => {
+    const lastWeek = fixtureHistory("7d", DateTime.makeUnsafe("2026-11-16T12:00:00Z"))
+    const [tokens, requests, value, month] = usageStats(lastWeek)
+    expect(tokens?.change?.direction).toBe("up")
+    expect(requests?.change?.tip).toContain("the 7 days before")
+    expect(value?.change?.direction).toBe("down")
+    expect(month?.change).toBeUndefined()
+    expect(usageStats(fixtureHistory("30d", DateTime.makeUnsafe("2026-11-16T12:00:00Z")))[0]?.change).toBeUndefined()
   })
 })

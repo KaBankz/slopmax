@@ -15,6 +15,7 @@ import {
   providerFacts,
   type RedeemOutcome,
   type Report,
+  type RequestRow,
   type SubscriptionId,
   Unauthorized,
 } from "@slopmax/client"
@@ -33,7 +34,7 @@ import {
 } from "@slopmax/client/api"
 import { ProxyState } from "@slopmax/client/desktop"
 import type { OfflineView, ProxyAction } from "@slopmax/client/desktop"
-import { noticeBody, noticeTitle } from "@slopmax/client/format"
+import { clock, noticeBody, noticeTitle } from "@slopmax/client/format"
 import { Cause, Data, DateTime, Duration, Effect, Exit, FiberHandle, Option, Schedule, Schema, Stream } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
@@ -54,7 +55,9 @@ import {
   tell,
 } from "./view/live.ts"
 import { type Page, pageHash, Pages, parseRoute, type Route, toggleSidebar as toggled } from "./view/pages.ts"
+import { maskEmails, maskReport } from "./view/privacy.ts"
 import { tailnetAccess } from "./view/tailnet.ts"
+import { allRequests, csv, csvName, pageSize, type RequestFilter } from "./view/requests.ts"
 import { addToast, type Toast } from "./view/toasts.ts"
 import { count, defaultRange, failureText, sentenceCase, settingChanged } from "./view/words.ts"
 
@@ -267,7 +270,8 @@ const onEvent = (event: Event, store: Store, later: FiberHandle.FiberHandle) =>
       }
       case "Status":
         store.set(reportAtom, Option.some(event.report))
-        if (host.kind === "web" && event.report.nudges.length > 0) yield* notifyOnce(event.report.nudges)
+        if (host.kind === "web" && event.report.nudges.length > 0)
+          yield* notifyOnce(event.report.nudges, store.read(prefsAtom).hideEmails)
         return
       case "Request": {
         const seq = store.read(feedSeqAtom) + 1
@@ -281,7 +285,7 @@ const onEvent = (event: Event, store: Store, later: FiberHandle.FiberHandle) =>
       }
       case "Notice":
         // The desktop's main process posts notices; the web dashboard posts them itself.
-        if (host.kind === "web") yield* notifyOnce([event.notice])
+        if (host.kind === "web") yield* notifyOnce([event.notice], store.read(prefsAtom).hideEmails)
         return
       case "Login":
         yield* onLogin(store, event.id, event.event)
@@ -292,12 +296,15 @@ const onEvent = (event: Event, store: Store, later: FiberHandle.FiberHandle) =>
   })
 
 /** Posts each notice this browser has not shown yet, once. */
-const notifyOnce = (notices: Report["nudges"]) =>
+const notifyOnce = (notices: Report["nudges"], hide: boolean) =>
   Effect.gen(function* () {
     const host = yield* Host
     if ((yield* host.permission) !== "granted") return
     const { fresh, told } = tell(yield* host.told, notices)
-    for (const notice of fresh) yield* host.notify(noticeTitle(notice.kind), noticeBody(notice), notice.key)
+    for (const notice of fresh) {
+      const body = noticeBody(notice)
+      yield* host.notify(noticeTitle(notice.kind), hide ? maskEmails(body) : body, notice.key)
+    }
     if (fresh.length > 0) yield* host.saveTold(told)
   })
 
@@ -409,11 +416,12 @@ export const offlineAtom = appRuntime.atom((get) =>
 
 /** The report to show: the live one, or the one read from disk while the desktop's proxy is stopped. */
 export const shownReportAtom = Atom.make((get): Option.Option<Report> => {
+  const hide = get(prefsAtom).hideEmails
   if (get(proxyAtom)._tag === "Stopped") {
     const offline = AsyncResult.getOrElse(get(offlineAtom), () => Option.none<OfflineView>())
-    if (Option.isSome(offline)) return Option.some(offline.value.report)
+    if (Option.isSome(offline)) return Option.some(hide ? maskReport(offline.value.report) : offline.value.report)
   }
-  return get(reportAtom)
+  return hide ? Option.map(get(reportAtom), maskReport) : get(reportAtom)
 })
 
 /**
@@ -487,6 +495,75 @@ export const machinesAtom = Atom.family((range: HistoryRange) =>
     .pipe(Api.runtime.factory.withReactivity(["history"])),
 )
 
+/**
+ * A subscription pool over time: its windows recorded and projected, what
+ * each account's windows have served, and its last day of requests. Read
+ * again with the history: a little after requests, and once a minute.
+ */
+export const poolDetailAtom = Atom.family((provider: SubscriptionId) =>
+  Api.runtime
+    .atom((get) => {
+      get(minuteAtom)
+      return Effect.gen(function* () {
+        const client = yield* Api
+        return yield* client.usage.pool({ params: { provider } })
+      })
+    })
+    .pipe(Api.runtime.factory.withReactivity(["history"])),
+)
+
+/** What the Requests page lists, kept while the app runs. */
+export const requestFilterAtom = Atom.make<RequestFilter>(allRequests).pipe(Atom.keepAlive)
+
+/** How many of the ledger's requests the Requests page shows: a page more with each "Show more". */
+export const requestLimitAtom = Atom.make(pageSize).pipe(Atom.keepAlive)
+
+/** The query a filter and a row count ask of `GET /requests`. */
+const requestQuery = (filter: RequestFilter, range: HistoryRange, limit: number, offset = 0) => ({
+  range,
+  outcome: filter.outcome,
+  ...(filter.account === undefined ? {} : { account: AccountId.make(filter.account) }),
+  ...(filter.model === undefined ? {} : { model: filter.model }),
+  ...(filter.agent === undefined ? {} : { agent: filter.agent }),
+  offset,
+  limit,
+})
+
+/**
+ * The first rows of a range of the ledger that a filter takes, newest first,
+ * keyed by the filter and the row count as JSON. Read again with the history:
+ * a little after requests, and once a minute.
+ */
+export const requestPageAtom = Atom.family((key: string) =>
+  Api.runtime
+    .atom((get) => {
+      get(minuteAtom)
+      const { filter, range, limit } = requestQueries.get(key) ?? {
+        filter: allRequests,
+        range: "today" as const,
+        limit: pageSize,
+      }
+      return Effect.gen(function* () {
+        const client = yield* Api
+        return yield* client.usage.requests({ query: requestQuery(filter, range, limit) })
+      })
+    })
+    .pipe(Api.runtime.factory.withReactivity(["history"])),
+)
+
+/** What each key of `requestPageAtom` asks for. */
+const requestQueries = new Map<
+  string,
+  { readonly filter: RequestFilter; readonly range: HistoryRange; readonly limit: number }
+>()
+
+/** The key of `requestPageAtom` for a filter over a range and a row count. */
+export const requestPageKey = (filter: RequestFilter, range: HistoryRange, limit: number): string => {
+  const key = JSON.stringify({ filter, range, limit })
+  requestQueries.set(key, { filter, range, limit })
+  return key
+}
+
 /** The range the Usage and Performance pages show. */
 export const rangeAtom = Atom.make<HistoryRange>(defaultRange).pipe(Atom.keepAlive)
 
@@ -557,8 +634,11 @@ const accountOf = (store: Store, id: string) =>
     .read(reportAtom)
     .pipe(Option.flatMap((report) => Option.fromUndefinedOr(report.accounts.find((a) => a.id === id))))
 
-const nameOf = (store: Store, id: string): string =>
-  Option.match(accountOf(store, id), { onNone: () => id, onSome: (account) => account.name })
+/** An account's name for a toast, masked while addresses are hidden. */
+const nameOf = (store: Store, id: string): string => {
+  const name = Option.match(accountOf(store, id), { onNone: () => id, onSome: (account) => account.name })
+  return store.read(prefsAtom).hideEmails ? maskEmails(name) : name
+}
 
 const providerOf = (store: Store, id: string): string =>
   Option.match(accountOf(store, id), {
@@ -811,6 +891,58 @@ export const redeem = act(
       return { report: result.report, ...redeemText(result.outcome, name, provider) }
     }),
   "Could not redeem a limit reset: ",
+)
+
+/**
+ * Lifts slopmax's hold on a limited or throttled account and reads its
+ * usage again, then says whether it is back.
+ */
+export const checkAccount = act(
+  (id: string, store) =>
+    Effect.gen(function* () {
+      const client = yield* Api
+      const name = nameOf(store, id)
+      const report = yield* client.accounts.check({ params: { id: AccountId.make(id) } })
+      const now = yield* DateTime.now
+      const condition = report.accounts.find((account) => account.id === id)?.condition
+      const text =
+        condition?._tag === "Limited"
+          ? `${name} is still limited: its provider's usage says it is back ${clock(condition.until, now, zone)}.`
+          : `${name} is back in rotation.`
+      return { report, text }
+    }),
+  (id, store) => `Could not check ${nameOf(store, id)}: `,
+)
+
+/** The most rows an export writes. */
+const exportMost = 100_000
+
+/** Saves every request a filter takes over a range as CSV, a thousand at a time. */
+export const exportRequests = act(
+  (input: { readonly filter: RequestFilter; readonly range: HistoryRange }, store) =>
+    Effect.gen(function* () {
+      const client = yield* Api
+      const host = yield* Host
+      const rows: Array<RequestRow> = []
+      for (;;) {
+        const page = yield* client.usage.requests({
+          query: requestQuery(input.filter, input.range, 1_000, rows.length),
+        })
+        rows.push(...page.rows)
+        if (page.rows.length === 0 || rows.length >= page.matched || rows.length >= exportMost) break
+      }
+      const now = yield* DateTime.now
+      const name = csvName(now, zone)
+      const saved = yield* host.save(
+        name,
+        csv(rows, (id) => nameOf(store, id)),
+        "text/csv",
+      )
+      return saved
+        ? { text: `Saved ${count(rows.length, "request")} to ${name}.` }
+        : { text: "Could not save the export.", error: true }
+    }),
+  "Could not export the requests: ",
 )
 
 export const connectAgent = act(
