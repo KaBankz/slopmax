@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-11-16
+
 ### Fixed
 
 - Claude Code's advisor works with a model you name through slopmax: an alias, a selector such as `work/claude-opus-5-5`, or a fallback. slopmax asked for the routed model but sent the advisor tool's own model on under the name Claude Code used, so Claude refused the request (`tools.N.model: work/claude-opus-5-5`) and Claude Code turned the advisor off for the conversation. The advisor now asks for the same model the request does, where it named the same one.
