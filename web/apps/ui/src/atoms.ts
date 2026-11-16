@@ -487,6 +487,23 @@ export const machinesAtom = Atom.family((range: HistoryRange) =>
     .pipe(Api.runtime.factory.withReactivity(["history"])),
 )
 
+/**
+ * A subscription pool over time: its windows recorded and projected, what
+ * each account's windows have served, and its last day of requests. Read
+ * again with the history: a little after requests, and once a minute.
+ */
+export const poolDetailAtom = Atom.family((provider: SubscriptionId) =>
+  Api.runtime
+    .atom((get) => {
+      get(minuteAtom)
+      return Effect.gen(function* () {
+        const client = yield* Api
+        return yield* client.usage.pool({ params: { provider } })
+      })
+    })
+    .pipe(Api.runtime.factory.withReactivity(["history"])),
+)
+
 /** The range the Usage and Performance pages show. */
 export const rangeAtom = Atom.make<HistoryRange>(defaultRange).pipe(Atom.keepAlive)
 

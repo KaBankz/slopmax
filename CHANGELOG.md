@@ -14,6 +14,11 @@ Your other machines can now use one machine's accounts over your Tailscale tailn
 - `slopmax usage --by machine` shows which of your machines sent what. The ledger records the machine that sent each request: a client key's name, or a tailnet machine's.
 - The dashboard opens from your tailnet without a key, on any of your machines or your phone, read-only unless the machine is an admin. Its Access page shows how your other machines reach slopmax, its Usage page sums usage by machine, and its live feed names the machine each request came from.
 - `GET` and `PATCH /slopmax/api/tailnet`, and `/healthz` says what the caller may do (`access`, `login`, `machine`, and `via` over the tailnet). `slopmax doctor` checks the published hub, or the hub a machine uses.
+- Each subscription's page forecasts its pool. A chart shows the pool's 5-hour or weekly use over the last day or week, then where it is heading at the recent pace as each account's window resets. Under it: the pace against the one that would last the window, when the pool would run dry, which account would run out first, and what the next reset gives back.
+- The proxy records each pool's quota every 2 minutes, in the usage ledger, when it changed or an hour has passed. The forecast fills in from the first reading.
+- A lane per account shows its resets over the next week, so resets bunched together stand out.
+- Each account shows its last day as a strip of half hours, green where requests were answered and amber or red where they failed, and each window shows what it has served so far at API prices and what a percent of it has bought.
+- `GET /slopmax/api/pools/{provider}` answers all of it, for any client.
 
 ### Changed
 

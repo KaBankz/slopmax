@@ -78,6 +78,7 @@ enum Route<'a> {
     Disconnect(AgentId),
     Usage,
     History,
+    Pool(slopmax_api::Provider),
     Events,
     NotifyTest,
     Tailnet,
@@ -89,6 +90,7 @@ impl<'a> Route<'a> {
     fn parse(method: &Method, path: &'a str) -> Option<Self> {
         let segments: Vec<&str> = path.trim_matches('/').split('/').collect();
         let agent = |id: &str| serde_json::from_value::<AgentId>(id.into()).ok();
+        let provider = |id: &str| serde_json::from_value::<slopmax_api::Provider>(id.into()).ok();
         Some(match (method, segments.as_slice()) {
             (&Method::GET, ["status"]) => Self::Status,
             (&Method::POST, ["refresh"]) => Self::Refresh,
@@ -118,6 +120,7 @@ impl<'a> Route<'a> {
             (&Method::POST, ["agents", id, "disconnect"]) => Self::Disconnect(agent(id)?),
             (&Method::GET, ["usage"]) => Self::Usage,
             (&Method::GET, ["history"]) => Self::History,
+            (&Method::GET, ["pools", id]) => Self::Pool(provider(id)?),
             (&Method::GET, ["events"]) => Self::Events,
             (&Method::POST, ["notify", "test"]) => Self::NotifyTest,
             (&Method::GET, ["tailnet"]) => Self::Tailnet,
@@ -129,9 +132,12 @@ impl<'a> Route<'a> {
     /// What a caller may do to use it: look, or manage.
     fn needs(&self) -> Access {
         match self {
-            Self::Status | Self::Usage | Self::History | Self::Events | Self::Tailnet => {
-                Access::View
-            }
+            Self::Status
+            | Self::Usage
+            | Self::History
+            | Self::Pool(_)
+            | Self::Events
+            | Self::Tailnet => Access::View,
             Self::Refresh
             | Self::Sync
             | Self::Shutdown
@@ -355,6 +361,10 @@ async fn answer(
         Route::Disconnect(id) => disconnect_agent(app, id).await,
         Route::Usage => usage(app, query, asker.here).await,
         Route::History => history(app, query).await,
+        Route::Pool(provider) => match app.pool_detail(api::provider_id(provider)).await {
+            Some(detail) => ok(&detail),
+            None => Err(ApiError::not_found("pool")),
+        },
         Route::Events => Ok(events(app, asker)),
         Route::NotifyTest => notify_test(app).await,
         Route::Tailnet => ok(&tailnet_view(app).await),
@@ -1218,6 +1228,11 @@ mod tests {
             Some(Route::Connect(AgentId::ClaudeCode))
         );
         assert_eq!(at(Method::POST, "/agents/vim/connect"), None);
+        assert_eq!(
+            at(Method::GET, "/pools/claude"),
+            Some(Route::Pool(slopmax_api::Provider::Claude))
+        );
+        assert_eq!(at(Method::GET, "/pools/vim"), None);
         assert_eq!(at(Method::GET, "/accounts/a"), None);
         assert_eq!(at(Method::POST, "/status"), None);
         assert_eq!(at(Method::GET, "/tailnet"), Some(Route::Tailnet));
@@ -1232,6 +1247,7 @@ mod tests {
             (Method::GET, "/status"),
             (Method::GET, "/usage"),
             (Method::GET, "/history"),
+            (Method::GET, "/pools/claude"),
             (Method::GET, "/events"),
             (Method::GET, "/tailnet"),
         ] {

@@ -27,6 +27,7 @@ let successes: [String: @Sendable (Data) throws -> Data] = [
     "config.removeKey": roundTrip([KeyInfo].self),
     "usage.summary": roundTrip(Summary.self),
     "usage.history": roundTrip(History.self),
+    "usage.pool": roundTrip(PoolDetail.self),
     "events.watch": roundTrip([Event].self),
 ]
 

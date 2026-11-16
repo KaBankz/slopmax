@@ -12,8 +12,8 @@ pub mod supervisor;
 // The engine's modules, under the names the daemon's code uses.
 pub(crate) use slopmax_core::{
     account, agent, api, auth, blocking, config, doctor, error, fsx, history, import, ledger,
-    limits, notify, paths, pool, provider, report, route, state, summary, tailscale, update, usage,
-    waste,
+    limits, notify, paths, pool, provider, quota, report, route, state, summary, tailscale, update,
+    usage, waste,
 };
 pub(crate) use slopmax_core::{ids, log, net, time, wire};
 
@@ -244,6 +244,9 @@ pub async fn serve_with(
             if app.config().poll_mins > 0 {
                 poll_all(&app, false).await;
             }
+        }),
+        Job::new("record quota", crate::quota::EVERY, |app| async move {
+            blocking::run(move || app.sample_quota()).await;
         }),
         Job::new("list credits", Duration::from_secs(60), |app| async move {
             list_credits(&app, false).await;

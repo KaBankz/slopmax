@@ -183,6 +183,29 @@ impl Ledger {
         }
     }
 
+    /// Writes each pool's quota reading to its month's file, as one
+    /// `{"quota": …}` line, then runs `then` while no other line can be
+    /// written, as [`Ledger::record_then`] does: read back by
+    /// [`crate::quota`], and skipped by every reader of requests.
+    pub fn record_samples_then(
+        &self,
+        samples: &[crate::quota::Sample],
+        then: impl FnOnce(&[crate::quota::Sample]),
+    ) {
+        let mut writer = self.open.lock().unwrap_or_else(|p| p.into_inner());
+        for sample in samples {
+            let line = crate::quota::Line {
+                quota: sample.clone(),
+            };
+            if let Err(e) = writer.append_line(&self.dir, sample.at, &line) {
+                writer.month = None;
+                writer.dropped += 1;
+                log::warn!("writing a quota reading to the ledger: {e}");
+            }
+        }
+        then(samples);
+    }
+
     /// Entries a failed write lost since the daemon started.
     pub fn dropped(&self) -> u64 {
         self.open.lock().unwrap_or_else(|p| p.into_inner()).dropped
@@ -265,23 +288,41 @@ pub fn month_name(at: Timestamp) -> String {
 /// Every entry at or after `since` within the files and lengths a
 /// [`Ledger::mark`] gave, oldest first.
 pub fn read_upto(dir: &Path, since: Timestamp, lengths: &[(PathBuf, u64)]) -> Vec<Entry> {
-    let first = file_for(dir, since);
     let mut entries = Vec::new();
-    for (path, len) in lengths.iter().filter(|(p, _)| *p >= first) {
+    lines_upto(dir, since, lengths, |line| {
+        if let Ok(entry) = serde_json::from_str::<Entry>(line)
+            && entry.at >= since
+        {
+            entries.push(entry);
+        }
+    });
+    entries.sort_by_key(|e| e.at);
+    entries
+}
+
+/// Each line of the month files from `since`'s on, within the files and
+/// lengths a [`Ledger::mark`] gave: requests, and the other lines kept
+/// beside them.
+pub fn lines_upto(
+    dir: &Path,
+    since: Timestamp,
+    lengths: &[(PathBuf, u64)],
+    mut each: impl FnMut(&str),
+) {
+    let first = file_for(dir, since);
+    let mut files: Vec<&(PathBuf, u64)> = lengths.iter().filter(|(p, _)| *p >= first).collect();
+    files.sort();
+    for (path, len) in files {
         let Ok(file) = fs::File::open(path) else {
             continue;
         };
-        let lines = BufReader::new(file.take(*len))
+        for line in BufReader::new(file.take(*len))
             .lines()
-            .map_while(Result::ok);
-        entries.extend(
-            lines
-                .filter_map(|line| serde_json::from_str::<Entry>(&line).ok())
-                .filter(|entry| entry.at >= since),
-        );
+            .map_while(Result::ok)
+        {
+            each(&line);
+        }
     }
-    entries.sort_by_key(|e| e.at);
-    entries
 }
 
 /// Every entry at or after `since`, oldest first. Unreadable lines (a

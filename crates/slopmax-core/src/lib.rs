@@ -26,6 +26,7 @@ pub mod paths;
 pub mod pool;
 pub mod pricing;
 pub mod provider;
+pub mod quota;
 pub mod report;
 pub mod route;
 pub mod service;

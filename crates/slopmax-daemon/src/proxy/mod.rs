@@ -81,6 +81,11 @@ pub struct App {
     /// The last month of the ledger by hour, for histories, once one is
     /// asked for.
     pub hours: crate::history::index::Kept,
+    /// The last week of the pools' quota readings and of what each account
+    /// served, once a pool's detail is asked for.
+    pub quota: crate::quota::Kept,
+    /// The reading last written of each pool, to write only what changed.
+    quota_written: Mutex<HashMap<ProviderId, crate::quota::Sample>>,
     /// Reasoning state kept between turns of translated conversations.
     replay: Mutex<transcode::Replay>,
     /// Each account's model list, and when it was read.
@@ -189,6 +194,8 @@ impl App {
             refreshing: tokio::sync::Mutex::new(()),
             ledger,
             hours: Default::default(),
+            quota: Default::default(),
+            quota_written: Default::default(),
             replay: Default::default(),
             catalogs: Default::default(),
             warmed: Default::default(),
@@ -455,6 +462,47 @@ impl App {
         .await
     }
 
+    /// Reads each pool's quota and writes the readings that changed, or
+    /// that were last written an hour ago, to the ledger.
+    pub fn sample_quota(&self) {
+        let now = Timestamp::now();
+        let samples = crate::quota::sample(&self.report(), now);
+        let mut written = self.quota_written.lock().unwrap_or_else(|p| p.into_inner());
+        let due = crate::quota::due(samples, &written);
+        if due.is_empty() {
+            return;
+        }
+        self.ledger
+            .record_samples_then(&due, |due| self.quota.sampled(due));
+        for sample in due {
+            written.insert(sample.provider, sample);
+        }
+    }
+
+    /// `provider`'s pool over time, from the readings and spending kept:
+    /// read from the ledger once, the first time. `None` when it has no
+    /// working account.
+    pub async fn pool_detail(
+        self: &Arc<Self>,
+        provider: ProviderId,
+    ) -> Option<slopmax_api::pools::PoolDetail> {
+        let app = Arc::clone(self);
+        crate::blocking::run(move || {
+            let report = app.report();
+            let now = Timestamp::now();
+            if let Some(detail) = app.quota.detail(provider, &report, now) {
+                return detail;
+            }
+            let config = app.config();
+            app.quota
+                .build(&app.home.usage(), now, &config.prices, |start| {
+                    app.ledger.mark(start)
+                });
+            app.quota.detail(provider, &report, now).flatten()
+        })
+        .await
+    }
+
     /// The model Codex asked for last.
     pub(crate) fn last_codex_model(&self) -> Option<String> {
         self.pool.codex().model
@@ -463,8 +511,11 @@ impl App {
     /// Writes a finished request to the usage ledger, tells the dashboard's
     /// live feed about it, and remembers the model of a Codex one.
     pub fn record(&self, entry: &crate::ledger::Entry) {
-        self.ledger
-            .record_then(entry, |entry| self.hours.add(entry));
+        let config = self.config();
+        self.ledger.record_then(entry, |entry| {
+            self.hours.add(entry);
+            self.quota.add(entry, &config.prices);
+        });
         if entry.provider == ProviderId::Codex
             && let Some(model) = &entry.model
         {

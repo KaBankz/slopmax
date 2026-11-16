@@ -29,6 +29,7 @@ import {
 import { Event } from "./events.ts"
 import { AccountId, AgentId, Dialect, KeyName, ProviderId, SubscriptionId, withDefault } from "./ids.ts"
 import { History, HistoryRange, Summary, SummaryBy, SummaryRange } from "./ledger.ts"
+import { PoolDetail } from "./pools.ts"
 import { LoginId } from "./login.ts"
 import { providerFacts } from "./providers.ts"
 import { AccountView, RedeemResult, Report } from "./report.ts"
@@ -385,6 +386,13 @@ export class UsageGroup extends HttpApiGroup.make("usage")
       query: { range: HistoryRange.pipe(withDefault("7d")) },
       success: History,
       error: Internal,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get("pool", "/pools/:provider", {
+      params: { provider: SubscriptionId },
+      success: PoolDetail,
+      error: [NotFound, Internal],
     }),
   ) {}
 

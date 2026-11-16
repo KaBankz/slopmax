@@ -81,6 +81,17 @@ describe("the web dashboard", () => {
     await showsSoon("Let slopmax choose")
   })
 
+  test("a subscription's page forecasts its pool, and each account shows its day and what its windows served", async () => {
+    await web("#/claude")
+    await showsSoon("Weekly pool", 5_000)
+    expect(shows("Resets ahead")).toBe(true)
+    expect(shows("Runs dry")).toBe(true)
+    expect(shows("$1,622 so far")).toBe(true)
+    expect(document.querySelectorAll('[role=img][aria-label*="in the last day"]').length).toBe(3)
+    await press("5-hour")
+    await showsSoon("5-hour pool")
+  })
+
   test("opening an account's limit resets lists them with what one clears", async () => {
     await web("#/codex")
     await showsSoon("2 limit resets")

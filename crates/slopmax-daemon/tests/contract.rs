@@ -248,6 +248,12 @@ fn steady(value: &mut Value, home: &str) {
                     // What depends on the day and hour the test runs.
                     "label" if value.is_string() => *value = "<day>".into(),
                     "monthly" => *value = 0.into(),
+                    // Which half hour a request falls in.
+                    "health" => {
+                        for cell in value.as_array_mut().into_iter().flatten() {
+                            *cell = serde_json::json!({ "answered": 0, "failed": 0 });
+                        }
+                    }
                     "activity" => {
                         for cell in value
                             .as_array_mut()
@@ -660,6 +666,32 @@ async fn every_endpoint_answers_as_its_fixture_says() {
             .unwrap()
             .contains("nLAPTOP1CNTRL")
     );
+    app.sample_quota();
+    let pool = call
+        .send(
+            "usage.pool.ok",
+            Method::GET,
+            "/pools/claude",
+            None,
+            StatusCode::OK,
+        )
+        .await;
+    assert_eq!(pool["trends"][0]["span"], "5h");
+    let served = pool["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == claude.as_str())
+        .unwrap();
+    assert_eq!(served["windows"][0]["requests"], 2);
+    call.send(
+        "usage.pool.notFound",
+        Method::GET,
+        "/pools/anthropic",
+        None,
+        StatusCode::NOT_FOUND,
+    )
+    .await;
 
     // Notifications.
     call.send(

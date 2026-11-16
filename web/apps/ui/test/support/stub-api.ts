@@ -63,6 +63,7 @@ import {
   quietHistory,
   version,
 } from "./fixtures.ts"
+import { fixturePool } from "./pools.ts"
 
 export interface StubOptions {
   /** The clock the fixtures are drawn against. */
@@ -578,6 +579,18 @@ export const makeStub = (options: StubOptions = {}): Stub => {
           "history",
           query,
           Effect.sync(() => history(query.range)),
+        ),
+      )
+      .handle("pool", ({ params }) =>
+        answer(
+          "pool",
+          params,
+          Effect.suspend(() => {
+            const pool = scenario === "full" ? fixturePool(params.provider, now()) : undefined
+            return pool === undefined
+              ? Effect.fail(NotFound.of({ what: `pool ${params.provider}` }))
+              : Effect.succeed(pool)
+          }),
         ),
       ),
   )

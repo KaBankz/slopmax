@@ -103,7 +103,8 @@ slopmax-core/src/
   daemon.rs     the long-running proxy and its background tasks
   background.rs the proxy seen from outside: its client, starting it, the login service
   ledger.rs     the usage ledger; summary.rs totals it; history.rs charts it (for the
-                app and the dashboard alike); pricing.rs prices it
+                app and the dashboard alike); pricing.rs prices it; quota.rs records
+                the pools' quota in it and forecasts each pool (`/pools/{provider}`)
   notify.rs     webhook and command notifications from account changes
   report.rs     the status report; doctor.rs the setup checks; service.rs systemd and launchd
   paths.rs      Home: a slopmax directory and its files (the proxy carries its own)
@@ -244,6 +245,7 @@ State a format cannot carry back is kept by slopmax: the encrypted reasoning an 
 - saving pool state (windows, blocks, sessions) every 10 seconds, so a restart keeps sessions on their accounts;
 - refreshing tokens ahead of expiry (every 5 minutes), polling usage when due, listing limit resets, and warming idle windows (each checked every minute), and redeeming resets about to expire (every 30 minutes);
 - watching account conditions every 30 seconds: notifications and nudges, told on the event stream and to the configured hooks, and remembered in `state.toml`; and each window that reset, written to the ledger for quota left on the table;
+- reading each subscription pool's windows, and each working account's, every 2 minutes, and writing them to the ledger when they changed or an hour passed (`quota.rs`). The pool pages' forecasts are drawn from these readings: from the first time one is asked for, the daemon keeps the last week of them, and of what each account served in five-minute steps, as the history index keeps the month;
 - following installs every minute: when the install the daemon runs from has a newer slopmax (its file replaced at the same path, or for mise a new version directory, then `mise where`), the daemon hands the proxy to it (below);
 - looking up the newest release once a day (`update::latest`, the `releases/latest` redirect rather than GitHub's rate-limited API), kept in `update.toml` for `slopmax status`.
 
@@ -281,8 +283,9 @@ The login service runs `~/.slopmax/bin/slopmax`, a link the handoff and `slopmax
   state.toml                windows, blocks, sessions, limit resets, the pins `slopmax use`
                             sets, the nudges already sent, what was last seen of Claude
                             Code and Codex (state.rs)
-  usage/<year>-<month>.jsonl  each request answered, and each window that reset with how
-                            much of it was used (waste.rs)
+  usage/<year>-<month>.jsonl  each request answered, each window that reset with how
+                            much of it was used (waste.rs), and the pools' quota
+                            readings (quota.rs)
   windows.jsonl             each window that reset, as versions before 0.4 kept them (read,
                             never written: the ledger holds them now)
   bin/slopmax               the link the login service runs, moved to each new binary

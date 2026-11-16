@@ -2,7 +2,7 @@
 // with a gauge per window, its notes, its limit resets, and a menu of what
 // can be done to it.
 import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react"
-import { type ProviderId, providerFacts, SubscriptionId } from "@slopmax/client"
+import { type AccountDetail, type PoolDetail, type ProviderId, providerFacts, SubscriptionId } from "@slopmax/client"
 import { cva } from "class-variance-authority"
 import { Option, Schema } from "effect"
 import { AsyncResult } from "effect/reactivity"
@@ -27,6 +27,7 @@ import {
   zone,
 } from "../atoms.ts"
 import { useAsk } from "../components/ask.tsx"
+import { HealthStrip, PoolForecast, ResetLanes, usePoolDetail } from "../components/forecast.tsx"
 import { Dot, Empty, Label, Meter, Panel, Section, SegmentedBar } from "../components/parts.tsx"
 import { Tip } from "../components/tip.tsx"
 import { Badge } from "../components/ui/badge.tsx"
@@ -44,6 +45,7 @@ import {
 } from "../components/ui/dropdown-menu.tsx"
 import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "../components/ui/item.tsx"
 import { askOwn, askPriority, askRedeem, askRemove, askRename, readPriority } from "../view/asks.ts"
+import { health, lanes, type SpendView, spendView } from "../view/forecast.ts"
 import { across, type Gauge, type Group, type Row } from "../view/groups.ts"
 import { cannotChange } from "../view/live.ts"
 import { autoRedeem, limitsNotRead, resetsLine, resetsUnlisted } from "../view/words.ts"
@@ -92,10 +94,12 @@ function WindowCell({
   title,
   gauge,
   faded,
+  spend,
 }: {
   readonly title: string
   readonly gauge: Gauge | undefined
   readonly faded: boolean
+  readonly spend: SpendView | undefined
 }) {
   if (gauge === undefined) {
     return (
@@ -118,6 +122,14 @@ function WindowCell({
         <span className="text-muted-foreground tabular-nums">{resetsLine(gauge.resetsIn, gauge.resetsAt)}</span>
         {gauge.pace !== undefined && <Label tone={gauge.pace.label.tone} text={gauge.pace.label.text} raw />}
       </span>
+      {spend !== undefined && (
+        <Tip content={spend.tip}>
+          <span className="flex w-fit min-w-0 flex-wrap gap-x-2 text-xs text-muted-foreground tabular-nums">
+            <span>{spend.line}</span>
+            {spend.rate !== undefined && <span>{spend.rate}</span>}
+          </span>
+        </Tip>
+      )}
     </div>
   )
 }
@@ -312,13 +324,53 @@ function SignInAgain({ row }: { readonly row: Row }) {
 
 const isSubscription = Schema.is(SubscriptionId)
 
+/** What the account's window in a column has served, for windows over every request. */
+const spendOf = (
+  detail: AccountDetail | undefined,
+  slot: Group["slots"][number] | undefined,
+): SpendView | undefined => {
+  if (detail === undefined || slot === undefined || slot.model !== undefined) return undefined
+  const spend = detail.windows.find((window) => window.span === slot.span)
+  return spend === undefined ? undefined : spendView(spend)
+}
+
+/** The pool's forecast and resets ahead, once its detail is read. */
+function PoolSections({ group, detail }: { readonly group: Group; readonly detail: PoolDetail }) {
+  const now = useAtomValue(nowAtom)
+  const working = group.rows.filter((row) => !row.disabled && !row.signedOut)
+  if (detail.trends.length === 0 && working.length < 2) return null
+  return (
+    <Section title="Forecast">
+      {detail.trends.length > 0 && <PoolForecast group={group} detail={detail} />}
+      {working.length > 1 && (
+        <ResetLanes
+          lanes={lanes(
+            working.map((row) => ({ id: row.id, name: row.name, windows: row.account.windows })),
+            now,
+            zone,
+          )}
+        />
+      )}
+    </Section>
+  )
+}
+
 /** Where an account's windows go, before slopmax has read any of the group's. */
 function UnreadCell() {
   const pollOff = useAtomValue(pollOffAtom)
   return <span className="min-w-0 flex-1 text-xs text-muted-foreground">{limitsNotRead(pollOff)}</span>
 }
 
-function AccountRow({ row, group }: { readonly row: Row; readonly group: Group }) {
+function AccountRow({
+  row,
+  group,
+  pool,
+}: {
+  readonly row: Row
+  readonly group: Group
+  readonly pool: PoolDetail | undefined
+}) {
+  const detail: AccountDetail | undefined = pool?.accounts.find((account) => account.id === row.id)
   const [open, setOpen] = useAtom(openCreditsAtom)
   const isOpen = Option.isSome(open) && open.value === row.id
   const metered = !group.subscription
@@ -340,6 +392,9 @@ function AccountRow({ row, group }: { readonly row: Row; readonly group: Group }
             </span>
             <SignInAgain row={row} />
             {row.lastUsed !== undefined && <span className="text-xs text-muted-foreground">{row.lastUsed}</span>}
+            {detail !== undefined && pool !== undefined && (
+              <HealthStrip health={health(detail, pool.healthSince, pool.cellMinutes, zone)} />
+            )}
           </ItemContent>
           {metered ? (
             <div className="flex min-w-0 flex-1 flex-col gap-1 text-xs">
@@ -360,6 +415,7 @@ function AccountRow({ row, group }: { readonly row: Row; readonly group: Group }
                   title={group.columns[i] ?? ""}
                   gauge={gauge}
                   faded={row.faded[i] ?? false}
+                  spend={spendOf(detail, group.slots[i])}
                 />
               ))}
             </div>
@@ -399,6 +455,15 @@ function AccountRow({ row, group }: { readonly row: Row; readonly group: Group }
 }
 
 export function ProviderPage({ provider }: { readonly provider: ProviderId }) {
+  return isSubscription(provider) ? <SubscriptionPage provider={provider} /> : <Accounts provider={provider} />
+}
+
+function SubscriptionPage({ provider }: { readonly provider: SubscriptionId }) {
+  const detail = usePoolDetail(provider)
+  return <Accounts provider={provider} pool={Option.getOrUndefined(detail)} />
+}
+
+function Accounts({ provider, pool }: { readonly provider: ProviderId; readonly pool?: PoolDetail | undefined }) {
   const shown = useAtomValue(shownReportAtom)
   const all = useAtomValue(groupsAtom)
   const change = useAtomSet(changeAccount)
@@ -420,6 +485,7 @@ export function ProviderPage({ provider }: { readonly provider: ProviderId }) {
           <PoolCells group={g} />
         </Section>
       )}
+      {pool !== undefined && <PoolSections group={g} detail={pool} />}
       <Section
         title="Accounts"
         trailing={
@@ -446,7 +512,7 @@ export function ProviderPage({ provider }: { readonly provider: ProviderId }) {
             </div>
           )}
           {g.rows.map((row) => (
-            <AccountRow key={row.id} row={row} group={g} />
+            <AccountRow key={row.id} row={row} group={g} pool={pool} />
           ))}
         </Panel>
       </Section>
