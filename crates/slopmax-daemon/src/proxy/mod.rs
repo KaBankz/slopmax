@@ -280,7 +280,7 @@ impl App {
         if seen.as_deref() == Some(text.as_str()) {
             return;
         }
-        match toml_edit::de::from_str::<Config>(&text) {
+        match Config::from_toml(&text) {
             Ok(mut config) => {
                 let current = self.config();
                 // Bound at start: the listener stays where it is.

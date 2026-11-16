@@ -134,13 +134,202 @@ pub struct Config {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub keys: Vec<ClientKey>,
     /// Who on the user's tailnet uses slopmax without a key, and which
-    /// machines may also manage it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// machines may also manage it. Read by [`Config::from_toml`].
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub tailscale: Option<Tailnet>,
     /// The machine whose slopmax this one uses, instead of running its
-    /// own proxy.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// own proxy. Read by [`Config::from_toml`].
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub hub: Option<HubLink>,
+    /// `[tailscale]` and `[hub]` as serde meets them: passed over, for
+    /// [`Config::from_toml`] to read.
+    #[doc(hidden)]
+    #[serde(rename = "tailscale", skip_serializing)]
+    pub tailscale_apart: Apart,
+    #[doc(hidden)]
+    #[serde(rename = "hub", skip_serializing)]
+    pub hub_apart: Apart,
+}
+
+/// A table serde passes over, read by hand once serde is done: a derived
+/// reader of `[tailscale]` and `[hub]` took several times the code.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Apart;
+
+impl<'de> Deserialize<'de> for Apart {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer
+            .deserialize_ignored_any(serde::de::IgnoredAny)
+            .map(|_| Apart)
+    }
+}
+
+/// Why a config's text is not a config.
+enum Unreadable {
+    /// It is not TOML, or a setting serde reads is wrong.
+    Toml(toml_edit::de::Error),
+    /// `[tailscale]` or `[hub]` is wrong, said naming the line.
+    Table(String),
+}
+
+impl Unreadable {
+    /// The error for a change that would leave the config so.
+    fn rejected(self) -> ConfigError {
+        match self {
+            Self::Toml(e) => ConfigError::Rejected(format!("invalid setting: {e}")),
+            Self::Table(message) => ConfigError::Rejected(message),
+        }
+    }
+}
+
+/// "line N: " for what starts at `span` in `text`, when it is known.
+fn line_of(text: &str, span: Option<std::ops::Range<usize>>) -> String {
+    match span {
+        Some(span) => {
+            let line = text[..span.start.min(text.len())].matches('\n').count() + 1;
+            format!("line {line}: ")
+        }
+        None => String::new(),
+    }
+}
+
+/// `[tailscale]`, read from `item` in the config `text`.
+fn read_tailnet(item: &toml_edit::Item, text: &str) -> Result<Tailnet, String> {
+    let line = |span| line_of(text, span);
+    let table = item.as_table_like().ok_or_else(|| {
+        format!(
+            "{}[tailscale] is a table of users and admins",
+            line(item.span())
+        )
+    })?;
+    let mut tailnet = Tailnet::default();
+    for (key, value) in table.iter() {
+        match key {
+            "users" => {
+                let users = value.as_array().ok_or_else(|| {
+                    format!(
+                        "{}[tailscale] users is a list of tailnet logins, such as [\"you@github\"]",
+                        line(value.span())
+                    )
+                })?;
+                for user in users {
+                    let login = user.as_str().filter(|user| {
+                        !user.is_empty()
+                            && user.is_ascii()
+                            && user.contains('@')
+                            && !user.contains("=?")
+                    });
+                    let Some(login) = login else {
+                        let shown = match user.as_str() {
+                            Some(user) => format!("{user:?}"),
+                            None => user.to_string().trim().to_owned(),
+                        };
+                        return Err(format!(
+                            "{}[tailscale] users: {shown} is not a tailnet login, such as you@github",
+                            line(user.span())
+                        ));
+                    };
+                    tailnet.users.push(login.to_owned());
+                }
+            }
+            "admins" => {
+                let admin = |entry: Option<&dyn toml_edit::TableLike>, span| {
+                    let field = |name| {
+                        entry?
+                            .get(name)
+                            .and_then(toml_edit::Item::as_str)
+                            .filter(|value| !value.trim().is_empty())
+                    };
+                    let only_those = entry.is_some_and(|entry| {
+                        entry.iter().all(|(key, _)| matches!(key, "machine" | "id"))
+                    });
+                    match (field("machine"), field("id")) {
+                        (Some(machine), Some(id)) if only_those => Ok(AdminMachine {
+                            machine: machine.to_owned(),
+                            id: id.to_owned(),
+                        }),
+                        _ => Err(format!(
+                            "{}[tailscale] admins: each needs a machine and its id, and nothing else; `slopmax tailscale admins add <machine>` fills them in",
+                            line(span)
+                        )),
+                    }
+                };
+                match value {
+                    toml_edit::Item::ArrayOfTables(tables) => {
+                        for table in tables {
+                            tailnet.admins.push(admin(Some(table), table.span())?);
+                        }
+                    }
+                    toml_edit::Item::Value(toml_edit::Value::Array(list)) => {
+                        for entry in list {
+                            let table = entry
+                                .as_inline_table()
+                                .map(|t| t as &dyn toml_edit::TableLike);
+                            tailnet.admins.push(admin(table, entry.span())?);
+                        }
+                    }
+                    _ => return Err(admin(None, value.span()).unwrap_err()),
+                }
+            }
+            other => {
+                return Err(format!(
+                    "{}[tailscale] has no setting {other:?}; it takes users and admins",
+                    line(value.span())
+                ));
+            }
+        }
+    }
+    Ok(tailnet)
+}
+
+/// `[hub]`, read from `item` in the config `text`.
+fn read_hub(item: &toml_edit::Item, text: &str) -> Result<HubLink, String> {
+    let line = |span| line_of(text, span);
+    let table = item
+        .as_table_like()
+        .ok_or_else(|| format!("{}[hub] is a table with the hub's url", line(item.span())))?;
+    let (mut url, mut key) = (None, None);
+    for (name, value) in table.iter() {
+        let Some(given) = value.as_str() else {
+            return Err(format!(
+                "{}[hub] {name} is text, in quotes",
+                line(value.span())
+            ));
+        };
+        match name {
+            "url" => url = Some((given, value.span())),
+            "key" => key = Some(given.to_owned()),
+            other => {
+                return Err(format!(
+                    "{}[hub] has no setting {other:?}; it takes url and key",
+                    line(value.span())
+                ));
+            }
+        }
+    }
+    let Some((url, span)) = url else {
+        return Err(format!("{}[hub] needs the hub's url", line(item.span())));
+    };
+    let uri = url.parse::<http::Uri>().ok().filter(|uri| {
+        matches!(uri.scheme_str(), Some("http" | "https"))
+            && uri.host().is_some_and(|h| !h.is_empty())
+    });
+    let Some(uri) = uri else {
+        return Err(format!(
+            "{}[hub] url = {url:?} is not a web address; give the whole URL, starting with https://",
+            line(span.clone())
+        ));
+    };
+    if uri.scheme_str() == Some("http") && key.is_none() && !is_loopback(&uri) {
+        return Err(format!(
+            "{}[hub] url must be https unless it is on this machine or [hub] key is set",
+            line(span)
+        ));
+    }
+    Ok(HubLink {
+        url: url.to_owned(),
+        key,
+    })
 }
 
 /// The token agents send a hub that knows their machine by its tailnet
@@ -148,8 +337,7 @@ pub struct Config {
 pub const TAILNET_TOKEN: &str = "tailnet";
 
 /// `[tailscale]`: who may use slopmax over the tailnet.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Tailnet {
     /// Tailnet logins (`you@github`) whose machines use slopmax without a
     /// key and see its status.
@@ -160,16 +348,14 @@ pub struct Tailnet {
 
 /// A machine that may manage slopmax, matched by Tailscale's stable node
 /// id; the name is for people.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AdminMachine {
     pub machine: String,
     pub id: String,
 }
 
 /// `[hub]`: the slopmax this machine's agents use.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HubLink {
     pub url: String,
     /// A client key, for a hub that can't tell this machine by its tailnet
@@ -225,6 +411,8 @@ impl Default for Config {
             keys: Vec::new(),
             tailscale: None,
             hub: None,
+            tailscale_apart: Apart,
+            hub_apart: Apart,
         }
     }
 }
@@ -337,13 +525,18 @@ impl Config {
                 Err(source) => return Err(read_error(path)(source)),
             };
             let config = match &text {
-                Some(text) => toml_edit::de::from_str::<Self>(text).map_err(invalid(path, text))?,
+                Some(text) => Self::read(text).map_err(|e| match e {
+                    Unreadable::Toml(e) => invalid(path, text)(e),
+                    Unreadable::Table(message) => ConfigError::Invalid {
+                        path: path.to_owned(),
+                        message,
+                    },
+                })?,
                 None => Self::default(),
             };
             config
                 .notify
                 .check()
-                .and_then(|()| config.check_tailnet(text.as_deref()))
                 .map_err(|message| ConfigError::Invalid {
                     path: path.to_owned(),
                     message,
@@ -442,9 +635,35 @@ impl Config {
             doc[*key] = toml_edit::Item::Value(value);
         }
         let text = doc.to_string();
-        let config = toml_edit::de::from_str::<Self>(&text)
-            .map_err(|e| ConfigError::Rejected(format!("invalid setting: {e}")))?;
+        let config = Self::read(&text).map_err(Unreadable::rejected)?;
         fsx::write_private(path, text.as_bytes()).map_err(write_error(path))?;
+        Ok(config)
+    }
+
+    /// The config `text` holds, as config.toml would; an error says what
+    /// is wrong, naming the line.
+    pub fn from_toml(text: &str) -> Result<Self, String> {
+        Self::read(text).map_err(|e| match e {
+            Unreadable::Toml(e) => e.to_string(),
+            Unreadable::Table(message) => message,
+        })
+    }
+
+    /// The config `text` holds: serde reads all but `[tailscale]` and
+    /// `[hub]`, which are read by hand from the same text, each value
+    /// checked.
+    fn read(text: &str) -> Result<Self, Unreadable> {
+        let mut config = toml_edit::de::from_str::<Self>(text).map_err(Unreadable::Toml)?;
+        // Serde read it, so it parses.
+        if let Ok(doc) = toml_edit::Document::parse(text) {
+            let tables = doc.as_item();
+            if let Some(item) = tables.get("tailscale") {
+                config.tailscale = Some(read_tailnet(item, text).map_err(Unreadable::Table)?);
+            }
+            if let Some(item) = tables.get("hub") {
+                config.hub = Some(read_hub(item, text).map_err(Unreadable::Table)?);
+            }
+        }
         Ok(config)
     }
 
@@ -523,9 +742,7 @@ impl Config {
     /// Writes `doc` to `path` once it reads as a valid config.
     fn write_checked(path: &Path, doc: DocumentMut) -> Result<Self, ConfigError> {
         let text = doc.to_string();
-        let config = toml_edit::de::from_str::<Self>(&text)
-            .map_err(|e| ConfigError::Rejected(format!("invalid setting: {e}")))?;
-        config.check_tailnet(None).map_err(ConfigError::Rejected)?;
+        let config = Self::read(&text).map_err(Unreadable::rejected)?;
         fsx::write_private(path, text.as_bytes()).map_err(write_error(path))?;
         Ok(config)
     }
@@ -533,74 +750,6 @@ impl Config {
     fn document(path: &Path) -> Result<DocumentMut, ConfigError> {
         let text = std::fs::read_to_string(path).map_err(read_error(path))?;
         text.parse().map_err(invalid(path, &text))
-    }
-
-    /// What is wrong with `[tailscale]` and `[hub]`, if anything, naming
-    /// the line at fault when `text`, the file they were read from, is
-    /// given.
-    fn check_tailnet(&self, text: Option<&str>) -> Result<(), String> {
-        let doc = text.and_then(|text| toml_edit::Document::parse(text).ok());
-        // "line N: " for the item at `table.key[nth]` in the file, when it
-        // is there.
-        let line = |table: &str, key: &str, nth: Option<usize>| -> String {
-            let (Some(text), Some(doc)) = (text, &doc) else {
-                return String::new();
-            };
-            let item = doc.as_item().get(table).and_then(|t| t.get(key));
-            let item = match nth {
-                Some(n) => item.and_then(|list| list.get(n)),
-                None => item,
-            };
-            match item.and_then(toml_edit::Item::span) {
-                Some(span) => {
-                    let line = text[..span.start.min(text.len())].matches('\n').count() + 1;
-                    format!("line {line}: ")
-                }
-                None => String::new(),
-            }
-        };
-        if let Some(hub) = &self.hub {
-            let uri = hub.url.parse::<http::Uri>().ok().filter(|uri| {
-                matches!(uri.scheme_str(), Some("http" | "https"))
-                    && uri.host().is_some_and(|h| !h.is_empty())
-            });
-            let Some(uri) = uri else {
-                return Err(format!(
-                    "{}[hub] url = {:?} is not a web address; give the whole URL, starting with https://",
-                    line("hub", "url", None),
-                    hub.url
-                ));
-            };
-            if uri.scheme_str() == Some("http") && hub.key.is_none() && !is_loopback(&uri) {
-                return Err(format!(
-                    "{}[hub] url must be https unless it is on this machine or [hub] key is set",
-                    line("hub", "url", None)
-                ));
-            }
-        }
-        if let Some(tailnet) = &self.tailscale {
-            for (n, user) in tailnet.users.iter().enumerate() {
-                let login = !user.is_empty()
-                    && user.is_ascii()
-                    && user.contains('@')
-                    && !user.contains("=?");
-                if !login {
-                    return Err(format!(
-                        "{}[tailscale] users: {user:?} is not a tailnet login, such as you@github",
-                        line("tailscale", "users", Some(n))
-                    ));
-                }
-            }
-            for (n, admin) in tailnet.admins.iter().enumerate() {
-                if admin.machine.trim().is_empty() || admin.id.trim().is_empty() {
-                    return Err(format!(
-                        "{}[tailscale] admins: each needs a machine and its id; `slopmax tailscale admins add <machine>` fills them in",
-                        line("tailscale", "admins", Some(n))
-                    ));
-                }
-            }
-        }
-        Ok(())
     }
 
     /// The base URL this machine's agents use: the hub's, when it uses one,
@@ -967,9 +1116,18 @@ mod tests {
     #[test]
     fn rejects_unknown_keys() {
         assert!(toml_edit::de::from_str::<Config>("lisen = \"x\"").is_err());
-        assert!(toml_edit::de::from_str::<Config>("[tailscale]\non = true\n").is_err());
+        assert_eq!(
+            Config::from_toml("[tailscale]\non = true\n").unwrap_err(),
+            "line 2: [tailscale] has no setting \"on\"; it takes users and admins"
+        );
+        assert!(Config::from_toml("[hub]\nurl = \"https://h\"\nport = 1\n").is_err());
+        assert!(Config::from_toml("[hub]\nkey = \"sm-x\"\n").is_err());
+        assert!(Config::from_toml("[hub]\nurl = 1\n").is_err());
+        assert!(Config::from_toml("tailscale = 1\n").is_err());
+        assert!(Config::from_toml("[tailscale]\nusers = \"you@github\"\n").is_err());
         assert!(
-            toml_edit::de::from_str::<Config>("[hub]\nurl = \"https://h\"\nport = 1\n").is_err()
+            Config::from_toml("[tailscale]\nadmins = [{ machine = \"m\", id = \"n\", x = 1 }]\n")
+                .is_err()
         );
     }
 
@@ -1012,11 +1170,15 @@ key = "sm-client"
         };
         assert_eq!(config.tailscale.as_ref(), Some(&tailnet));
         assert_eq!(config.hub.as_ref(), Some(&hub));
-        let again: Config =
-            toml_edit::de::from_str(&toml_edit::ser::to_string(&config).unwrap()).unwrap();
+        let again = Config::from_toml(&toml_edit::ser::to_string(&config).unwrap()).unwrap();
         assert_eq!(again, config);
+        // Admins as a table each read the same.
+        let tables =
+            Config::from_toml("[[tailscale.admins]]\nmachine = \"laptop\"\nid = \"nAbC1CNTRL\"\n")
+                .unwrap();
+        assert_eq!(tables.tailscale.unwrap().admins, tailnet.admins);
         // Either table alone, and empty lists, read too.
-        let bare: Config = toml_edit::de::from_str("[tailscale]\n").unwrap();
+        let bare = Config::from_toml("[tailscale]\n").unwrap();
         assert_eq!(bare.tailscale, Some(Tailnet::default()));
         assert_eq!(bare.hub, None);
         // Without them, nothing is written of them.
