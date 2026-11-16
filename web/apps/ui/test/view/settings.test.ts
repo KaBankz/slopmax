@@ -1,14 +1,15 @@
 import { describe, expect, test } from "bun:test"
 import { defaultSettings, liveKeys, parseLive, Settings, settingsView } from "@slopmax/client"
 import { Option, Result } from "effect"
-import { advancedRows, livePatch, namedElsewhere, restartLine, settingTitle } from "../../src/view/settings.ts"
+import { advancedRows, livePatch, restartLine } from "../../src/view/settings.ts"
 
 const view = settingsView(defaultSettings("sm-test"))
 
 describe("the settings page's live settings", () => {
   test("every live setting the API lists has a place: its own section or Advanced, each with its title", () => {
     const advanced = advancedRows(view).map((row) => row.name)
-    expect([...namedElsewhere, ...advanced].toSorted()).toEqual([...liveKeys].toSorted())
+    const named = ["strategy", "sessionAffinity", "redeemExpiring", "redeemWhenExhausted"]
+    expect([...named, ...advanced].toSorted()).toEqual([...liveKeys].toSorted())
     expect(advanced).toEqual([
       "sessionMinutes",
       "warmWindows",
@@ -17,7 +18,7 @@ describe("the settings page's live settings", () => {
       "refreshTokens",
       "websockets",
     ])
-    for (const name of liveKeys) expect(settingTitle(name)).not.toBe("")
+    for (const row of advancedRows(view)) expect(row.title).not.toBe("")
   })
 
   test("Advanced reads each row from the served settings: switches, and steppers of minutes", () => {

@@ -24,20 +24,14 @@
           "effect/Path",
           "effect/PlatformError",
           "effect/ByteSize",
-          "effect/cli",
           "effect/http",
           "effect/http-api",
-          "effect/encoding",
-          "effect/process",
           "effect/reactivity",
-          "effect/rpc",
           "effect/crypto",
           "effect/testing",
           "@effect/platform-bun",
-          "@effect/platform-node",
           "@effect/atom-react"
         ],
-        "allowedExperimentalApis": ["effect/net/Dns", "effect/net/Host", "@effect/platform-bun/BunDns"],
         "diagnosticSeverity": {
           "unstableApiUsage": "message",
           "floatingEffect": "error"

@@ -7,12 +7,7 @@ import { Option, Schema } from "effect"
 import { liveDetail, minutes, pollSteps, sessionSteps, step } from "./words.ts"
 
 /** The live settings shown in their own sections, not under Advanced. */
-export const namedElsewhere: ReadonlyArray<LiveKey> = [
-  "strategy",
-  "sessionAffinity",
-  "redeemExpiring",
-  "redeemWhenExhausted",
-]
+const namedElsewhere: ReadonlyArray<LiveKey> = ["strategy", "sessionAffinity", "redeemExpiring", "redeemWhenExhausted"]
 
 const titles: { readonly [K in LiveKey]: string } = {
   strategy: "Strategy",
@@ -26,9 +21,6 @@ const titles: { readonly [K in LiveKey]: string } = {
   refreshTokens: "Refresh sign-ins",
   websockets: "Codex WebSockets",
 }
-
-/** A live setting's title on the Settings page. */
-export const settingTitle = (name: LiveKey): string => titles[name]
 
 /** One Advanced row. */
 export type AdvancedRow =

@@ -76,7 +76,6 @@ export const LedgerRecord = Schema.TaggedUnion({
 })
 export type LedgerRecord = typeof LedgerRecord.Type
 export type RequestRecord = typeof LedgerRecord.cases.Request.Type
-export type WindowEndedRecord = typeof LedgerRecord.cases.WindowEnded.Type
 
 export const SummaryRange = Schema.Literals(["today", "7d", "30d", "all"]).annotate({
   message: "range is today, 7d, 30d, or all",
@@ -204,7 +203,7 @@ export class PreviousTotals extends Schema.Class<PreviousTotals>("PreviousTotals
   sessions: NonNegativeInt,
 }) {}
 
-/** `GET /history`: what went through slopmax over a range, shaped for the app's charts. */
+/** `GET /history`: what went through slopmax over a range, shaped for the dashboard's charts. */
 export class History extends Schema.Class<History>("History")({
   range: HistoryRange,
   buckets: Schema.Array(HistoryBucket),

@@ -1,12 +1,11 @@
 // The app: the web dashboard's gate when it has no key (unless this
-// machine's tailnet identity opens it), the menu bar's panel, or the window:
-// the sidebar, the page's title and tools, the sign-in card, the page, and
-// the toasts.
+// machine's tailnet identity opens it), or the window: the sidebar, the
+// page's title and tools, the sign-in card, the page, and the toasts.
 import { RegistryProvider, useAtomMount, useAtomSet, useAtomValue } from "@effect/atom-react"
 import { Option } from "effect"
 import type { Atom } from "effect/reactivity"
 import { AsyncResult } from "effect/reactivity"
-import { CircleAlert, Eye, Plus, RefreshCw, TriangleAlert, Trash } from "lucide-react"
+import { Eye, Plus, RefreshCw, TriangleAlert, Trash } from "lucide-react"
 import { Component, type ErrorInfo, type ReactNode, useEffect } from "react"
 import { hostAtom, machineAtom, ownerKeyAtom } from "./api.ts"
 import {
@@ -17,22 +16,18 @@ import {
   feedAtom,
   requestFilterAtom,
   go,
-  liveAtom,
-  menuAtom,
-  offlineAtom,
+  pageAtom,
   prefsAtom,
-  proxyAction,
-  proxyAtom,
   rangeAtom,
   readOnlyAtom,
   refresh,
   refreshingAtom,
-  routeAtom,
   settingsAtom,
   shownReportAtom,
   tailnetProbeAtom,
   tailnetRetryAtom,
   toggleSidebar,
+  unansweredAtom,
 } from "./atoms.ts"
 import { AskHost } from "./components/ask.tsx"
 import { Kbd } from "./components/parts.tsx"
@@ -41,7 +36,7 @@ import { Sidebar, SidebarFrame } from "./components/sidebar.tsx"
 import { SignInCard } from "./components/sign-in.tsx"
 import { Tip } from "./components/tip.tsx"
 import { Toasts } from "./components/toasts.tsx"
-import { Alert, AlertAction, AlertDescription, AlertTitle } from "./components/ui/alert.tsx"
+import { Alert, AlertDescription, AlertTitle } from "./components/ui/alert.tsx"
 import { Button } from "./components/ui/button.tsx"
 import { Separator } from "./components/ui/separator.tsx"
 import { SidebarInset, SidebarTrigger } from "./components/ui/sidebar.tsx"
@@ -51,7 +46,6 @@ import { AgentsPage } from "./pages/agents.tsx"
 import { DiagnosticsPage, DiagnosticsTools } from "./pages/diagnostics.tsx"
 import { Gate } from "./pages/gate.tsx"
 import { OverviewPage } from "./pages/overview.tsx"
-import { PanelPage } from "./pages/panel.tsx"
 import { ProviderPage } from "./pages/provider.tsx"
 import { RequestsPage } from "./pages/requests.tsx"
 import { SettingsPage } from "./pages/settings.tsx"
@@ -60,11 +54,9 @@ import { keyFromHash, type Page, pageOrder, Pages, pageTitle } from "./view/page
 import { adminCommand, onTheHub } from "./view/tailnet.ts"
 import { rangeTitle, ranges } from "./view/words.ts"
 
-/** Light or dark, from the Appearance setting or the system's; and whether the window sits on a Mac. */
+/** Light or dark, from the Appearance setting or the system's. */
 const useTheme = () => {
   const prefs = useAtomValue(prefsAtom)
-  const host = useAtomValue(hostAtom)
-  const desktop = Option.isSome(host) && host.value.kind === "desktop"
   useEffect(() => {
     const root = document.documentElement
     const media = typeof matchMedia === "undefined" ? undefined : matchMedia("(prefers-color-scheme: dark)")
@@ -73,10 +65,9 @@ const useTheme = () => {
       root.classList.toggle("dark", dark)
     }
     apply()
-    root.classList.toggle("mac", desktop && /Mac/.test(navigator.platform))
     media?.addEventListener("change", apply)
     return () => media?.removeEventListener("change", apply)
-  }, [prefs.appearance, desktop])
+  }, [prefs.appearance])
 }
 
 const isTyping = (target: EventTarget | null): boolean =>
@@ -107,7 +98,7 @@ const useShortcuts = () => {
         if (page !== undefined) go(page)
       } else if (event.key === "r") {
         if (canChange && !refreshing) again()
-      } else if (event.key === "\\") toggle("keyboard")
+      } else if (event.key === "\\") toggle()
       else if (event.key === ",") go(Pages.settings)
       else return
       event.preventDefault()
@@ -210,64 +201,16 @@ function PageBody({ page }: { readonly page: Page }) {
   }
 }
 
-/**
- * While the desktop's proxy is stopped, or another version runs: what the
- * window shows, and the way back. While the event stream is down, in either
- * host, that what is shown may be out of date.
- */
-function ProxyBanner() {
-  const proxy = useAtomValue(proxyAtom)
-  const live = useAtomValue(liveAtom)
-  const offline = useAtomValue(offlineAtom)
-  const act = useAtomSet(proxyAction)
-  if (proxy._tag === "OtherVersion") {
-    return (
-      <Alert role="status" variant="warning">
-        <TriangleAlert />
-        <AlertTitle>
-          slopmax {proxy.running} is running, not this app's {proxy.bundled}
-        </AlertTitle>
-        <AlertDescription>
-          {proxy.service
-            ? "The login service runs the other version. Restart points it at this app's slopmax."
-            : "Restart to run this app's slopmax."}
-        </AlertDescription>
-        <AlertAction>
-          <Button size="sm" onClick={() => act("restart")}>
-            Restart
-          </Button>
-        </AlertAction>
-      </Alert>
-    )
-  }
-  if (proxy._tag !== "Stopped") {
-    if (live._tag !== "Reconnecting") return null
-    return (
-      <Alert role="status" variant="warning">
-        <TriangleAlert />
-        <AlertTitle>slopmax is not answering</AlertTitle>
-        <AlertDescription>
-          This page tries again on its own; until then, what it shows may be out of date.
-        </AlertDescription>
-      </Alert>
-    )
-  }
-  const fromDisk = Option.isSome(AsyncResult.getOrElse(offline, () => Option.none()))
+/** While the event stream is down: that what the window shows may be out of date. */
+function UnansweredBanner() {
+  if (!useAtomValue(unansweredAtom)) return null
   return (
-    <Alert role="status" variant="destructive">
-      <CircleAlert />
-      <AlertTitle>The proxy is stopped</AlertTitle>
+    <Alert role="status" variant="warning">
+      <TriangleAlert />
+      <AlertTitle>slopmax is not answering</AlertTitle>
       <AlertDescription>
-        Agents cannot reach slopmax.{" "}
-        {fromDisk
-          ? "This is what slopmax last saved; signing in, changes and history need it running."
-          : "Start it to see your accounts."}
+        This page tries again on its own; until then, what it shows may be out of date.
       </AlertDescription>
-      <AlertAction>
-        <Button size="sm" onClick={() => act("start")}>
-          Start the proxy
-        </Button>
-      </AlertAction>
     </Alert>
   )
 }
@@ -303,32 +246,26 @@ function ReadOnlyBanner() {
 
 function Window() {
   useAtomMount(eventsAtom)
-  useAtomMount(menuAtom)
   useShortcuts()
-  const route = useAtomValue(routeAtom)
-  const prefs = useAtomValue(prefsAtom)
+  const page = useAtomValue(pageAtom)
   const host = useAtomValue(hostAtom)
   const settings = useAtomValue(settingsAtom)
   const toggle = useAtomSet(toggleSidebar)
-  const page = route._tag === "Page" ? route.page : Pages.overview
   const listen = Option.map(AsyncResult.value(settings), (view) => view.settings.listen)
   const address = Option.getOrElse(listen, () =>
     Option.match(host, { onNone: () => "", onSome: (h) => h.origin.replace(/^https?:\/\//, "") }),
   )
   return (
-    <SidebarFrame onToggle={() => toggle("button")}>
+    <SidebarFrame onToggle={() => toggle()}>
       <Sidebar address={address} />
       <SidebarInset className="min-w-0">
-        <header className="drag flex h-14 shrink-0 items-center border-b">
+        <header className="flex h-14 shrink-0 items-center border-b">
           {/* As wide as the content column, so the page's tools sit over the page they act on. */}
-          <div
-            className="mx-auto flex w-full max-w-6xl items-center gap-2 px-4 mac:data-hidden:pl-22 md:px-6"
-            data-hidden={prefs.sidebarHidden || undefined}
-          >
-            <SidebarTrigger className="no-drag -ml-1" />
+          <div className="mx-auto flex w-full max-w-6xl items-center gap-2 px-4 md:px-6">
+            <SidebarTrigger className="-ml-1" />
             <Separator orientation="vertical" className="mr-2 data-[orientation=vertical]:h-4" />
             <h1 className="min-w-0 flex-1 truncate text-base font-medium">{pageTitle(page)}</h1>
-            <div className="no-drag flex items-center gap-2">
+            <div className="flex items-center gap-2">
               <Tools page={page} />
             </div>
           </div>
@@ -336,7 +273,7 @@ function Window() {
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="@container mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 md:p-6">
             <ReadOnlyBanner />
-            <ProxyBanner />
+            <UnansweredBanner />
             <SignInCard />
             <PageBody page={page} />
           </div>
@@ -345,20 +282,6 @@ function Window() {
       <Toasts />
       <AskHost />
     </SidebarFrame>
-  )
-}
-
-function Panel() {
-  useAtomMount(eventsAtom)
-  // The panel's window is transparent around its card.
-  useEffect(() => {
-    document.documentElement.classList.add("panel")
-    return () => document.documentElement.classList.remove("panel")
-  }, [])
-  return (
-    <div className="flex justify-center bg-transparent">
-      <PanelPage />
-    </div>
   )
 }
 
@@ -376,28 +299,24 @@ export const takeKeyFromAddress = (): string | undefined => {
 }
 
 /** A key handed over in the address while the page is open (a second `slopmax dashboard` reusing the tab). */
-const useKeyFromAddress = (web: boolean) => {
+const useKeyFromAddress = () => {
   const setKey = useAtomSet(enterKey)
   useEffect(() => {
-    if (!web) return
     const take = () => {
       const key = takeKeyFromAddress()
       if (key !== undefined) setKey(key)
     }
     window.addEventListener("hashchange", take)
     return () => window.removeEventListener("hashchange", take)
-  }, [web, setKey])
+  }, [setKey])
 }
 
 export function App() {
   useTheme()
-  const route = useAtomValue(routeAtom)
-  const host = useAtomValue(hostAtom)
   const key = useAtomValue(ownerKeyAtom)
-  const web = Option.isSome(host) && host.value.kind === "web"
-  useKeyFromAddress(web)
-  if (web && Option.isNone(key)) return <Entrance />
-  return route._tag === "Panel" ? <Panel /> : <Window />
+  useKeyFromAddress()
+  if (Option.isNone(key)) return <Entrance />
+  return <Window />
 }
 
 /**

@@ -3,7 +3,7 @@
 // built and tested against the contract itself before the daemon's handlers
 // exist. Changes behave as the daemon's do (a pin pins, a removed account is
 // gone) and each one sends a Status event, as the daemon does, so the app can
-// be driven end to end: in tests, and by `bun dev.ts` for a browser or Electron.
+// be driven end to end: in tests, and by `bun dev.ts` for a browser.
 import {
   AccountId,
   AccountView,
@@ -71,7 +71,7 @@ export interface StubOptions {
   readonly now?: () => DateTime.Utc
   /** A busy slopmax, or one before any account was added. */
   readonly scenario?: "full" | "empty"
-  /** The owner key the API asks for; none accepts any call, as the desktop's main process adds the key. */
+  /** The owner key the API asks for; none accepts any call. */
   readonly key?: string | undefined
   /** How long each answer takes, so loading states can be seen. */
   readonly latency?: Duration.Input

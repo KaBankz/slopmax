@@ -2,7 +2,7 @@
 //! accounts read as one pool. Every decision a front end shows (an
 //! account's condition, the notes beside it, the tones they are colored in,
 //! which account a new session would get) is made here by the daemon, so
-//! the CLI, the web UI and the apps never disagree and only format.
+//! the CLI and the dashboard never disagree and only format.
 
 use std::collections::BTreeMap;
 
@@ -261,26 +261,6 @@ impl AccountView {
         self.windows.iter().filter(|w| w.model.is_some())
     }
 
-    /// How many limit resets it holds at `now`: those listed that have not
-    /// expired, or before they are listed, as many as the provider counts.
-    pub fn resets_left(&self, now: Instant) -> u64 {
-        if !self.resets.is_empty() {
-            return self.unexpired_resets(now).count() as u64;
-        }
-        self.notes
-            .iter()
-            .find_map(|n| match n {
-                Note::Resets { count } => Some(*count),
-                _ => None,
-            })
-            .unwrap_or(0)
-    }
-
-    /// Its sign-in stopped working.
-    pub fn signed_out(&self) -> bool {
-        matches!(self.condition, Condition::SignInNeeded { .. })
-    }
-
     /// Limit resets that have not expired at `now`, soonest first.
     pub fn unexpired_resets(&self, now: Instant) -> impl Iterator<Item = &LimitReset> {
         self.resets
@@ -480,4 +460,108 @@ pub struct AgentWiring {
     pub wired_to: Option<String>,
     pub wired: bool,
     pub backed_up: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ts(secs: i64) -> Instant {
+        Instant::from_second(secs).unwrap()
+    }
+
+    #[test]
+    fn conditions_read_and_color_the_same_in_every_front_end() {
+        let now = ts(1_000);
+        let cases = [
+            (
+                Condition::SignInNeeded {
+                    error: "revoked".into(),
+                },
+                "sign in again (revoked)",
+                Tone::Bad,
+            ),
+            (Condition::Disabled, "disabled", Tone::Muted),
+            (
+                Condition::Limited { until: ts(1_090) },
+                "limited · back in 1m30s",
+                Tone::Warn,
+            ),
+            (
+                Condition::Throttled { until: None },
+                "throttled",
+                Tone::Warn,
+            ),
+            (
+                Condition::Active { sessions: 1 },
+                "● active · 1 session",
+                Tone::Good,
+            ),
+            (
+                Condition::Active { sessions: 3 },
+                "● active · 3 sessions",
+                Tone::Good,
+            ),
+            (Condition::Ready, "ready", Tone::Good),
+        ];
+        for (condition, text, tone) in cases {
+            assert_eq!(condition.describe(now), text);
+            assert_eq!(condition.tone(), tone, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_limit_or_hold_whose_time_has_passed_is_over() {
+        let limited = Condition::Limited { until: ts(1_090) };
+        assert_eq!(limited.at(ts(1_000)), limited);
+        assert_eq!(limited.at(ts(1_090)), Condition::Ready);
+        let held = Condition::Throttled {
+            until: Some(ts(1_030)),
+        };
+        assert_eq!(held.at(ts(1_000)), held);
+        assert_eq!(held.at(ts(1_100)), Condition::Ready);
+    }
+
+    #[test]
+    fn notes_read_and_color_the_same_in_every_front_end() {
+        let cases = [
+            (Note::Pinned, "pinned", Tone::Accent),
+            (Note::Priority { value: -2 }, "priority -2", Tone::Muted),
+            (
+                Note::Follows {
+                    tool: "codex".into(),
+                },
+                "follows codex",
+                Tone::Muted,
+            ),
+            (Note::Resets { count: 1 }, "1 limit reset", Tone::Accent),
+            (Note::Resets { count: 4 }, "4 limit resets", Tone::Accent),
+            (
+                Note::Served {
+                    requests: 12,
+                    tokens: 1_500_000,
+                },
+                "12 req · 1.5M tok",
+                Tone::Muted,
+            ),
+            (
+                Note::LastError {
+                    text: "boom".into(),
+                },
+                "last error: boom",
+                Tone::Muted,
+            ),
+        ];
+        for (note, text, tone) in cases {
+            assert_eq!(note.describe(), text);
+            assert_eq!(note.tone(), tone, "{text}");
+        }
+    }
+
+    #[test]
+    fn use_turns_yellow_at_70_and_red_at_90_percent() {
+        assert_eq!(tone_of_use(69.9), Tone::Good);
+        assert_eq!(tone_of_use(70.0), Tone::Warn);
+        assert_eq!(tone_of_use(90.0), Tone::Bad);
+    }
 }

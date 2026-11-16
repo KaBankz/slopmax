@@ -1,7 +1,7 @@
 //! The API's contract: every endpoint's answers, successes and errors, as
 //! the fixtures in `contract/fixtures/` hold them. The TypeScript client
-//! (`web/packages/client/test/rust-contract.test.ts`) and the Swift app
-//! decode the same fixtures strictly, so a field added, renamed or dropped
+//! (`web/packages/client/test/rust-contract.test.ts`) decodes the same
+//! fixtures strictly, so a field added, renamed or dropped
 //! here fails there.
 //!
 //! `SLOPMAX_BLESS=1 cargo test --test contract` rewrites the fixtures;
@@ -242,8 +242,7 @@ fn steady(value: &mut Value, home: &str) {
         Value::Object(fields) => {
             for (name, value) in fields.iter_mut() {
                 match name.as_str() {
-                    // The program and the release: true of any build.
-                    "exe" => *value = "<exe>".into(),
+                    // The release: true of any build.
                     "version" if value.is_string() => *value = "<version>".into(),
                     // What depends on the day and hour the test runs.
                     "label" if value.is_string() => *value = "<day>".into(),

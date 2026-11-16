@@ -353,7 +353,7 @@ describe("SlopmaxApi", () => {
       expect(yield* addAnswer({ _tag: "Key", provider: "openai", key: "sk-1", label: "work" })).toEqual([200, "added"])
       expect(yield* addAnswer({ _tag: "Key", provider: "claude", key: "sk-1" })).toEqual([
         400,
-        "provider: Claude accounts sign in with a browser: `slopmax login claude`, or the app",
+        "provider: Claude accounts sign in with a browser, through `slopmax login claude` or the dashboard",
       ])
       expect(yield* addAnswer({ _tag: "Key", provider: "gemini", key: "sk-1" })).toEqual([
         400,

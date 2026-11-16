@@ -1,15 +1,11 @@
 // Settings: `config.json` in slopmax's home.
 //
-// One Schema defines the file, its defaults, its validation and its JSON
-// Schema (`config.schema.json`, for editor completion and hover text). Every
-// key is optional, so a partial file loads; an unknown key is an error, so a
-// typo is never silently ignored. Settings annotated `live` may change while
-// slopmax runs (`slopmax config`, `PATCH /settings`, the app's switches); the
+// One Schema defines the file, its defaults and its validation. Every key is
+// optional, so a partial file loads; an unknown key is an error, so a typo is
+// never silently ignored. Settings annotated `live` may change while slopmax
+// runs (`slopmax config`, `PATCH /settings`, the dashboard's switches); the
 // rest need a restart.
-//
-// Descriptions and defaults sit on each field's plain JSON side (before any
-// check or transformation), because that is the side the JSON Schema shows.
-import { Effect, JsonSchema, Result, Schema, SchemaAST, SchemaTransformation, Struct } from "effect"
+import { Result, Schema, SchemaAST, SchemaTransformation, Struct } from "effect"
 import { firstIssueText } from "./errors.ts"
 import { KeyName, NonNegativeInt, PositiveInt, Secret, Strategy, withDefault } from "./ids.ts"
 import { defaultNoticeKinds, NoticeKind } from "./notice.ts"
@@ -20,7 +16,7 @@ declare module "effect/Schema" {
     // This adds to Effect's own `Annotations` interface; it shadows nothing.
     // oxlint-disable-next-line no-shadow
     interface Annotations {
-      /** May be changed by `slopmax config`, `PATCH /settings`, and the app while slopmax runs. */
+      /** May be changed by `slopmax config`, `PATCH /settings`, and the dashboard while slopmax runs. */
       readonly live?: { readonly summary: string } | undefined
     }
   }
@@ -33,7 +29,7 @@ export const strict: SchemaAST.ParseOptions = { onExcessProperty: "error" }
 export const defaultPort = 7567
 
 /** Where the proxy listens unless told otherwise: this machine only. */
-export const defaultListen = `127.0.0.1:${defaultPort}`
+const defaultListen = `127.0.0.1:${defaultPort}`
 
 const hostPort = /^(?:\[[0-9A-Fa-f:.]+\]|[^\s:[\]]+):(\d{1,5})$/
 
@@ -58,9 +54,6 @@ export const isProxyUrl = Schema.makeFilter((text: string) => {
   if (scheme === undefined) return `proxy ${JSON.stringify(text)} needs a scheme, like http:// or socks5://`
   return ["http", "socks5", "socks5h"].includes(scheme) || `unsupported proxy scheme ${JSON.stringify(scheme)}`
 })
-
-/** An outbound proxy for provider calls, for checking one on its own; `Settings` states it as `Listen` is. */
-export const ProxyUrl = Schema.String.check(isProxyUrl)
 
 /** A key other machines and tools present to the proxy, optionally limited to some models. */
 export class ClientKey extends Schema.Class<ClientKey>("ClientKey")({
@@ -255,87 +248,8 @@ export class Settings extends Schema.Class<Settings>("Settings")({
     .pipe(withDefault([])),
 }) {}
 
-export type SettingsKey = keyof typeof Settings.fields
-
-/** Reads `config.json`'s contents. Missing keys take their defaults; unknown ones are errors. */
-export const decodeSettings = (input: unknown): Effect.Effect<Settings, Schema.SchemaError> =>
-  Schema.decodeUnknownEffect(Settings)(input, strict)
-
 /** Every setting at its default, with this owner key. */
 export const defaultSettings = (apiKey: string): Settings => Schema.decodeUnknownSync(Settings)({ apiKey }, strict)
-
-const encodeSettings = Schema.encodeSync(Settings)
-
-/** The file names the schema beside it, so editors find it. */
-export const schemaFileName = "config.schema.json"
-
-const isEmptyCollection = (value: unknown): boolean =>
-  Array.isArray(value)
-    ? value.length === 0
-    : typeof value === "object" && value !== null && Object.keys(value).length === 0
-
-/**
- * The settings as `config.json` holds them: the `$schema` link first, and
- * the lists and tables that are empty left out, so the file shows only what
- * someone set. Notices at their defaults are left out too.
- */
-export const settingsFile = (settings: Settings): Record<string, unknown> => {
-  const encoded: Record<string, unknown> = { $schema: `./${schemaFileName}`, ...encodeSettings(settings) }
-  const out: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(encoded)) {
-    if (key !== "notify" && isEmptyCollection(value)) continue
-    if (key === "notify" && !settings.notify.enabled && sameKinds(settings.notify.events, defaultNoticeKinds)) continue
-    out[key] = value
-  }
-  return out
-}
-
-const sameKinds = (a: ReadonlyArray<NoticeKind>, b: ReadonlyArray<NoticeKind>) =>
-  a.length === b.length && a.every((kind, index) => kind === b[index])
-
-/**
- * `config.schema.json`: the JSON Schema of `config.json`, with every
- * setting's description and default, for editor completion and hover text.
- */
-export const settingsJsonSchema = (): JsonSchema.JsonSchema => {
-  const { schema, definitions } = Schema.toJsonSchemaDocument(Settings, strict)
-  // The settings object itself sits at the root rather than behind a reference.
-  const name = typeof schema["$ref"] === "string" ? schema["$ref"].replace("#/$defs/", "") : ""
-  const { [name]: root = schema, ...defs } = definitions
-  const properties: Record<string, unknown> = isObject(root["properties"]) ? root["properties"] : {}
-  return {
-    $schema: JsonSchema.META_SCHEMA_URI_DRAFT_2020_12,
-    title: "slopmax settings",
-    description: "slopmax's config.json. Every setting is optional and takes its default when left out.",
-    ...root,
-    properties: Object.fromEntries(Object.entries(properties).map(([key, value]) => [key, described(key, value)])),
-    $defs: defs,
-  }
-}
-
-const isObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value)
-
-const isSettingsKey = (key: string): key is SettingsKey => Object.hasOwn(Settings.fields, key)
-
-/**
- * A setting whose JSON Schema is a reference (a nested object) gets its
- * description and default beside the reference. The owner key's default is
- * left out: an empty key only means one is made on first run.
- */
-const described = (key: string, property: unknown): unknown => {
-  if (!isObject(property) || !isSettingsKey(key)) return property
-  const description =
-    property["description"] === undefined ? Schema.resolveAnnotations(Settings.fields[key])?.description : undefined
-  const fallback = property["default"] === undefined && key !== "apiKey" ? encodedDefaults()[key] : undefined
-  return {
-    ...property,
-    ...(description === undefined ? {} : { description }),
-    ...(fallback === undefined ? {} : { default: fallback }),
-  }
-}
-
-const encodedDefaults = (): Record<string, unknown> => encodeSettings(defaultSettings(""))
 
 const notLive = (name: string) =>
   `${name} is not a setting slopmax changes while it runs; those are ${liveKeys.join(", ")}`
@@ -424,7 +338,7 @@ const parseAs = (name: LiveKey, kind: LiveKind, text: string): Result.Result<Liv
   )
 }
 
-/** One live setting, as `slopmax config`, the dashboard and the app list it. */
+/** One live setting, as `slopmax config` and the dashboard list it. */
 export interface LiveRow {
   readonly name: LiveKey
   readonly summary: string
@@ -434,7 +348,7 @@ export interface LiveRow {
 }
 
 /** One row per live setting, read from the `live` annotations on `Settings`. */
-export const liveTable: ReadonlyArray<LiveRow> = liveKeys.map((name) => {
+const liveTable: ReadonlyArray<LiveRow> = liveKeys.map((name) => {
   const kind = kindOf(name)
   return {
     name,
@@ -452,17 +366,8 @@ export const liveTable: ReadonlyArray<LiveRow> = liveKeys.map((name) => {
 export const parseLive = (name: string, text: string): Result.Result<LivePatch, string> =>
   isLiveKey(name) ? parseAs(name, kindOf(name), text) : Result.fail(notLive(name))
 
-/** A live setting's value as `parseLive` reads it back: `on`, `60`, `reset-first`. */
-export const liveText = (settings: LiveSettings | Settings, name: LiveKey): string => {
-  const value = settings[name]
-  return typeof value === "boolean" ? (value ? "on" : "off") : String(value)
-}
-
-/** The live settings of a whole settings file. */
-export const liveOf = (settings: Settings): LiveSettings => new LiveSettings(Struct.pick(settings, liveKeys))
-
 /** The summaries the strategy choices are offered with. */
-export const strategySummaries: { readonly [K in Strategy]: string } = {
+const strategySummaries: { readonly [K in Strategy]: string } = {
   "reset-first": "Spend the quota that resets soonest, so none is lost",
   "fill-first": "Use accounts in order; fail over when one is limited",
   "least-used": "Balance load toward the least used account",
@@ -492,7 +397,7 @@ export class PublicSettings extends Schema.Class<PublicSettings>("PublicSettings
 
 export const keyInfo = (key: ClientKey): KeyInfo => new KeyInfo({ name: key.name, models: key.models })
 
-export const toPublic = (settings: Settings): PublicSettings => {
+const toPublic = (settings: Settings): PublicSettings => {
   const { apiKey: _key, keys, $schema: _s, ...rest } = settings
   return new PublicSettings({ ...rest, keys: keys.map(keyInfo) })
 }

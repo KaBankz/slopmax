@@ -1,44 +1,24 @@
-// Where the app runs: a browser tab served by the proxy (the web dashboard),
-// or the desktop app's window. The pages are the same; the host decides how
-// the owner key is held, how links open, how notices reach people, and
-// whether there is a desktop main process to start the proxy and read it
-// while it is stopped.
-import { type DesktopBridge, DesktopPrefs, OfflineView, ProxyState, ShellResult } from "@slopmax/client/desktop"
-import type { MenuAction, ProxyAction, ServiceAction } from "@slopmax/client/desktop"
-import { Context, Data, Effect, Layer, Option, Queue, Schema, Stream, Struct } from "effect"
-
-/** The desktop's main process did not answer a call (it is gone, or its bridge is older than the window). */
-export class MainFailed extends Data.TaggedError("MainFailed")<{ readonly message: string }> {}
+// Where the app runs: a browser tab served by the proxy (the web dashboard).
+// The host holds the owner key, opens links, posts notices, and keeps the
+// preferences, so tests can stand in for the browser.
+import { withDefault } from "@slopmax/client"
+import { Context, Effect, Layer, Option, Schema } from "effect"
 
 /** Whether a browser lets this page post notifications. */
 export type Permission = "granted" | "denied" | "default" | "unsupported"
 
-/** The desktop main process, its answers decoded. */
-export interface Desktop {
-  /** Where the proxy stands now, then each change main tells of. */
-  readonly proxyStates: Stream.Stream<ProxyState>
-  readonly offline: Effect.Effect<OfflineView, MainFailed | Schema.SchemaError>
-  readonly proxy: (action: ProxyAction) => Effect.Effect<ShellResult>
-  readonly service: (action: ServiceAction) => Effect.Effect<ShellResult>
-  readonly menu: Stream.Stream<MenuAction>
-  readonly panelHeight: (px: number) => Effect.Effect<void>
-  readonly openWindow: (page: string) => Effect.Effect<void>
-  readonly quit: Effect.Effect<void>
-}
-
 export interface HostShape {
-  readonly kind: "web" | "desktop"
-  /** Where slopmax's API is: this page's own origin in both hosts. */
+  /** Where slopmax's API is: this page's own origin. */
   readonly origin: string
   /**
-   * The owner key the web dashboard holds for this tab; the desktop's main
-   * process adds it instead. The tailnet token a page opened over the
-   * tailnet uses is never kept here: it lives in the page's memory only.
+   * The owner key the web dashboard holds for this tab. The tailnet token a
+   * page opened over the tailnet uses is never kept here: it lives in the
+   * page's memory only.
    */
   readonly key: Effect.Effect<Option.Option<string>>
   readonly saveKey: (key: string) => Effect.Effect<void>
   readonly forgetKey: Effect.Effect<void>
-  /** Opens an address in the system's browser; false when it could not. */
+  /** Opens an address in a new tab; false when the browser would not. */
   readonly openExternal: (url: string) => Effect.Effect<boolean>
   readonly copy: (text: string) => Effect.Effect<boolean>
   /** Offers text to save as a file named `name`; false when it could not. */
@@ -53,16 +33,24 @@ export interface HostShape {
   /** How the window looks and where its sidebar stands. */
   readonly prefs: Effect.Effect<UiPrefs>
   readonly savePrefs: (prefs: UiPrefs) => Effect.Effect<void>
-  readonly desktop: Option.Option<Desktop>
 }
 
+export const Appearance = Schema.Literals(["system", "light", "dark"])
+export type Appearance = typeof Appearance.Type
+
 /**
- * The preferences the page keeps: the web dashboard in this browser, the
- * desktop app in its own file. They are the desktop's preferences without the
- * window's bounds, which only main sees. `notifications` is whether the
- * desktop app posts notices; a browser asks for permission instead.
+ * The preferences the page keeps in this browser; a field left out takes its
+ * default. Whether notices are posted is the browser's permission, not a
+ * preference.
  */
-export class UiPrefs extends Schema.Class<UiPrefs>("UiPrefs")(Struct.omit(DesktopPrefs.fields, ["bounds"])) {
+export class UiPrefs extends Schema.Class<UiPrefs>("UiPrefs")({
+  sidebarWidth: Schema.Finite.pipe(withDefault(220)),
+  sidebarHidden: Schema.Boolean.pipe(withDefault(false)),
+  appearance: Appearance.pipe(withDefault("system")),
+  /** Whether email addresses are masked wherever they show, for screen sharing. */
+  hideEmails: Schema.Boolean.pipe(withDefault(false)),
+}) {
+  /** Every preference at the default it takes when the page has none saved. */
   static readonly defaults: UiPrefs = Schema.decodeUnknownSync(UiPrefs)({})
 }
 
@@ -127,6 +115,19 @@ const saveText = (name: string, text: string, type: string): Effect.Effect<boole
     return true
   }).pipe(Effect.orElseSucceed(() => false))
 
+/**
+ * Opens an address in a new tab that cannot reach back to this page. With the
+ * `noopener` feature `window.open` returns null even when it opened the tab,
+ * so the tab is cut off by hand instead. The page sends no referrer at all.
+ */
+const openTab = (url: string): Effect.Effect<boolean> =>
+  Effect.try(() => {
+    const opened = window.open(url, "_blank")
+    if (opened === null) return false
+    opened.opener = null
+    return true
+  }).pipe(Effect.orElseSucceed(() => false))
+
 const permissionNow = (): Permission => (typeof Notification === "undefined" ? "unsupported" : Notification.permission)
 
 /** The web dashboard's host. The key arrives once in the fragment (`#key=…`) and is kept for the tab. */
@@ -134,12 +135,11 @@ export const webHost = (): HostShape => {
   const session = storage(() => sessionStorage)
   const local = storage(() => localStorage)
   return {
-    kind: "web",
     origin: location.origin,
     key: session.get(keyItem).pipe(Effect.map(Option.filter((key) => key !== ""))),
     saveKey: (key) => session.set(keyItem, key),
     forgetKey: session.remove(keyItem),
-    openExternal: (url) => Effect.sync(() => window.open(url, "_blank", "noopener,noreferrer") !== null),
+    openExternal: openTab,
     copy: copyText,
     save: saveText,
     permission: Effect.sync(permissionNow),
@@ -164,109 +164,7 @@ export const webHost = (): HostShape => {
       .get(prefsItem)
       .pipe(Effect.map((text) => Option.flatMap(text, decodePrefsJson).pipe(Option.getOrElse(() => UiPrefs.defaults)))),
     savePrefs: (prefs) => local.set(prefsItem, encodePrefsJson(prefs)),
-    desktop: Option.none(),
   }
 }
-
-const encodePrefs = Schema.encodeSync(DesktopPrefs)
-
-/**
- * Asks main for something and decodes its answer. A call main does not answer
- * (the process is gone, the bridge is older) or an answer that does not
- * decode is a typed failure, so each caller picks what the window shows instead.
- */
-const fromMain = <A, I>(schema: Schema.Codec<A, I>, call: () => Promise<I>) =>
-  Effect.tryPromise({
-    try: call,
-    catch: (error) => new MainFailed({ message: error instanceof Error ? error.message : "the app did not answer" }),
-  }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(schema)))
-
-/** What a shell action came to when main could not run it at all. */
-const unanswered = (error: MainFailed | Schema.SchemaError): ShellResult =>
-  new ShellResult({ ok: false, message: error.message })
-
-/** Tells main something it need not answer; a bridge that throws only loses that message. */
-const tell = (send: () => void): Effect.Effect<void> => Effect.try(send).pipe(Effect.ignore)
-
-/** The desktop window's host, over the preload bridge. Notices are posted by the main process, not here. */
-export const desktopHost = (bridge: DesktopBridge): HostShape => {
-  const prefs = fromMain(DesktopPrefs, () => bridge.prefs.get()).pipe(Effect.orElseSucceed(() => DesktopPrefs.defaults))
-  const shell = (call: () => Promise<typeof ShellResult.Encoded>) =>
-    fromMain(ShellResult, call).pipe(Effect.catch((error) => Effect.succeed(unanswered(error))))
-  const desktop: Desktop = {
-    // It listens before it asks, so a change while the answer is on its way is not lost to a stale answer.
-    proxyStates: Stream.callback<ProxyState>((queue) =>
-      Effect.gen(function* () {
-        let told = false
-        yield* Effect.acquireRelease(
-          Effect.sync(() =>
-            bridge.onProxyState((state) => {
-              const decoded = Schema.decodeUnknownOption(ProxyState)(state)
-              if (Option.isNone(decoded)) return
-              told = true
-              Queue.offerUnsafe(queue, decoded.value)
-            }),
-          ),
-          (stop) => Effect.sync(stop),
-        )
-        const now = yield* fromMain(ProxyState, () => bridge.proxyState()).pipe(
-          Effect.orElseSucceed((): ProxyState => ProxyState.cases.Checking.make({})),
-        )
-        if (!told) Queue.offerUnsafe(queue, now)
-      }),
-    ),
-    offline: fromMain(OfflineView, () => bridge.offline()),
-    proxy: (action) => shell(() => bridge.proxy(action)),
-    service: (action) => shell(() => bridge.service(action)),
-    menu: Stream.callback<MenuAction>((queue) =>
-      Effect.acquireRelease(
-        Effect.sync(() => bridge.onMenu((action) => Queue.offerUnsafe(queue, action))),
-        (stop) => Effect.sync(stop),
-      ),
-    ),
-    panelHeight: (px) => tell(() => bridge.panelHeight(px)),
-    openWindow: (page) => tell(() => bridge.openWindow(page)),
-    quit: tell(() => bridge.quit()),
-  }
-  return {
-    kind: "desktop",
-    origin: location.origin,
-    key: Effect.succeed(Option.none()),
-    saveKey: () => Effect.void,
-    forgetKey: Effect.void,
-    openExternal: (url) =>
-      Effect.try(() => bridge.openExternal(url)).pipe(
-        Effect.as(true),
-        Effect.orElseSucceed(() => false),
-      ),
-    copy: copyText,
-    save: saveText,
-    permission: Effect.succeed("unsupported"),
-    askPermission: Effect.succeed("unsupported"),
-    notify: () => Effect.void,
-    told: Effect.succeed([]),
-    saveTold: () => Effect.void,
-    prefs: Effect.map(prefs, (p) => new UiPrefs(Struct.omit(p, ["bounds"]))),
-    savePrefs: (next) =>
-      prefs.pipe(
-        Effect.flatMap((p) =>
-          Effect.tryPromise(() => bridge.prefs.set(encodePrefs(new DesktopPrefs({ ...p, ...next })))),
-        ),
-        Effect.ignore,
-      ),
-    desktop: Option.some(desktop),
-  }
-}
-
-declare global {
-  interface Window {
-    /** Present in the desktop app's window, put there by its preload script. */
-    readonly slopmaxDesktop?: DesktopBridge
-  }
-}
-
-/** The host this page runs in. */
-export const detectHost = (): HostShape =>
-  window.slopmaxDesktop === undefined ? webHost() : desktopHost(window.slopmaxDesktop)
 
 export const hostLayer = (host: HostShape): Layer.Layer<Host> => Layer.succeed(Host, host)

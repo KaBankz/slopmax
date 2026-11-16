@@ -1,5 +1,5 @@
 // Notices: what slopmax tells people, through the webhook, the notify
-// command, the desktop's notifications and the report's nudges.
+// command, the dashboard's notifications and the report's nudges.
 import { Schema } from "effect"
 import { Instant, ProviderId } from "./ids.ts"
 

@@ -306,7 +306,7 @@ export const speedRows = (
     speed: `${fixed(row.tokensPerSecond, 0)} tok/s`,
   }))
 
-/** Today's tokens hour by hour, all 24 hours, for the small charts on the overview and the panel. */
+/** Today's tokens hour by hour, all 24 hours, for the overview's small chart. */
 export const hourly = (history: History): ReadonlyArray<number> => {
   const hours = Array.from({ length: 24 }, () => 0)
   history.buckets.forEach((bucket, i) => {
@@ -315,11 +315,4 @@ export const hourly = (history: History): ReadonlyArray<number> => {
     if (at >= 0 && at < 24) hours[at] = bucket.tokens.reduce((sum, n) => sum + n, 0)
   })
   return hours
-}
-
-/** The panel's one line about today: `{compact} tokens, {value} at API prices`. */
-export const todayLine = (history: History): string => {
-  const total = history.total
-  const tokens = `${compact(total.tokens)} tokens`
-  return total.cost > 0 ? `${tokens}, ${priced(total.cost, total.unpriced, total.requests)} at API prices` : tokens
 }

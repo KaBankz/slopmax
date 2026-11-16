@@ -2,7 +2,7 @@
 //! pool that picks an account for each request, the ledger and what is read
 //! from it, the report, and the files they keep. The daemon
 //! (`slopmax-daemon`) serves it; the CLI uses it directly only while no
-//! daemon runs, and the apps not at all.
+//! daemon runs.
 //!
 //! The crates beneath it are re-exported under the names the modules here
 //! use.

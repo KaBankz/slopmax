@@ -1,6 +1,6 @@
 [package]
 name = "slopmax-client"
-description = "A typed client of slopmax's API, for the CLI and the desktop app"
+description = "A typed client of slopmax's API, for the CLI and slopmax-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,11 +16,9 @@ serde.workspace = true
 serde_json.workspace = true
 slopmax-api.workspace = true
 slopmax-net.workspace = true
-tokio.workspace = true
 
 [dev-dependencies]
-hyper.workspace = true
-hyper-util.workspace = true
+tokio.workspace = true
 
 [lints]
 workspace = true

@@ -2,9 +2,7 @@
 // words, and which notices a browser has already shown. Each is a small pure
 // state with the functions that move it along.
 import type { AgentWiring, LoginEvent, Notice, ProviderId, RequestRecord, Tone } from "@slopmax/client"
-import { agentFacts, providerFacts } from "@slopmax/client"
-import type { ProxyState } from "@slopmax/client/desktop"
-import { compact, grouped } from "@slopmax/client/format"
+import { providerFacts } from "@slopmax/client"
 import { DateTime } from "effect"
 import { readOnlyShort } from "./tailnet.ts"
 
@@ -26,68 +24,12 @@ export const pushFeed = (
   seq: number,
 ): ReadonlyArray<FeedEntry> => [{ seq, record }, ...feed].slice(0, feedSize)
 
-/** One request as the feed shows it. */
-export interface FeedRow {
-  readonly time: string
-  readonly who: string
-  readonly model: string
-  readonly status: string
-  readonly failed: boolean
-  readonly detail: string
-  readonly tokens: string
-  readonly took: string
-}
-
 /** `420 ms`, `1.24 s`, `12.3 s`. */
 export const secs = (ms: number): string =>
   ms < 1000 ? `${Math.round(ms)} ms` : ms < 10_000 ? `${(ms / 1000).toFixed(2)} s` : `${(ms / 1000).toFixed(1)} s`
 
-const timeFormat = new Map<string, Intl.DateTimeFormat>()
-
-const timeOf = (at: DateTime.Utc, zone: DateTime.TimeZone): string => {
-  const timeZone = DateTime.zoneToString(zone)
-  let format = timeFormat.get(timeZone)
-  if (format === undefined) {
-    format = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hourCycle: "h23",
-    })
-    timeFormat.set(timeZone, format)
-  }
-  return DateTime.formatIntl(at, format)
-}
-
 /** A request is a failure when its status is outside 200–399. */
 export const isFailure = (status: number): boolean => status < 200 || status >= 400
-
-export const feedRow = (
-  record: RequestRecord,
-  accountName: (id: string) => string,
-  zone: DateTime.TimeZone,
-): FeedRow => {
-  const failed = isFailure(record.status)
-  const agent =
-    record.agent === undefined ? "Other" : record.agent === "slopmax" ? "Warmup" : agentFacts[record.agent].title
-  const tokens = record.usage.input + record.usage.output + record.usage.cacheRead + record.usage.cacheWrite
-  return {
-    time: timeOf(record.at, zone),
-    who: agent,
-    model: record.model ?? "—",
-    status: String(record.status),
-    failed,
-    detail: [
-      record.account === undefined ? "no account free" : accountName(record.account),
-      ...(record.machine === undefined ? [] : [`from ${record.machine}`]),
-      ...(record.attempts > 1 ? ["after failover"] : []),
-      ...(record.via === "socket" ? ["WebSocket"] : []),
-    ].join(" · "),
-    tokens: tokens === 0 ? "—" : compact(tokens),
-    took: record.firstByteMs === undefined ? secs(record.ms) : `${secs(record.firstByteMs)} · ${secs(record.ms)}`,
-  }
-}
 
 // --- Sign-in ----------------------------------------------------------------------
 
@@ -184,74 +126,31 @@ export const signInDone = (event: LoginEvent): { readonly text: string; readonly
 
 // --- The proxy ------------------------------------------------------------------
 
-/** The proxy's state as a short label with its tone, for the sidebar's foot and Settings. */
-export const proxyLabel = (state: ProxyState): { readonly text: string; readonly tone: Tone } => {
-  switch (state._tag) {
-    case "Checking":
-      return { text: "Looking for the proxy…", tone: "muted" }
-    case "Starting":
-      return { text: "Starting…", tone: "warn" }
-    case "Running":
-      return { text: `Running ${state.version}`, tone: "good" }
-    case "Stopped":
-      return { text: "Stopped", tone: "bad" }
-    case "OtherVersion":
-      return { text: `Running ${state.running}`, tone: "warn" }
-  }
-}
+/**
+ * Whether the event stream is up: all the dashboard knows of the proxy. The
+ * proxy serves the page, so while the stream is down the dashboard waits for
+ * it, never sure it stopped.
+ */
+export type Live =
+  | { readonly _tag: "Connecting" }
+  | { readonly _tag: "Running"; readonly version: string }
+  | { readonly _tag: "Reconnecting" }
 
-/** Whether the web dashboard's event stream is up: all that page knows of the proxy. */
-export type StreamState = "Connecting" | "Running" | "Reconnecting"
+/** The proxy's state as a short label with its tone, the same in the sidebar's foot and in Settings. */
+export const shownProxy = (live: Live): { readonly text: string; readonly tone: Tone } =>
+  live._tag === "Running"
+    ? { text: `Running ${live.version}`, tone: "good" }
+    : live._tag === "Reconnecting"
+      ? { text: "Reconnecting…", tone: "warn" }
+      : { text: "Connecting…", tone: "muted" }
 
 /**
- * The proxy's state as the window shows it, in the sidebar's foot and in
- * Settings alike. The web dashboard says whether its stream is up, as that is
- * all it knows; the desktop window says what its main process knows.
+ * Why a change can't be made from this page now: it may only look, or
+ * slopmax is not answering (the stream dropped). Undefined when it can be,
+ * or while the stream is still connecting (a placeholder shows then).
  */
-export const shownProxy = (
-  state: ProxyState,
-  stream: StreamState | undefined,
-): { readonly text: string; readonly tone: Tone } =>
-  stream === "Reconnecting"
-    ? { text: "Reconnecting…", tone: "warn" }
-    : stream === "Connecting"
-      ? { text: "Connecting…", tone: "muted" }
-      : proxyLabel(state)
-
-/** What a part of the window that needs slopmax says while slopmax does not answer. */
-export const notAnswering = "slopmax is not answering"
-
-/**
- * What a part of the window that needs the running proxy says in its place:
- * how to get it running, that slopmax is not answering (the web dashboard's
- * stream dropped), or nothing while the window is still finding out (a
- * placeholder shows then, rather than a stopped proxy that is not).
- */
-export const needsProxy = (state: ProxyState, doing: string, unanswered = false): string | undefined => {
-  switch (state._tag) {
-    case "Stopped":
-      return `Start the proxy to ${doing}`
-    case "OtherVersion":
-      return `Restart the proxy to ${doing}`
-    case "Checking":
-    case "Starting":
-      return unanswered ? notAnswering : undefined
-    case "Running":
-      return undefined
-  }
-}
-
-/**
- * Why a change can't be made from this page now: it may only look, or the
- * proxy is not running (see {@link needsProxy}). Undefined when it can be,
- * or while that is still being found out.
- */
-export const cannotChange = (
-  state: ProxyState,
-  doing: string,
-  unanswered: boolean,
-  readOnly: boolean,
-): string | undefined => (readOnly ? readOnlyShort : needsProxy(state, doing, unanswered))
+export const cannotChange = (unanswered: boolean, readOnly: boolean): string | undefined =>
+  readOnly ? readOnlyShort : unanswered ? "slopmax is not answering" : undefined
 
 /**
  * How an agent is wired, and whether that is through slopmax. A connected
@@ -279,31 +178,6 @@ export const agentsInOrder = (agents: ReadonlyArray<AgentWiring>): ReadonlyArray
 /** Whether any agent goes through slopmax. */
 export const anyWired = (agents: ReadonlyArray<AgentWiring>): boolean => agents.some((agent) => agent.wired)
 
-/** The login service, as the Start at login setting shows it. */
-export interface LoginService {
-  readonly on: boolean
-  readonly available: boolean
-  readonly detail: string
-}
-
-export const loginService = (
-  service: { readonly installed: boolean; readonly running: boolean } | undefined,
-): LoginService =>
-  service === undefined
-    ? {
-        on: false,
-        available: false,
-        detail: "This system has no login service slopmax can use, so the app starts the proxy while it runs.",
-      }
-    : {
-        on: service.installed,
-        available: true,
-        detail:
-          service.installed && !service.running
-            ? "Runs the proxy whenever you log in. It is not running now."
-            : "Runs the proxy whenever you log in, even while the app is closed.",
-      }
-
 // --- Notices a browser has shown ----------------------------------------------------
 
 /** How many notices a browser remembers having shown. */
@@ -324,6 +198,3 @@ export const tell = (
   })
   return { fresh, told: [...told, ...fresh.map(toldId)].slice(-toldSize) }
 }
-
-/** `12 requests` for the panel. */
-export const requestsLine = (n: number): string => (n === 0 ? "Nothing yet" : `${grouped(n)} requests`)

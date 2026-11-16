@@ -1,10 +1,8 @@
 // The app's state and actions against the stub API: the report arriving on
 // the event stream, every action's call and what it says, sign-in steps,
-// a refused key, browser notifications, and the desktop's proxy states.
+// a refused key, and browser notifications.
 import { afterEach, describe, expect, test } from "bun:test"
 import { BadRequest, Event, Internal, LedgerRecord, Notice, UpstreamFailed, Usage } from "@slopmax/client"
-import { ImportOutcome, ImportResult } from "@slopmax/client/api"
-import { OfflineView, ProxyState } from "@slopmax/client/desktop"
 import { DateTime, Effect, Option } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import { ownerKeyAtom } from "../src/api.ts"
@@ -18,26 +16,23 @@ import {
   eventsAtom,
   feedAtom,
   importLogins,
-  importText,
   keyRefusedAtom,
   liveAtom,
   makeKey,
   newKeyAtom,
-  offlineAtom,
   pasteAddress,
-  proxyAtom,
+  proxyStatusAtom,
   redeem,
   refresh,
   refusedKey,
   reportAtom,
   settingsAtom,
-  shownReportAtom,
   signIn,
   signInAtom,
   toastsAtom,
 } from "../src/atoms.ts"
 import { type Harness, harness, until } from "./support/app.ts"
-import { emptyReport, fixtureDoctor, ownerKey } from "./support/fixtures.ts"
+import { emptyReport, ownerKey } from "./support/fixtures.ts"
 
 let open: Harness | undefined
 afterEach(async () => {
@@ -60,7 +55,7 @@ describe("the event stream", () => {
   test("brings the proxy's version and its report, and then each answered request", async () => {
     const h = await started()
     expect(h.registry.get(liveAtom)).toEqual({ _tag: "Running", version: "0.4.0" })
-    expect(h.registry.get(proxyAtom)).toEqual({ _tag: "Running", version: "0.4.0" })
+    expect(h.registry.get(proxyStatusAtom)).toEqual({ text: "Running 0.4.0", tone: "good" })
     const record = LedgerRecord.cases.Request.make({
       at: DateTime.nowUnsafe(),
       provider: "claude",
@@ -87,7 +82,7 @@ describe("the event stream", () => {
     h.registry.mount(eventsAtom)
     await until(() => h.registry.get(liveAtom)._tag === "Reconnecting", "reconnecting")
     // The proxy serves the dashboard, so a dropped stream is a wait, never a stopped proxy.
-    expect(h.registry.get(proxyAtom)._tag).toBe("Checking")
+    expect(h.registry.get(proxyStatusAtom)).toEqual({ text: "Reconnecting…", tone: "warn" })
     await until(() => h.registry.get(liveAtom)._tag === "Running", "running again", 3_000)
   })
 
@@ -269,23 +264,6 @@ describe("actions", () => {
     await until(() => toasts(h).length === 1, "the toast")
     expect(toasts(h)).toEqual([["Imported 1 account of 2 logins found. CLIProxyAPI: no logins there", false]])
   })
-
-  test("an import that saved nothing is a failure that says why, and finding nothing says what to do", () => {
-    const report = emptyReport(DateTime.nowUnsafe())
-    const failed = ImportOutcome.cases.Failed.make({
-      source: "codex",
-      origin: "~/.codex",
-      message: "its login expired; sign in to Codex again",
-    })
-    expect(importText(new ImportResult({ outcomes: [], report }))).toEqual({
-      text: "No logins found. Sign in with Claude Code or Codex first, or use Sign in above.",
-      error: false,
-    })
-    expect(importText(new ImportResult({ outcomes: [failed, failed], report }))).toEqual({
-      text: "Imported 0 accounts of 2 logins found. Codex: its login expired; sign in to Codex again",
-      error: true,
-    })
-  })
 })
 
 describe("signing in", () => {
@@ -337,31 +315,5 @@ describe("notifications in a browser", () => {
     h.stub.setReport(h.stub.report())
     await Bun.sleep(50)
     expect(h.host.recorded.notified).toEqual([])
-  })
-})
-
-describe("the desktop window", () => {
-  test("follows the proxy's state as the main process tells it", async () => {
-    const h = harness({ host: { kind: "desktop", proxy: ProxyState.cases.Starting.make({}) } })
-    open = h
-    h.registry.mount(proxyAtom)
-    await until(() => h.registry.get(proxyAtom)._tag === "Starting", "starting")
-    h.host.setProxy(ProxyState.cases.Running.make({ version: "0.4.0" }))
-    await until(() => h.registry.get(proxyAtom)._tag === "Running", "running")
-  })
-
-  test("shows the report and doctor read from disk while the proxy is stopped", async () => {
-    const report = emptyReport(DateTime.nowUnsafe())
-    const h = harness({
-      host: {
-        kind: "desktop",
-        proxy: ProxyState.cases.Stopped.make({}),
-        offline: new OfflineView({ report, doctor: fixtureDoctor() }),
-      },
-    })
-    open = h
-    h.registry.mount(shownReportAtom)
-    await until(() => Option.isSome(h.registry.get(shownReportAtom)), "the offline report")
-    expect(AsyncResult.getOrElse(h.registry.get(offlineAtom), () => Option.none()).pipe(Option.isSome)).toBe(true)
   })
 })

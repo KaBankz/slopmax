@@ -1,10 +1,8 @@
-// A host for tests: the web dashboard's or the desktop window's, with storage
-// in memory and every link opened, text copied and notification posted
+// A host for tests: the web dashboard's, with storage in memory and every
+// link opened, text copied, notification posted and preference saved
 // recorded, so a test can check what the app did outside the page.
-import type { MenuAction, ProxyState, ShellResult } from "@slopmax/client/desktop"
-import { OfflineView } from "@slopmax/client/desktop"
-import { Effect, Option, PubSub, Stream } from "effect"
-import { type Desktop, type HostShape, type Permission, UiPrefs } from "../../src/host.ts"
+import { Effect, Option } from "effect"
+import { type HostShape, type Permission, UiPrefs } from "../../src/host.ts"
 
 export interface Recorded {
   readonly opened: Array<string>
@@ -12,29 +10,18 @@ export interface Recorded {
   /** Files offered to save. */
   readonly files: Array<{ readonly name: string; readonly text: string }>
   readonly notified: Array<{ readonly title: string; readonly body: string; readonly tag: string }>
+  /** Each time the preferences were saved, in order. */
   readonly saved: Array<UiPrefs>
-  readonly proxy: Array<string>
-  readonly service: Array<string>
 }
 
 export interface TestHost {
   readonly host: HostShape
   readonly recorded: Recorded
-  /** Moves the desktop's proxy to another state, as main would tell the window. */
-  readonly setProxy: (state: ProxyState) => void
-  /** Sends a menu action, as the app's menus and keys would. */
-  readonly menu: (action: MenuAction) => void
 }
 
 export interface TestHostOptions {
-  readonly kind?: "web" | "desktop"
   readonly key?: string
   readonly permission?: Permission
-  readonly told?: ReadonlyArray<string>
-  readonly proxy?: ProxyState
-  readonly offline?: OfflineView
-  readonly shell?: (action: string) => ShellResult
-  readonly service?: { readonly installed: boolean; readonly running: boolean }
   /** The dashboard's preferences as saved before it opened. */
   readonly prefs?: UiPrefs
 }
@@ -46,45 +33,11 @@ export const testHost = (options: TestHostOptions = {}): TestHost => {
     files: [],
     notified: [],
     saved: [],
-    proxy: [],
-    service: [],
   }
   let key = Option.fromUndefinedOr(options.key)
-  let told = options.told ?? []
+  let told: ReadonlyArray<string> = []
   let prefs = options.prefs ?? UiPrefs.defaults
-  let state: ProxyState = options.proxy ?? { _tag: "Running", version: "0.4.0" }
-  const states = Effect.runSync(PubSub.unbounded<ProxyState>())
-  const menus = Effect.runSync(PubSub.unbounded<MenuAction>())
-  const shell = options.shell ?? ((action: string) => ({ ok: true, message: action }))
-  const desktop: Desktop = {
-    proxyStates: Stream.concat(Stream.fromEffect(Effect.sync(() => state)), Stream.fromPubSub(states)),
-    offline: Effect.sync(() => Option.fromUndefinedOr(options.offline)).pipe(
-      Effect.flatMap(
-        Option.match({
-          onNone: () => Effect.die(new Error("no offline view in this test")),
-          onSome: Effect.succeed,
-        }),
-      ),
-    ),
-    proxy: (action) =>
-      Effect.sync(() => {
-        recorded.proxy.push(action)
-        return shell(action)
-      }),
-    service: (action) =>
-      Effect.sync(() => {
-        recorded.service.push(action)
-        return action === "status" && options.service !== undefined
-          ? { ok: true, message: JSON.stringify(options.service) }
-          : shell(action)
-      }),
-    menu: Stream.fromPubSub(menus),
-    panelHeight: () => Effect.void,
-    openWindow: (page) => Effect.sync(() => recorded.opened.push(`window:${page}`)),
-    quit: Effect.void,
-  }
   const host: HostShape = {
-    kind: options.kind ?? "web",
     origin: "http://slopmax.test",
     key: Effect.sync(() => key),
     saveKey: (next) =>
@@ -111,17 +64,6 @@ export const testHost = (options: TestHostOptions = {}): TestHost => {
         prefs = next
         recorded.saved.push(next)
       }),
-    desktop: options.kind === "desktop" ? Option.some(desktop) : Option.none(),
   }
-  return {
-    host,
-    recorded,
-    setProxy: (next) => {
-      state = next
-      Effect.runSync(PubSub.publish(states, next))
-    },
-    menu: (action) => {
-      Effect.runSync(PubSub.publish(menus, action))
-    },
-  }
+  return { host, recorded }
 }

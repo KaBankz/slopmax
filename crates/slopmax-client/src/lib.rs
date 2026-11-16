@@ -1,8 +1,8 @@
-//! A client of slopmax's API (`/slopmax/api`), for the front ends written
-//! in Rust: the CLI, when a daemon serves its home, and the desktop app,
-//! always. It speaks the [`slopmax_api`] types and nothing of the engine,
-//! so a front end built on it changes nothing on disk: the daemon is the
-//! only writer while it runs.
+//! A client of slopmax's API (`/slopmax/api`), for the Rust code that
+//! talks to a running daemon: the CLI, and slopmax-core's background proxy
+//! and doctor. It speaks the [`slopmax_api`] types and nothing of the
+//! engine, so what is built on it changes nothing on disk: the daemon is
+//! the only writer while it runs.
 //!
 //! [`Client::events`] follows the event stream, which pushes the report
 //! whenever it changes, each request answered, notices and sign-in
@@ -19,15 +19,14 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use slopmax_api::events::Event;
 use slopmax_api::ledger::{History, HistoryRange, Summary, SummaryBy, SummaryRange};
-use slopmax_api::report::{AgentWiring, RedeemResult, Report, Section};
+use slopmax_api::report::{RedeemResult, Report};
 use slopmax_api::requests::{
-    AccountAdded, AccountPatch, AddAccount, AgentConnected, AgentDisconnected, ImportRequest,
-    ImportResult, LoginStarted, MakeKey, PasteAddress, RedeemRequest, Shutdown, StartLogin,
-    Stopping,
+    AccountAdded, AccountPatch, AddAccount, ImportRequest, ImportResult, LoginStarted, MakeKey,
+    PasteAddress, RedeemRequest, Shutdown, StartLogin, Stopping,
 };
 use slopmax_api::settings::{KeyInfo, LivePatch, NewKey, SettingsView};
 use slopmax_api::tailnet::{Access, TailnetPatch, TailnetView};
-use slopmax_api::{AgentId, ApiError, PREFIX};
+use slopmax_api::{ApiError, PREFIX};
 
 pub use slopmax_api as api;
 
@@ -303,10 +302,6 @@ impl Client {
         .await
     }
 
-    pub async fn doctor(&self) -> Result<Vec<Section>> {
-        self.call(Method::GET, "doctor", Self::NONE).await
-    }
-
     pub async fn add_account(&self, account: &AddAccount) -> Result<AccountAdded> {
         self.call(Method::POST, "accounts", Some(account)).await
     }
@@ -423,28 +418,6 @@ impl Client {
         .await
     }
 
-    pub async fn agents(&self) -> Result<Vec<AgentWiring>> {
-        self.call(Method::GET, "agents", Self::NONE).await
-    }
-
-    pub async fn connect_agent(&self, id: AgentId) -> Result<AgentConnected> {
-        self.call(
-            Method::POST,
-            &format!("agents/{}/connect", agent(id)),
-            Self::NONE,
-        )
-        .await
-    }
-
-    pub async fn disconnect_agent(&self, id: AgentId) -> Result<AgentDisconnected> {
-        self.call(
-            Method::POST,
-            &format!("agents/{}/disconnect", agent(id)),
-            Self::NONE,
-        )
-        .await
-    }
-
     pub async fn usage(&self, range: SummaryRange, by: SummaryBy) -> Result<Summary> {
         let query = format!("usage?range={}&by={}", word(&range), word(&by));
         self.call(Method::GET, &query, Self::NONE).await
@@ -547,10 +520,6 @@ fn word(value: &impl Serialize) -> String {
     }
 }
 
-fn agent(id: AgentId) -> String {
-    word(&id)
-}
-
 /// A path segment with what would end it escaped.
 fn escape(segment: &str) -> String {
     let mut out = String::with_capacity(segment.len());
@@ -644,7 +613,6 @@ mod tests {
     fn path_words_are_their_serde_names() {
         assert_eq!(word(&HistoryRange::Week), "7d");
         assert_eq!(word(&SummaryBy::Model), "model");
-        assert_eq!(agent(AgentId::ClaudeCode), "claude-code");
         assert_eq!(escape("work laptop/1"), "work%20laptop%2F1");
     }
 
@@ -668,7 +636,6 @@ mod tests {
             events.take().unwrap().unwrap(),
             Event::Hello {
                 version: "1.0".into(),
-                exe: None
             }
         );
     }

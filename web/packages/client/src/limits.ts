@@ -77,28 +77,8 @@ export const upcomingReset = (window: Window, now: DateTime.Utc): Option.Option<
 
 export const isFull = (window: Window, now: DateTime.Utc): boolean => usedAt(window, now) >= 100
 
-/** `5h`, `7d`, or `7d Fable` for a window that covers one model. */
-export const windowLabel = (window: Window): string =>
-  window.model === undefined ? window.span : `${window.span} ${window.model}`
-
-/** The window's length in minutes, as Codex states it. */
-export const spanMinutes = (span: Span): number => (span === "5h" ? 300 : span === "30d" ? 43_200 : 10_080)
-
-/** The windows that cover every request. */
-export const sharedWindows = (windows: ReadonlyArray<Window>): ReadonlyArray<Window> =>
-  windows.filter((window) => window.model === undefined)
-
-/** The windows that cover one model only. */
-export const scopedWindows = (windows: ReadonlyArray<Window>): ReadonlyArray<Window> =>
-  windows.filter((window) => window.model !== undefined)
-
 /** The window over every request for `span`. */
 export const windowOf = <W extends { readonly span: Span; readonly model?: string }>(
   windows: ReadonlyArray<W>,
   span: Span,
 ): W | undefined => windows.find((window) => window.model === undefined && window.span === span)
-
-/** The longer window: the week, or for plans without one, the month. */
-export const longWindow = <W extends { readonly span: Span; readonly model?: string }>(
-  windows: ReadonlyArray<W>,
-): W | undefined => windowOf(windows, "7d") ?? windowOf(windows, "30d")

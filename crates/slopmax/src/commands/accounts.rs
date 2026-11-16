@@ -1,7 +1,7 @@
 //! Account commands: connecting, importing, and managing accounts. While a
-//! daemon serves this home, each change goes through its API, as the app's
-//! and the dashboard's do, since it is the only writer while it runs; with
-//! none, the CLI makes the change on disk itself.
+//! daemon serves this home, each change goes through its API, as the
+//! dashboard's do, since it is the only writer while it runs; with none,
+//! the CLI makes the change on disk itself.
 
 use std::io::IsTerminal;
 

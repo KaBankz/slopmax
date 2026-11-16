@@ -1,14 +1,12 @@
 // The whole app drawn in happy-dom against the stub API: the gate, the
 // pages, the account menu, the settings table read from what the API
-// serves, the add-account form's errors, the keyboard, the desktop's offline
-// mode and the menu bar's panel.
+// serves, the add-account form's errors, and the keyboard.
 import { useBrowser } from "./support/dom.ts"
 import { afterEach, describe, expect, test } from "bun:test"
 import { Report, UpstreamFailed } from "@slopmax/client"
-import { OfflineView, ProxyState } from "@slopmax/client/desktop"
 import { DateTime } from "effect"
 import { act } from "react"
-import { account, emptyReport, fixtureDoctor, ownerKey } from "./support/fixtures.ts"
+import { account, emptyReport, ownerKey } from "./support/fixtures.ts"
 import { control, draw, type Drawn, key, press, settle, shows, showsSoon, type } from "./support/render.tsx"
 
 useBrowser()
@@ -18,6 +16,9 @@ afterEach(async () => {
   await drawn?.close()
   drawn = undefined
 })
+
+/** Whether the sidebar is `expanded` or `collapsed`. */
+const sidebarState = () => document.querySelector("[data-slot=sidebar][data-state]")?.getAttribute("data-state")
 
 const web = async (at?: string) => {
   drawn = await draw({ stub: { key: ownerKey }, host: { key: ownerKey }, ...(at === undefined ? {} : { at }) })
@@ -216,6 +217,17 @@ describe("the web dashboard", () => {
     await settle(() => location.hash === "#/settings", "settings")
   })
 
+  test("\\ hides and shows the sidebar as its button does, and the page keeps that for next time", async () => {
+    const { host } = await web()
+    expect(sidebarState()).toBe("expanded")
+    await key("\\")
+    await settle(() => host.recorded.saved.at(-1)?.sidebarHidden === true, "the sidebar hidden")
+    expect(sidebarState()).toBe("collapsed")
+    await press("Toggle Sidebar")
+    await settle(() => host.recorded.saved.at(-1)?.sidebarHidden === false, "the sidebar shown")
+    expect(sidebarState()).toBe("expanded")
+  })
+
   test("a slopmax with no accounts says how to add one", async () => {
     drawn = await draw({ stub: { key: ownerKey, scenario: "empty" }, host: { key: ownerKey } })
     await showsSoon("No accounts yet")
@@ -319,39 +331,5 @@ describe("what the dashboard says while waiting, failing or quiet", () => {
     await type("Priority", "3")
     await press("Save")
     await showsSoon("ana@studio.dev is at priority 3.")
-  })
-})
-
-describe("the desktop window", () => {
-  test("while the proxy is stopped, shows what was saved and a way to start it", async () => {
-    drawn = await draw({
-      host: {
-        kind: "desktop",
-        proxy: ProxyState.cases.Stopped.make({}),
-        offline: new OfflineView({ report: emptyReport(DateTime.nowUnsafe()), doctor: fixtureDoctor() }),
-      },
-    })
-    await showsSoon("The proxy is stopped")
-    await press("Start the proxy")
-    await settle(() => drawn?.host.recorded.proxy.includes("start") === true, "the start")
-    await showsSoon("Started the proxy.")
-  })
-
-  test("the menu bar's panel shows the pools and the app's commands", async () => {
-    drawn = await draw({ host: { kind: "desktop" }, at: "#/panel" })
-    await showsSoon("Open slopmax")
-    await showsSoon("2 of 3 ready")
-    expect(shows("Quit slopmax")).toBe(true)
-    await press("Open slopmax")
-    expect(drawn.host.recorded.opened).toContain("window:overview")
-  })
-
-  test("a menu's Settings… opens Settings, and its sidebar item hides the sidebar at once", async () => {
-    drawn = await draw({ host: { kind: "desktop" } })
-    await showsSoon("Running 0.4.0")
-    drawn.host.menu("open-settings")
-    await settle(() => location.hash === "#/settings", "settings")
-    drawn.host.menu("toggle-sidebar")
-    await settle(() => drawn?.host.recorded.saved.at(-1)?.sidebarHidden === true, "the sidebar hidden")
   })
 })

@@ -17,7 +17,6 @@ import {
   nowAtom,
   openCreditsAtom,
   pollOffAtom,
-  proxyAtom,
   readOnlyAtom,
   redeem,
   redeemingAtom,
@@ -238,7 +237,6 @@ function CreditsWell({ row, provider }: { readonly row: Row; readonly provider: 
   const now = useAtomValue(nowAtom)
   const redeeming = useAtomValue(redeemingAtom)
   const canChange = useAtomValue(canChangeAtom)
-  const proxy = useAtomValue(proxyAtom)
   const unanswered = useAtomValue(unansweredAtom)
   const readOnly = useAtomValue(readOnlyAtom)
   const settings = useAtomValue(settingsAtom)
@@ -250,9 +248,7 @@ function CreditsWell({ row, provider }: { readonly row: Row; readonly provider: 
   const policy = Option.flatMap(AsyncResult.value(settings), (view) =>
     Option.fromUndefinedOr(autoRedeem(view.settings, providerFacts[provider].title)),
   )
-  const held = !canChange
-    ? (cannotChange(proxy, "redeem one", unanswered, readOnly) ?? "Waiting for slopmax")
-    : credits.held
+  const held = !canChange ? (cannotChange(unanswered, readOnly) ?? "Waiting for slopmax") : credits.held
   return (
     <div className="flex animate-in fade-in slide-in-from-top-1 flex-col px-3 pb-2.5">
       <Item variant="muted">

@@ -19,7 +19,7 @@ import {
   Usage,
   Window,
 } from "../src/index.ts"
-import { conditionText, nextReasonText, noteText } from "../src/format.ts"
+import { conditionText, noteText } from "../src/format.ts"
 
 const ts = (seconds: number) => DateTime.makeUnsafe(seconds * 1000)
 const id = (text: string) => AccountId.make(text)
@@ -70,18 +70,6 @@ describe("tones", () => {
   })
 })
 
-describe("next reasons", () => {
-  it("say in a phrase why a new session would get an account", () => {
-    expect(nextReasonText("pinned")).toBe("pinned for new sessions")
-    expect(nextReasonText("only-one")).toBe("the only account ready")
-    expect(nextReasonText("week-ending")).toBe("its week resets within the day with quota to spare")
-    expect(nextReasonText("resets-first")).toBe("its quota resets soonest")
-    expect(nextReasonText("fills-first")).toBe("first in priority order")
-    expect(nextReasonText("most-room")).toBe("the most room left")
-    expect(nextReasonText("turn")).toBe("next in turn")
-  })
-})
-
 const sampleReport = (): Report => {
   const account = new AccountView({
     id: id("claude-1a2b3c4d"),
@@ -114,7 +102,7 @@ const sampleReport = (): Report => {
         windows: [new PoolWindow({ span: "5h", used: 25, resetsAt: ts(5_000), weighted: false })],
         scoped: [Window.of("7d", 60, undefined, "opus")],
         shares: { [account.id]: 1 },
-        next: new NextView({ account: account.id, reason: "pinned", why: nextReasonText("pinned") }),
+        next: new NextView({ account: account.id, reason: "pinned", why: "pinned for new sessions" }),
       }),
     ],
     nudges: [

@@ -1,10 +1,9 @@
 // How the accounts stand in a line, and what wants a look: the overview's
-// headline, the "Needs attention" list, and the menu bar panel's short form
-// of it. Every front end lists the same things in the same order.
+// headline and the "Needs attention" list.
 import { type AccountView, type Notice, type ProviderId, type Report, type Tone, usedAt } from "@slopmax/client"
 import { clock, fixed, pace, until } from "@slopmax/client/format"
 import { DateTime, Duration, Option } from "effect"
-import { expiringWithin, resetsLeft, shortName, unexpiredResets, windowTitle } from "./groups.ts"
+import { expiringWithin, resetsLeft, unexpiredResets, windowTitle } from "./groups.ts"
 import { lowercaseFirst, resetCount } from "./words.ts"
 
 /** How the accounts stand: what an overview leads with. */
@@ -53,20 +52,14 @@ export interface Attention {
   readonly provider: ProviderId
   readonly account: string
   readonly text: string
-  /** Short, for the menu bar panel: who, by the local part of their address. */
-  readonly who: string
-  /** And what and when, which a narrow line keeps whole. */
-  readonly what: string
   readonly tone: Tone
   readonly remedy: Remedy
 }
 
-const item = (account: AccountView, text: string, what: string, tone: Tone, remedy: Remedy): Attention => ({
+const item = (account: AccountView, text: string, tone: Tone, remedy: Remedy): Attention => ({
   provider: account.provider,
   account: account.id,
   text,
-  who: shortName(account.name),
-  what,
   tone,
   remedy,
 })
@@ -76,7 +69,7 @@ const item = (account: AccountView, text: string, what: string, tone: Tone, reme
  * command, and its times as the window sets them: `in 19h59m (19:12)` reads
  * `in 19h59m · 19:12`.
  */
-export const firstSentence = (message: string): string =>
+const firstSentence = (message: string): string =>
   (message.split(". ")[0] ?? message)
     .replace(/\.+$/, "")
     .replaceAll("`", "")
@@ -105,20 +98,14 @@ export const attention = (report: Report, now: DateTime.Utc, zone: DateTime.Time
     const held = resetsLeft(account, now)
     const condition = account.condition
     if (condition._tag === "SignInNeeded") {
-      found.push(item(account, `${account.name} needs signing in again`, "sign in again", "bad", "sign-in"))
+      found.push(item(account, `${account.name} needs signing in again`, "bad", "sign-in"))
       continue
     }
     if (condition._tag === "Limited") {
       if (held === 0) continue
       const at = clock(condition.until, now, zone)
       found.push(
-        item(
-          account,
-          `${account.name} is limited until ${at}, and holds ${resetCount(held)}`,
-          `limited until ${at}, ${held} held`,
-          "warn",
-          "redeem",
-        ),
+        item(account, `${account.name} is limited until ${at}, and holds ${resetCount(held)}`, "warn", "redeem"),
       )
     }
     for (const window of account.windows.filter((w) => w.model === undefined)) {
@@ -126,7 +113,7 @@ export const attention = (report: Report, now: DateTime.Utc, zone: DateTime.Time
       if (Option.isNone(windowPace) || windowPace.value.tone !== "warn") continue
       const title = lowercaseFirst(windowTitle(window))
       const text = lowercaseFirst(windowPace.value.text)
-      found.push(item(account, `${account.name}'s ${title} window ${text}`, `${title} ${text}`, "warn", "look"))
+      found.push(item(account, `${account.name}'s ${title} window ${text}`, "warn", "look"))
     }
     const expiring = unexpiredResets(account, now)
       .flatMap((reset) => (reset.expiresAt === undefined ? [] : [reset.expiresAt]))
@@ -138,7 +125,6 @@ export const attention = (report: Report, now: DateTime.Utc, zone: DateTime.Time
         item(
           account,
           `A limit reset on ${account.name} expires in ${until(expiring, now)} · ${clock(expiring, now, zone)}${autoOff ? "; auto-redeem is off" : ""}`,
-          `reset expires in ${until(expiring, now)}`,
           "warn",
           "redeem",
         ),
@@ -151,7 +137,7 @@ export const attention = (report: Report, now: DateTime.Utc, zone: DateTime.Time
     const at = nudge.until ?? now
     if (nudge.kind === "reset-expiring") {
       if (found.some((f) => f.account === account.id && f.remedy === "redeem")) continue
-      found.push(item(account, firstSentence(nudge.message), `reset expires in ${until(at, now)}`, "warn", "redeem"))
+      found.push(item(account, firstSentence(nudge.message), "warn", "redeem"))
     } else if (nudge.kind === "quota-unused") {
       const { period, unused } = unusedAtReset(account, now)
       const worth =
@@ -160,7 +146,6 @@ export const attention = (report: Report, now: DateTime.Utc, zone: DateTime.Time
         item(
           account,
           `${account.name}'s ${period} resets in ${until(at, now)} · ${clock(at, now, zone)} with ${fixed(unused, 0)}% of it unused${worth}`,
-          `${period} ends in ${until(at, now)}, ${fixed(unused, 0)}% unused`,
           "warn",
           "look",
         ),

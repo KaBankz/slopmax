@@ -2,7 +2,7 @@
  * shadcn/ui's design system, as `shadcn init -b base -p nova` writes it: its
  * tokens in `:root` and `.dark`, mapped to colors in `@theme inline`, on
  * Tailwind's own scales. slopmax adds two tokens shadcn has no names for,
- * `success` and `warning`, and a few utilities the desktop window needs.
+ * `success` and `warning`.
  * `.dark` on <html> switches the theme, set by the app from the system or
  * from the Appearance setting. See DESIGN.md.
  */
@@ -11,15 +11,11 @@
 @import "shadcn/tailwind.css";
 @source "./";
 
-/* Geist is declared by build.ts, which ships the font as a file (the page's CSP refuses fonts inlined as data). */
-
 @custom-variant dark (&:is(.dark *));
-/* The desktop window on macOS, where the traffic lights sit at the top left. */
-@custom-variant mac (&:where(.mac, .mac *));
 
 @theme inline {
   --font-heading: var(--font-sans);
-  --font-sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -154,17 +150,4 @@
   #root {
     @apply h-full;
   }
-  /* The menu bar's panel: a card in a transparent window. */
-  html.panel,
-  html.panel body {
-    @apply bg-transparent;
-  }
-}
-
-/* The desktop window's title strips drag the window; their controls do not. */
-@utility drag {
-  -webkit-app-region: drag;
-}
-@utility no-drag {
-  -webkit-app-region: no-drag;
 }

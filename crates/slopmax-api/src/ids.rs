@@ -59,11 +59,6 @@ impl Provider {
     pub fn is_subscription(self) -> bool {
         matches!(self, Self::Claude | Self::Codex | Self::Grok)
     }
-
-    /// Whether it grants limit resets, which clear its windows at once.
-    pub fn grants_resets(self) -> bool {
-        matches!(self, Self::Claude | Self::Codex)
-    }
 }
 
 impl std::fmt::Display for Provider {

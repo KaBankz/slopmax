@@ -1,7 +1,8 @@
 //! The browser half of an OAuth authorization-code flow.
 //!
 //! slopmax listens on the provider's registered loopback redirect and, at the
-//! same time, accepts the final redirect address pasted into the CLI or app.
+//! same time, accepts the final redirect address pasted into the CLI or the
+//! dashboard.
 //! The paste path makes logins work on headless machines: authorize in any
 //! browser, then copy the address bar of the (failed) localhost page back.
 

@@ -1,4 +1,4 @@
-// @slopmax/ui has no code for other packages: `build.ts` writes the app's two
-// copies, which the CLI embeds and the desktop app ships as files. This names
-// where each copy lands, relative to apps/ui.
-export const outputs = { web: "dist/web", desktop: "dist/desktop" } as const
+// @slopmax/ui has no code for other packages: `build.ts` writes the dashboard
+// the daemon embeds. This names where it lands, relative to apps/ui, which is
+// where the daemon's build.rs looks for it.
+export const outdir = "dist/rust"

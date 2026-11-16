@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
-# A throwaway slopmax for working on the desktop app or the dashboard: the
+# A throwaway slopmax for working on the dashboard: the
 # bench rig's mock provider and proxy, four fake accounts with varied usage
-# (one limited), and every config directory an app could touch (Claude
+# (one limited), and every config directory an agent could touch (Claude
 # Code's, Codex's) pointed into the demo, and the login service turned off,
 # so nothing reaches a real account, a real setting, or launchd/systemd.
 #
 #   scripts/demo.sh            # prints what to export, runs until Ctrl-C
 #
-# Then, in another shell, export those and run an app or the CLI:
-#   cargo run -p slopmax-desktop-gpui
-# or draw each of the desktop app's pages to images, without the screen:
-#   SLOPMAX_SHOTS=/tmp/shots cargo run -p slopmax-desktop-gpui --features shots
+# Then, in another shell, export those and run the CLI, or open the dashboard
+# with `slopmax dashboard`.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -39,7 +37,7 @@ refresh_tokens = false
 redeem_expiring_credits = false
 EOF
 up() { until curl -fs -o /dev/null "http://$listen/healthz"; do sleep 0.1; done; }
-# A proxy left on the demo's port (say, one the app started for an earlier
+# A proxy left on the demo's port (say, one left from an earlier
 # demo) would answer for this one.
 for addr in "$upstream" "$listen"; do
   if curl -fs -o /dev/null "http://$addr/healthz"; then
@@ -120,7 +118,7 @@ with open(f"{home}/windows.jsonl", "w") as f:
                                     "provider": provider, "plan": plan_of[account],
                                     "span": "7d", "used": used}) + "\n")
 
-# Thirty days of requests in the ledger, for the app's charts, as the proxy
+# Thirty days of requests in the ledger, for the dashboard's charts, as the proxy
 # writes them: agents' sessions, busier on weekdays and in working hours,
 # mostly cached and growing over the month; the odd answer after a failover
 # and the odd failure; each session opening with a model listing (no
@@ -214,10 +212,9 @@ The demo proxy runs on $listen with four fake accounts. In another shell:
   export CLAUDE_CONFIG_DIR=$demo/claude CODEX_HOME=$demo/codex XDG_CONFIG_HOME=$demo/config
   export SLOPMAX_NO_SERVICE=1
 
-Then run the desktop app, or draw its pages to images in /tmp/shots:
+Then run the CLI, or open the dashboard:
 
-  cargo run -p slopmax-desktop-gpui
-  SLOPMAX_SHOTS=/tmp/shots cargo run -p slopmax-desktop-gpui --features shots
+  cargo run -p slopmax -- dashboard
 
 Ctrl-C stops it and deletes the demo.
 EOF

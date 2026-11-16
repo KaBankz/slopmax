@@ -53,7 +53,8 @@ check "launchd started it again" '[ -n "$P" ] && [ "$P" = "$(jobpid)" ]'
 
 echo "== handoff"
 cp "$B" "$H/slopmax2"
-KEY=$("$B" daemon-info --json | sed -n 's/.*"key":"\([^"]*\)".*/\1/p')
+# The owner's key, which `service install` added to the config.toml above.
+KEY=$(sed -n 's/^api_key = "\([^"]*\)".*/\1/p' "$H/home/config.toml")
 knock 12 > "$H/k2" & sleep 1.5
 curl -s -X POST -H "Authorization: Bearer $KEY" -H 'content-type: application/json' \
   -d "{\"exe\":\"$H/slopmax2\"}" http://127.0.0.1:7599/slopmax/api/shutdown; echo

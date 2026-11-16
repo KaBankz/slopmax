@@ -4,6 +4,20 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Removed
+
+- The desktop apps: the macOS app (`apple/`), `slopmax-app` and the GPUI app, with their CI workflows, the icon files only they used, and the dashboard's code for running in a desktop window (its menu bar panel, start and stop buttons, and the bridge to an app). The CLI, with the dashboard it serves, is slopmax's interface. A `~/.slopmax/app.toml` left by the app is no longer read and can be deleted.
+- `slopmax daemon-info`, which the apps ran to find the proxy and its key.
+- The `exe` field of the event stream's `Hello`, which the apps compared with the CLI they shipped.
+
+### Changed
+
+- Adding a Claude or ChatGPT subscription by key is refused with "…through `slopmax login <provider>` or the dashboard" rather than "…, or the app".
+
+### Fixed
+
+- The dashboard said it could not open a link, such as the release notes or a sign-in address, even when the browser had opened it.
+
 ## [0.13.1] - 2026-11-16
 
 ### Fixed

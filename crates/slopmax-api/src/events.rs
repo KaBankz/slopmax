@@ -9,14 +9,9 @@ use crate::report::{AccountView, Notice, Report};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "_tag")]
 pub enum Event {
-    /// The first event on every connection: the proxy is live, its
-    /// version, and the program serving it, so a client can tell a daemon
-    /// it started from one it did not.
-    Hello {
-        version: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        exe: Option<String>,
-    },
+    /// The first event on every connection: the proxy is live, and its
+    /// version.
+    Hello { version: String },
     /// The report, at connect and whenever it changes.
     Status { report: Box<Report> },
     /// One per request slopmax answered.

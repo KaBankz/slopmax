@@ -2,7 +2,7 @@
 // records them in `contract/fixtures/`, decoded strictly with this
 // package's schemas: a key the schema does not know fails, as one it needs
 // and is missing does. So the Rust daemon and every client built on this
-// package (the web UI, the desktop window) agree on every field.
+// package (the web UI) agree on every field.
 import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
 import {

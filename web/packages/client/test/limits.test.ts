@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { it } from "@slopmax/test"
 import { DateTime, Option, Schema } from "effect"
-import { longWindow, scopedWindows, upcomingReset, usedAt, Window, windowLabel, windowOf } from "../src/index.ts"
+import { upcomingReset, usedAt, Window, windowOf } from "../src/index.ts"
 
 const ts = (seconds: number) => DateTime.makeUnsafe(seconds * 1000)
 describe("Window", () => {
@@ -13,11 +13,6 @@ describe("Window", () => {
     expect(usedAt(window, ts(500))).toBe(0)
     expect(upcomingReset(window, ts(499))).toEqual(Option.some(ts(500)))
     expect(upcomingReset(window, ts(500))).toEqual(Option.none())
-  })
-
-  it("is labelled by its span, and its model when it covers one", () => {
-    expect(windowLabel(Window.of("5h", 1))).toBe("5h")
-    expect(windowLabel(Window.of("7d", 1, undefined, "Fable"))).toBe("7d Fable")
   })
 
   it("hands out the window it made before for the same reading, and a new one when anything differs", () => {
@@ -40,9 +35,6 @@ describe("Limits", () => {
     expect(windowOf(windows, "5h")?.used).toBe(10)
     // The model's own weekly window is not the shared one.
     expect(windowOf(windows, "7d")).toBeUndefined()
-    expect(longWindow(windows)?.span).toBe("30d")
-    expect(scopedWindows(windows).map((w) => w.model)).toEqual(["opus"])
+    expect(windowOf(windows, "30d")?.used).toBe(30)
   })
 })
-
-describe("pooled", () => {})

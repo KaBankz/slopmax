@@ -144,7 +144,7 @@ export const parseProviderId = (text: string): Result.Result<ProviderId, string>
  * (including none). Without a `*` the two must be equal. The last part
  * anchors at the end and may not overlap a part matched before it.
  */
-export const matchesModel = (pattern: string, model: string): boolean => {
+const matchesModel = (pattern: string, model: string): boolean => {
   if (!pattern.includes("*")) return pattern === model
   const [first = "", ...parts] = pattern.split("*")
   if (!model.startsWith(first)) return false

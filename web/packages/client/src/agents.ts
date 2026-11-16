@@ -18,10 +18,7 @@ export const agentFacts: { readonly [K in AgentId]: AgentFacts & { readonly id: 
   "grok-build": { id: "grok-build", title: "Grok Build", program: "grok", provider: "grok" },
 }
 
-/** Every agent, in the order requests are matched against them. */
-export const agentOrder: ReadonlyArray<AgentId> = AgentId.literals
-
-/** How an agent on this machine is set up, as the doctor, the CLI and the app show it. */
+/** How an agent on this machine is set up, as the doctor, the CLI and the dashboard show it. */
 export class AgentWiring extends Schema.Class<AgentWiring>("AgentWiring")({
   id: AgentId,
   title: Schema.String,
