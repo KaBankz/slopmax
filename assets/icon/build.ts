@@ -23,7 +23,7 @@ const master = path.join(here, "icon.png")
 const root = path.join(here, "../..")
 const ui = path.join(root, "web/apps/ui/src")
 
-/** Big Sur's icon grid: the tile is 824 of the 1024 canvas, its corner radius 228 at full size. */
+/** The squircle's corner radius: 228 at 1024 px. */
 const squircle = async (dir: string, size: number, radius: number): Promise<string> => {
   const mask = path.join(dir, `mask-${size}.png`)
   await $`${magick} -size ${size}x${size} xc:black -fill white -draw ${`roundrectangle 0,0,${size - 1},${size - 1},${radius},${radius}`} ${mask}`

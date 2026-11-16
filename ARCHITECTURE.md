@@ -39,7 +39,7 @@ crates/
   slopmax-common   time, ids, the logger, short formats for people, and slopmax's home
 web/               the web UI the daemon serves (React), and @slopmax/client, its client
                    of the API
-contract/          the API's answers as the daemon gives them, which every client decodes
+contract/          the API's answers as the daemon gives them, which the web UI's client decodes
 ```
 
 Dependencies point one way: `slopmax-common` under `slopmax-net`, `slopmax-wire` and `slopmax-api`; those under `slopmax-core` and `slopmax-client`; the core under the daemon; and the daemon, the core and the client under the CLI. The core re-exports the crates beneath it (`slopmax_core::net`, `::wire`, `::time`, `::log`).
@@ -81,17 +81,16 @@ slopmax-core/src/
   pool.rs       account health, session affinity (and opting out of it), and placement
                 strategies; `Routing` is the part of the config it follows
   limits.rs     usage windows and refusals, shared by the provider parsers
-  proxy/        mod.rs (App, the handler, keys), forward.rs (the failover loop), sse.rs and
-                start.rs (stream taps and holds), transcode.rs (translated streams), socket.rs
-                (Codex's WebSockets), models.rs (/v1/models), admin.rs and dashboard.html
-                (/slopmax/*), hub.rs (CLIProxyAPI's management calls for quota tools),
-                tailnet.rs (tailnet identity: the ingress strip, who is calling and with
-                what access, the whois cache), warm.rs (window warmups), rawjson.rs
-                (in-place JSON edits); in slopmax-daemon
-  daemon.rs     the long-running proxy and its background tasks
+  proxy/        mod.rs (App, the handler, keys), forward.rs (the failover loop), relay.rs
+                and start.rs (the streamed body, its taps and holds), transcode.rs
+                (translated streams), socket.rs (Codex's WebSockets), models.rs
+                (/v1/models), api.rs (/slopmax/api), ui.rs (the web UI at /slopmax/),
+                hub.rs (CLIProxyAPI's management calls for quota tools), tailnet.rs
+                (tailnet identity: the ingress strip, who is calling and with what
+                access, the whois cache), warm.rs (window warmups); in slopmax-daemon
   background.rs the proxy seen from outside: its client, starting it, the login service
   ledger.rs     the usage ledger; summary.rs totals it; history.rs charts it (for the
-                app and the dashboard alike); pricing.rs prices it; quota.rs records
+                dashboard); pricing.rs prices it; quota.rs records
                 the pools' quota in it and forecasts each pool (`/pools/{provider}`);
                 browse.rs lists its requests one by one, filtered (`/requests`)
   notify.rs     webhook and command notifications from account changes
@@ -285,7 +284,7 @@ The login service runs `~/.slopmax/bin/slopmax`, a link the handoff and `slopmax
   slopmax.log
 ```
 
-While a daemon serves the home, it is the only writer of what it holds: the CLI and the apps
+While a daemon serves the home, it is the only writer of what it holds: the CLI and the web UI
 change accounts, pins, settings and keys through `/slopmax/api` (`slopmax-client`), and the
 CLI writes the files itself only while none runs, under the same serve lock
 (`state::change`). `pins.toml` and `nudged.toml`, which an earlier layout kept beside the
