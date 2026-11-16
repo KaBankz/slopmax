@@ -635,8 +635,9 @@ async fn health(app: &Arc<App>, headers: &HeaderMap, seen: &Seen) -> Response {
     if has_credential(headers) {
         let config = app.config();
         body["owner"] = json!(matches!(by_key(&config, headers), Some(Caller::Owner)));
-        // Asked of whois now: this is where a machine learns what it may do.
-        match identify(app, &config, headers, seen, true).await {
+        // Asked of whois now: this is where a machine learns the most it
+        // may do.
+        match identify(app, &config, headers, seen, true, Access::Admin).await {
             Ok(caller) => {
                 body["access"] = json!(caller.access());
                 match &caller {
@@ -1022,20 +1023,45 @@ fn known<'a, 's>(
     })
 }
 
-/// Who sent a request. A tailnet login may use and see slopmax; its
-/// machine may also manage it when whois says the machine is untagged,
-/// signed in as that login, and in `[tailscale] admins`. With `resolve`,
-/// whois is asked now (for at most two seconds); otherwise the machine is
-/// read from what is known and looked up in the background, for the next
-/// request. A lookup that fails leaves the machine able to see, not manage.
+/// The tailnet login a client key came with, when slopmax takes it: a
+/// machine set up with `slopmax setup --hub` sends its key, and may also do
+/// what its login may.
+pub(crate) fn login_beside_key<'s>(
+    config: &Config,
+    headers: &HeaderMap,
+    seen: &'s Seen,
+) -> Option<&'s str> {
+    let login = seen.login.as_deref()?;
+    (seen.channel == Channel::Tailnet
+        && !config.tailnet_users().is_empty()
+        && tailnet::browser_ok(headers, seen)
+        && config.allows_login(login))
+    .then_some(login)
+}
+
+/// Who sent a request, for what it `need`s. A tailnet login may use and
+/// see slopmax; its machine may also manage it when whois says the machine
+/// is untagged, signed in as that login, and in `[tailscale] admins`. A
+/// client key reaches the proxy only, so for more its machine is taken by
+/// its login. With `resolve`, whois is asked now (for at most two
+/// seconds); otherwise the machine is read from what is known and looked
+/// up in the background, for the next request. A lookup that fails leaves
+/// the machine able to see, not manage.
 async fn identify<'a>(
     app: &Arc<App>,
     config: &'a Config,
     headers: &HeaderMap,
     seen: &Seen,
     resolve: bool,
+    need: Access,
 ) -> Result<Caller<'a>, Denied> {
     let login = match known(config, headers, seen)? {
+        Known::Key(caller @ Caller::Client(_)) if caller.access() < need => {
+            match login_beside_key(config, headers, seen) {
+                Some(login) => login,
+                None => return Ok(caller),
+            }
+        }
         Known::Key(caller) => return Ok(caller),
         Known::Login(login) => login,
     };
@@ -1076,7 +1102,7 @@ pub(crate) async fn caller<'a>(
 ) -> Result<Caller<'a>, Denied> {
     // Only managing waits for whois, and only when some machine may.
     let resolve = need == Access::Admin && config.admin_ids().next().is_some();
-    let caller = identify(app, config, headers, seen, resolve).await?;
+    let caller = identify(app, config, headers, seen, resolve, need).await?;
     if caller.access() < need {
         return Err(Denied::Needs {
             need,
@@ -1475,9 +1501,14 @@ mod tests {
                 })
             ));
         }
-        // A client key reaches the proxy only.
+        // A client key reaches the proxy only; its machine may do what its
+        // login may.
         assert_eq!(
             ask(keyed("Bearer sm-laptop"), me.clone(), Access::View).await,
+            Ok((Access::View, Some("phone".into())))
+        );
+        assert_eq!(
+            ask(keyed("Bearer sm-laptop"), Seen::tcp(), Access::View).await,
             Err(Denied::Needs {
                 need: Access::View,
                 machine: None,

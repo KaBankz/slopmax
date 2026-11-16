@@ -1064,9 +1064,17 @@ fn access_now(
     machine: &mut Option<super::tailnet::Machine>,
 ) -> Option<Access> {
     let config = app.config();
-    match super::known(&config, &asker.headers, &asker.seen) {
-        Ok(super::Known::Key(caller)) => Some(caller.access()),
-        Ok(super::Known::Login(login)) => {
+    let login = match super::known(&config, &asker.headers, &asker.seen) {
+        Ok(super::Known::Key(caller @ Caller::Client(_))) => {
+            super::login_beside_key(&config, &asker.headers, &asker.seen).ok_or(caller)
+        }
+        Ok(super::Known::Key(caller)) => Err(caller),
+        Ok(super::Known::Login(login)) => Ok(login),
+        Err(_) => return None,
+    };
+    match login {
+        Err(caller) => Some(caller.access()),
+        Ok(login) => {
             if let Some(peer) = asker.seen.peer {
                 match app.peers.lately(peer) {
                     Some(found) => *machine = found.filter(|m| m.is(login)),
@@ -1075,7 +1083,6 @@ fn access_now(
             }
             Some(super::member_access(&config, machine.as_ref()))
         }
-        Err(_) => None,
     }
 }
 

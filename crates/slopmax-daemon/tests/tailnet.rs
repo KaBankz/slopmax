@@ -740,6 +740,77 @@ async fn health_says_who_the_tailnet_asker_is() {
     std::fs::remove_dir_all(hub.stop().await).unwrap();
 }
 
+/// A machine set up with `slopmax setup --hub` sends its client key; what
+/// its login may do beyond the proxy, it still may.
+#[tokio::test]
+async fn a_client_key_s_machine_may_do_what_its_login_may() {
+    let home = temp_home();
+    let hub = Hub::start(&home).await;
+    let keyed = |method: Method, path: &str, ip: &str, login: Option<&str>| {
+        from(method, path, ip, login).header("authorization", format!("Bearer {CI_KEY}"))
+    };
+    let (_, phone) = hub
+        .ask(empty(keyed(
+            Method::GET,
+            "/healthz",
+            PHONE,
+            Some("me@test"),
+        )))
+        .await;
+    assert_eq!(
+        (&phone["access"], &phone["login"], &phone["machine"]),
+        (&json!("view"), &json!("me@test"), &json!("phone"))
+    );
+    let (status, _) = hub
+        .ask(empty(keyed(
+            Method::GET,
+            "/slopmax/api/status",
+            PHONE,
+            Some("me@test"),
+        )))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, refused) = hub
+        .ask(empty(keyed(
+            Method::POST,
+            "/slopmax/api/sync",
+            PHONE,
+            Some("me@test"),
+        )))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        refused["message"],
+        "this machine may not change slopmax; on the hub: slopmax tailscale admins add phone"
+    );
+    let (status, _) = hub
+        .ask(empty(keyed(
+            Method::POST,
+            "/slopmax/api/sync",
+            MAC,
+            Some("me@test"),
+        )))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    // A login slopmax doesn't take, or none, leaves the key what it is.
+    for login in [Some("stranger@test"), None] {
+        let (status, refused) = hub
+            .ask(empty(keyed(
+                Method::GET,
+                "/slopmax/api/status",
+                TAGGED,
+                login,
+            )))
+            .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{login:?}");
+        assert_eq!(
+            refused["message"],
+            "the key \"ci\" reaches the proxy only, not slopmax's own API"
+        );
+    }
+    std::fs::remove_dir_all(hub.stop().await).unwrap();
+}
+
 #[tokio::test]
 async fn the_ledger_records_which_machine_asked() {
     let home = temp_home();
