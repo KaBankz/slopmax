@@ -54,7 +54,7 @@ const LIST_CREDITS_GAP: SignedDuration = SignedDuration::from_mins(10);
 const WATCH_EVERY: Duration = Duration::from_secs(30);
 
 /// The runtime every command runs on: one thread unless `SLOPMAX_WORKERS`
-/// asks for more. One thread carries a desktop's agents with room to spare,
+/// asks for more. One thread carries one machine's agents with room to spare,
 /// and it hands no work between threads and holds the least memory. A
 /// proxy shared by many clients sets `SLOPMAX_WORKERS` to a number of
 /// threads, or to `auto` for one per CPU; blocking work (the disk, name

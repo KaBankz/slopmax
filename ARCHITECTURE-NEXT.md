@@ -1,6 +1,6 @@
 # slopmax: the target architecture
 
-The plan for slopmax after v0.3.0, carrying over what a TypeScript rewrite got right. The rewrite was measured against Rust in every configuration, lost each time, and was dropped on 2026-11-08; its web UI stays in `web/`, as a client of the Rust daemon. A panel wrote it on 2026-11-01. Five critics each read the code through one lens: the hot path, architecture, testing, crates and the build, and the desktop with its native bridge. Two architects then proposed designs, one lean-first and one robust-first, and two judges scored both against the code. This document starts from **lean**, which won on the mean judge score (7.75 against 7.3). It takes robust's sequencing and correctness pieces, and it fixes every error the judges found. [`ARCHITECTURE.md`](ARCHITECTURE.md) describes the code as it is; this document describes where it is going, phase by phase.
+The plan for slopmax after v0.3.0, carrying over what a TypeScript rewrite got right. The rewrite was measured against Rust in every configuration, lost each time, and was dropped on 2026-11-08; its web UI stays in `web/`, as a client of the Rust daemon. A panel wrote it on 2026-11-01. Critics each read the code through one lens, among them the hot path, architecture, testing, and crates and the build. Two architects then proposed designs, one lean-first and one robust-first, and two judges scored both against the code. This document starts from **lean**, which won on the mean judge score (7.75 against 7.3). It takes robust's sequencing and correctness pieces, and it fixes every error the judges found. [`ARCHITECTURE.md`](ARCHITECTURE.md) describes the code as it is; this document describes where it is going, phase by phase.
 
 ## Status, 2026-11-16
 
@@ -8,11 +8,9 @@ The plan for slopmax after v0.3.0, carrying over what a TypeScript rewrite got r
 |---|---|---|
 | 1 | done (`789ed0d`) | No data lost at stop, no file read per request, one thread by default, serve lock, state quarantine, DST and Retry-After fixes |
 | 2 | done (`40d9da4`, `453fd60`, `e70ab6a`) | One `Relay` body and `Settle` (`end` recorded), typed taps in `wire::sse`, `rawjson` framing instead of a parse (proptested), large translations off-thread, one task per Codex socket with a cancel-safe frame reader, an `Arc` snapshot pool, the `raw`/`swarm`/`translate`/`allocs` bench modes |
-| 3 | done (`bc4fa6e`, `6ecf087`, `9ad708a`, `a6215b7`, `a8809ea`) | `slopmax-api`, the `live!` registry, `/slopmax/api/*` with the event stream, `contract/` (Rust blesses, TypeScript decodes strictly, as Swift did until the app was deleted); the `slopmax-daemon` crate (proxy, API, jobs, web UI) apart from the engine; every path from a `Home`, so the engine reads no environment; the `providers!` rows; thiserror enums at the boundaries (`StoreError`, `ConfigError`, `LoginError`, `ProviderError`, `ListenError`), each into `ApiError` once, anyhow kept for errors only reported |
-| 4 | done (`790cebb`, `cfa242c`, `bb0c7d0`, `4c2e289`, `ac13883`, `0fa7b66`, `1eab687`, `5fe4608`, `25f656c`) | Local files are TOML; one deadline scheduler (idle 0.18 wakeups/s and one thread, from 0.52 and two); the single-flight `/refresh`; notices on the event stream; `state.toml` holds pins, the nudges told and Codex (`pins.toml`, `nudged.toml` read once, left in place); `HistoryIndex`; `slopmax-client`; the CLI's changes through the API while a daemon runs, `status --watch` on the event stream; `slopmax-app` (since deleted) an API client with no `slopmax-core` (`cargo tree -e normal`), posting the daemon's notices; reset windows in the ledger (`windows.jsonl` read, no longer written); a pin saved the moment it is set; jobs on 30 s ticks. Gates on the static musl build, 4 accounts, a year of ledger: idle 6 switches a minute, 1 thread, 4.6 MB; serve to `/healthz` 21 ms; warm `/history` with no file opened 0.55 / 0.58 / 1.23 ms for today / 7 days / 30 days, HTTP round trip included; since 2026-11-15 the 30-day answer takes about 0.3 ms (`bench history`, a year of 4,000 answers a day: 2.5 ms before), within the gate |
+| 3 | done (`bc4fa6e`, `6ecf087`, `9ad708a`, `a6215b7`, `a8809ea`) | `slopmax-api`, the `live!` registry, `/slopmax/api/*` with the event stream, `contract/` (Rust blesses, TypeScript decodes strictly); the `slopmax-daemon` crate (proxy, API, jobs, web UI) apart from the engine; every path from a `Home`, so the engine reads no environment; the `providers!` rows; thiserror enums at the boundaries (`StoreError`, `ConfigError`, `LoginError`, `ProviderError`, `ListenError`), each into `ApiError` once, anyhow kept for errors only reported |
+| 4 | done (`790cebb`, `cfa242c`, `bb0c7d0`, `4c2e289`, `ac13883`, `0fa7b66`, `1eab687`, `5fe4608`, `25f656c`) | Local files are TOML; one deadline scheduler (idle 0.18 wakeups/s and one thread, from 0.52 and two); the single-flight `/refresh`; notices on the event stream; `state.toml` holds pins, the nudges told and Codex (`pins.toml`, `nudged.toml` read once, left in place); `HistoryIndex`; `slopmax-client`; the CLI's changes through the API while a daemon runs, `status --watch` on the event stream; reset windows in the ledger (`windows.jsonl` read, no longer written); a pin saved the moment it is set; jobs on 30 s ticks. Gates on the static musl build, 4 accounts, a year of ledger: idle 6 switches a minute, 1 thread, 4.6 MB; serve to `/healthz` 21 ms; warm `/history` with no file opened 0.55 / 0.58 / 1.23 ms for today / 7 days / 30 days, HTTP round trip included; since 2026-11-15 the 30-day answer takes about 0.3 ms (`bench history`, a year of 4,000 answers a day: 2.5 ms before), within the gate |
 | 5 | done (`2fbadbb`, `769935d`) | The React UI embedded and served at `/slopmax/`; `dashboard.html` deleted; the first API under `/slopmax/*` retired, its addresses answering 404 and naming `/slopmax/api` |
-| 6 | dropped 2026-11-16: the macOS app was deleted; the CLI and its web UI are the only interface | Was built, then deleted: the app's Swift client tested on Linux against the fixtures and a live daemon |
-| 7 | dropped 2026-11-16: the GPUI app and `slopmax-app` were deleted; was started (`cfa242c`) | Was started, then deleted: the app redrew when a countdown would read differently, not every second |
 
 **Decisions revised on measurement:**
 
@@ -21,12 +19,11 @@ The plan for slopmax after v0.3.0, carrying over what a TypeScript rewrite got r
 - **JSON stays serde_json.** Measured on the 300 KB conversation: framing by `rawjson` 31 µs (serde_json's validation 89, sonic-rs 71, simd-json 129); finding `model` 0.3 µs (sonic-rs 0.4); a usage event by the typed reader 0.6 µs (sonic-rs 0.5, serde_json to `Value` 2.0). sonic-rs wins where slopmax parses whole documents (translation), but into serde types only 1.27× (229 µs against 291), and it adds 17 crates, past the budget of 70; simd-json adds 9 and 123 KB and is slower here. There is no JSON parser in std.
 - **slopmax's own files are TOML**, as `config.toml` is; logs (`usage/*.jsonl`, `windows.jsonl`), the setup backup and other tools' files stay JSON (see `ARCHITECTURE.md`, Files).
 - **Size: the budget is 9 MiB from phase 4.** The `slopmax-daemon` split cost 0.45 MB (each crate compiles its own copies of the generic code it uses, which LTO cannot merge on stable Rust) and retiring `/slopmax/*` saved 0.17 MB: 8,477,632 bytes without the UI. The CLI as an API client (D6) decodes the API's types and carries `slopmax-client`: 8,132,272 bytes without the web UI, as CI measures it, and 8,445,536 with it, from about 7.28 and 7.60 MB before phase 4 (same toolchain). Most of the growth is serde's decoders for the API's tagged types, half of it the buffered path serde takes for internally tagged enums; decoding through one deserializer would save about 0.25 MB.
-- **`HistoryIndex` keeps the last month by hour, rolling the days before today up as they are first read**, rather than daily aggregates for older months: `/history` ranges reach 30 days, and `usage --range all` reads the ledger as it always did. Waits and speeds are binned (exact below 1,024, within 0.1% above), so an hour holds a few hundred numbers. On a month of 1.3 million answers (10 agents' worth), warm reads take 0.25 ms for today, 0.7 ms for 7 days and 2.8 ms for 30, most of it counting each session once; a desktop's ledger reads in well under the 1 ms gate.
-- **No desktop apps.** The macOS SwiftUI app, the GPUI app with its `slopmax-app` view model, and the web UI's desktop host were deleted on 2026-11-16 (their history is in git). The CLI and the web UI its daemon serves are the interface.
+- **`HistoryIndex` keeps the last month by hour, rolling the days before today up as they are first read**, rather than daily aggregates for older months: `/history` ranges reach 30 days, and `usage --range all` reads the ledger as it always did. Waits and speeds are binned (exact below 1,024, within 0.1% above), so an hour holds a few hundred numbers. On a month of 1.3 million answers (10 agents' worth), warm reads take 0.25 ms for today, 0.7 ms for 7 days and 2.8 ms for 30, most of it counting each session once; one machine's ledger reads in well under the 1 ms gate.
 
 ## Summary
 
-slopmax stays one static Rust binary, and that binary is the daemon. Every other front end is a client of it: the CLI and the web UI it serves. The daemon runs on a **current-thread tokio runtime** and keeps accounts in an **in-memory snapshot**, so a request touches no files. It uses a **slot-indexed pool behind one short lock** and **one concrete relay body that records exactly one outcome**. The ledger is a **single `write(2)` to a month file held open with O_APPEND**. All background work goes through **one deadline scheduler**, and all detached work is owned by a tracker with an explicit shutdown order. The daemon is the **only writer** of state. It speaks **one typed contract** (`slopmax-api`), wire-compatible with the TS `SlopmaxApi`, and keeps it honest with golden fixtures rather than codegen. It **pushes** status over one SSE stream instead of being polled. The React UI from `web/apps/ui` is served from the binary and `dashboard.html` is deleted. The Rust core also computes the derived facts (tone, pace, attention, next change), so the clients only format them. The migration has 7 phases, each shipped as its own version. Each has numeric gates and keeps old clients working until they have moved.
+slopmax stays one static Rust binary, and that binary is the daemon. Every other front end is a client of it: the CLI and the web UI it serves. The daemon runs on a **current-thread tokio runtime** and keeps accounts in an **in-memory snapshot**, so a request touches no files. It uses a **slot-indexed pool behind one short lock** and **one concrete relay body that records exactly one outcome**. The ledger is a **single `write(2)` to a month file held open with O_APPEND**. All background work goes through **one deadline scheduler**, and all detached work is owned by a tracker with an explicit shutdown order. The daemon is the **only writer** of state. It speaks **one typed contract** (`slopmax-api`), wire-compatible with the TS `SlopmaxApi`, and keeps it honest with golden fixtures rather than codegen. It **pushes** status over one SSE stream instead of being polled. The React UI from `web/apps/ui` is served from the binary and `dashboard.html` is deleted. The Rust core also computes the derived facts (tone, pace, attention, next change), so the clients only format them. The migration has 5 phases, each shipped as its own version. Each has numeric gates and keeps old clients working until they have moved.
 
 ### Measured targets
 
@@ -68,13 +65,11 @@ The bench host is the 8 vCPU host in `SUMMARY.md` with the same rig and pinning.
 | D3 | The ledger is one inline `write(2)` to the month file, kept open with O_APPEND. Settle runs in `Drop`. There is no queue and no task. | `ledger.rs:84-136`: detached, `spawn_blocking` plus mkdir and open per batch. It is never drained (`daemon.rs:131-133`). |
 | D4 | One `Supervisor` owns everything that runs in the background: a `CancellationToken`, a `TaskTracker`, the scheduler's `JoinSet`, and the explicit shutdown order. | `daemon.rs:58-120`: eight detached loops; `every` never exits (`daemon.rs:138-149`). |
 | D5 | **Nothing blocks the runtime thread.** File I/O goes through `blocking()`. The only inline syscalls allowed are the ledger write and the rescan's `statx`. This lands **before** D1 in the same phase. | `save_state` → `write_private` calls `sync_all` on a worker (`daemon.rs:216-222`, `fsx.rs:21`). `store.save` runs inside an async task (`auth/mod.rs:327`). `store.update` runs on workers (`admin.rs:455-473`). |
-| D6 | The daemon is the only writer of state while it runs. The CLI and every front end are API clients. A serve lock enforces this. | The app writes files and then calls `/sync`: `slopmax-app/src/lib.rs:362, 417, 462, 501`. |
+| D6 | The daemon is the only writer of state while it runs. The CLI and every front end are API clients. A serve lock enforces this. | Clients wrote files and then called `/sync`. |
 | D7 | One typed contract, `slopmax-api`, wire-compatible with the TS `SlopmaxApi` under `/slopmax/api` (`ts/packages/domain/src/api.ts:368`). There is one settings registry, typed errors and one event stream. Golden fixtures keep it honest; there is no codegen. | `json!` replies; form strings joined from query and body (`admin.rs:80, 205`); setting names as strings in about 8 places (`config.rs:183-263`). |
 | D8 | **Old `/slopmax/*` admin routes stay as a thin compat shim over the new handlers until the last client has moved (phase 5).** | `background.rs:76-104` and `dashboard.html:492, 1306` call them. Both proposals deleted the routes 2-4 releases too early. |
-| D9 | Status is pushed over SSE, not polled. One deadline scheduler replaces the fixed intervals. | App polls every 2 s (`slopmax-app/src/lib.rs:41`); dashboard `setInterval` (`dashboard.html:1459-1461`). |
+| D9 | Status is pushed over SSE, not polled. One deadline scheduler replaces the fixed intervals. | The dashboard polled with `setInterval` (`dashboard.html:1459-1461`). |
 | D10 | The React UI is served from the daemon, gzip-only, on the system font. `dashboard.html` is deleted. | 99,748 B raw `include_str!` (`admin.rs:33`). |
-| D11 | Dropped 2026-11-16: the desktop apps were deleted. (Was: a SwiftUI macOS app as a pure HTTP+SSE client with no FFI.) | |
-| D12 | Dropped 2026-11-16: the desktop apps were deleted. (Was: GPUI for Windows and Linux as a thin API client behind hardware gates.) | |
 
 ---
 
@@ -115,9 +110,9 @@ benches/                gungraun crate, not a default member
 | `proxy/*`, `daemon.rs`, `admin.rs`, `hub.rs` | `slopmax-daemon` | Breaks the `admin.rs:58` ↔ `daemon.rs:107` cycle. |
 | `App` (14 fields, six std Mutex caches, `proxy/mod.rs:47-79`) | `Daemon` + `ProxyCaches` | Explicit ownership. |
 | `Report.accounts[].state: AccountState` (`report.rs:122`) | `api::AccountView` | The API is no longer welded to the `state.json` format. |
-| `slopmax-app/src/view.rs` (since deleted) derivations: pace, attention, which window binds, `next_change`, the status facts | `core/report.rs` → DTO fields (enums, fractions, instants). `Tone` is already there (`report.rs:154, 207`). | One derivation site for every client. This was unscheduled in lean. |
-| `slopmax-app/src/alerts.rs` (since deleted) decisions + the `desktop-notified` file | `core/notify.rs` + `told` in `state.json` → `Event::Notice` | One decider. |
-| `pins.json`, `nudged.json`, `windows.jsonl`, the 30-day ledger scan for the Codex model (`proxy/mod.rs:85-91`) | `state.json {pins, told, codex{version,last_model}}` + `WindowEnded` ledger records | Fewer files; startup no longer grows with history. Old files are **read once and left in place for one release**, so a downgrade works (§9.3). |
+| Client-side derivations: pace, attention, which window binds, `next_change`, the status facts | `core/report.rs` → DTO fields (enums, fractions, instants). `Tone` is already there (`report.rs:154, 207`). | One derivation site for every client. This was unscheduled in lean. |
+| Client-side notice decisions | `core/notify.rs` + `told` in `state.json` → `Event::Notice` | One decider. |
+| `pins.json`, `nudged.json`, `windows.jsonl`, the 30-day ledger scan for the Codex model (`proxy/mod.rs:85-91`) | `state.json {pins, told, codex{version,last_model}}` + `WindowEnded` ledger records | Fewer files; startup no longer grows with history. Old files are **read once and left in place for one release**, so a downgrade works (§8.3). |
 | `paths.rs:76-103` free functions | deleted; `&Home` everywhere | Tests run side by side. |
 | `net/client.rs:167-172` `DEFAULT_PROXY` OnceLock | `Client::builder().proxy(Matcher)` | Explicit; sees the system proxy. |
 | `proxy/dashboard.html` | deleted (phase 5) | D10 |
@@ -145,7 +140,7 @@ benches/                gungraun crate, not a default member
   - `#[allow]` with a reason is granted only in `ledger::Sink`, `snapshot::rescan` (statx only) and `blocking.rs`.
 - **Long-poll detector (test only).** A test build compiled with `RUSTFLAGS="--cfg tokio_unstable"` uses `on_before_task_poll` / `on_after_task_poll` (both are `#[cfg(tokio_unstable)]` in `tokio-1.54.1/src/runtime/builder.rs`). It fails any poll longer than 1 ms. It runs as a separate nightly CI job, never in release builds.
 - **The `hub` feature** turns on `rt-multi-thread` with `workers = N` (config or `SLOPMAX_WORKERS`). All shared state stays `Send + Sync` behind std locks, so this is a build switch, not a fork.
-- **Accepted cost.** On one thread a 300 KB translation decode delays other streams by about 1-3 ms. TLS handshakes take about 1 ms of CPU each. Both are bounded by the head-of-line gate (§7.4).
+- **Accepted cost.** On one thread a 300 KB translation decode delays other streams by about 1-3 ms. TLS handshakes take about 1 ms of CPU each. Both are bounded by the head-of-line gate (§6.4).
 
 ### 3.2 State ownership: snapshots plus short std locks, no actors
 
@@ -297,7 +292,7 @@ Robust's `sessionTtlMinutes` was wrong. Keeping the TOML keys also makes a downg
 
 `refreshTokens` and `websockets` join `LIVE`. They already apply live but are invisible to the API (`config.rs:183-216`).
 
-**Deleted:** `live_value`, `Config::live`, admin `settings()`, the `Setting` enum in slopmax-app, `view::live_detail(&str)`, and the strings in GPUI and the dashboard. A test checks that the registry, the TOML template (`config.rs:623-656`) and the `SettingsView` fixture agree. A `compile_fail` doctest proves that a misspelled key fails to compile.
+**Deleted:** `live_value`, `Config::live`, admin `settings()`, and the setting names spelled out in the dashboard. A test checks that the registry, the TOML template (`config.rs:623-656`) and the `SettingsView` fixture agree. A `compile_fail` doctest proves that a misspelled key fails to compile.
 
 ### 4.2 API, errors, compat
 
@@ -310,7 +305,7 @@ Robust's `sessionTtlMinutes` was wrong. Keeping the TOML keys also makes a downg
   - usage, history, events, notify test.
 - **Routing without axum.** A `Route` enum is parsed once and matched exhaustively. Bodies are capped at 64 KiB and request types use `deny_unknown_fields`.
 - **Errors.** thiserror enums at each boundary: `ConfigError`, `StoreError{NotFound, Ambiguous, Gone, Io}`, `LoginError`, `ProviderError`, `ListenError{addr, holder}`; `RefreshError` and `UsageError` are kept. There is one `From` into `ApiError` per boundary. `ApiError` is `#[serde(tag = "_tag")]` with `status()`. anyhow stays in the CLI's `main` only.
-- **`api/compat.rs`** maps the old `/slopmax/{status,refresh,sync,shutdown,usage,history,settings,events,accounts/:id/:action,…}` onto the new handlers and keeps today's JSON shapes. It is deleted in phase 5, once the dashboard is gone and `slopmax-app` is on the new API (phase 4). A test drives today's `background.rs` client (`background.rs:239-310` mock list) against the shim.
+- **`api/compat.rs`** maps the old `/slopmax/{status,refresh,sync,shutdown,usage,history,settings,events,accounts/:id/:action,…}` onto the new handlers and keeps today's JSON shapes. It is deleted in phase 5, once the old dashboard is gone and every client is on the new API (phase 4). A test drives today's `background.rs` client (`background.rs:239-310` mock list) against the shim.
 - **Version skew.** `Hello` and `/healthz` carry `version`, so a client can tell it is talking to another release of the daemon.
 
 ### 4.3 How TS gets its types: golden fixtures, no codegen
@@ -332,21 +327,15 @@ Robust's `sessionTtlMinutes` was wrong. Keeping the TOML keys also makes a downg
 
 ---
 
-## 5. Desktop
+## 5. Crates, build, release
 
-Dropped 2026-11-16, with the apps it planned: the macOS SwiftUI app, GPUI on Windows and Linux, and the web UI's desktop host were deleted. The CLI and the web UI the daemon serves are the interface. The plan is in git history.
-
----
-
-## 6. Crates, build, release
-
-### 6.1 Verdicts
+### 5.1 Verdicts
 
 | Crate | Verdict |
 |---|---|
 | tokio → 1.54.1 | **Keep** (RUSTSEC-2026-0386). Drop only `fs`: grep finds no `tokio::fs`. **Keep `process`**, which `notify.rs:176-180` uses; robust's list broke this. Audit `io-std` (no `tokio::io::std*` use found by grep; drop it if the build confirms). Move `rt-multi-thread` behind `hub`. `test-util` in dev only. |
 | hyper 1.12, hyper-util, http, http-body-util, bytes, tower-service | **Keep.** This is the minimal HTTP/1 stack. |
-| hyper-util `client-proxy` (all) + `client-proxy-system` (macOS/Windows only) | **Add.** It sees the macOS system proxy and parses NO_PROXY the way curl does. It pulls system-configuration (+core-foundation) on macOS and windows-registry on Windows, which the musl gate cannot see, so a **macOS size gate** is added (§6.4). |
+| hyper-util `client-proxy` (all) + `client-proxy-system` (macOS/Windows only) | **Add.** It sees the macOS system proxy and parses NO_PROXY the way curl does. It pulls system-configuration (+core-foundation) on macOS and windows-registry on Windows, which the musl gate cannot see, so a **macOS size gate** is added (§5.4). |
 | rustls 0.23.46 + ring, hyper-rustls, native-certs, webpki 0.103.16 | **Keep and update** (RUSTSEC-2026-0346..0349, -0382). aws-lc-rs is +2.3 MB. |
 | serde, serde_json (preserve_order), toml_edit, memchr, base64, ring, libc, anyhow | **Keep.** preserve_order is needed at `provider/codex/wire.rs:139`. |
 | thiserror 2 | **Add.** Proc macro only. |
@@ -361,7 +350,7 @@ Dropped 2026-11-16, with the apps it planned: the macOS SwiftUI app, GPUI on Win
 
 **Tools via mise:** cargo-nextest, cargo-llvm-cov (report only), cargo-deny, cargo-bloat, cargo-auditable, cargo-fuzz (nightly), bun.
 
-### 6.2 Profiles
+### 5.2 Profiles
 
 ```toml
 [workspace.package]  rust-version = "1.99"     # = mise pin; delete the msrv task (mise.toml:20 pins 1.89)
@@ -374,7 +363,7 @@ Dropped 2026-11-16, with the apps it planned: the macOS SwiftUI app, GPUI on Win
 - Use `--remap-path-prefix` for `$CARGO_HOME` and the checkout, or `trim-paths` if 1.99 has stabilized it.
 - Evaluate `opt-level = "s"` once, against the speed gates; adopt it only within ±5%.
 
-### 6.3 Release pipeline
+### 5.3 Release pipeline
 
 - **Per version:** a signed tag and a GitHub release, with notes from CHANGELOG.md.
 - **Native runners:** x86_64 musl on ubuntu-24.04; aarch64 musl on ubuntu-24.04-arm (today it is cross-built and never run, `release.yml:31-32`); both darwin targets on macos-15, lipo'd into a universal binary. Each runner smoke-runs `--version` and `serve` until `/healthz`.
@@ -387,7 +376,7 @@ Dropped 2026-11-16, with the apps it planned: the macOS SwiftUI app, GPUI on Win
   - `ts/` added to `.dockerignore` (956 MB of node_modules is in the context today).
 - **Fix the red macOS check in phase 1:** `doctor::tests::cliproxyapi_matters_only_with_linked_accounts` (`doctor.rs:808`).
 
-### 6.4 Size
+### 5.4 Size
 
 | Change | Δ |
 |---|---|
@@ -407,16 +396,16 @@ Dropped 2026-11-16, with the apps it planned: the macOS SwiftUI app, GPUI on Win
 
 ---
 
-## 7. Testing and gates
+## 6. Testing and gates
 
-### 7.1 Testability first (phase 1-2 prerequisite)
+### 6.1 Testability first (phase 1-2 prerequisite)
 
 - **Clock.** `Clock` on `Daemon`. `ManualClock` is tied to tokio's paused base, so wall time and timers move together. Use `tokio::time::Instant` everywhere; `forward.rs:16` uses `std::time::Instant` today. The 74 direct `Timestamp::now()` call sites move to the clock. The pool keeps its explicit `now` arguments.
 - **`Transport::Memory`.** A hyper-util `Connect` that returns one end of `tokio::io::duplex`, served by an async `MockUpstream` whose channel-backed bodies can send, stall, error or end at chosen moments (about 150 lines; `ts/packages/core/test/support/memory-upstream.ts`). The inbound side drives `http1::serve_connection` over a duplex. Keep 3-5 real-TCP smoke tests.
 - **`Daemon::start(Options) -> Handle`** with `stop()`. It replaces tests that call `proxy::handle` directly (`tests/proxy.rs:522-528`).
 - **Runtime in tests:** `#[tokio::test(start_paused = true, flavor = "current_thread")]`.
 
-### 7.2 Layers
+### 6.2 Layers
 
 | Layer | Tool | Scope |
 |---|---|---|
@@ -440,15 +429,15 @@ Dropped 2026-11-16, with the apps it planned: the macOS SwiftUI app, GPUI on Win
 
 Target: about 1,100 tests in ≤ 8 s.
 
-### 7.3 Deterministic perf gates (every PR)
+### 6.3 Deterministic perf gates (every PR)
 
 1. **Instruction counts** (gungraun): one Claude and one Codex request in-process, plus `pick`, `Tap::feed`, `rawjson`, translate. Fail at +3% for request benches and +5% for micro benches, against committed baselines.
 2. **Allocations** (gungraun DHAT): ≤ 40 per request; 0 from pick and settle.
 3. **Syscalls:** `strace -c -f` over 1,000 sequential requests on the current-thread rig **with `SLOPMAX_LOG=info`**; today the rig never calls `log::init`. Assert per request: openat = statx = mkdir = 0, futex ≤ 1, writev ≤ upstream reads + 1, ledger writes = 1.
 4. **Idle** (Linux): 4 fake accounts, 60 s. Voluntary context switches summed over `/proc/PID/task/*` ≤ 6, threads ≤ 2, RSS ≤ the phase-1 baseline (≤ 6 MB from phase 4). On a macOS runner, the same from `top -l` idle wakeups.
-5. **Size and crates:** §6.4.
+5. **Size and crates:** §5.4.
 
-### 7.4 Wall-clock gates (nightly, or required on a pinned runner)
+### 6.4 Wall-clock gates (nightly, or required on a pinned runner)
 
 - **Against `bench raw`:** small at 32 at once ≥ 70% of raw throughput; 300 KB ≥ 80%; one-at-a-time p50 ≤ raw + 0.10 ms; CPU ≤ 2× raw.
 - **Absolute targets** from the opening table, including:
@@ -461,7 +450,7 @@ Target: about 1,100 tests in ≤ 8 s.
 
 ---
 
-## 8. Migration plan
+## 7. Migration plan
 
 Each phase ships as its own version with a signed tag and a release.
 
@@ -501,7 +490,7 @@ Each phase ships as its own version with a signed tag and a release.
 ### Phase 2, v0.5: the hot path down to the floor (about 2 weeks, about 2,500 lines)
 
 **Scope:**
-- §7.1 infrastructure.
+- §6.1 infrastructure.
 - Slot pool (≤ 3 locks). `AccountEntry` caches. In-place headers, `Uri::from_parts`, the beta memo. Raw rate-limit compare and pooled-header cache.
 - `Relay` + `Settle` + `EndReason` + live set and sweeper. Typed taps. Codex hold.
 - **`is_valid` → framing check, after proptest agreement and 10 minutes of clean fuzzing.**
@@ -553,7 +542,6 @@ Each phase ships as its own version with a signed tag and a release.
   - `state.json` absorbs pins, told and codex; old files read once and left in place;
   - nudge rules into `notify.rs` with `Event::Notice`.
 - **Clients:**
-  - `slopmax-app` (since deleted) becomes an API client on **every platform** (no Store or Config writes, SSE follower, `Change` split, `next_change`), so GPUI pins keep working once pins move into `state.json`;
   - the CLI's mutations go through the API whenever a daemon runs;
   - `status --watch` runs over SSE.
 
@@ -564,8 +552,6 @@ Each phase ships as its own version with a signed tag and a release.
 - `/history` ≤ 1 ms after warm-up and 0 file reads;
 - serve → `/healthz` ≤ 25 ms with a 12-month ledger;
 - a panicking job keeps its schedule;
-- the `cargo tree` rule (no slopmax-core in slopmax-app; gone with the crate);
-- `slopmax-app` (since deleted) wakes 0 times while nothing changes;
 - downgrade test vN+1 → vN.
 
 ### Phase 5, v0.8: serve the React UI; retire the shim (about 1 week, about 300 lines Rust)
@@ -578,19 +564,9 @@ Each phase ships as its own version with a signed tag and a release.
 - a headless smoke test: page loads, key entered, Status rendered, browser sign-in against the mock provider;
 - net size delta ≤ +250 KB, total ≤ 7 MiB.
 
-### Phase 6, v0.9: SwiftUI macOS app
-
-Dropped 2026-11-16: the macOS app was deleted before it shipped, and the CLI command it used to find the daemon with it. Its plan is in git history.
-
-### Phase 7, v1.0: GPUI hardening for Windows and Linux
-
-Dropped 2026-11-16: the GPUI app and `slopmax-app` were deleted. It had been started (`cfa242c`).
-
-Left from this phase and not about the apps: the jiff decision (§6.1) and the mimalloc-on-musl decision (§6.1). The Windows daemon release was never part of it; it was done on 2026-11-15 without a named pipe or schtasks: the daemon stays on TCP, and `slopmax service install` puts `slopmaxw.exe` (crates/slopmax-launcher) in the user's Run key, which needs no administrator, where a logon task needs one or a stored password, and keeps the proxy in the user's session, where it can open a browser for a sign-in.
-
 ---
 
-## 9. Risks
+## 8. Risks
 
 | Risk | Mitigation |
 |---|---|
@@ -627,25 +603,22 @@ Left from this phase and not about the apps: the jiff decision (§6.1) and the m
 
 ---
 
-## 10. Panel scores and disagreements
+## 9. Panel scores and disagreements
 
-| Judge | Winner | lean (perf / min / tests / ext / desktop / migration / overall) | robust (same axes) |
+| Judge | Winner | lean (perf / min / tests / ext / migration / overall) | robust (same axes) |
 |---|---|---|---|
-| perf-skeptic | lean | 8 / 9 / 7.5 / 7 / 8 / 8 / **8.2** | 7.5 / 5.5 / 8 / 8 / 6 / 6.5 / **6.9** |
-| product-skeptic | robust | 8.5 / 9 / 7 / 7 / 7 / 6 / **7.3** | 8.5 / 6.5 / 8 / 8.5 / 7.5 / 6.5 / **7.7** |
+| perf-skeptic | lean | 8 / 9 / 7.5 / 7 / 8 / **8.2** | 7.5 / 5.5 / 8 / 8 / 6.5 / **6.9** |
+| product-skeptic | robust | 8.5 / 9 / 7 / 7 / 6 / **7.3** | 8.5 / 6.5 / 8 / 8.5 / 6.5 / **7.7** |
 | **Mean overall** | **lean** | **7.75** | **7.3** |
+
+The overall scores are as the judges gave them, over one more axis, since dropped.
 
 **Where the judges disagreed:**
 
-1. **The macOS bridge.**
-   - perf-skeptic: HTTP+SSE follows `VERDICT.md:181` and avoids a runtime in the GUI.
-   - product-skeptic: UniFFI avoids a third view model and its version-skew and reconnect logic.
-   - Resolved for HTTP+SSE, with the decision logic moved into `report.rs`, so Swift is left with only the reconnect loop (about 150 lines) and the formatting.
-2. **Sequencing risk.**
+1. **Sequencing risk.**
    - product-skeptic weighed lean's inline fsync on current-thread and its early `is_valid` swap heavily; perf-skeptic weighed robust's unreachable gates and unmeasurable bench heavily.
    - Both were right; this plan fixes both.
-3. **Desktop plan score.** perf-skeptic gave lean 8 and robust 6; product-skeptic gave lean 7 and robust 7.5, on the third-view-model argument.
-4. **Migration plan score.** perf-skeptic gave lean 8 and robust 6.5; product-skeptic gave lean 6 and robust 6.5. Product-skeptic alone found that both proposals delete `/slopmax/*` before their clients move. Fixed here by D8 and the phase 4-5 order.
-5. **Minimalism versus extensibility.** Both judges ranked lean higher on minimalism (9 against 5.5 and 6.5) and robust higher on extensibility (8 or 8.5 against 7). They disagreed on how much that matters for the overall score.
+2. **Migration plan score.** perf-skeptic gave lean 8 and robust 6.5; product-skeptic gave lean 6 and robust 6.5. Product-skeptic alone found that both proposals delete `/slopmax/*` before their clients move. Fixed here by D8 and the phase 4-5 order.
+3. **Minimalism versus extensibility.** Both judges ranked lean higher on minimalism (9 against 5.5 and 6.5) and robust higher on extensibility (8 or 8.5 against 7). They disagreed on how much that matters for the overall score.
 
-**Both judges flagged** that neither proposal gated concurrent p99, head-of-line delay or macOS artifact size. Those gates are added in §7.4 and §6.4.
+**Both judges flagged** that neither proposal gated concurrent p99, head-of-line delay or macOS artifact size. Those gates are added in §6.4 and §5.4.

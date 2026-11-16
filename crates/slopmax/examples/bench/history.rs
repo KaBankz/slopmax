@@ -1,5 +1,5 @@
 //! What the dashboard waits for on `/slopmax/api/history`: a ledger written
-//! as a desktop's would be, then the daemon serving it and asked for each
+//! as one machine's would be, then the daemon serving it and asked for each
 //! range over one kept-alive connection, so the time is the HTTP round
 //! trip with the answer.
 //!
