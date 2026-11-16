@@ -25,7 +25,7 @@ export function Quiet({
   const unwired = Option.exists(AsyncResult.value(agents), (list) => !anyWired(list))
   return (
     <Empty icon={icon} title={title} detail={unwired ? `${unwiredLine} ${detail}` : detail}>
-      <Button variant={unwired ? "primary" : "default"} onClick={() => go(Pages.agents)}>
+      <Button variant={unwired ? "default" : "outline"} onClick={() => go(Pages.agents)}>
         Connect an agent
       </Button>
     </Empty>

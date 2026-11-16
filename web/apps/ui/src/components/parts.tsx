@@ -1,27 +1,37 @@
-// The pieces every page is built from: a tone's dot and label, meters, the
-// pool's segmented bar, panels, sections, rows, figures, and empty states.
+// The pieces every page is built from, each a composition of shadcn/ui
+// components: a tone's dot and label, meters (Progress), the pool's
+// segmented bar, panels (Card), sections, rows (Item), figures (Card),
+// empty states (Empty), placeholders (Skeleton) and failures (Alert).
 import type { Tone } from "@slopmax/client"
 import { cva } from "class-variance-authority"
 import { Option } from "effect"
-import type { LucideIcon } from "lucide-react"
 import { AsyncResult } from "effect/reactivity"
+import type { LucideIcon } from "lucide-react"
+import { CircleAlert } from "lucide-react"
 import type { ReactNode } from "react"
 import appIcon from "../icon-128.png"
-import { pct } from "../lib/style.ts"
 import mark from "../logo.svg"
 import type { Overview } from "../view/groups.ts"
 import { failureText, poolBarTip, segmentsShown, sentence, sentenceCase } from "../view/words.ts"
+import { Tip } from "./tip.tsx"
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert.tsx"
 import { Button } from "./ui/button.tsx"
-import { Tip } from "./ui/tooltip.tsx"
+import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from "./ui/card.tsx"
+import { Empty as EmptyRoot, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "./ui/empty.tsx"
+import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "./ui/item.tsx"
+import { Progress } from "./ui/progress.tsx"
+import { Skeleton as SkeletonBar } from "./ui/skeleton.tsx"
+
+export { Kbd } from "./ui/kbd.tsx"
 
 const dotVariants = cva("inline-block size-1.5 shrink-0 rounded-full", {
   variants: {
     tone: {
       good: "bg-success",
-      muted: "bg-faint",
-      accent: "bg-faint",
+      muted: "bg-muted-foreground",
+      accent: "bg-muted-foreground",
       warn: "bg-warning",
-      bad: "bg-danger",
+      bad: "bg-destructive",
     },
   },
 })
@@ -37,7 +47,7 @@ const labelVariants = cva("inline-flex min-w-0 items-center gap-1.5", {
       muted: "text-muted-foreground",
       accent: "text-muted-foreground",
       warn: "text-warning",
-      bad: "text-danger",
+      bad: "text-destructive",
     },
   },
 })
@@ -70,19 +80,11 @@ export function Label({
   )
 }
 
-const fillVariants = cva("absolute inset-y-0 left-0 w-(--fill) min-w-0.5 rounded-xs", {
-  variants: {
-    tone: {
-      good: "bg-meter",
-      muted: "bg-meter",
-      accent: "bg-meter",
-      warn: "bg-warning",
-      bad: "bg-danger",
-    },
-  },
-})
+/** A Progress tone for a state: warnings and failures in their color, the rest the primary color. */
+const meterTone = (tone: Tone): "default" | "warning" | "destructive" =>
+  tone === "warn" ? "warning" : tone === "bad" ? "destructive" : "default"
 
-/** A 4-tall bar filled to `fraction`; warnings and failures in their color, the rest neutral. */
+/** A thin Progress bar filled to `fraction`, with a tick where an even spend would have reached. */
 export function Meter({
   fraction,
   tone,
@@ -94,22 +96,16 @@ export function Meter({
   readonly marker?: number
 }) {
   return (
-    <div
-      className="relative h-1 w-full rounded-xs bg-track"
-      style={{ "--fill": pct(fraction), "--at": pct(marker ?? 0) }}
-    >
-      {fraction > 0 && <div className={fillVariants({ tone })} />}
-      {marker !== undefined && (
-        <div
-          aria-hidden
-          className="absolute -top-1 left-(--at) h-3 w-0.5 -translate-x-1/2 rounded-xs bg-muted-foreground"
-        />
-      )}
-    </div>
+    <Progress
+      value={Math.min(100, Math.max(0, fraction * 100))}
+      tone={meterTone(tone)}
+      marker={marker === undefined ? undefined : marker * 100}
+      className="w-full"
+    />
   )
 }
 
-const segmentVariants = cva("h-1 min-w-1 grow-(--weight) basis-0", {
+const segmentVariants = cva("min-w-1 grow-(--weight) basis-0", {
   variants: { idle: { true: "opacity-40", false: "" } },
 })
 
@@ -148,9 +144,9 @@ export function SegmentedBar({ window, weighted }: { readonly window: Overview; 
   )
 }
 
-/** A bordered card on the page's background. */
+/** A Card that holds rows edge to edge. */
 export function Panel({ children }: { readonly children: ReactNode }) {
-  return <div className="overflow-hidden rounded-xl border bg-background">{children}</div>
+  return <Card size="flush">{children}</Card>
 }
 
 /** A titled part of a page, with tools at its right. */
@@ -164,9 +160,9 @@ export function Section({
   readonly children: ReactNode
 }) {
   return (
-    <section className="flex min-w-0 flex-col gap-2.5">
-      <div className="flex min-h-6 items-center justify-between gap-3">
-        <h2 className="text-heading font-semibold">{title}</h2>
+    <section className="flex min-w-0 flex-col gap-3">
+      <div className="flex min-h-8 items-center justify-between gap-3">
+        <h2 className="font-heading text-base font-medium">{title}</h2>
         {trailing}
       </div>
       {children}
@@ -174,12 +170,12 @@ export function Section({
   )
 }
 
-/** A row in a panel: a hairline above all but the first. */
+/** A row in a Panel: a rule above all but the first. */
 export function Row({ children }: { readonly children: ReactNode }) {
-  return <div className="flex items-center gap-4 border-t border-separator px-4 py-3 first:border-t-0">{children}</div>
+  return <div className="flex items-center gap-4 border-t px-4 py-3 text-sm first:border-t-0">{children}</div>
 }
 
-/** A setting: its title over what it does, its control at the right. */
+/** A setting: an Item with its title over what it does, its control at the right. */
 export function SettingRow({
   title,
   detail,
@@ -190,17 +186,19 @@ export function SettingRow({
   readonly children?: ReactNode
 }) {
   return (
-    <div className="flex min-h-14 items-center gap-4 border-t border-separator px-4 py-3 first:border-t-0">
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <div className="font-medium">{title}</div>
-        {detail !== undefined && <div className="text-small text-muted-foreground">{detail}</div>}
-      </div>
-      {children}
+    <div className="border-t first:border-t-0">
+      <Item>
+        <ItemContent>
+          <ItemTitle>{title}</ItemTitle>
+          {detail !== undefined && <ItemDescription>{detail}</ItemDescription>}
+        </ItemContent>
+        {children !== undefined && <ItemActions>{children}</ItemActions>}
+      </Item>
     </div>
   )
 }
 
-/** A figure: its caption, the number, and a faint note. */
+/** A figure in a Card: its caption, the number, and a note. */
 export function Stat({
   title,
   value,
@@ -211,28 +209,30 @@ export function Stat({
   readonly note: string
 }) {
   return (
-    <div className="flex min-w-32 flex-1 flex-col gap-1 border-l border-separator px-4 py-3.5 first:border-l-0">
-      <div className="text-small text-muted-foreground">{title}</div>
-      <div className="text-figure font-semibold tabular">{value}</div>
-      <div className="truncate text-caption text-faint">{note}</div>
-    </div>
+    <Card>
+      <CardHeader>
+        <CardDescription>{title}</CardDescription>
+        <CardTitle className="text-2xl tabular-nums">{value}</CardTitle>
+      </CardHeader>
+      <CardFooter>
+        <span className="truncate text-xs text-muted-foreground">{note}</span>
+      </CardFooter>
+    </Card>
   )
 }
 
-/** Figures side by side in one panel. */
+/** Figures side by side, a Card each. */
 export function Stats({
   stats,
 }: {
   readonly stats: ReadonlyArray<{ readonly title: string; readonly value: string; readonly note: string }>
 }) {
   return (
-    <Panel>
-      <div className="flex flex-wrap">
-        {stats.map((stat) => (
-          <Stat key={stat.title} {...stat} />
-        ))}
-      </div>
-    </Panel>
+    <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2 @4xl:grid-cols-4">
+      {stats.map((stat) => (
+        <Stat key={stat.title} {...stat} />
+      ))}
+    </div>
   )
 }
 
@@ -249,31 +249,35 @@ export function Empty({
   readonly children?: ReactNode
 }) {
   return (
-    <Panel>
-      <div className="flex flex-col items-center gap-1.5 px-6 py-10 text-center">
+    <EmptyRoot>
+      <EmptyHeader>
         {Icon !== undefined && (
-          <span className="mb-1.5 flex size-9 items-center justify-center rounded-full bg-well text-muted-foreground">
-            <Icon aria-hidden className="size-4.5" />
-          </span>
+          <EmptyMedia variant="icon">
+            <Icon aria-hidden />
+          </EmptyMedia>
         )}
-        <div className="font-medium">{title}</div>
-        <div className="max-w-md text-small text-muted-foreground">{detail}</div>
-        {children !== undefined && <div className="mt-3 flex gap-2">{children}</div>}
-      </div>
-    </Panel>
+        <EmptyTitle>{title}</EmptyTitle>
+        <EmptyDescription>{detail}</EmptyDescription>
+      </EmptyHeader>
+      {children !== undefined && (
+        <EmptyContent>
+          <div className="flex gap-2">{children}</div>
+        </EmptyContent>
+      )}
+    </EmptyRoot>
   )
 }
 
 /** A placeholder shaped like content, while it loads. */
 export function Skeleton({ lines = 3 }: { readonly lines?: number }) {
   return (
-    <Panel>
-      <div aria-hidden className="flex flex-col gap-3 p-4">
+    <Card aria-hidden>
+      <div className="flex flex-col gap-3 px-4">
         {Array.from({ length: lines }, (_, i) => (
-          <div key={i} className="h-3 animate-pulse rounded-sm bg-track first:w-1/3 last:w-2/3" />
+          <SkeletonBar key={i} className="h-4 first:w-1/3 last:w-2/3" />
         ))}
       </div>
-    </Panel>
+    </Card>
   )
 }
 
@@ -287,12 +291,7 @@ export function Logo({ size = "md" }: { readonly size?: "sm" | "md" | "lg" }) {
   return <img src={mark} alt="" width={20} height={20} className={size === "sm" ? "size-4" : "size-5"} />
 }
 
-/** A keyboard shortcut, faint. */
-export function Kbd({ children }: { readonly children: ReactNode }) {
-  return <kbd className="font-sans text-caption text-faint">{children}</kbd>
-}
-
-/** What went wrong reading something, with a way to try again. */
+/** What went wrong reading something, with a way to try again: a destructive Alert. */
 export function Failed({
   title,
   detail,
@@ -303,17 +302,18 @@ export function Failed({
   readonly onRetry?: () => void
 }) {
   return (
-    <Panel>
-      <div role="alert" className="flex flex-col items-center gap-1.5 px-6 py-10 text-center">
-        <div className="font-medium text-danger">{title}</div>
-        <div className="max-w-md text-small text-muted-foreground">{sentenceCase(detail)}</div>
-        {onRetry !== undefined && (
-          <div className="mt-3">
-            <Button onClick={onRetry}>Try again</Button>
-          </div>
-        )}
-      </div>
-    </Panel>
+    <Alert variant="destructive">
+      <CircleAlert />
+      <AlertTitle>{title}</AlertTitle>
+      <AlertDescription>{sentenceCase(detail)}</AlertDescription>
+      {onRetry !== undefined && (
+        <AlertAction>
+          <Button variant="outline" size="sm" onClick={onRetry}>
+            Try again
+          </Button>
+        </AlertAction>
+      )}
+    </Alert>
   )
 }
 

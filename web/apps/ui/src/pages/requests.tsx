@@ -2,12 +2,25 @@
 // stream: who sent it, the model, the account that answered (and whether a
 // failover rescued it), its status, its tokens and how long it took.
 import { useAtomValue } from "@effect/atom-react"
+import { cva } from "class-variance-authority"
 import { Option } from "effect"
 import { Activity } from "lucide-react"
+import type { ReactNode } from "react"
 import { feedAtom, liveAtom, shownReportAtom, zone } from "../atoms.ts"
-import { Dot, Panel } from "../components/parts.tsx"
+import { Label } from "../components/parts.tsx"
 import { Quiet } from "../components/quiet.tsx"
+import { Card, CardContent } from "../components/ui/card.tsx"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx"
 import { feedRow, feedSize } from "../view/live.ts"
+
+const figureVariants = cva("animate-in text-right tabular-nums fade-in", {
+  variants: { muted: { true: "text-muted-foreground", false: "" } },
+})
+
+/** A figure in a table cell, right-aligned so the column's digits line up. */
+function Figure({ children, muted = false }: { readonly children?: ReactNode; readonly muted?: boolean }) {
+  return <div className={figureVariants({ muted })}>{children}</div>
+}
 
 export function RequestsPage() {
   const feed = useAtomValue(feedAtom)
@@ -29,44 +42,58 @@ export function RequestsPage() {
   }
   return (
     <div className="flex flex-col gap-2">
-      <Panel>
-        <div className="flex items-center gap-3 border-b border-separator px-4 py-2 text-small text-muted-foreground">
-          <span className="w-18 shrink-0">Time</span>
-          <span className="w-24 shrink-0">Agent</span>
-          <span className="w-40 shrink-0">Model</span>
-          <span className="min-w-0 flex-1">Account</span>
-          <span className="w-12 shrink-0 text-right">Status</span>
-          <span className="w-14 shrink-0 text-right">Tokens</span>
-          <span className="w-28 shrink-0 text-right">First byte · total</span>
-        </div>
-        {feed.map((entry) => {
-          const row = feedRow(entry.record, name, zone)
-          return (
-            <div
-              key={entry.seq}
-              className="flex animate-flash items-center gap-3 border-t border-separator px-4 py-2 text-small first:border-t-0"
-            >
-              <span className="w-18 shrink-0 text-muted-foreground tabular">{row.time}</span>
-              <span className="w-24 shrink-0 truncate">{row.who}</span>
-              <span className="w-40 shrink-0 truncate font-mono text-caption">{row.model}</span>
-              <span className="min-w-0 flex-1 truncate text-muted-foreground">{row.detail}</span>
-              <span
-                className={
-                  row.failed
-                    ? "inline-flex w-12 shrink-0 items-center justify-end gap-1.5 text-danger tabular"
-                    : "inline-flex w-12 shrink-0 items-center justify-end gap-1.5 text-muted-foreground tabular"
-                }
-              >
-                {row.failed && <Dot tone="bad" />}
-                {row.status}
-              </span>
-              <span className="w-14 shrink-0 text-right tabular">{row.tokens}</span>
-              <span className="w-28 shrink-0 text-right text-muted-foreground tabular">{row.took}</span>
-            </div>
-          )
-        })}
-      </Panel>
-      <p className="text-caption text-faint">The newest {feedSize} requests since this page opened.</p>
+      <Card>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-18">Time</TableHead>
+                <TableHead className="w-24">Agent</TableHead>
+                <TableHead className="w-40">Model</TableHead>
+                <TableHead className="w-full">Account</TableHead>
+                <TableHead className="w-12 text-right">Status</TableHead>
+                <TableHead className="w-14 text-right">Tokens</TableHead>
+                <TableHead className="w-28 text-right">First byte · total</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {feed.map((entry) => {
+                const row = feedRow(entry.record, name, zone)
+                return (
+                  <TableRow key={entry.seq}>
+                    <TableCell>
+                      <div className="animate-in text-muted-foreground tabular-nums fade-in">{row.time}</div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="max-w-24 animate-in truncate fade-in">{row.who}</div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="max-w-40 animate-in truncate font-mono text-xs fade-in">{row.model}</div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="max-w-0 min-w-full animate-in truncate text-muted-foreground fade-in">
+                        {row.detail}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex animate-in justify-end tabular-nums fade-in">
+                        <Label tone={row.failed ? "bad" : "muted"} text={row.status} raw />
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Figure>{row.tokens}</Figure>
+                    </TableCell>
+                    <TableCell>
+                      <Figure muted>{row.took}</Figure>
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+      <p className="text-xs text-muted-foreground">The newest {feedSize} requests since this page opened.</p>
     </div>
   )
 }

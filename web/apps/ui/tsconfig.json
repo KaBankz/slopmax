@@ -4,7 +4,9 @@
     "outDir": "../../.tsbuild/ui",
     "rootDir": ".",
     "lib": ["es2024", "dom", "dom.iterable"],
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    // `@/` is src/, for the shadcn CLI (components.json): it writes its files there and imports through it.
+    "paths": { "@/*": ["./src/*"] }
   },
   "include": ["src", "test", "build.ts", "dev.ts"],
   "references": [{ "path": "../../tools/test" }, { "path": "../../packages/client" }]

@@ -5,7 +5,7 @@ import { RegistryProvider, useAtomMount, useAtomSet, useAtomValue } from "@effec
 import { Option } from "effect"
 import type { Atom } from "effect/reactivity"
 import { AsyncResult } from "effect/reactivity"
-import { PanelLeft, Plus, RefreshCw, Trash } from "lucide-react"
+import { CircleAlert, Plus, RefreshCw, TriangleAlert, Trash } from "lucide-react"
 import { Component, type ErrorInfo, type ReactNode, useEffect } from "react"
 import { hostAtom, ownerKeyAtom } from "./api.ts"
 import {
@@ -31,12 +31,16 @@ import {
 } from "./atoms.ts"
 import { AskHost } from "./components/ask.tsx"
 import { Kbd } from "./components/parts.tsx"
-import { Sidebar } from "./components/sidebar.tsx"
+import { Segmented } from "./components/segmented.tsx"
+import { Sidebar, SidebarFrame } from "./components/sidebar.tsx"
 import { SignInCard } from "./components/sign-in.tsx"
+import { Tip } from "./components/tip.tsx"
 import { Toasts } from "./components/toasts.tsx"
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "./components/ui/alert.tsx"
 import { Button } from "./components/ui/button.tsx"
-import { Segmented } from "./components/ui/segmented.tsx"
-import { Tip, TooltipProvider } from "./components/ui/tooltip.tsx"
+import { Separator } from "./components/ui/separator.tsx"
+import { SidebarInset, SidebarTrigger } from "./components/ui/sidebar.tsx"
+import { TooltipProvider } from "./components/ui/tooltip.tsx"
 import { AccessPage } from "./pages/access.tsx"
 import { AgentsPage } from "./pages/agents.tsx"
 import { DiagnosticsPage, DiagnosticsTools } from "./pages/diagnostics.tsx"
@@ -143,7 +147,7 @@ function Tools({ page }: { readonly page: Page }) {
       return (
         <>
           <RefreshButton />
-          <Button variant="primary" onClick={() => go(Pages.access)}>
+          <Button onClick={() => go(Pages.access)}>
             <Plus />
             Add account
           </Button>
@@ -163,7 +167,7 @@ function Tools({ page }: { readonly page: Page }) {
       return <DiagnosticsTools />
     case "Requests":
       return (
-        <Button disabled={feed.length === 0} onClick={() => clear()}>
+        <Button variant="outline" disabled={feed.length === 0} onClick={() => clear()}>
           <Trash />
           Clear
         </Button>
@@ -210,50 +214,53 @@ function ProxyBanner() {
   const act = useAtomSet(proxyAction)
   if (proxy._tag === "OtherVersion") {
     return (
-      <div role="status" className="flex items-center gap-4 rounded-xl border border-warning px-4 py-3">
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="font-medium">
-            slopmax {proxy.running} is running, not this app's {proxy.bundled}
-          </span>
-          <span className="text-small text-muted-foreground">
-            {proxy.service
-              ? "The login service runs the other version. Restart points it at this app's slopmax."
-              : "Restart to run this app's slopmax."}
-          </span>
-        </div>
-        <Button variant="primary" onClick={() => act("restart")}>
-          Restart
-        </Button>
-      </div>
+      <Alert role="status" variant="warning">
+        <TriangleAlert />
+        <AlertTitle>
+          slopmax {proxy.running} is running, not this app's {proxy.bundled}
+        </AlertTitle>
+        <AlertDescription>
+          {proxy.service
+            ? "The login service runs the other version. Restart points it at this app's slopmax."
+            : "Restart to run this app's slopmax."}
+        </AlertDescription>
+        <AlertAction>
+          <Button size="sm" onClick={() => act("restart")}>
+            Restart
+          </Button>
+        </AlertAction>
+      </Alert>
     )
   }
   if (proxy._tag !== "Stopped") {
     if (live._tag !== "Reconnecting") return null
     return (
-      <div role="status" className="flex flex-col gap-0.5 rounded-xl border border-warning px-4 py-3">
-        <span className="font-medium">slopmax is not answering</span>
-        <span className="text-small text-muted-foreground">
+      <Alert role="status" variant="warning">
+        <TriangleAlert />
+        <AlertTitle>slopmax is not answering</AlertTitle>
+        <AlertDescription>
           This page tries again on its own; until then, what it shows may be out of date.
-        </span>
-      </div>
+        </AlertDescription>
+      </Alert>
     )
   }
   const fromDisk = Option.isSome(AsyncResult.getOrElse(offline, () => Option.none()))
   return (
-    <div role="status" className="flex items-center gap-4 rounded-xl border border-danger px-4 py-3">
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="font-medium">The proxy is stopped</span>
-        <span className="text-small text-muted-foreground">
-          Agents cannot reach slopmax.{" "}
-          {fromDisk
-            ? "This is what slopmax last saved; signing in, changes and history need it running."
-            : "Start it to see your accounts."}
-        </span>
-      </div>
-      <Button variant="primary" onClick={() => act("start")}>
-        Start the proxy
-      </Button>
-    </div>
+    <Alert role="status" variant="destructive">
+      <CircleAlert />
+      <AlertTitle>The proxy is stopped</AlertTitle>
+      <AlertDescription>
+        Agents cannot reach slopmax.{" "}
+        {fromDisk
+          ? "This is what slopmax last saved; signing in, changes and history need it running."
+          : "Start it to see your accounts."}
+      </AlertDescription>
+      <AlertAction>
+        <Button size="sm" onClick={() => act("start")}>
+          Start the proxy
+        </Button>
+      </AlertAction>
+    </Alert>
   )
 }
 
@@ -272,45 +279,34 @@ function Window() {
     Option.match(host, { onNone: () => "", onSome: (h) => h.origin.replace(/^https?:\/\//, "") }),
   )
   return (
-    <div className="flex h-full">
-      <Sidebar address={address} onToggle={() => toggle("button")} />
-      <main className="flex min-w-0 flex-1 flex-col">
-        <header className="drag flex h-13 shrink-0 items-center">
+    <SidebarFrame onToggle={() => toggle("button")}>
+      <Sidebar address={address} />
+      <SidebarInset className="min-w-0">
+        <header className="drag flex h-14 shrink-0 items-center border-b">
           {/* As wide as the content column, so the page's tools sit over the page they act on. */}
           <div
-            className="flex w-full max-w-page items-center gap-3 px-8 mac:data-hidden:pl-22"
+            className="mx-auto flex w-full max-w-6xl items-center gap-2 px-4 mac:data-hidden:pl-22 md:px-6"
             data-hidden={prefs.sidebarHidden || undefined}
           >
-            {prefs.sidebarHidden && (
-              <Tip content="Show Sidebar">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label="Show Sidebar"
-                  className="no-drag"
-                  onClick={() => toggle("button")}
-                >
-                  <PanelLeft />
-                </Button>
-              </Tip>
-            )}
-            <h1 className="min-w-0 flex-1 truncate text-title font-semibold">{pageTitle(page)}</h1>
+            <SidebarTrigger className="no-drag -ml-1" />
+            <Separator orientation="vertical" className="mr-2 data-[orientation=vertical]:h-4" />
+            <h1 className="min-w-0 flex-1 truncate text-base font-medium">{pageTitle(page)}</h1>
             <div className="no-drag flex items-center gap-2">
               <Tools page={page} />
             </div>
           </div>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="@container flex max-w-page flex-col gap-8 px-8 pt-1 pb-10">
+          <div className="@container mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 md:p-6">
             <ProxyBanner />
             <SignInCard />
             <PageBody page={page} />
           </div>
         </div>
-      </main>
+      </SidebarInset>
       <Toasts />
       <AskHost />
-    </div>
+    </SidebarFrame>
   )
 }
 
@@ -382,9 +378,9 @@ export class Boundary extends Component<{ readonly children: ReactNode }, { read
     if (this.state.failed === undefined) return this.props.children
     return (
       <main role="alert" className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
-        <h1 className="text-heading font-semibold">slopmax could not draw this page</h1>
-        <p className="max-w-md text-small text-muted-foreground">{this.state.failed}</p>
-        <Button className="mt-2" onClick={() => location.reload()}>
+        <h1 className="text-base font-semibold">slopmax could not draw this page</h1>
+        <p className="max-w-md text-xs text-muted-foreground">{this.state.failed}</p>
+        <Button variant="outline" onClick={() => location.reload()}>
           Reload
         </Button>
       </main>
@@ -397,7 +393,7 @@ export function Root({ initialValues }: { readonly initialValues: Iterable<reado
   return (
     <RegistryProvider initialValues={initialValues}>
       <Boundary>
-        <TooltipProvider delay={300}>
+        <TooltipProvider>
           <App />
         </TooltipProvider>
       </Boundary>

@@ -24,9 +24,13 @@ pub(crate) struct Asset {
 
 include!(concat!(env!("OUT_DIR"), "/ui.rs"));
 
-const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; \
-                   connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; \
-                   base-uri 'none'; form-action 'none'";
+/// The policy. `style-src` allows one inline style besides the page's own
+/// files: the stylesheet Sonner (the toasts) inserts when it loads, by its
+/// hash. `web/apps/ui/test/csp.test.ts` fails when an upgrade changes it.
+const CSP: &str = "default-src 'none'; script-src 'self'; \
+                   style-src 'self' 'sha256-StEaX+se6YS7pqjzrzMIA0KaX9zF/8zAhvQXZAe5epY='; \
+                   font-src 'self'; connect-src 'self'; img-src 'self' data:; \
+                   frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
 /// What a slopmax built without the UI shows at `/slopmax/`.
 const NOT_BUILT: &str = "<!doctype html><meta charset=utf-8><title>slopmax</title>\

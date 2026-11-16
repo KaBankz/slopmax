@@ -5,6 +5,7 @@ import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
 import type { Dialect } from "@slopmax/client"
 import { providerFacts } from "@slopmax/client"
 import { Exit, Option } from "effect"
+import { Copy, KeyRound } from "lucide-react"
 import { type FormEvent, type ReactNode, useId, useState } from "react"
 import {
   addAccount,
@@ -22,9 +23,13 @@ import {
 } from "../atoms.ts"
 import { useAsk } from "../components/ask.tsx"
 import { Loaded, Panel, Section, SettingRow, Skeleton } from "../components/parts.tsx"
+import { Segmented } from "../components/segmented.tsx"
+import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert.tsx"
 import { Button } from "../components/ui/button.tsx"
+import { Field, FieldError, FieldLabel, FieldTitle } from "../components/ui/field.tsx"
 import { Input } from "../components/ui/input.tsx"
-import { Segmented } from "../components/ui/segmented.tsx"
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "../components/ui/input-group.tsx"
+import { Item, ItemActions, ItemContent, ItemDescription, ItemFooter, ItemTitle } from "../components/ui/item.tsx"
 import { askRevoke } from "../view/asks.ts"
 import { needsProxy } from "../view/live.ts"
 import { failureText, patterns, sentenceCase } from "../view/words.ts"
@@ -37,15 +42,6 @@ const dialects: ReadonlyArray<{ readonly value: Dialect; readonly title: string 
   { value: "responses", title: "Responses" },
   { value: "messages", title: "Messages" },
 ]
-
-/** Why an add was refused, shown with the form that asked rather than as a toast. */
-function Refused({ id, text, className }: { readonly id: string; readonly text: string; readonly className: string }) {
-  return (
-    <div id={id} role="alert" className={className}>
-      {sentenceCase(text)}
-    </div>
-  )
-}
 
 function KeyRow({ disabled }: { readonly disabled: boolean }) {
   const add = useAtomSet(addAccount, { mode: "promiseExit" })
@@ -65,56 +61,72 @@ function KeyRow({ disabled }: { readonly disabled: boolean }) {
       else setRefused(failureText(exit.cause))
     })
   }
+  // A SettingRow, but why a key was refused takes the place of its description,
+  // with the form that asked rather than as a toast.
   return (
-    <SettingRow
-      title="API key"
-      detail={
-        refused === undefined ? (
-          "A key bills by the token; slopmax spends subscriptions first."
-        ) : (
-          <Refused id={errorId} text={refused} className="text-danger" />
-        )
-      }
-    >
-      <form onSubmit={submit} className="flex items-center gap-2">
-        <Segmented
-          label="Provider"
-          value={provider}
-          onChange={setProvider}
-          options={keyProviders.map((id) => ({ value: id, title: providerFacts[id].title }))}
-        />
-        <span className="w-56">
-          <Input
-            type="password"
-            aria-label="Paste an API key"
-            placeholder="Paste an API key"
-            value={key}
-            aria-invalid={refused !== undefined || undefined}
-            aria-describedby={refused === undefined ? undefined : errorId}
-            onChange={(event) => setKey(event.currentTarget.value)}
-          />
-        </span>
-        <Button type="submit" variant="primary" disabled={disabled || busy || key.trim() === ""}>
-          {busy ? "Checking key…" : "Add key"}
-        </Button>
-      </form>
-    </SettingRow>
+    <div className="border-t first:border-t-0">
+      <Item>
+        <ItemContent>
+          <ItemTitle>API key</ItemTitle>
+          {refused === undefined ? (
+            <ItemDescription>A key bills by the token; slopmax spends subscriptions first.</ItemDescription>
+          ) : (
+            <FieldError id={errorId}>{sentenceCase(refused)}</FieldError>
+          )}
+        </ItemContent>
+        <ItemActions>
+          <form onSubmit={submit} className="flex items-center gap-2">
+            <Segmented
+              label="Provider"
+              value={provider}
+              onChange={setProvider}
+              options={keyProviders.map((id) => ({ value: id, title: providerFacts[id].title }))}
+            />
+            <Input
+              type="password"
+              aria-label="Paste an API key"
+              placeholder="Paste an API key"
+              className="w-56"
+              value={key}
+              aria-invalid={refused !== undefined || undefined}
+              aria-describedby={refused === undefined ? undefined : errorId}
+              onChange={(event) => setKey(event.currentTarget.value)}
+            />
+            <Button type="submit" disabled={disabled || busy || key.trim() === ""}>
+              {busy ? "Checking key…" : "Add key"}
+            </Button>
+          </form>
+        </ItemActions>
+      </Item>
+    </div>
   )
 }
 
-function Line({ label, children }: { readonly label: string; readonly children: ReactNode }) {
+/** A field of the endpoint form: its label in a column at the left, the control beside it. */
+function Line({
+  label,
+  htmlFor,
+  invalid = false,
+  children,
+}: {
+  readonly label: string
+  readonly htmlFor: string
+  readonly invalid?: boolean
+  readonly children: ReactNode
+}) {
   return (
-    <label className="flex items-center gap-3">
-      <span className="w-24 shrink-0 text-small text-muted-foreground">{label}</span>
-      <span className="min-w-0 flex-1">{children}</span>
-    </label>
+    <Field orientation="horizontal" data-invalid={invalid || undefined} className="grid grid-cols-[6rem_1fr]">
+      <FieldLabel htmlFor={htmlFor}>{label}</FieldLabel>
+      {children}
+    </Field>
   )
 }
 
 function EndpointRow({ disabled }: { readonly disabled: boolean }) {
   const add = useAtomSet(addAccount, { mode: "promiseExit" })
   const [refused, setRefused] = useState<string | undefined>(undefined)
-  const errorId = useId()
+  const id = useId()
+  const errorId = `${id}-error`
   const invalid = {
     "aria-invalid": refused !== undefined || undefined,
     "aria-describedby": refused === undefined ? undefined : errorId,
@@ -147,55 +159,69 @@ function EndpointRow({ disabled }: { readonly disabled: boolean }) {
     })
   }
   return (
-    <div className="flex flex-col gap-3 border-t border-separator px-4 py-3.5">
-      <div className="flex flex-col gap-0.5">
-        <span className="font-medium">Compatible endpoint</span>
-        <span className="text-small text-muted-foreground">
-          An API that speaks OpenAI's or Anthropic's format, such as a local model server or a gateway. Its key is
-          checked before it is saved.
-        </span>
-      </div>
-      <form onSubmit={submit} className="flex max-w-page flex-col gap-2">
-        <Line label="Address">
-          <Input
-            placeholder="https://example.com/v1"
-            value={url}
-            {...invalid}
-            onChange={(e) => setUrl(e.currentTarget.value)}
-          />
-        </Line>
-        <div className="flex items-center gap-3">
-          <span className="w-24 shrink-0 text-small text-muted-foreground">API</span>
-          <Segmented label="API" value={dialect} onChange={setDialect} options={dialects} />
-        </div>
-        <Line label="Models">
-          <Input
-            placeholder="Models it serves, as patterns (any if empty)"
-            value={models}
-            onChange={(e) => setModels(e.currentTarget.value)}
-          />
-        </Line>
-        <Line label="Key">
-          <Input
-            type="password"
-            placeholder="Its API key"
-            value={key}
-            {...invalid}
-            onChange={(e) => setKey(e.currentTarget.value)}
-          />
-        </Line>
-        <Line label="Name">
-          <Input placeholder="Name (optional)" value={name} onChange={(e) => setName(e.currentTarget.value)} />
-        </Line>
-        <div className="flex items-center justify-end gap-3">
-          {refused !== undefined && (
-            <Refused id={errorId} text={refused} className="min-w-0 flex-1 text-small text-danger" />
-          )}
-          <Button type="submit" variant="primary" disabled={disabled || busy || url.trim() === ""}>
-            {busy ? "Adding…" : "Add endpoint"}
-          </Button>
-        </div>
-      </form>
+    <div className="border-t first:border-t-0">
+      <Item>
+        <ItemContent>
+          <ItemTitle>Compatible endpoint</ItemTitle>
+          <ItemDescription>
+            An API that speaks OpenAI's or Anthropic's format, such as a local model server or a gateway. Its key is
+            checked before it is saved.
+          </ItemDescription>
+        </ItemContent>
+        <ItemFooter>
+          <form onSubmit={submit} className="flex w-full max-w-5xl flex-col gap-2">
+            <Line label="Address" htmlFor={`${id}-url`} invalid={refused !== undefined}>
+              <Input
+                id={`${id}-url`}
+                placeholder="https://example.com/v1"
+                value={url}
+                {...invalid}
+                onChange={(e) => setUrl(e.currentTarget.value)}
+              />
+            </Line>
+            <Field orientation="horizontal" className="grid grid-cols-[6rem_1fr]">
+              <FieldTitle>API</FieldTitle>
+              <Segmented label="API" value={dialect} onChange={setDialect} options={dialects} />
+            </Field>
+            <Line label="Models" htmlFor={`${id}-models`}>
+              <Input
+                id={`${id}-models`}
+                placeholder="Models it serves, as patterns (any if empty)"
+                value={models}
+                onChange={(e) => setModels(e.currentTarget.value)}
+              />
+            </Line>
+            <Line label="Key" htmlFor={`${id}-key`} invalid={refused !== undefined}>
+              <Input
+                id={`${id}-key`}
+                type="password"
+                placeholder="Its API key"
+                value={key}
+                {...invalid}
+                onChange={(e) => setKey(e.currentTarget.value)}
+              />
+            </Line>
+            <Line label="Name" htmlFor={`${id}-name`}>
+              <Input
+                id={`${id}-name`}
+                placeholder="Name (optional)"
+                value={name}
+                onChange={(e) => setName(e.currentTarget.value)}
+              />
+            </Line>
+            <Field orientation="horizontal" className="justify-end">
+              {refused !== undefined && (
+                <FieldError id={errorId} className="min-w-0 flex-1">
+                  {sentenceCase(refused)}
+                </FieldError>
+              )}
+              <Button type="submit" disabled={disabled || busy || url.trim() === ""}>
+                {busy ? "Adding…" : "Add endpoint"}
+              </Button>
+            </Field>
+          </form>
+        </ItemFooter>
+      </Item>
     </div>
   )
 }
@@ -217,16 +243,16 @@ function AddAccount() {
           title="Sign in"
           detail="With your browser, as the agent's own sign-in does. SuperGrok signs in with a code."
         >
-          <Button disabled={!canChange} onClick={() => start({ provider: "claude" })}>
+          <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "claude" })}>
             Claude
           </Button>
-          <Button disabled={!canChange} onClick={() => start({ provider: "codex" })}>
+          <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "codex" })}>
             ChatGPT
           </Button>
           <Button disabled={!canChange} variant="ghost" onClick={() => start({ provider: "codex", device: true })}>
             ChatGPT with a code
           </Button>
-          <Button disabled={!canChange} onClick={() => start({ provider: "grok", device: true })}>
+          <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "grok", device: true })}>
             SuperGrok
           </Button>
         </SettingRow>
@@ -234,7 +260,7 @@ function AddAccount() {
           title="Import"
           detail="Logins Claude Code, Codex, or CLIProxyAPI (Claude, ChatGPT, and SuperGrok) already have."
         >
-          <Button disabled={!canChange || importing} onClick={runImport}>
+          <Button variant="outline" disabled={!canChange || importing} onClick={runImport}>
             {importing ? "Importing…" : "Import"}
           </Button>
         </SettingRow>
@@ -252,23 +278,40 @@ function NewKeyWell() {
   if (Option.isNone(shown)) return null
   const made = shown.value
   return (
-    <div className="flex animate-appear flex-col gap-2.5 border-b border-separator bg-well px-4 py-3.5">
-      <div className="flex flex-col gap-0.5">
-        <span className="font-medium">The key {made.name}</span>
-        <span className="text-small text-muted-foreground">
+    <div className="animate-in fade-in slide-in-from-top-1">
+      <Alert role="status">
+        <KeyRound />
+        <AlertTitle>The key {made.name}</AlertTitle>
+        <AlertDescription>
           Copy it now: you won't see it again. Give it to the tool as its API key, with slopmax's address.
-        </span>
-      </div>
-      <div className="flex items-center gap-2">
-        <code className="min-w-0 flex-1 truncate rounded-md border bg-background px-2.5 py-1.5 font-mono text-small select-all">
-          {made.key}
-        </code>
-        <Button variant="primary" onClick={() => copyText({ text: made.key })}>
-          Copy
-        </Button>
-        <Button onClick={() => done()}>Done</Button>
-      </div>
+        </AlertDescription>
+        <div className="col-start-2 mt-2 flex items-center gap-2">
+          <InputGroup>
+            <InputGroupInput readOnly aria-label={`The key ${made.name}`} value={made.key} />
+            <InputGroupAddon align="inline-end">
+              <InputGroupButton onClick={() => copyText({ text: made.key })}>
+                <Copy />
+                Copy
+              </InputGroupButton>
+            </InputGroupAddon>
+          </InputGroup>
+          <Button variant="outline" onClick={() => done()}>
+            Done
+          </Button>
+        </div>
+      </Alert>
     </div>
+  )
+}
+
+/** A line in the keys' panel where rows would be: what there is instead. */
+function Note({ children }: { readonly children: ReactNode }) {
+  return (
+    <Item>
+      <ItemContent>
+        <ItemDescription>{children}</ItemDescription>
+      </ItemContent>
+    </Item>
   )
 }
 
@@ -301,13 +344,13 @@ function ClientKeys() {
   return (
     <Section title="Client keys">
       <div className="flex flex-col gap-2">
+        <NewKeyWell />
         <Panel>
-          <NewKeyWell />
           {!canChange ? (
             waiting === undefined ? (
               <Skeleton lines={2} />
             ) : (
-              <div className="px-4 py-3.5 text-small text-muted-foreground">{waiting}.</div>
+              <Note>{waiting}.</Note>
             )
           ) : (
             <Loaded result={keys} title="Could not read the keys" loading={<Skeleton lines={2} />} onRetry={again}>
@@ -321,11 +364,12 @@ function ClientKeys() {
                         key.models.length === 0 ? (
                           "Any model"
                         ) : (
-                          <span className="font-mono text-caption">{key.models.join(", ")}</span>
+                          <span className="font-mono text-xs">{key.models.join(", ")}</span>
                         )
                       }
                     >
                       <Button
+                        variant="outline"
                         aria-label={`Revoke the key ${key.name}…`}
                         onClick={() =>
                           void ask(askRevoke(key.name)).then((answer) => {
@@ -337,44 +381,39 @@ function ClientKeys() {
                       </Button>
                     </SettingRow>
                   ))}
-                  {list.length === 0 && (
-                    <div className="px-4 py-3.5 text-small text-muted-foreground">
-                      No client keys yet. Agents on this machine use slopmax's own key.
-                    </div>
-                  )}
+                  {list.length === 0 && <Note>No client keys yet. Agents on this machine use slopmax's own key.</Note>}
                 </>
               )}
             </Loaded>
           )}
-          <form onSubmit={submit} className="flex flex-col gap-2 border-t border-separator px-4 py-3">
-            <div className="flex items-center gap-2">
-              <span className="w-50 shrink-0">
-                <Input
-                  aria-label="Name, such as laptop"
-                  placeholder="Name, such as laptop"
-                  value={name}
-                  aria-invalid={refused !== undefined || undefined}
-                  aria-describedby={refused === undefined ? undefined : errorId}
-                  onChange={(e) => {
-                    setName(e.currentTarget.value)
-                    setRefused(undefined)
-                  }}
-                />
-              </span>
+          <form onSubmit={submit} className="flex flex-col gap-2 border-t px-3 py-2.5">
+            <Field orientation="horizontal">
+              <Input
+                aria-label="Name, such as laptop"
+                placeholder="Name, such as laptop"
+                className="w-50 shrink-0"
+                value={name}
+                aria-invalid={refused !== undefined || undefined}
+                aria-describedby={refused === undefined ? undefined : errorId}
+                onChange={(e) => {
+                  setName(e.currentTarget.value)
+                  setRefused(undefined)
+                }}
+              />
               <Input
                 aria-label="Models it may use, as patterns (any if empty)"
                 placeholder="Models it may use, as patterns (any if empty)"
                 value={models}
                 onChange={(e) => setModels(e.currentTarget.value)}
               />
-              <Button type="submit" variant="primary" disabled={!canChange || busy || name.trim() === ""}>
+              <Button type="submit" disabled={!canChange || busy || name.trim() === ""}>
                 {busy ? "Creating…" : "Create key"}
               </Button>
-            </div>
-            {refused !== undefined && <Refused id={errorId} text={refused} className="text-small text-danger" />}
+            </Field>
+            {refused !== undefined && <FieldError id={errorId}>{sentenceCase(refused)}</FieldError>}
           </form>
         </Panel>
-        <p className="text-caption text-faint">
+        <p className="text-xs text-muted-foreground">
           A tool presents its key as an API key. Revoking one refuses it at once; slopmax's own key, in config.json,
           stays as it is.
         </p>
