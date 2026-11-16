@@ -63,11 +63,26 @@ pub(super) async fn service(config: &Config, action: &str) -> Result<()> {
     match action {
         "install" => {
             let exe = background::current_exe()?;
+            let before = manager
+                .status(super::home())
+                .elsewhere
+                .then(|| manager.served(super::home()))
+                .flatten();
             let file = background::install_service(config, super::home(), manager, &exe).await?;
             println!(
                 "slopmax now starts at login {}",
                 ui::dim(format!("({})", file.display()))
             );
+            if let Some(before) = before {
+                println!(
+                    "{}",
+                    ui::dim(format!(
+                        "It ran slopmax for {} before; that home's proxy now runs only when \
+                         started there.",
+                        super::home().show(&before)
+                    ))
+                );
+            }
             if manager.status(super::home()).lingering == Some(false) {
                 println!(
                     "{}",
@@ -88,6 +103,16 @@ pub(super) async fn service(config: &Config, action: &str) -> Result<()> {
         _ => {
             let status = manager.status(super::home());
             let state = match (status.installed, status.running) {
+                (false, _) if status.elsewhere => format!(
+                    "not installed for this home {}",
+                    ui::dim(format!(
+                        "(it runs slopmax for {})",
+                        manager
+                            .served(super::home())
+                            .map(|dir| super::home().show(&dir))
+                            .unwrap_or_default()
+                    ))
+                ),
                 (false, _) => "not installed".to_owned(),
                 (true, true) => ui::green("installed and running"),
                 (true, false) => ui::yellow("installed, not running"),
