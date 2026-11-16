@@ -4,7 +4,9 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
-Your other machines can now use one machine's accounts over your Tailscale tailnet, without a key. Only that machine, the hub, refreshes each login, so copies no longer sign each other out. The dashboard is rebuilt on shadcn/ui, forecasts each subscription pool, and looks back over every request.
+## [0.13.0] - 2026-11-16
+
+Your other machines can now use one machine's accounts over your Tailscale tailnet, without a key. Only that machine, the hub, refreshes each login, so copies no longer sign each other out. The dashboard is rebuilt on shadcn/ui, forecasts each subscription pool, and looks back over every request. Changes to rely on: a client key sent to `/slopmax/api` now gets 403 instead of 401, and an older slopmax can't read a config.toml with `[tailscale]` or `[hub]`.
 
 ### Added
 
