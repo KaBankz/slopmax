@@ -486,7 +486,7 @@ The proxy applies a changed config.toml within two seconds, without a restart; o
 ```sh
 mise run check     # rustfmt, clippy with warnings denied, and the tests
 mise run msrv      # builds with the minimum supported Rust (1.89)
-mise run budget    # at most 71 crates and a 9 MiB binary
+mise run budget    # at most 71 crates and a 10 MiB binary
 mise run bench     # the latency, throughput, memory, and startup slopmax adds
 mise run build     # optimized release binary
 ```
