@@ -354,6 +354,11 @@ pub fn history(
         sessions: h.sessions,
         first_byte: h.first_byte.map(|ms| ms as f64),
         monthly: h.monthly,
+        previous: h.previous.as_ref().map(|p| api::ledger::PreviousTotals {
+            total: totals(&p.total),
+            rescued: p.rescued,
+            sessions: p.sessions,
+        }),
         activity: h.activity.iter().map(|day| day.to_vec()).collect(),
         models: h
             .models

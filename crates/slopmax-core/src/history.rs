@@ -96,6 +96,11 @@ pub struct History {
     /// What a month at this range's pace would be worth at API prices, when
     /// the range says enough about a month.
     pub monthly: Option<f64>,
+    /// The same span before this one, up to the same time of day, for the
+    /// changes since: yesterday up to this hour, or the 7 days before.
+    /// Only while the daemon keeps the ledger's last month, and not for a
+    /// month, which would need two.
+    pub previous: Option<Previous>,
     /// The agents' answers by local weekday (Monday first) and hour;
     /// warmups, at slopmax's hours, left out.
     pub activity: [[u64; 24]; 7],
@@ -108,6 +113,14 @@ pub struct History {
     pub agents: Vec<Part>,
     /// Each model's median output speed, fastest first.
     pub speeds: Vec<Speed>,
+}
+
+/// What the span before a history's came to.
+#[derive(Debug, Clone, Serialize)]
+pub struct Previous {
+    pub total: Totals,
+    pub rescued: u64,
+    pub sessions: u64,
 }
 
 /// One hour or day.

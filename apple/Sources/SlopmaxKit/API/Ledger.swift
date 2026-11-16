@@ -124,6 +124,12 @@ public struct Speed: Codable, Sendable, Equatable {
     public var tokensPerSecond: Double
 }
 
+public struct PreviousTotals: Codable, Sendable, Equatable {
+    public var total: Totals
+    public var rescued: Int
+    public var sessions: Int
+}
+
 public struct History: Codable, Sendable, Equatable {
     public var range: HistoryRange
     public var buckets: [HistoryBucket]
@@ -138,6 +144,7 @@ public struct History: Codable, Sendable, Equatable {
     public var sessions: Int
     public var firstByte: Double?
     public var monthly: Double?
+    public var previous: PreviousTotals?
     /// Requests by weekday (Monday first) and hour.
     public var activity: [[Int]]
     public var models: [NamedTotals]

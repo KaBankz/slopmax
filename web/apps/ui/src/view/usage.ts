@@ -5,11 +5,50 @@ import { type History, providerFacts, type Summary, Totals } from "@slopmax/clie
 import { compact, fixed, grouped, providerTitle } from "@slopmax/client/format"
 import { count, dollars, priced } from "./words.ts"
 
-/** A figure with its caption. */
+/** How a figure moved since the span before. */
+export interface Change {
+  /** `+12%`, `−8%`, `0%`. */
+  readonly text: string
+  readonly direction: "up" | "down" | "flat"
+  /** `1,204 yesterday by this hour`. */
+  readonly tip: string
+}
+
+/** A figure with its caption, and how it moved when there is a span before to tell. */
 export interface Stat {
   readonly title: string
   readonly value: string
   readonly note: string
+  readonly change?: Change
+}
+
+/** What the span before a range is called: `yesterday by this hour`, `the 7 days before`. */
+const before = (history: History): string =>
+  history.range === "today" ? "yesterday by this hour" : "the 7 days before"
+
+/** How `now` moved from `then`; nothing when there was nothing then to move from. */
+export const change = (now: number, then: number, said: string, when: string): Change | undefined => {
+  if (then <= 0) return undefined
+  const percent = ((now - then) / then) * 100
+  const flat = Math.abs(percent) < 0.5
+  return {
+    text: flat ? "0%" : `${percent > 0 ? "+" : "−"}${fixed(Math.abs(percent), Math.abs(percent) < 10 ? 1 : 0)}%`,
+    direction: flat ? "flat" : percent > 0 ? "up" : "down",
+    tip: `${said} ${when}`,
+  }
+}
+
+/** A stat with its change from the span before, when the history has one. */
+const moved = (
+  stat: Stat,
+  history: History,
+  pick: (totals: History["total"]) => number,
+  say: (n: number) => string,
+) => {
+  const previous = history.previous
+  if (previous === undefined) return stat
+  const changed = change(pick(history.total), pick(previous.total), say(pick(previous.total)), before(history))
+  return changed === undefined ? stat : { ...stat, change: changed }
 }
 
 /** The share of input read from cache, as words: `62% from cache`. */
@@ -21,17 +60,32 @@ export const isQuiet = (history: History): boolean => history.total.requests ===
 
 /** The overview's Today panel. */
 export const todayStats = (history: History): ReadonlyArray<Stat> => [
-  {
-    title: "Requests",
-    value: grouped(history.total.requests),
-    note: history.total.failed === 0 ? "none failed" : `${grouped(history.total.failed)} failed`,
-  },
-  { title: "Tokens", value: compact(history.total.tokens), note: cacheNote(history.cached) },
-  {
-    title: "API value",
-    value: priced(history.total.cost, history.total.unpriced, history.total.requests),
-    note: "what the API would charge",
-  },
+  moved(
+    {
+      title: "Requests",
+      value: grouped(history.total.requests),
+      note: history.total.failed === 0 ? "none failed" : `${grouped(history.total.failed)} failed`,
+    },
+    history,
+    (t) => t.requests,
+    grouped,
+  ),
+  moved(
+    { title: "Tokens", value: compact(history.total.tokens), note: cacheNote(history.cached) },
+    history,
+    (t) => t.input + t.output + t.cacheRead + t.cacheWrite,
+    compact,
+  ),
+  moved(
+    {
+      title: "API value",
+      value: priced(history.total.cost, history.total.unpriced, history.total.requests),
+      note: "what the API would charge",
+    },
+    history,
+    (t) => t.cost,
+    dollars,
+  ),
   { title: "Saved by failover", value: grouped(history.rescued), note: "answered by another account" },
 ]
 
@@ -46,13 +100,23 @@ export const usageStats = (history: History): ReadonlyArray<Stat> => {
         ? "at API prices"
         : `${count(total.unpriced, "request")} unpriced`
   return [
-    { title: "Tokens", value: compact(total.tokens), note: cacheNote(history.cached) },
-    {
-      title: "Requests",
-      value: grouped(total.requests),
-      note: history.sessions > 0 ? `in ${count(history.sessions, "conversation")}` : "answered",
-    },
-    { title: "API value", value, note: valueNote },
+    moved(
+      { title: "Tokens", value: compact(total.tokens), note: cacheNote(history.cached) },
+      history,
+      (t) => t.input + t.output + t.cacheRead + t.cacheWrite,
+      compact,
+    ),
+    moved(
+      {
+        title: "Requests",
+        value: grouped(total.requests),
+        note: history.sessions > 0 ? `in ${count(history.sessions, "conversation")}` : "answered",
+      },
+      history,
+      (t) => t.requests,
+      grouped,
+    ),
+    moved({ title: "API value", value, note: valueNote }, history, (t) => t.cost, dollars),
     {
       title: "A month at this pace",
       value: history.monthly === undefined ? "—" : dollars(history.monthly),

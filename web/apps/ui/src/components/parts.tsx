@@ -7,16 +7,18 @@ import { cva } from "class-variance-authority"
 import { Option } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import type { LucideIcon } from "lucide-react"
-import { CircleAlert } from "lucide-react"
+import { CircleAlert, Minus, TrendingDown, TrendingUp } from "lucide-react"
 import type { ReactNode } from "react"
 import appIcon from "../icon-128.png"
 import mark from "../logo.svg"
 import type { Overview } from "../view/groups.ts"
+import type { Change } from "../view/usage.ts"
 import { failureText, poolBarTip, segmentsShown, sentence, sentenceCase } from "../view/words.ts"
 import { Tip } from "./tip.tsx"
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert.tsx"
+import { Badge } from "./ui/badge.tsx"
 import { Button } from "./ui/button.tsx"
-import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from "./ui/card.tsx"
+import { Card, CardAction, CardDescription, CardFooter, CardHeader, CardTitle } from "./ui/card.tsx"
 import { Empty as EmptyRoot, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "./ui/empty.tsx"
 import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "./ui/item.tsx"
 import { Progress } from "./ui/progress.tsx"
@@ -198,21 +200,39 @@ export function SettingRow({
   )
 }
 
-/** A figure in a Card: its caption, the number, and a note. */
+/** A figure in a Card: its caption, the number, a note, and how it moved since the span before. */
 export function Stat({
   title,
   value,
   note,
+  change,
 }: {
   readonly title: string
   readonly value: string
   readonly note: string
+  readonly change?: Change | undefined
 }) {
   return (
     <Card>
       <CardHeader>
         <CardDescription>{title}</CardDescription>
         <CardTitle className="text-2xl tabular-nums">{value}</CardTitle>
+        {change !== undefined && (
+          <CardAction>
+            <Tip content={change.tip}>
+              <Badge variant="outline">
+                {change.direction === "up" ? (
+                  <TrendingUp data-icon="inline-start" />
+                ) : change.direction === "down" ? (
+                  <TrendingDown data-icon="inline-start" />
+                ) : (
+                  <Minus data-icon="inline-start" />
+                )}
+                {change.text}
+              </Badge>
+            </Tip>
+          </CardAction>
+        )}
       </CardHeader>
       <CardFooter>
         <span className="truncate text-xs text-muted-foreground">{note}</span>
@@ -225,7 +245,12 @@ export function Stat({
 export function Stats({
   stats,
 }: {
-  readonly stats: ReadonlyArray<{ readonly title: string; readonly value: string; readonly note: string }>
+  readonly stats: ReadonlyArray<{
+    readonly title: string
+    readonly value: string
+    readonly note: string
+    readonly change?: Change | undefined
+  }>
 }) {
   return (
     <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2 @4xl:grid-cols-4">

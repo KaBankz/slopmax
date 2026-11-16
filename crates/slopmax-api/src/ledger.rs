@@ -185,6 +185,15 @@ pub struct Speed {
     pub tokens_per_second: f64,
 }
 
+/// What the span before a history's came to, for the changes since.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviousTotals {
+    pub total: Totals,
+    pub rescued: u64,
+    pub sessions: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct History {
@@ -204,6 +213,9 @@ pub struct History {
     pub first_byte: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub monthly: Option<f64>,
+    /// The same span before this one, up to the same time of day.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous: Option<PreviousTotals>,
     /// Requests by weekday (Monday first) and hour.
     pub activity: Vec<Vec<u64>>,
     pub models: Vec<NamedTotals>,

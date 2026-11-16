@@ -197,6 +197,13 @@ export class Speed extends Schema.Class<Speed>("Speed")({
   tokensPerSecond: Schema.Number,
 }) {}
 
+/** What the span before a history's came to: yesterday up to this hour, or the 7 days before. */
+export class PreviousTotals extends Schema.Class<PreviousTotals>("PreviousTotals")({
+  total: Totals,
+  rescued: NonNegativeInt,
+  sessions: NonNegativeInt,
+}) {}
+
 /** `GET /history`: what went through slopmax over a range, shaped for the app's charts. */
 export class History extends Schema.Class<History>("History")({
   range: HistoryRange,
@@ -219,6 +226,8 @@ export class History extends Schema.Class<History>("History")({
   firstByte: Schema.optionalKey(Schema.Number),
   /** A month at this pace, in dollars at API prices (the 7-day range only). */
   monthly: Schema.optionalKey(Schema.Number),
+  /** The same span before, for the changes since (today and the 7-day range). */
+  previous: Schema.optionalKey(PreviousTotals),
   /** Requests by local weekday (Monday first) and hour: 7 rows of 24. */
   activity: Schema.Array(Schema.Array(NonNegativeInt)),
   models: Schema.Array(NamedTotals),
