@@ -12,6 +12,7 @@ import {
   attentionAtom,
   canChangeAtom,
   changeAccount,
+  checkAccount,
   groupsAtom,
   nowAtom,
   openCreditsAtom,
@@ -137,6 +138,7 @@ function WindowCell({
 /** Everything that can be done to one account. */
 function AccountMenu({ row }: { readonly row: Row }) {
   const change = useAtomSet(changeAccount)
+  const check = useAtomSet(checkAccount)
   const openCredits = useAtomSet(openCreditsAtom)
   const canChange = useAtomValue(canChangeAtom)
   const ask = useAsk()
@@ -160,6 +162,9 @@ function AccountMenu({ row }: { readonly row: Row }) {
               Use for new sessions
             </DropdownMenuItem>
           )}
+          <DropdownMenuItem disabled={row.disabled || row.signedOut} onClick={() => check(id)}>
+            Check its limits now
+          </DropdownMenuItem>
           <DropdownMenuItem onClick={() => change({ _tag: "Enable", id, on: row.disabled })}>
             {row.disabled ? "Enable" : "Disable"}
           </DropdownMenuItem>
@@ -322,6 +327,26 @@ function SignInAgain({ row }: { readonly row: Row }) {
   )
 }
 
+/** Checking a limited or throttled account again now, beside its condition. */
+function CheckNow({ row }: { readonly row: Row }) {
+  const canChange = useAtomValue(canChangeAtom)
+  const check = useAtomSet(checkAccount)
+  const held = row.account.condition._tag === "Limited" || row.account.condition._tag === "Throttled"
+  if (!held || row.disabled) return null
+  return (
+    <Button
+      variant="outline"
+      size="xs"
+      className="self-start"
+      disabled={!canChange}
+      aria-label={`Check ${row.name} now`}
+      onClick={() => check(row.id)}
+    >
+      Check now
+    </Button>
+  )
+}
+
 const isSubscription = Schema.is(SubscriptionId)
 
 /** What the account's window in a column has served, for windows over every request. */
@@ -391,6 +416,7 @@ function AccountRow({
               {row.next && <Badge>Next</Badge>}
             </span>
             <SignInAgain row={row} />
+            <CheckNow row={row} />
             {row.lastUsed !== undefined && <span className="text-xs text-muted-foreground">{row.lastUsed}</span>}
             {detail !== undefined && pool !== undefined && (
               <HealthStrip health={health(detail, pool.healthSince, pool.cellMinutes, zone)} />

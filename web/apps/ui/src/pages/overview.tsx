@@ -22,6 +22,7 @@ import {
   signIn,
 } from "../atoms.ts"
 import { Hours } from "../components/charts.tsx"
+import { HealthCard, RecentFailures } from "../components/health.tsx"
 import { Dot, Empty, Label, Loaded, Panel, Section, SegmentedBar, Skeleton, Stats } from "../components/parts.tsx"
 import { Quiet } from "../components/quiet.tsx"
 import { Tip } from "../components/tip.tsx"
@@ -301,6 +302,14 @@ export function OverviewPage() {
               <Metered key={group.provider} group={group} />
             ))}
           </Panel>
+        </Section>
+      )}
+      {pools.length > 0 && (
+        <Section title="Last day">
+          <div className="grid grid-cols-1 gap-4 @4xl:grid-cols-2">
+            <HealthCard groups={pools} />
+            <RecentFailures />
+          </div>
         </Section>
       )}
       <Section title="Today">

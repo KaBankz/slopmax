@@ -594,6 +594,23 @@ async fn every_endpoint_answers_as_its_fixture_says() {
     )
     .await;
 
+    call.send(
+        "accounts.check.ok",
+        Method::POST,
+        &format!("/accounts/{key}/check"),
+        None,
+        StatusCode::OK,
+    )
+    .await;
+    call.send(
+        "accounts.check.notFound",
+        Method::POST,
+        "/accounts/nobody/check",
+        None,
+        StatusCode::NOT_FOUND,
+    )
+    .await;
+
     // Usage.
     call.send(
         "usage.summary.ok",

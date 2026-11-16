@@ -34,7 +34,7 @@ import {
 } from "@slopmax/client/api"
 import { ProxyState } from "@slopmax/client/desktop"
 import type { OfflineView, ProxyAction } from "@slopmax/client/desktop"
-import { noticeBody, noticeTitle } from "@slopmax/client/format"
+import { clock, noticeBody, noticeTitle } from "@slopmax/client/format"
 import { Cause, Data, DateTime, Duration, Effect, Exit, FiberHandle, Option, Schedule, Schema, Stream } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
@@ -891,6 +891,27 @@ export const redeem = act(
       return { report: result.report, ...redeemText(result.outcome, name, provider) }
     }),
   "Could not redeem a limit reset: ",
+)
+
+/**
+ * Lifts slopmax's hold on a limited or throttled account and reads its
+ * usage again, then says whether it is back.
+ */
+export const checkAccount = act(
+  (id: string, store) =>
+    Effect.gen(function* () {
+      const client = yield* Api
+      const name = nameOf(store, id)
+      const report = yield* client.accounts.check({ params: { id: AccountId.make(id) } })
+      const now = yield* DateTime.now
+      const condition = report.accounts.find((account) => account.id === id)?.condition
+      const text =
+        condition?._tag === "Limited"
+          ? `${name} is still limited: its provider's usage says it is back ${clock(condition.until, now, zone)}.`
+          : `${name} is back in rotation.`
+      return { report, text }
+    }),
+  (id, store) => `Could not check ${nameOf(store, id)}: `,
 )
 
 /** The most rows an export writes. */

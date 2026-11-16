@@ -327,6 +327,20 @@ export const makeStub = (options: StubOptions = {}): Stub => {
           ),
         ),
       )
+      .handle("check", ({ params }) =>
+        answer(
+          "check",
+          params,
+          Effect.map(known(params.id), () =>
+            mapAccounts((account) =>
+              account.id === params.id &&
+              (account.condition._tag === "Limited" || account.condition._tag === "Throttled")
+                ? new AccountView({ ...account, condition: Condition.cases.Ready.make({}) })
+                : account,
+            ),
+          ),
+        ),
+      )
       .handle("remove", ({ params }) =>
         answer(
           "remove",

@@ -19,6 +19,7 @@ let successes: [String: @Sendable (Data) throws -> Data] = [
     "accounts.pin": roundTrip(Report.self),
     "accounts.unpinAll": roundTrip(Report.self),
     "accounts.own": roundTrip(Report.self),
+    "accounts.check": roundTrip(Report.self),
     "accounts.remove": roundTrip(Report.self),
     "config.settings": roundTrip(SettingsView.self),
     "config.change": roundTrip(SettingsView.self),

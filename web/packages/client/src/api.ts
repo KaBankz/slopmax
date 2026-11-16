@@ -325,6 +325,14 @@ export class AccountsGroup extends HttpApiGroup.make("accounts")
     }),
   )
   .add(
+    // Lifts slopmax's hold on a limited or throttled account and reads its usage again.
+    HttpApiEndpoint.post("check", "/accounts/:id/check", {
+      params: accountParams,
+      success: Report,
+      error: [NotFound, Internal],
+    }),
+  )
+  .add(
     HttpApiEndpoint.post("redeem", "/accounts/:id/redeem", {
       params: accountParams,
       payload: [RedeemRequest, leftOut(RedeemRequest, Schema.decodeUnknownSync(RedeemRequest)({}))],

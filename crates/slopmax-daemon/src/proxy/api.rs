@@ -64,6 +64,7 @@ enum Route<'a> {
     Own(&'a str),
     RemoveAccount(&'a str),
     Redeem(&'a str),
+    Check(&'a str),
     Import,
     StartLogin,
     PasteLogin(&'a str),
@@ -104,6 +105,7 @@ impl<'a> Route<'a> {
             (&Method::POST, ["accounts", id, "pin"]) => Self::Pin(id),
             (&Method::POST, ["accounts", id, "own"]) => Self::Own(id),
             (&Method::POST, ["accounts", id, "redeem"]) => Self::Redeem(id),
+            (&Method::POST, ["accounts", id, "check"]) => Self::Check(id),
             (&Method::DELETE, ["pins"]) => Self::UnpinAll,
             (&Method::POST, ["imports"]) => Self::Import,
             (&Method::POST, ["logins"]) => Self::StartLogin,
@@ -325,6 +327,21 @@ async fn answer(
             )
         }
         Route::Redeem(id) => redeem(app, id, optional(body)?).await,
+        Route::Check(id) => {
+            // Lifts slopmax's own hold on the account, then reads its usage
+            // again (when usage polling is on), so a limit that has passed
+            // shows at once and one that has not is set aside anew.
+            let account = find(app, id)?;
+            app.pool.clear_blocks(&account.id);
+            if app.config().poll_mins > 0
+                && account.auth_error.is_none()
+                && account.provider.spec().is_subscription()
+            {
+                crate::poll_one(app, &account).await;
+            }
+            crate::save_soon(app);
+            ok(&app.api_report())
+        }
         Route::Import => import(app, optional(body)?).await,
         Route::StartLogin => start_login(app, strict(body)?),
         Route::PasteLogin(id) => {
@@ -1295,6 +1312,10 @@ mod tests {
         );
         assert_eq!(at(Method::GET, "/pools/vim"), None);
         assert_eq!(at(Method::GET, "/requests"), Some(Route::Requests));
+        assert_eq!(
+            at(Method::POST, "/accounts/a/check"),
+            Some(Route::Check("a"))
+        );
         assert_eq!(at(Method::GET, "/accounts/a"), None);
         assert_eq!(at(Method::POST, "/status"), None);
         assert_eq!(at(Method::GET, "/tailnet"), Some(Route::Tailnet));

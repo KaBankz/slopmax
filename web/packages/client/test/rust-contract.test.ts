@@ -31,6 +31,7 @@ const successes: Readonly<Record<string, Schema.Decoder<unknown>>> = {
   "accounts.pin": Report,
   "accounts.unpinAll": Report,
   "accounts.own": Report,
+  "accounts.check": Report,
   "accounts.remove": Report,
   "config.settings": SettingsView,
   "config.change": SettingsView,

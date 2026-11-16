@@ -92,6 +92,7 @@ const Accounts = HttpApiBuilder.group(SlopmaxApi, "accounts", (handlers) =>
     .handle("pin", () => notReached)
     .handle("unpinAll", () => Effect.succeed(report))
     .handle("own", () => notReached)
+    .handle("check", () => notReached)
     .handle("remove", () => notReached)
     .handle("redeem", ({ payload }) =>
       Effect.sync(() => received.push(payload)).pipe(Effect.as(new RedeemResult({ outcome: "no-credit", report }))),

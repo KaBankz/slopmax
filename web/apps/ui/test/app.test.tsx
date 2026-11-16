@@ -122,6 +122,23 @@ describe("the web dashboard", () => {
     expect(document.querySelector("main")?.textContent).not.toContain("ana@studio.dev")
   })
 
+  test("a limited account can be checked again now, and comes back when its limit has passed", async () => {
+    await web("#/claude")
+    await showsSoon("Limited · back in")
+    await press("Check ops@studio.dev now")
+    await showsSoon("ops@studio.dev is back in rotation.")
+    expect(drawn?.stub.calls.some((call) => call.endpoint === "check")).toBe(true)
+  })
+
+  test("the overview shows each account's last day and today's failures, a click from the Requests page", async () => {
+    await web()
+    await showsSoon("Account health", 5_000)
+    await showsSoon("Failed today")
+    await press("See all")
+    await showsSoon("Any agent")
+    expect(location.hash).toBe("#/requests")
+  })
+
   test("opening an account's limit resets lists them with what one clears", async () => {
     await web("#/codex")
     await showsSoon("2 limit resets")
