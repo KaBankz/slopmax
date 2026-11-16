@@ -274,14 +274,12 @@ function TableSkeleton() {
   )
 }
 
-export function RequestsPage() {
+/** The page's shared parts: the filter, choosing it, names, and the open request. */
+function usePage() {
   const [filter, setFilter] = useAtom(requestFilterAtom)
-  const [limit, setLimit] = useAtom(requestLimitAtom)
-  const feed = useAtomValue(feedAtom)
-  const live = useAtomValue(liveAtom)
+  const setLimit = useAtomSet(requestLimitAtom)
   const report = useAtomValue(shownReportAtom)
   const now = useAtomValue(nowAtom)
-  const save = useAtomSet(exportRequests)
   const [open, setOpen] = useState<RequestRow | undefined>(undefined)
   const name = (id: string) =>
     Option.match(report, {
@@ -292,78 +290,78 @@ export function RequestsPage() {
     setFilter(next)
     setLimit(pageSize)
   }
-  const range: HistoryRange = filter.span === "live" ? "today" : filter.span
-  const ledger = useAtomValue(requestPageAtom(requestPageKey(filter, range, limit)))
-  const page: Option.Option<RequestPage> = filter.span === "live" ? Option.none() : AsyncResult.value(ledger)
+  const views = (rows: ReadonlyArray<RequestRow>) =>
+    rows.map((row, i) => ({ view: rowView(row, i, name, now, zone), row }))
+  return { filter, choose, name, views, open, setOpen }
+}
 
+/** The live feed, filtered as the ledger is. */
+function LiveRequests() {
+  const { filter, choose, name, views, open, setOpen } = usePage()
+  const feed = useAtomValue(feedAtom)
+  const live = useAtomValue(liveAtom)
   const feedRows = feed.map((entry) => new RequestRow({ record: entry.record }))
-  const rows =
-    filter.span === "live"
-      ? liveRows(filter, feedRows)
-      : Option.match(page, { onNone: () => [], onSome: (p) => p.rows })
-  const facets =
-    filter.span === "live"
-      ? {
-          accounts: [...new Set(feedRows.flatMap((r) => r.record.account ?? []))].toSorted(),
-          models: [...new Set(feedRows.flatMap((r) => r.record.model ?? []))].toSorted(),
-          agents: (["claude-code", "codex", "slopmax"] as const).filter((a) =>
-            feedRows.some((r) => r.record.agent === a),
-          ),
-        }
-      : Option.match(page, {
-          onNone: () => ({ accounts: [], models: [], agents: [] }),
-          onSome: (p) => p.facets,
-        })
-  const views = rows.map((row, i) => ({ view: rowView(row, i, name, now, zone), row }))
-
-  const filters = <Filters filter={filter} facets={facets} onChange={choose} name={name} />
-  const exportButton = (
-    <Button variant="outline" size="sm" disabled={rows.length === 0} onClick={() => save({ filter, range })}>
-      <Download data-icon="inline-start" />
-      Export CSV
-    </Button>
-  )
-  const toolbar = (
-    <div className="flex flex-wrap items-start justify-between gap-2">
-      {filters}
-      {filter.span !== "live" && exportButton}
-    </div>
-  )
-
-  if (filter.span === "live") {
-    return (
-      <div className="flex flex-col gap-3">
-        {toolbar}
-        {views.length === 0 ? (
-          <Quiet
-            icon={Activity}
-            title={
-              feed.length > 0
-                ? "No live requests match"
-                : live._tag === "Running"
-                  ? "Waiting for requests"
-                  : "Connecting to the proxy…"
-            }
-            detail={
-              feed.length > 0
-                ? "Clear the filters, or look back over a day, a week or a month."
-                : "Answered and failed requests show here as they happen. Look back over a day, a week or a month above."
-            }
-          />
-        ) : (
-          <RequestsTable views={views} onOpen={setOpen} />
-        )}
-        <p className="text-xs text-muted-foreground">
-          The newest {feedSize} requests since this page opened, as they are answered.
-        </p>
-        <RequestSheet row={open} onClose={() => setOpen(undefined)} name={name} />
-      </div>
-    )
+  const shown = views(liveRows(filter, feedRows))
+  const facets = {
+    accounts: [...new Set(feedRows.flatMap((r) => r.record.account ?? []))].toSorted(),
+    models: [...new Set(feedRows.flatMap((r) => r.record.model ?? []))].toSorted(),
+    agents: (["claude-code", "codex", "slopmax"] as const).filter((a) => feedRows.some((r) => r.record.agent === a)),
   }
-
   return (
     <div className="flex flex-col gap-3">
-      {toolbar}
+      <Filters filter={filter} facets={facets} onChange={choose} name={name} />
+      {shown.length === 0 ? (
+        <Quiet
+          icon={Activity}
+          title={
+            feed.length > 0
+              ? "No live requests match"
+              : live._tag === "Running"
+                ? "Waiting for requests"
+                : "Connecting to the proxy…"
+          }
+          detail={
+            feed.length > 0
+              ? "Clear the filters, or look back over a day, a week or a month."
+              : "Answered and failed requests show here as they happen. Look back over a day, a week or a month above."
+          }
+        />
+      ) : (
+        <RequestsTable views={shown} onOpen={setOpen} />
+      )}
+      <p className="text-xs text-muted-foreground">
+        The newest {feedSize} requests since this page opened, as they are answered.
+      </p>
+      <RequestSheet row={open} onClose={() => setOpen(undefined)} name={name} />
+    </div>
+  )
+}
+
+/** A range of the ledger, filtered, a page at a time. */
+function LedgerRequests({ range }: { readonly range: HistoryRange }) {
+  const { filter, choose, name, views, open, setOpen } = usePage()
+  const [limit, setLimit] = useAtom(requestLimitAtom)
+  const save = useAtomSet(exportRequests)
+  const ledger = useAtomValue(requestPageAtom(requestPageKey(filter, range, limit)))
+  const page: Option.Option<RequestPage> = AsyncResult.value(ledger)
+  const facets = Option.match(page, {
+    onNone: () => ({ accounts: [], models: [], agents: [] }),
+    onSome: (p) => p.facets,
+  })
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <Filters filter={filter} facets={facets} onChange={choose} name={name} />
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={Option.match(page, { onNone: () => true, onSome: (p) => p.matched === 0 })}
+          onClick={() => save({ filter, range })}
+        >
+          <Download data-icon="inline-start" />
+          Export CSV
+        </Button>
+      </div>
       {Option.match(page, {
         onNone: () =>
           AsyncResult.isFailure(ledger) ? (
@@ -385,7 +383,7 @@ export function RequestsPage() {
                 }
               />
             ) : (
-              <RequestsTable views={views} onOpen={setOpen} />
+              <RequestsTable views={views(p.rows)} onOpen={setOpen} />
             )}
             {p.matched > p.rows.length && (
               <div className="flex items-center justify-center gap-3">
@@ -408,4 +406,9 @@ export function RequestsPage() {
       <RequestSheet row={open} onClose={() => setOpen(undefined)} name={name} />
     </div>
   )
+}
+
+export function RequestsPage() {
+  const span = useAtomValue(requestFilterAtom).span
+  return span === "live" ? <LiveRequests /> : <LedgerRequests range={span} />
 }

@@ -338,11 +338,15 @@ pub fn read(dir: &Path, since: Timestamp) -> Vec<Entry> {
         .collect();
     files.sort();
     let mut entries = Vec::new();
+    let floor = Floor::of(since);
     for path in files {
         let Ok(file) = fs::File::open(&path) else {
             continue;
         };
         for line in BufReader::new(file).lines().map_while(Result::ok) {
+            if floor.before(&line) {
+                continue;
+            }
             if let Ok(entry) = serde_json::from_str::<Entry>(&line)
                 && entry.at >= since
             {
@@ -352,6 +356,25 @@ pub fn read(dir: &Path, since: Timestamp) -> Vec<Entry> {
     }
     entries.sort_by_key(|e| e.at);
     entries
+}
+
+/// A time to skip a request's line before, read off the line's first
+/// field (an entry writes `at` first) without parsing the rest: a month
+/// file holds the whole month, and a range often wants its last day.
+struct Floor(String);
+
+impl Floor {
+    fn of(since: Timestamp) -> Self {
+        // `2026-11-16T05:00:00`: RFC 3339 to the second sorts as text.
+        Self(since.to_string().chars().take(19).collect())
+    }
+
+    /// Whether `line` is a request from a whole second before the floor.
+    fn before(&self, line: &str) -> bool {
+        line.strip_prefix("{\"at\":\"")
+            .and_then(|rest| rest.get(..19))
+            .is_some_and(|at| self.0.len() == 19 && at < self.0.as_str())
+    }
 }
 
 #[cfg(test)]
@@ -402,6 +425,25 @@ mod tests {
         // Lines stay compact: defaults are left out.
         let text = fs::read_to_string(dir.join("2026-10.jsonl")).unwrap();
         assert!(!text.contains("attempts"), "{text}");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_line_from_before_the_floor_is_skipped_unread() {
+        let floor = Floor::of("2026-10-02T12:00:00.5Z".parse().unwrap());
+        assert!(floor.before(r#"{"at":"2026-10-02T11:59:59Z","account":"a"}"#));
+        // The same second is read, and the parsed time decides.
+        assert!(!floor.before(r#"{"at":"2026-10-02T12:00:00.25Z","account":"a"}"#));
+        assert!(!floor.before(r#"{"at":"2026-10-03T00:00:00Z"}"#));
+        // Lines of other kinds are left to the parser.
+        assert!(!floor.before(r#"{"window":{"ended_at":"2020-01-01T00:00:00Z"}}"#));
+        let dir = temp_dir();
+        let ledger = Ledger::at(dir.clone());
+        ledger.record(&entry("2026-10-02T11:00:00Z", "early"));
+        ledger.record(&entry("2026-10-02T13:00:00Z", "late"));
+        let read = read(&dir, "2026-10-02T12:00:00Z".parse().unwrap());
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].model.as_deref(), Some("late"));
         fs::remove_dir_all(dir).unwrap();
     }
 
