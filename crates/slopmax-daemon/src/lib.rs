@@ -310,8 +310,17 @@ pub async fn serve_with(
     // this one is told to: what it still holds is cut.
     #[cfg(unix)]
     let socket = tailnet_socket::listen(&app, handler.clone());
+    let stopping = {
+        let app = app.clone();
+        async move {
+            let how = shutdown(app.clone()).await;
+            // The server accepts nothing more once this returns.
+            app.let_go.cancel();
+            how
+        }
+    };
     tokio::select! {
-        () = server::serve_until(listener, handler, shutdown(app.clone())) => {}
+        () = server::serve_until(listener, handler, stopping) => {}
         () = app.cut.cancelled() => log::info!("ending what this proxy still had"),
     }
     // Both listeners stop together; the socket goes once it has drained.

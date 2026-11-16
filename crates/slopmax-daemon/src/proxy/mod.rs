@@ -121,6 +121,8 @@ pub struct App {
     /// Cancelled when a handed-off daemon should stop draining: the new
     /// process stopped, or this one was signalled.
     pub cut: CancellationToken,
+    /// Cancelled once the proxy's TCP listener takes no more connections.
+    pub let_go: CancellationToken,
     /// The exit code of the process the proxy was handed to, once it ended.
     pub successor_exit: Mutex<Option<i32>>,
     /// The binary this daemon runs, to notice a newer one installed.
@@ -204,6 +206,7 @@ impl App {
             launchd: std::sync::atomic::AtomicBool::new(false),
             launchd_socket: std::sync::atomic::AtomicBool::new(false),
             cut: CancellationToken::new(),
+            let_go: CancellationToken::new(),
             successor_exit: Mutex::default(),
             running: crate::handoff::Running::now(),
             install_seen: Default::default(),

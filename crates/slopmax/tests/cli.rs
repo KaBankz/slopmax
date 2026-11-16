@@ -2114,6 +2114,12 @@ async fn handing_the_proxy_to_another_binary_refuses_and_cuts_off_nothing() {
         health(http.clone(), base.clone()).await.unwrap()["pid"],
         first.id()
     );
+    // A connection opened before the move, idle through it.
+    let held = Client::builder().plain_http().build();
+    assert_eq!(
+        health(held.clone(), base.clone()).await.unwrap()["pid"],
+        first.id()
+    );
 
     // A stream under way when the proxy moves…
     let streaming = {
@@ -2169,7 +2175,7 @@ async fn handing_the_proxy_to_another_binary_refuses_and_cuts_off_nothing() {
     assert_ne!(second, first.id(), "{now}");
     // …and one opened before the move still answers, from the old one,
     // which closes it after: no client finds its connection gone.
-    let kept = http.get(format!("{base}/healthz")).send().await.unwrap();
+    let kept = held.get(format!("{base}/healthz")).send().await.unwrap();
     assert_eq!(
         kept.headers()
             .get("connection")
