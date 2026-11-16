@@ -2580,7 +2580,8 @@ fn tailscale_on_publishes_the_socket_and_off_takes_it_down() {
     // one command that does it, and finishes once it has been run.
     s.ts_marker("root-only", true);
     let by_hand = format!(
-        "  sudo tailscale serve --bg --yes --https={port} {}",
+        "then run `slopmax tailscale on --socket` again:\n  sudo tailscale serve --bg --yes \
+         --https={port} {}",
         s.socket_target()
     );
     let out = s
@@ -2638,7 +2639,7 @@ fn tailscale_on_publishes_the_socket_and_off_takes_it_down() {
     );
     let table = s.ts(&["tailscale"]).ok().stdout;
     assert!(
-        table.contains(&format!("-> http://127.0.0.1:{port} (a private path)")),
+        table.contains(&format!("-> a private path on http://127.0.0.1:{port}")),
         "{table}"
     );
     assert!(!table.contains(".slopmax-tailnet-"), "{table}");

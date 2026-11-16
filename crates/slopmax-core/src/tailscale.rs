@@ -625,7 +625,7 @@ impl Target {
     pub fn shown(&self, home: &Home) -> String {
         match self {
             Self::Socket(path) => home.show(path),
-            Self::Private { port, .. } => format!("http://127.0.0.1:{port} (a private path)"),
+            Self::Private { port, .. } => format!("a private path on http://127.0.0.1:{port}"),
             Self::Loopback(port) => format!("http://127.0.0.1:{port}"),
         }
     }

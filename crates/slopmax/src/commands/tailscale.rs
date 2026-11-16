@@ -177,10 +177,15 @@ async fn on(config: &Config, args: &Args<'_>) -> Result<()> {
     let mut why: Option<String> = None;
     let by_hand =
         |target: &Target| format!("tailscale serve --bg --yes --https={port} {}", target.arg());
-    let again = match args.port {
-        Some(port) => format!("on --port {port}"),
-        None => "on".to_owned(),
-    };
+    let mut again = "on".to_owned();
+    if let Some(port) = args.port {
+        again.push_str(&format!(" --port {port}"));
+    }
+    if args.socket {
+        again.push_str(" --socket");
+    } else if args.loopback {
+        again.push_str(" --loopback");
+    }
     // Published already, perhaps by hand with sudo: nothing for Tailscale
     // to change, so nothing that needs root.
     let published = matches!(
