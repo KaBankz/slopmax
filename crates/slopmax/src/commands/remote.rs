@@ -301,9 +301,10 @@ fn is_loopback(host: &str) -> bool {
 pub async fn discover() -> Result<Vec<Found>, String> {
     let ts = Tailscale::find().map_err(|e| e.message())?;
     let (_, peers) = ts.peers().await.map_err(|e| e.message())?;
-    let mut probes = tokio::task::JoinSet::new();
+    // All at once, and read in the candidates' order, which is by name.
+    let mut probes = Vec::new();
     for (name, url) in tailscale::discovery_candidates(&peers, HUB_PORT) {
-        probes.spawn(async move {
+        probes.push(tokio::spawn(async move {
             let health = Client::remote(&url, TAILNET_TOKEN)
                 .health_within(Duration::from_millis(1500))
                 .await?;
@@ -312,15 +313,14 @@ pub async fn discover() -> Result<Vec<Found>, String> {
                 url,
                 version: health.version,
             })
-        });
+        }));
     }
     let mut found = Vec::new();
-    while let Some(done) = probes.join_next().await {
-        if let Ok(Some(hub)) = done {
+    for probe in probes {
+        if let Ok(Some(hub)) = probe.await {
             found.push(hub);
         }
     }
-    found.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(found)
 }
 

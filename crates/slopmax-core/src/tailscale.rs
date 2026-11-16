@@ -540,32 +540,32 @@ pub fn parse_status(json: &str) -> Result<(Node, Vec<Peer>), TsError> {
         version,
         id: text(me, "ID"),
     };
-    let mut peers: Vec<Peer> = status
+    let mut peers: Vec<Peer> = Vec::new();
+    for peer in status
         .get("Peer")
         .and_then(Value::as_object)
         .into_iter()
         .flat_map(Map::values)
-        .map(|peer| {
-            let dns_name = trim_dot(&text(peer, "DNSName"));
-            let tags = texts(peer, "Tags");
-            Peer {
-                id: text(peer, "ID"),
-                name: first_label(&dns_name),
-                dns_name,
-                host_name: text(peer, "HostName"),
-                online: peer.get("Online").and_then(Value::as_bool) == Some(true),
-                login: login_of(&status, peer.get("UserID"), !tags.is_empty()),
-                tags,
-                os: text(peer, "OS"),
-                ips: addresses(peer, "TailscaleIPs"),
-            }
-        })
-        .collect();
-    peers.sort_by(|a, b| {
-        a.name
-            .cmp(&b.name)
-            .then_with(|| a.dns_name.cmp(&b.dns_name))
-    });
+    {
+        let dns_name = trim_dot(&text(peer, "DNSName"));
+        let tags = texts(peer, "Tags");
+        let peer = Peer {
+            id: text(peer, "ID"),
+            name: first_label(&dns_name),
+            dns_name,
+            host_name: text(peer, "HostName"),
+            online: peer.get("Online").and_then(Value::as_bool) == Some(true),
+            login: login_of(&status, peer.get("UserID"), !tags.is_empty()),
+            tags,
+            os: text(peer, "OS"),
+            ips: addresses(peer, "TailscaleIPs"),
+        };
+        insert_sorted(&mut peers, peer, |a, b| {
+            a.name
+                .cmp(&b.name)
+                .then_with(|| a.dns_name.cmp(&b.dns_name))
+        });
+    }
     Ok((node, peers))
 }
 
@@ -711,11 +711,6 @@ pub fn parse_serve(json: &str) -> Result<ServeState, TsError> {
             read_config(session, true, &mut state);
         }
     }
-    state
-        .handlers
-        .sort_by(|a, b| (a.port, &a.path, a.foreground).cmp(&(b.port, &b.path, b.foreground)));
-    state.funnel_ports.sort_unstable();
-    state.funnel_ports.dedup();
     state.raw = raw;
     Ok(state)
 }
@@ -739,14 +734,17 @@ fn read_config(config: &Value, foreground: bool, state: &mut ServeState) {
         if forward.is_empty() {
             continue;
         }
-        state.handlers.push(Handler {
-            port,
-            https: !text(handler, "TerminateTLS").is_empty(),
-            host: String::new(),
-            path: String::new(),
-            target: HandlerTarget::Tcp(forward.to_owned()),
-            foreground,
-        });
+        add_handler(
+            state,
+            Handler {
+                port,
+                https: !text(handler, "TerminateTLS").is_empty(),
+                host: String::new(),
+                path: String::new(),
+                target: HandlerTarget::Tcp(forward.to_owned()),
+                foreground,
+            },
+        );
     }
     let web = config.get("Web").and_then(Value::as_object);
     for (key, site) in web.into_iter().flatten() {
@@ -761,22 +759,41 @@ fn read_config(config: &Value, foreground: bool, state: &mut ServeState) {
             == Some(true);
         let handlers = site.get("Handlers").and_then(Value::as_object);
         for (path, handler) in handlers.into_iter().flatten() {
-            state.handlers.push(Handler {
-                port,
-                https: !plain,
-                host: host.to_owned(),
-                path: path.clone(),
-                target: handler_target(handler),
-                foreground,
-            });
+            add_handler(
+                state,
+                Handler {
+                    port,
+                    https: !plain,
+                    host: host.to_owned(),
+                    path: path.clone(),
+                    target: handler_target(handler),
+                    foreground,
+                },
+            );
         }
     }
     let funnel = config.get("AllowFunnel").and_then(Value::as_object);
     for (key, on) in funnel.into_iter().flatten() {
-        if let (Some((_, port)), Some(true)) = (port_of(key), on.as_bool()) {
-            state.funnel_ports.push(port);
+        if let (Some((_, port)), Some(true)) = (port_of(key), on.as_bool())
+            && let Err(at) = state.funnel_ports.binary_search(&port)
+        {
+            state.funnel_ports.insert(at, port);
         }
     }
+}
+
+/// Adds `handler` to what `state` publishes, in order of port and path.
+fn add_handler(state: &mut ServeState, handler: Handler) {
+    insert_sorted(&mut state.handlers, handler, |a, b| {
+        (a.port, &a.path, a.foreground).cmp(&(b.port, &b.path, b.foreground))
+    });
+}
+
+/// Puts `item` in `list`, sorted by `order`, after those it equals. The
+/// lists are short, and a sort is compiled anew for each type it sorts.
+fn insert_sorted<T>(list: &mut Vec<T>, item: T, order: impl Fn(&T, &T) -> std::cmp::Ordering) {
+    let at = list.partition_point(|x| order(x, &item).is_le());
+    list.insert(at, item);
 }
 
 fn handler_target(handler: &Value) -> HandlerTarget {
@@ -1230,9 +1247,10 @@ impl Whois for LazyWhois {
 }
 
 /// Where slopmax would answer on each online machine of `peers` serving on
-/// `port`, as (name, URL), sorted by name: the machines to look for a hub on.
+/// `port`, as (name, URL), in the order of `peers` ([`parse_status`] sorts
+/// them by name): the machines to look for a hub on.
 pub fn discovery_candidates(peers: &[Peer], port: u16) -> Vec<(String, String)> {
-    let mut all: Vec<(String, String)> = peers
+    peers
         .iter()
         .filter(|peer| peer.online && !peer.dns_name.is_empty())
         .map(|peer| {
@@ -1242,9 +1260,7 @@ pub fn discovery_candidates(peers: &[Peer], port: u16) -> Vec<(String, String)> 
             };
             (peer.name.clone(), url)
         })
-        .collect();
-    all.sort();
-    all
+        .collect()
 }
 
 /// The machine of `peers` that `query` names: by its full DNS name, by that

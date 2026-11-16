@@ -198,19 +198,19 @@ impl AsyncWrite for Conn {
 /// Serves `handler` on `listener` until `shutdown` completes, then lets
 /// in-flight requests finish for a moment. Each request carries its
 /// [`Channel`] in its extensions.
-pub async fn serve<H, F>(
+pub fn serve<H, F>(
     listener: impl Into<Listener>,
     handler: H,
     shutdown: impl Future<Output = ()>,
-) where
+) -> impl Future<Output = ()>
+where
     H: Fn(Request) -> F + Clone + Send + Sync + 'static,
     F: Future<Output = Response> + Send + 'static,
 {
-    serve_until(listener, handler, async {
+    run(listener.into(), handler, async {
         shutdown.await;
         Stop::Now(DRAIN)
     })
-    .await;
 }
 
 /// Serves `handler` on `listener` until `shutdown` says how to stop, then
@@ -218,15 +218,25 @@ pub async fn serve<H, F>(
 /// listener closes as soon as it stops taking connections, so none wait on
 /// it for an answer that never comes; a process it was handed to keeps the
 /// socket open and takes them instead.
-pub async fn serve_until<H, F>(
+pub fn serve_until<H, F>(
     listener: impl Into<Listener>,
     handler: H,
     shutdown: impl Future<Output = Stop>,
-) where
+) -> impl Future<Output = ()>
+where
     H: Fn(Request) -> F + Clone + Send + Sync + 'static,
     F: Future<Output = Response> + Send + 'static,
 {
-    let listener = listener.into();
+    run(listener.into(), handler, shutdown)
+}
+
+/// [`serve_until`] on a listener of either kind: one server whichever it
+/// is, compiled once for each handler.
+async fn run<H, F>(listener: Listener, handler: H, shutdown: impl Future<Output = Stop>)
+where
+    H: Fn(Request) -> F + Clone + Send + Sync + 'static,
+    F: Future<Output = Response> + Send + 'static,
+{
     // Each connection holds a receiver; the sender learns when all are gone.
     let (stop, stopping) = watch::channel(None::<Stop>);
     tokio::pin!(shutdown);
