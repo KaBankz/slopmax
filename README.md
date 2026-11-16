@@ -286,13 +286,13 @@ If your machines are on the same [Tailscale](https://tailscale.com) tailnet, pub
 slopmax tailscale on
 ```
 
-It runs `tailscale serve` for you, and the proxy itself keeps listening on 127.0.0.1 only. The tailnet needs HTTPS certificates turned on (DNS in Tailscale's admin console). On Linux, Tailscale lets only root change what a machine serves, so allow your user once first:
+It runs `tailscale serve` for you, and the proxy itself keeps listening on 127.0.0.1 only. The tailnet needs HTTPS certificates turned on (DNS in Tailscale's admin console). Tailscale reaches slopmax through a socket only you and Tailscale can open, which is how slopmax knows a request came from your tailnet. On Linux, and on a Mac with Homebrew's tailscaled, Tailscale lets only root publish a socket, so `slopmax tailscale on` stops and prints the command to run once:
 
 ```sh
-sudo tailscale set --operator=$USER
+sudo tailscale serve --bg --yes --https=7567 unix:$HOME/.slopmax/tailnet.sock
 ```
 
-slopmax never runs sudo itself. Then, on each of your other machines:
+Then run `slopmax tailscale on` again to finish. slopmax never runs sudo itself. Then, on each of your other machines:
 
 ```sh
 slopmax setup --hub <machine>   # the hub's name on your tailnet, or its URL

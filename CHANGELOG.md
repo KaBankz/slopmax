@@ -16,6 +16,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ### Fixed
 
+- `slopmax tailscale on` says what to run when Tailscale refuses to publish slopmax's socket. Tailscale lets only root publish a socket: it lets an operator too only when the operator may run `sudo tailscale`, which it checks under the account's full name rather than its login (so it fails where the two differ, such as `ec2-user`, "EC2 Default User"), and its next release drops the operator altogether. slopmax showed Tailscale's raw 401; it now gives the one `sudo tailscale serve` command, or `--loopback`.
+- `slopmax tailscale on` finishes when slopmax is already published, by hand or by an earlier run: it no longer asks Tailscale to publish it again, which needed root just to change nothing.
 - The dashboard said it could not open a link, such as the release notes or a sign-in address, even when the browser had opened it.
 
 ## [0.13.1] - 2026-11-16

@@ -1094,6 +1094,11 @@ pub enum TsError {
     NeedsApproval,
     /// Only root may change what this machine serves.
     AccessDenied,
+    /// Only root may publish a socket. Tailscale lets an operator do it
+    /// only if the operator may `sudo tailscale` (which tailscaled checks
+    /// under the account's full name, not its login, so it fails wherever
+    /// the two differ), and Tailscale after 1.104 lets only root do it.
+    RootOnly,
     /// The tailnet has HTTPS certificates turned off.
     NoHttps,
     /// Something else is published on `port`.
@@ -1122,6 +1127,7 @@ impl TsError {
             Self::AccessDenied => {
                 "Tailscale lets only root change what this machine serves.".to_owned()
             }
+            Self::RootOnly => "Tailscale lets only root publish a socket.".to_owned(),
             Self::NoHttps => "your tailnet has HTTPS certificates turned off".to_owned(),
             Self::PortTaken { port, by } => {
                 format!("port {port} of this machine already serves {by} to your tailnet")
@@ -1157,7 +1163,11 @@ impl TsError {
                 format!("slopmax tailscale on --port {}", port.saturating_add(1))
             }
             Self::Funnel { port } => format!("tailscale funnel --https={port} off"),
-            Self::Timeout { .. } | Self::Unreadable { .. } | Self::Failed { .. } => return None,
+            // The command names the socket, which only the caller knows.
+            Self::RootOnly
+            | Self::Timeout { .. }
+            | Self::Unreadable { .. }
+            | Self::Failed { .. } => return None,
         };
         Some(fix)
     }
@@ -1176,6 +1186,12 @@ impl std::error::Error for TsError {}
 pub fn classify(output: &Output) -> TsError {
     let stderr = output.stderr.as_str();
     let lower = stderr.to_ascii_lowercase();
+    // "must be root, or be an operator and able to run 'sudo tailscale' to
+    // serve a path or Unix socket", "must be root to …" after 1.104, and
+    // "must be a Windows local admin to …".
+    if lower.contains("to serve a path or unix socket") {
+        return TsError::RootOnly;
+    }
     if stderr.contains("Access denied") || stderr.contains("--operator") {
         return TsError::AccessDenied;
     }
@@ -1810,6 +1826,21 @@ mod tests {
             (
                 "To not require root, use 'sudo tailscale set --operator=$USER' once.",
                 TsError::AccessDenied,
+            ),
+            (
+                "sending serve config: 401 Unauthorized: must be root, or be an operator and \
+                 able to run 'sudo tailscale' to serve a path or Unix socket",
+                TsError::RootOnly,
+            ),
+            (
+                "sending serve config: 401 Unauthorized: must be root to serve a path or Unix \
+                 socket",
+                TsError::RootOnly,
+            ),
+            (
+                "sending serve config: 401 Unauthorized: must be a Windows local admin to serve \
+                 a path or Unix socket",
+                TsError::RootOnly,
             ),
             (
                 "failed to connect to local tailscaled; it doesn't appear to be running",

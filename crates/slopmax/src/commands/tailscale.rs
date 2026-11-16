@@ -86,6 +86,17 @@ fn access_denied(again: &str, by_hand: &str) -> anyhow::Error {
     )
 }
 
+/// Only root may publish the socket: the one command that does it, or the
+/// proxy's port, which needs no root once the user is Tailscale's operator.
+fn root_only(again: &str, by_hand: &str) -> anyhow::Error {
+    anyhow!(
+        "{}\nPublish it once yourself, then run `slopmax tailscale {again}` again:\n  sudo \
+         {by_hand}\nOr serve the proxy's port instead, where every machine needs a key: slopmax \
+         tailscale on --loopback\n(slopmax never runs sudo itself.)",
+        TsError::RootOnly.message()
+    )
+}
+
 /// The longest socket path slopmax listens on: macOS takes 104 bytes.
 const SOCKET_PATH_MAX: usize = 100;
 
@@ -163,11 +174,25 @@ async fn on(config: &Config, args: &Args<'_>) -> Result<()> {
     let (mut target, mut why) = transport(config, &ts, args);
     let by_hand =
         |target: &Target| format!("tailscale serve --bg --yes --https={port} {}", target.arg());
-    if cfg!(target_os = "linux") && !tailscale::is_root() {
+    let again = match args.port {
+        Some(port) => format!("on --port {port}"),
+        None => "on".to_owned(),
+    };
+    // Published already, perhaps by hand with sudo: nothing for Tailscale
+    // to change, so nothing that needs root.
+    let published = matches!(
+        tailscale::port_use(&serve, port, &targets(config)),
+        Port::Ours(handler) if tailscale::ours(&handler, std::slice::from_ref(&target))
+    );
+    if !published && cfg!(target_os = "linux") && !tailscale::is_root() {
         let user = std::env::var("USER").ok().filter(|u| !u.is_empty());
         let operator = ts.operator().await;
         if operator.is_none() || (user.is_some() && operator != user) {
-            return Err(access_denied("on", &by_hand(&target)));
+            // The operator may publish the proxy's port, but not a socket.
+            return Err(match target {
+                Target::Socket(_) => root_only(&again, &by_hand(&target)),
+                Target::Loopback(_) => access_denied(&again, &by_hand(&target)),
+            });
         }
     }
 
@@ -205,7 +230,9 @@ async fn on(config: &Config, args: &Args<'_>) -> Result<()> {
             path.display()
         );
     }
-    publish(&ts, port, &target, &by_hand).await?;
+    if !published {
+        publish(&ts, port, &target, &again, &by_hand).await?;
+    }
     let mut url = check_published(&ts, &node, port, &target).await?;
     let mut note = None;
     match reach(&url).await {
@@ -217,7 +244,7 @@ async fn on(config: &Config, args: &Args<'_>) -> Result<()> {
             // where keys work.
             ts.unpublish(port).await.map_err(fail)?;
             target = Target::Loopback(config.listen.port());
-            publish(&ts, port, &target, &by_hand).await?;
+            publish(&ts, port, &target, &again, &by_hand).await?;
             url = check_published(&ts, &node, port, &target).await?;
             why = Some(
                 "Tailscale here couldn't reach slopmax's socket, so it serves the proxy's port \
@@ -293,17 +320,19 @@ fn setup_command(name: &str, url: &str, port: u16) -> String {
     }
 }
 
-/// Publishes `target` on `port`, an `Access denied` said as how to get
-/// the right.
+/// Publishes `target` on `port`, a refusal said as how to get the right,
+/// then `slopmax tailscale {again}`.
 async fn publish(
     ts: &Tailscale,
     port: u16,
     target: &Target,
+    again: &str,
     by_hand: &dyn Fn(&Target) -> String,
 ) -> Result<()> {
     match ts.publish(port, target).await {
         Ok(()) => Ok(()),
-        Err(TsError::AccessDenied) => Err(access_denied("on", &by_hand(target))),
+        Err(TsError::AccessDenied) => Err(access_denied(again, &by_hand(target))),
+        Err(TsError::RootOnly) => Err(root_only(again, &by_hand(target))),
         Err(e) => Err(fail(e)),
     }
 }
@@ -397,7 +426,8 @@ async fn off(config: &Config) -> Result<()> {
     for port in ports {
         match ts.unpublish(port).await {
             Ok(()) => {}
-            Err(TsError::AccessDenied) => {
+            // Root-only: something else on this machine serves a socket.
+            Err(TsError::AccessDenied | TsError::RootOnly) => {
                 return Err(access_denied("off", &tailscale::serve_off(port)));
             }
             Err(e) => return Err(fail(e)),
