@@ -1,0 +1,7 @@
+{
+  "status": 400,
+  "body": {
+    "_tag": "BadRequest",
+    "message": "outcome is all, answered, failed, or rescued"
+  }
+}

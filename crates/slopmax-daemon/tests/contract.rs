@@ -684,6 +684,25 @@ async fn every_endpoint_answers_as_its_fixture_says() {
         .find(|a| a["id"] == claude.as_str())
         .unwrap();
     assert_eq!(served["windows"][0]["requests"], 2);
+    let requests = call
+        .send(
+            "usage.requests.ok",
+            Method::GET,
+            "/requests?range=7d&limit=2",
+            None,
+            StatusCode::OK,
+        )
+        .await;
+    assert_eq!(requests["matched"], 3);
+    assert_eq!(requests["rows"].as_array().unwrap().len(), 2);
+    call.send(
+        "usage.requests.badRequest",
+        Method::GET,
+        "/requests?outcome=maybe",
+        None,
+        StatusCode::BAD_REQUEST,
+    )
+    .await;
     call.send(
         "usage.pool.notFound",
         Method::GET,

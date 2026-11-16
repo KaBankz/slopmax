@@ -13,6 +13,7 @@ pub mod api;
 pub mod auth;
 pub mod background;
 pub mod blocking;
+pub mod browse;
 pub mod config;
 pub mod doctor;
 pub mod error;

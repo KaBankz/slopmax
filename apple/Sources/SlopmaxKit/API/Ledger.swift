@@ -145,3 +145,37 @@ public struct History: Codable, Sendable, Equatable {
     public var agents: [NamedTotals]
     public var speeds: [Speed]
 }
+
+/// How a streamed answer ended, when not by completing.
+public enum RequestEnd: String, Codable, Sendable {
+    case upstreamError = "upstream-error"
+    case clientGone = "client-gone"
+    case stalled, cut
+}
+
+/// One request of the ledger, with what it was worth.
+public struct RequestRow: Codable, Sendable, Equatable {
+    public var record: LedgerRecord
+    public var cost: Double?
+    public var end: RequestEnd?
+}
+
+public struct RequestFacets: Codable, Sendable, Equatable {
+    public var accounts: [String]
+    public var models: [String]
+    public var agents: [Sender]
+}
+
+/// `GET /requests`: a page of the ledger's requests, newest first.
+public struct RequestPage: Codable, Sendable, Equatable {
+    public var range: HistoryRange
+    public var since: Date
+    public var rows: [RequestRow]
+    public var offset: Int
+    public var matched: Int
+    public var failed: Int
+    public var rescued: Int
+    public var tokens: Int
+    public var cost: Double
+    public var facets: RequestFacets
+}

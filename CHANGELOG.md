@@ -19,6 +19,8 @@ Your other machines can now use one machine's accounts over your Tailscale tailn
 - A lane per account shows its resets over the next week, so resets bunched together stand out.
 - Each account shows its last day as a strip of half hours, green where requests were answered and amber or red where they failed, and each window shows what it has served so far at API prices and what a percent of it has bought.
 - `GET /slopmax/api/pools/{provider}` answers all of it, for any client.
+- The Requests page looks back over today, 7 days or 30 days of the ledger as well as the live feed. It filters by account, model, agent and outcome (answered, failed, or saved by failover), sums what matched, and shows each request's cost at API prices. A row opens the request in full: its tokens by kind, the accounts tried, its status in words, and how it ended. The listing exports as CSV.
+- `GET /slopmax/api/requests` answers the ledger's requests a page at a time, filtered.
 
 ### Changed
 

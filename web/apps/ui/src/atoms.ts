@@ -15,6 +15,7 @@ import {
   providerFacts,
   type RedeemOutcome,
   type Report,
+  type RequestRow,
   type SubscriptionId,
   Unauthorized,
 } from "@slopmax/client"
@@ -55,6 +56,7 @@ import {
 } from "./view/live.ts"
 import { type Page, pageHash, Pages, parseRoute, type Route, toggleSidebar as toggled } from "./view/pages.ts"
 import { tailnetAccess } from "./view/tailnet.ts"
+import { allRequests, csv, csvName, pageSize, type RequestFilter } from "./view/requests.ts"
 import { addToast, type Toast } from "./view/toasts.ts"
 import { count, defaultRange, failureText, sentenceCase, settingChanged } from "./view/words.ts"
 
@@ -504,6 +506,58 @@ export const poolDetailAtom = Atom.family((provider: SubscriptionId) =>
     .pipe(Api.runtime.factory.withReactivity(["history"])),
 )
 
+/** What the Requests page lists, kept while the app runs. */
+export const requestFilterAtom = Atom.make<RequestFilter>(allRequests).pipe(Atom.keepAlive)
+
+/** How many of the ledger's requests the Requests page shows: a page more with each "Show more". */
+export const requestLimitAtom = Atom.make(pageSize).pipe(Atom.keepAlive)
+
+/** The query a filter and a row count ask of `GET /requests`. */
+const requestQuery = (filter: RequestFilter, range: HistoryRange, limit: number, offset = 0) => ({
+  range,
+  outcome: filter.outcome,
+  ...(filter.account === undefined ? {} : { account: AccountId.make(filter.account) }),
+  ...(filter.model === undefined ? {} : { model: filter.model }),
+  ...(filter.agent === undefined ? {} : { agent: filter.agent }),
+  offset,
+  limit,
+})
+
+/**
+ * The first rows of a range of the ledger that a filter takes, newest first,
+ * keyed by the filter and the row count as JSON. Read again with the history:
+ * a little after requests, and once a minute.
+ */
+export const requestPageAtom = Atom.family((key: string) =>
+  Api.runtime
+    .atom((get) => {
+      get(minuteAtom)
+      const { filter, range, limit } = requestQueries.get(key) ?? {
+        filter: allRequests,
+        range: "today" as const,
+        limit: pageSize,
+      }
+      return Effect.gen(function* () {
+        const client = yield* Api
+        return yield* client.usage.requests({ query: requestQuery(filter, range, limit) })
+      })
+    })
+    .pipe(Api.runtime.factory.withReactivity(["history"])),
+)
+
+/** What each key of `requestPageAtom` asks for. */
+const requestQueries = new Map<
+  string,
+  { readonly filter: RequestFilter; readonly range: HistoryRange; readonly limit: number }
+>()
+
+/** The key of `requestPageAtom` for a filter over a range and a row count. */
+export const requestPageKey = (filter: RequestFilter, range: HistoryRange, limit: number): string => {
+  const key = JSON.stringify({ filter, range, limit })
+  requestQueries.set(key, { filter, range, limit })
+  return key
+}
+
 /** The range the Usage and Performance pages show. */
 export const rangeAtom = Atom.make<HistoryRange>(defaultRange).pipe(Atom.keepAlive)
 
@@ -828,6 +882,37 @@ export const redeem = act(
       return { report: result.report, ...redeemText(result.outcome, name, provider) }
     }),
   "Could not redeem a limit reset: ",
+)
+
+/** The most rows an export writes. */
+const exportMost = 100_000
+
+/** Saves every request a filter takes over a range as CSV, a thousand at a time. */
+export const exportRequests = act(
+  (input: { readonly filter: RequestFilter; readonly range: HistoryRange }, store) =>
+    Effect.gen(function* () {
+      const client = yield* Api
+      const host = yield* Host
+      const rows: Array<RequestRow> = []
+      for (;;) {
+        const page = yield* client.usage.requests({
+          query: requestQuery(input.filter, input.range, 1_000, rows.length),
+        })
+        rows.push(...page.rows)
+        if (page.rows.length === 0 || rows.length >= page.matched || rows.length >= exportMost) break
+      }
+      const now = yield* DateTime.now
+      const name = csvName(now, zone)
+      const saved = yield* host.save(
+        name,
+        csv(rows, (id) => nameOf(store, id)),
+        "text/csv",
+      )
+      return saved
+        ? { text: `Saved ${count(rows.length, "request")} to ${name}.` }
+        : { text: "Could not save the export.", error: true }
+    }),
+  "Could not export the requests: ",
 )
 
 export const connectAgent = act(

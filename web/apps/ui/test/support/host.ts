@@ -9,6 +9,8 @@ import { type Desktop, type HostShape, type Permission, UiPrefs } from "../../sr
 export interface Recorded {
   readonly opened: Array<string>
   readonly copied: Array<string>
+  /** Files offered to save. */
+  readonly files: Array<{ readonly name: string; readonly text: string }>
   readonly notified: Array<{ readonly title: string; readonly body: string; readonly tag: string }>
   readonly saved: Array<UiPrefs>
   readonly proxy: Array<string>
@@ -36,7 +38,15 @@ export interface TestHostOptions {
 }
 
 export const testHost = (options: TestHostOptions = {}): TestHost => {
-  const recorded: Recorded = { opened: [], copied: [], notified: [], saved: [], proxy: [], service: [] }
+  const recorded: Recorded = {
+    opened: [],
+    copied: [],
+    files: [],
+    notified: [],
+    saved: [],
+    proxy: [],
+    service: [],
+  }
   let key = Option.fromUndefinedOr(options.key)
   let told = options.told ?? []
   let prefs = UiPrefs.defaults
@@ -84,6 +94,7 @@ export const testHost = (options: TestHostOptions = {}): TestHost => {
     }),
     openExternal: (url) => Effect.sync(() => (recorded.opened.push(url), true)),
     copy: (text) => Effect.sync(() => (recorded.copied.push(text), true)),
+    save: (name, text) => Effect.sync(() => (recorded.files.push({ name, text }), true)),
     permission: Effect.succeed(options.permission ?? "default"),
     askPermission: Effect.succeed("granted"),
     notify: (title, body, tag) => Effect.sync(() => void recorded.notified.push({ title, body, tag })),

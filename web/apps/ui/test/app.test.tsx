@@ -92,6 +92,24 @@ describe("the web dashboard", () => {
     await showsSoon("5-hour pool")
   })
 
+  test("the Requests page looks back over the ledger, filters it, opens a request, and exports it", async () => {
+    const { host } = await web("#/requests")
+    await press("7 days")
+    await showsSoon("at API prices", 5_000)
+    expect(shows("saved by failover")).toBe(true)
+    // The live feed's Clear belongs to the live feed.
+    expect(() => control("Clear")).toThrow()
+    const first = document.querySelector<HTMLElement>('button[aria-label^="Details of the request"]')
+    await act(async () => first?.click())
+    await showsSoon("Accounts tried")
+    expect(shows("At API prices")).toBe(true)
+    await press("Close")
+    await press("Export CSV")
+    await settle(() => host.recorded.files.length === 1, "the export")
+    expect(host.recorded.files[0]?.name).toMatch(/^slopmax-requests-.*\.csv$/)
+    expect(host.recorded.files[0]?.text.split("\n")[0]).toContain("time,agent,provider")
+  })
+
   test("opening an account's limit resets lists them with what one clears", async () => {
     await web("#/codex")
     await showsSoon("2 limit resets")

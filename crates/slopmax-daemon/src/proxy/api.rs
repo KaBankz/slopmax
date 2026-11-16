@@ -17,7 +17,7 @@ use http::{HeaderValue, Method, StatusCode, header};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use slopmax_api::events::{Event, LoginEvent};
-use slopmax_api::ledger::{HistoryRange, SummaryBy, SummaryRange};
+use slopmax_api::ledger::{HistoryRange, RequestOutcome, Sender, SummaryBy, SummaryRange};
 use slopmax_api::report::{AgentWiring, Finding, Level, RedeemOutcome, RedeemResult, Section};
 use slopmax_api::requests::{
     AccountAdded, AccountPatch, AddAccount, AgentConnected, AgentDisconnected, ImportOutcome,
@@ -79,6 +79,7 @@ enum Route<'a> {
     Usage,
     History,
     Pool(slopmax_api::Provider),
+    Requests,
     Events,
     NotifyTest,
     Tailnet,
@@ -121,6 +122,7 @@ impl<'a> Route<'a> {
             (&Method::GET, ["usage"]) => Self::Usage,
             (&Method::GET, ["history"]) => Self::History,
             (&Method::GET, ["pools", id]) => Self::Pool(provider(id)?),
+            (&Method::GET, ["requests"]) => Self::Requests,
             (&Method::GET, ["events"]) => Self::Events,
             (&Method::POST, ["notify", "test"]) => Self::NotifyTest,
             (&Method::GET, ["tailnet"]) => Self::Tailnet,
@@ -361,6 +363,7 @@ async fn answer(
         Route::Disconnect(id) => disconnect_agent(app, id).await,
         Route::Usage => usage(app, query, asker.here).await,
         Route::History => history(app, query).await,
+        Route::Requests => requests(app, query).await,
         Route::Pool(provider) => match app.pool_detail(api::provider_id(provider)).await {
             Some(detail) => ok(&detail),
             None => Err(ApiError::not_found("pool")),
@@ -952,6 +955,64 @@ async fn usage(app: &App, query: &str, here: bool) -> Answer {
     ok(&api::summary(&built, range, by))
 }
 
+/// A text parameter, if given and not blank.
+fn text(query: &str, name: &str) -> Option<String> {
+    crate::net::form::decode(query)
+        .into_iter()
+        .find(|(k, v)| k == name && !v.trim().is_empty())
+        .map(|(_, v)| v)
+}
+
+/// A whole-number parameter.
+fn whole(query: &str, name: &str, default: usize) -> Result<usize, ApiError> {
+    match text(query, name) {
+        None => Ok(default),
+        Some(value) => value
+            .parse()
+            .map_err(|_| ApiError::bad_request(format!("{name} is a whole number"))),
+    }
+}
+
+/// The ledger's requests over a range, filtered, newest first, a page at a
+/// time.
+async fn requests(app: &App, query: &str) -> Answer {
+    let range = param(
+        query,
+        "range",
+        HistoryRange::Today,
+        "range is today, 7d, or 30d",
+    )?;
+    let outcome = param(
+        query,
+        "outcome",
+        RequestOutcome::All,
+        "outcome is all, answered, failed, or rescued",
+    )?;
+    let agent = param::<Option<Sender>>(
+        query,
+        "agent",
+        None,
+        "agent is claude-code, codex, or slopmax",
+    )?;
+    let asked = crate::browse::Query {
+        account: text(query, "account"),
+        model: text(query, "model"),
+        agent,
+        outcome,
+        offset: whole(query, "offset", 0)?,
+        limit: whole(query, "limit", 100)?,
+    };
+    let since = summary::since(api::history_range(range).key(), Timestamp::now())
+        .expect("every range has a start");
+    let (dir, config) = (app.home.usage(), app.config());
+    let page = crate::blocking::run(move || {
+        let entries = crate::ledger::read(&dir, since);
+        crate::browse::page(&entries, &asked, range, since, &config.prices)
+    })
+    .await;
+    ok(&page)
+}
+
 async fn history(app: &Arc<App>, query: &str) -> Answer {
     let range = param(
         query,
@@ -1233,6 +1294,7 @@ mod tests {
             Some(Route::Pool(slopmax_api::Provider::Claude))
         );
         assert_eq!(at(Method::GET, "/pools/vim"), None);
+        assert_eq!(at(Method::GET, "/requests"), Some(Route::Requests));
         assert_eq!(at(Method::GET, "/accounts/a"), None);
         assert_eq!(at(Method::POST, "/status"), None);
         assert_eq!(at(Method::GET, "/tailnet"), Some(Route::Tailnet));

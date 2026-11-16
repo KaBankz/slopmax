@@ -136,7 +136,8 @@ const UsageGroup = HttpApiBuilder.group(SlopmaxApi, "usage", (handlers) =>
       Effect.succeed(new Summary({ range: query.range, by: query.by, since: at, rows: [], total: Totals.zero })),
     )
     .handle("history", () => notReached)
-    .handle("pool", () => notReached),
+    .handle("pool", () => notReached)
+    .handle("requests", () => notReached),
 )
 
 const Events = HttpApiBuilder.group(SlopmaxApi, "events", (handlers) =>

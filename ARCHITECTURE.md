@@ -104,7 +104,8 @@ slopmax-core/src/
   background.rs the proxy seen from outside: its client, starting it, the login service
   ledger.rs     the usage ledger; summary.rs totals it; history.rs charts it (for the
                 app and the dashboard alike); pricing.rs prices it; quota.rs records
-                the pools' quota in it and forecasts each pool (`/pools/{provider}`)
+                the pools' quota in it and forecasts each pool (`/pools/{provider}`);
+                browse.rs lists its requests one by one, filtered (`/requests`)
   notify.rs     webhook and command notifications from account changes
   report.rs     the status report; doctor.rs the setup checks; service.rs systemd and launchd
   paths.rs      Home: a slopmax directory and its files (the proxy carries its own)

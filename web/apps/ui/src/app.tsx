@@ -15,6 +15,7 @@ import {
   enterKey,
   eventsAtom,
   feedAtom,
+  requestFilterAtom,
   go,
   liveAtom,
   menuAtom,
@@ -146,6 +147,7 @@ function Tools({ page }: { readonly page: Page }) {
   const [range, setRange] = [useAtomValue(rangeAtom), useAtomSet(rangeAtom)]
   const feed = useAtomValue(feedAtom)
   const clear = useAtomSet(clearFeed)
+  const listing = useAtomValue(requestFilterAtom).span
   switch (page._tag) {
     case "Overview":
     case "Provider":
@@ -171,7 +173,8 @@ function Tools({ page }: { readonly page: Page }) {
     case "Diagnostics":
       return <DiagnosticsTools />
     case "Requests":
-      return (
+      // Clearing empties the live feed; the ledger's ranges keep everything.
+      return listing !== "live" ? null : (
         <Button variant="outline" disabled={feed.length === 0} onClick={() => clear()}>
           <Trash />
           Clear

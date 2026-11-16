@@ -11,9 +11,9 @@ pub mod supervisor;
 
 // The engine's modules, under the names the daemon's code uses.
 pub(crate) use slopmax_core::{
-    account, agent, api, auth, blocking, config, doctor, error, fsx, history, import, ledger,
-    limits, notify, paths, pool, provider, quota, report, route, state, summary, tailscale, update,
-    usage, waste,
+    account, agent, api, auth, blocking, browse, config, doctor, error, fsx, history, import,
+    ledger, limits, notify, paths, pool, provider, quota, report, route, state, summary, tailscale,
+    update, usage, waste,
 };
 pub(crate) use slopmax_core::{ids, log, net, time, wire};
 

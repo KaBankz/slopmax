@@ -28,7 +28,16 @@ import {
 } from "./errors.ts"
 import { Event } from "./events.ts"
 import { AccountId, AgentId, Dialect, KeyName, ProviderId, SubscriptionId, withDefault } from "./ids.ts"
-import { History, HistoryRange, Summary, SummaryBy, SummaryRange } from "./ledger.ts"
+import {
+  History,
+  HistoryRange,
+  RequestOutcome,
+  RequestPage,
+  RequestSender,
+  Summary,
+  SummaryBy,
+  SummaryRange,
+} from "./ledger.ts"
 import { PoolDetail } from "./pools.ts"
 import { LoginId } from "./login.ts"
 import { providerFacts } from "./providers.ts"
@@ -386,6 +395,21 @@ export class UsageGroup extends HttpApiGroup.make("usage")
       query: { range: HistoryRange.pipe(withDefault("7d")) },
       success: History,
       error: Internal,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get("requests", "/requests", {
+      query: {
+        range: HistoryRange.pipe(withDefault("today")),
+        account: Schema.optionalKey(AccountId),
+        model: Schema.optionalKey(Schema.String),
+        agent: Schema.optionalKey(RequestSender),
+        outcome: RequestOutcome.pipe(withDefault("all")),
+        offset: Schema.optionalKey(Schema.FiniteFromString),
+        limit: Schema.optionalKey(Schema.FiniteFromString),
+      },
+      success: RequestPage,
+      error: [BadRequest, Internal],
     }),
   )
   .add(

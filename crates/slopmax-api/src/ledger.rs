@@ -212,6 +212,74 @@ pub struct History {
     pub speeds: Vec<Speed>,
 }
 
+/// How a streamed answer ended, when not by completing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RequestEnd {
+    /// The upstream broke it off.
+    UpstreamError,
+    /// The agent hung up first, as when its user interrupts it.
+    ClientGone,
+    /// The upstream went quiet for too long.
+    Stalled,
+    /// The proxy stopped while it streamed.
+    Cut,
+}
+
+/// Which requests `GET /requests` lists by how they went.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RequestOutcome {
+    #[default]
+    All,
+    Answered,
+    Failed,
+    /// Answered by another account after the first could not.
+    Rescued,
+}
+
+/// One request of the ledger, with what it was worth.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestRow {
+    /// Always a request, tagged as the event stream tags it.
+    pub record: LedgerRecord,
+    /// Dollars at API prices, for a model with a known price.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<RequestEnd>,
+}
+
+/// What the requests of a range can be filtered by: every account, model
+/// and agent that appears in it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestFacets {
+    pub accounts: Vec<String>,
+    pub models: Vec<String>,
+    pub agents: Vec<Sender>,
+}
+
+/// `GET /requests`: a page of the ledger's requests over a range, newest
+/// first, filtered, with the totals of every request that matched.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestPage {
+    pub range: HistoryRange,
+    pub since: Instant,
+    pub rows: Vec<RequestRow>,
+    /// Where this page starts among the matches.
+    pub offset: u64,
+    /// Every request that matched, on this page or not.
+    pub matched: u64,
+    pub failed: u64,
+    pub rescued: u64,
+    pub tokens: u64,
+    pub cost: f64,
+    pub facets: RequestFacets,
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;

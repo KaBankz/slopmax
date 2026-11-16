@@ -28,6 +28,7 @@ let successes: [String: @Sendable (Data) throws -> Data] = [
     "usage.summary": roundTrip(Summary.self),
     "usage.history": roundTrip(History.self),
     "usage.pool": roundTrip(PoolDetail.self),
+    "usage.requests": roundTrip(RequestPage.self),
     "events.watch": roundTrip([Event].self),
 ]
 
