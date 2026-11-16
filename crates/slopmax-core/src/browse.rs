@@ -157,6 +157,7 @@ mod tests {
             attempts,
             agent: Some("claude".into()),
             session: None,
+            machine: None,
             end: None,
         }
     }

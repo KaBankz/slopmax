@@ -4,7 +4,7 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
-Your other machines can now use one machine's accounts over your Tailscale tailnet, without a key. Only that machine, the hub, refreshes each login, so copies no longer sign each other out.
+Your other machines can now use one machine's accounts over your Tailscale tailnet, without a key. Only that machine, the hub, refreshes each login, so copies no longer sign each other out. The dashboard is rebuilt on shadcn/ui, forecasts each subscription pool, and looks back over every request.
 
 ### Added
 
@@ -19,13 +19,13 @@ Your other machines can now use one machine's accounts over your Tailscale tailn
 - A lane per account shows its resets over the next week, so resets bunched together stand out.
 - Each account shows its last day as a strip of half hours, green where requests were answered and amber or red where they failed, and each window shows what it has served so far at API prices and what a percent of it has bought.
 - `GET /slopmax/api/pools/{provider}` answers all of it, for any client.
-- The Requests page looks back over today, 7 days or 30 days of the ledger as well as the live feed. It filters by account, model, agent and outcome (answered, failed, or saved by failover), sums what matched, and shows each request's cost at API prices. A row opens the request in full: its tokens by kind, the accounts tried, its status in words, and how it ended. The listing exports as CSV.
+- The Requests page looks back over today, 7 days or 30 days of the ledger as well as the live feed. It filters by account, model, agent and outcome (answered, failed, or saved by failover), sums what matched, and shows each request's cost at API prices. A row opens the request in full: the machine that sent it, its tokens by kind, the accounts tried, its status in words, and how it ended. The listing exports as CSV.
 - `GET /slopmax/api/requests` answers the ledger's requests a page at a time, filtered.
 - A limited or throttled account has a Check now button, and every account's menu has Check its limits now: slopmax lifts its own hold on the account and reads its usage again, so an account whose limit has passed is back at once. `POST /slopmax/api/accounts/{id}/check` does the same for any client.
 - The overview has a Last day section: each subscription account's requests in half hours, and today's failed requests with a link to all of them on the Requests page.
 - The Usage page's figures and the overview's Today say how each moved since the span before: yesterday up to this hour, or the 7 days before. The history API carries the earlier span's totals as `previous`.
 - The overview says when a newer slopmax is out, with the command that updates this install (`slopmax update`, or the package manager's), a button that copies it, and a link to the release notes. The report carries it as `update`.
-- Settings › Appearance › Hide email addresses masks every address the dashboard shows, as `a•••@s•••.dev`, for screen sharing and streams: account names, nudges, toasts, notifications and exports.
+- Settings › Appearance › Hide email addresses masks every address the dashboard shows, as `a•••@s•••.dev`, for screen sharing and streams: account names, tailnet logins, nudges, toasts, notifications and exports.
 
 ### Changed
 

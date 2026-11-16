@@ -48,7 +48,8 @@
           "attempts": 1,
           "agent": "claude-code",
           "session": "session-1",
-          "via": "http"
+          "via": "http",
+          "machine": "laptop"
         },
         "cost": 0.02065
       }

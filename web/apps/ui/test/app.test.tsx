@@ -107,7 +107,7 @@ describe("the web dashboard", () => {
     await press("Export CSV")
     await settle(() => host.recorded.files.length === 1, "the export")
     expect(host.recorded.files[0]?.name).toMatch(/^slopmax-requests-.*\.csv$/)
-    expect(host.recorded.files[0]?.text.split("\n")[0]).toContain("time,agent,provider")
+    expect(host.recorded.files[0]?.text.split("\n")[0]).toContain("time,agent,machine,provider")
   })
 
   test("hiding email addresses masks them on every page until it is turned off", async () => {

@@ -35,6 +35,8 @@ export interface TestHostOptions {
   readonly offline?: OfflineView
   readonly shell?: (action: string) => ShellResult
   readonly service?: { readonly installed: boolean; readonly running: boolean }
+  /** The dashboard's preferences as saved before it opened. */
+  readonly prefs?: UiPrefs
 }
 
 export const testHost = (options: TestHostOptions = {}): TestHost => {
@@ -49,7 +51,7 @@ export const testHost = (options: TestHostOptions = {}): TestHost => {
   }
   let key = Option.fromUndefinedOr(options.key)
   let told = options.told ?? []
-  let prefs = UiPrefs.defaults
+  let prefs = options.prefs ?? UiPrefs.defaults
   let state: ProxyState = options.proxy ?? { _tag: "Running", version: "0.4.0" }
   const states = Effect.runSync(PubSub.unbounded<ProxyState>())
   const menus = Effect.runSync(PubSub.unbounded<MenuAction>())

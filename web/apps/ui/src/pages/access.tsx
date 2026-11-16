@@ -18,6 +18,7 @@ import {
   keysAtom,
   makeKey,
   newKeyAtom,
+  prefsAtom,
   proxyAtom,
   readOnlyAtom,
   revokeKey,
@@ -37,6 +38,7 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "
 import { Item, ItemActions, ItemContent, ItemDescription, ItemFooter, ItemTitle } from "../components/ui/item.tsx"
 import { askRevoke } from "../view/asks.ts"
 import { cannotChange } from "../view/live.ts"
+import { maskEmails } from "../view/privacy.ts"
 import { machinesCard } from "../view/tailnet.ts"
 import { failureText, patterns, sentenceCase } from "../view/words.ts"
 
@@ -455,6 +457,8 @@ function Copyable({ text, label }: { readonly text: string; readonly label: stri
 function OtherMachines() {
   const result = useAtomValue(tailnetAtom)
   const again = useAtomRefresh(tailnetAtom)
+  const hide = useAtomValue(prefsAtom).hideEmails
+  const shown = (text: string) => (hide ? maskEmails(text) : text)
   if (AsyncResult.isFailure(result) && Cause.squash(result.cause) instanceof NotFound) return null
   const view = AsyncResult.value(result)
   if (Option.isNone(view)) {
@@ -488,7 +492,7 @@ function OtherMachines() {
               {row.copy === true ? (
                 <Copyable text={row.value} label={`Copy ${row.value}`} />
               ) : (
-                <span className="text-sm">{row.value}</span>
+                <span className="text-sm">{shown(row.value)}</span>
               )}
             </SettingRow>
           ))}

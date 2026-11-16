@@ -1,6 +1,6 @@
 // Requests, one by one: live off the event stream as they are answered, or
-// a day, a week or a month of the ledger, filtered by account, model, agent
-// and how they went, with the totals of what matched. A row opens its
+// a day, a week or a month of the ledger, each with the machine that sent
+// it, filtered by account, model, agent and how they went, with the totals of what matched. A row opens its
 // request in a sheet; what is listed exports as CSV.
 import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react"
 import { type HistoryRange, type RequestPage, RequestRow } from "@slopmax/client"

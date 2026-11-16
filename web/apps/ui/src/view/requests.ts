@@ -114,7 +114,7 @@ export interface RowView {
   readonly account: string
   readonly status: string
   readonly failed: boolean
-  /** `after failover`, `WebSocket`, how it ended. */
+  /** `from laptop`, `after failover`, `WebSocket`, how it ended. */
   readonly notes: ReadonlyArray<string>
   readonly tokens: string
   readonly cost: string
@@ -142,6 +142,7 @@ export const rowView = (
     status: String(record.status),
     failed: isFailure(record.status) || (row.end !== undefined && row.end !== "client-gone"),
     notes: [
+      ...(record.machine === undefined ? [] : [`from ${record.machine}`]),
       ...(record.attempts > 1 && !isFailure(record.status) ? ["after failover"] : []),
       ...(record.via === "socket" ? ["WebSocket"] : []),
       ...(row.end === undefined ? [] : [row.end === "client-gone" ? "interrupted" : "broken off"]),
@@ -195,6 +196,7 @@ export const facts = (
       facts: [
         { title: "When", value: at },
         { title: "Sent by", value: senderTitle(r.agent) },
+        ...(r.machine === undefined ? [] : [{ title: "From", value: r.machine }]),
         { title: "Model", value: r.model ?? "—", mono: true },
         { title: "Provider", value: providerFacts[r.provider].title },
         { title: "Account", value: r.account === undefined ? "None was free" : name(r.account) },
@@ -253,6 +255,7 @@ export const csv = (rows: ReadonlyArray<RequestRow>, name: (id: string) => strin
   const header = [
     "time",
     "agent",
+    "machine",
     "provider",
     "model",
     "account",
@@ -274,6 +277,7 @@ export const csv = (rows: ReadonlyArray<RequestRow>, name: (id: string) => strin
     return [
       DateTime.formatIso(r.at),
       r.agent ?? "",
+      r.machine,
       r.provider,
       r.model,
       r.account === undefined ? "" : name(r.account),

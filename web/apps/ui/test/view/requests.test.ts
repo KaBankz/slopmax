@@ -85,6 +85,13 @@ const page = (failed: number, rescued: number) =>
   })
 
 describe("what a range came to", () => {
+  test("names the machine that sent it, when another did", () => {
+    const sent = row({ machine: "laptop" })
+    expect(rowView(sent, 0, name, now, zone).notes).toEqual(["from laptop"])
+    expect(facts(sent, name, zone)[0]?.facts).toContainEqual({ title: "From", value: "laptop" })
+    expect(facts(row(), name, zone)[0]?.facts.some((f) => f.title === "From")).toBe(false)
+  })
+
   test("names failures and failover only when there are any", () => {
     expect(totalsLine(page(12, 3))).toBe(
       "1,204 requests · 12 failed · 3 saved by failover · 48.2M tokens · $412.20 at API prices",
@@ -93,9 +100,10 @@ describe("what a range came to", () => {
   })
 
   test("exports as CSV with a header, quoting what needs it", () => {
-    const text = csv([row({ session: 'a,"b"' })], (id) => (id === "claude-1" ? "Ana, Team" : id))
+    const text = csv([row({ session: 'a,"b"', machine: "laptop" })], (id) => (id === "claude-1" ? "Ana, Team" : id))
     const [header, line] = text.trim().split("\n")
-    expect(header?.startsWith("time,agent,provider,model,account,status")).toBe(true)
+    expect(header?.startsWith("time,agent,machine,provider,model,account,status")).toBe(true)
+    expect(line).toContain(",claude-code,laptop,claude,")
     expect(line).toContain('"Ana, Team"')
     expect(line).toContain('"a,""b"""')
     expect(line).toContain("0.042500")

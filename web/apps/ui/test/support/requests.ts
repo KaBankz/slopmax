@@ -74,6 +74,7 @@ export const fixtureRequests = (now: DateTime.Utc): ReadonlyArray<Kept> => {
       attempts,
       agent,
       session: `session-${Math.floor(i / 40)}`,
+      ...(account.provider === "claude" && noise(i * 47) < 0.3 ? { machine: "laptop" } : {}),
       via: account.provider === "codex" && noise(i * 41) < 0.5 ? "socket" : "http",
     })
     const interrupted = !failed && noise(i * 43) < 0.01

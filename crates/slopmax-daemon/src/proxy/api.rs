@@ -140,6 +140,7 @@ impl<'a> Route<'a> {
             | Self::Usage
             | Self::History
             | Self::Pool(_)
+            | Self::Requests
             | Self::Events
             | Self::Tailnet => Access::View,
             Self::Refresh
@@ -152,6 +153,7 @@ impl<'a> Route<'a> {
             | Self::UnpinAll
             | Self::Own(_)
             | Self::RemoveAccount(_)
+            | Self::Check(_)
             | Self::Redeem(_)
             | Self::Import
             | Self::StartLogin
@@ -1331,6 +1333,7 @@ mod tests {
             (Method::GET, "/usage"),
             (Method::GET, "/history"),
             (Method::GET, "/pools/claude"),
+            (Method::GET, "/requests"),
             (Method::GET, "/events"),
             (Method::GET, "/tailnet"),
         ] {
@@ -1343,6 +1346,7 @@ mod tests {
             (Method::GET, "/agents"),
             (Method::POST, "/logins"),
             (Method::POST, "/refresh"),
+            (Method::POST, "/accounts/a/check"),
             (Method::POST, "/shutdown"),
             (Method::PATCH, "/settings"),
             (Method::PATCH, "/tailnet"),

@@ -822,6 +822,7 @@ mod tests {
             attempts: 1,
             agent: None,
             session: None,
+            machine: None,
             end: None,
         };
         let prices = BTreeMap::new();
