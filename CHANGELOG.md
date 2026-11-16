@@ -21,6 +21,7 @@ Your other machines can now use one machine's accounts over your Tailscale tailn
 - `GET /slopmax/api/pools/{provider}` answers all of it, for any client.
 - The Requests page looks back over today, 7 days or 30 days of the ledger as well as the live feed. It filters by account, model, agent and outcome (answered, failed, or saved by failover), sums what matched, and shows each request's cost at API prices. A row opens the request in full: its tokens by kind, the accounts tried, its status in words, and how it ended. The listing exports as CSV.
 - `GET /slopmax/api/requests` answers the ledger's requests a page at a time, filtered.
+- Settings › Appearance › Hide email addresses masks every address the dashboard shows, as `a•••@s•••.dev`, for screen sharing and streams: account names, nudges, toasts, notifications and exports.
 
 ### Changed
 

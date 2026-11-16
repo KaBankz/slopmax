@@ -36,6 +36,8 @@ export class DesktopPrefs extends Schema.Class<DesktopPrefs>("DesktopPrefs")({
   appearance: Appearance.pipe(withDefault("system")),
   /** Whether notices are posted as notifications. */
   notifications: Schema.Boolean.pipe(withDefault(true)),
+  /** Whether email addresses are masked wherever they show, for screen sharing. */
+  hideEmails: Schema.Boolean.pipe(withDefault(false)),
   bounds: Schema.optionalKey(Bounds),
 }) {
   /** Every preference at the default it takes when the file leaves it out. */

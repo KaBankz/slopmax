@@ -110,6 +110,18 @@ describe("the web dashboard", () => {
     expect(host.recorded.files[0]?.text.split("\n")[0]).toContain("time,agent,provider")
   })
 
+  test("hiding email addresses masks them on every page until it is turned off", async () => {
+    await web("#/settings")
+    await showsSoon("Hide email addresses")
+    await press("Hide email addresses")
+    await act(async () => {
+      location.hash = "#/claude"
+    })
+    await showsSoon("a•••@s•••.dev")
+    // The page itself; Sonner keeps toasts from earlier tests in the body.
+    expect(document.querySelector("main")?.textContent).not.toContain("ana@studio.dev")
+  })
+
   test("opening an account's limit resets lists them with what one clears", async () => {
     await web("#/codex")
     await showsSoon("2 limit resets")

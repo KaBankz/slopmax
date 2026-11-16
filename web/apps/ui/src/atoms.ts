@@ -55,6 +55,7 @@ import {
   tell,
 } from "./view/live.ts"
 import { type Page, pageHash, Pages, parseRoute, type Route, toggleSidebar as toggled } from "./view/pages.ts"
+import { maskEmails, maskReport } from "./view/privacy.ts"
 import { tailnetAccess } from "./view/tailnet.ts"
 import { allRequests, csv, csvName, pageSize, type RequestFilter } from "./view/requests.ts"
 import { addToast, type Toast } from "./view/toasts.ts"
@@ -269,7 +270,8 @@ const onEvent = (event: Event, store: Store, later: FiberHandle.FiberHandle) =>
       }
       case "Status":
         store.set(reportAtom, Option.some(event.report))
-        if (host.kind === "web" && event.report.nudges.length > 0) yield* notifyOnce(event.report.nudges)
+        if (host.kind === "web" && event.report.nudges.length > 0)
+          yield* notifyOnce(event.report.nudges, store.read(prefsAtom).hideEmails)
         return
       case "Request": {
         const seq = store.read(feedSeqAtom) + 1
@@ -283,7 +285,7 @@ const onEvent = (event: Event, store: Store, later: FiberHandle.FiberHandle) =>
       }
       case "Notice":
         // The desktop's main process posts notices; the web dashboard posts them itself.
-        if (host.kind === "web") yield* notifyOnce([event.notice])
+        if (host.kind === "web") yield* notifyOnce([event.notice], store.read(prefsAtom).hideEmails)
         return
       case "Login":
         yield* onLogin(store, event.id, event.event)
@@ -294,12 +296,15 @@ const onEvent = (event: Event, store: Store, later: FiberHandle.FiberHandle) =>
   })
 
 /** Posts each notice this browser has not shown yet, once. */
-const notifyOnce = (notices: Report["nudges"]) =>
+const notifyOnce = (notices: Report["nudges"], hide: boolean) =>
   Effect.gen(function* () {
     const host = yield* Host
     if ((yield* host.permission) !== "granted") return
     const { fresh, told } = tell(yield* host.told, notices)
-    for (const notice of fresh) yield* host.notify(noticeTitle(notice.kind), noticeBody(notice), notice.key)
+    for (const notice of fresh) {
+      const body = noticeBody(notice)
+      yield* host.notify(noticeTitle(notice.kind), hide ? maskEmails(body) : body, notice.key)
+    }
     if (fresh.length > 0) yield* host.saveTold(told)
   })
 
@@ -411,11 +416,12 @@ export const offlineAtom = appRuntime.atom((get) =>
 
 /** The report to show: the live one, or the one read from disk while the desktop's proxy is stopped. */
 export const shownReportAtom = Atom.make((get): Option.Option<Report> => {
+  const hide = get(prefsAtom).hideEmails
   if (get(proxyAtom)._tag === "Stopped") {
     const offline = AsyncResult.getOrElse(get(offlineAtom), () => Option.none<OfflineView>())
-    if (Option.isSome(offline)) return Option.some(offline.value.report)
+    if (Option.isSome(offline)) return Option.some(hide ? maskReport(offline.value.report) : offline.value.report)
   }
-  return get(reportAtom)
+  return hide ? Option.map(get(reportAtom), maskReport) : get(reportAtom)
 })
 
 /**
@@ -628,8 +634,11 @@ const accountOf = (store: Store, id: string) =>
     .read(reportAtom)
     .pipe(Option.flatMap((report) => Option.fromUndefinedOr(report.accounts.find((a) => a.id === id))))
 
-const nameOf = (store: Store, id: string): string =>
-  Option.match(accountOf(store, id), { onNone: () => id, onSome: (account) => account.name })
+/** An account's name for a toast, masked while addresses are hidden. */
+const nameOf = (store: Store, id: string): string => {
+  const name = Option.match(accountOf(store, id), { onNone: () => id, onSome: (account) => account.name })
+  return store.read(prefsAtom).hideEmails ? maskEmails(name) : name
+}
 
 const providerOf = (store: Store, id: string): string =>
   Option.match(accountOf(store, id), {
