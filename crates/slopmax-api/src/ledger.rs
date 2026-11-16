@@ -1,4 +1,4 @@
-//! Usage: what was served, summed by day, model or account, and the
+//! Usage: what was served, summed by day, model, account or machine, and the
 //! analytics the dashboard charts.
 
 use serde::{Deserialize, Serialize};
@@ -52,6 +52,10 @@ pub struct RequestRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
     pub via: Via,
+    /// The machine that sent it: a client key's name or a tailnet
+    /// machine; left out for the hub's own key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +75,8 @@ pub enum SummaryBy {
     Day,
     Model,
     Account,
+    /// The machine that sent each request.
+    Machine,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -204,4 +210,50 @@ pub struct History {
     pub accounts: Vec<AccountTotals>,
     pub agents: Vec<NamedTotals>,
     pub speeds: Vec<Speed>,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn usage_groups_by_machine() {
+        assert_eq!(serde_json::to_value(SummaryBy::Machine).unwrap(), "machine");
+        assert_eq!(
+            serde_json::from_value::<SummaryBy>(json!("machine")).unwrap(),
+            SummaryBy::Machine
+        );
+    }
+
+    #[test]
+    fn a_record_names_its_machine_only_when_known() {
+        let wire = json!({
+            "_tag": "Request",
+            "at": "2026-10-02T00:00:00Z",
+            "provider": "claude",
+            "status": 200,
+            "usage": { "requests": 1, "input": 10, "output": 5, "cacheRead": 0, "cacheWrite": 0 },
+            "ms": 900,
+            "attempts": 1,
+            "via": "http"
+        });
+        let LedgerRecord::Request(record) = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(record.machine, None);
+        assert_eq!(
+            serde_json::to_value(LedgerRecord::Request(record.clone())).unwrap(),
+            wire
+        );
+        let laptop = RequestRecord {
+            machine: Some("laptop".into()),
+            ..record
+        };
+        let sent = serde_json::to_value(LedgerRecord::Request(laptop.clone())).unwrap();
+        assert_eq!(sent["machine"], "laptop");
+        assert_eq!(
+            serde_json::from_value::<LedgerRecord>(sent).unwrap(),
+            LedgerRecord::Request(laptop)
+        );
+    }
 }

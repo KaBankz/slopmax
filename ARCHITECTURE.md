@@ -56,6 +56,10 @@ While a daemon serves a home it is the only process that writes what it holds: a
 - `status` reads the API's `Report`, from the daemon or mapped from disk (`api::report`); `--watch` redraws as the event stream pushes it.
 - The desktop apps (SwiftUI on macOS, `slopmax-app` under GPUI elsewhere) and the web UI are API clients and nothing more. What the API cannot answer while no daemon runs (where it listens, starting it, installing the login service, the report from disk) they ask of the CLI they ship with: `daemon-info --json`, `start`, `service install`, `status --json`.
 
+### Hub mode
+
+A machine with `[hub] url` in config.toml uses another machine's slopmax, the hub, and runs no proxy of its own. `Config::agent_base()` and `Config::agent_token()` give the hub's URL and its key, or the placeholder token `tailnet` when the hub knows the machine by its tailnet identity; Claude Code's and Codex's wiring and the doctor's agent checks read them. `Config::base_url()` stays this machine's own address, so `start`, `stop`, `serve`, `service` and the background client never aim at the hub: they refuse in hub mode (`Config::hub_refusal`). Every other command goes to the hub's API through `Client::remote`, which speaks HTTPS with the system's roots and allows the first handshake 30 seconds, because `tailscale serve` makes its certificate then. A hub that doesn't answer is an error, never a reason to read this machine's files: the hub is the one writer of its accounts, and refreshing a login on two machines signs one of them out.
+
 The engine's errors at these boundaries are typed (`error.rs`: `StoreError`, `ConfigError`, `LoginError`, `ProviderError`, `ListenError`), and `api.rs` turns each into the API's error once. Nothing in the engine reads the terminal, prints, or reads the environment: paths come from a `Home`, made once by the CLI or the daemon.
 
 ### The desktop app
@@ -70,11 +74,16 @@ A UI subscribes to the snapshot through a tokio `watch` channel, which any execu
 
 ```
 slopmax/src/
-  main.rs       entry point; commands.rs (the command table and dispatch) and commands/
+  main.rs       entry point; commands.rs (the command table and dispatch) and commands/,
+                among them tailscale.rs (`slopmax tailscale`: publishing, users, admins)
+                and remote.rs (`setup --hub`: finding a hub, its key, wiring the agents)
   args.rs       the table-driven parser; term.rs reads input; ui.rs styles output
 
 slopmax-core/src/
-  config.rs     ~/.slopmax/config.toml, with a commented template
+  config.rs     ~/.slopmax/config.toml, with a commented template; [tailscale] and [hub]
+  tailscale.rs  the `tailscale` CLI: finding it, running it with a timeout, reading its
+                status, serve config and whois as JSON, publishing and unpublishing, and
+                the tailnet view the API and `tailscale status --json` both show
   account.rs    Account (OAuth tokens or a key, optional Endpoint and Link), the file Store, pins
   auth/         sign-in events, browser and device logins, PKCE, the callback server, refresh under a file lock
   import.rs     logins from Claude Code, Codex, and CLIProxyAPI (linked or copied)
@@ -88,7 +97,9 @@ slopmax-core/src/
                 start.rs (stream taps and holds), transcode.rs (translated streams), socket.rs
                 (Codex's WebSockets), models.rs (/v1/models), admin.rs and dashboard.html
                 (/slopmax/*), hub.rs (CLIProxyAPI's management calls for quota tools),
-                warm.rs (window warmups), rawjson.rs (in-place JSON edits)
+                tailnet.rs (tailnet identity: the ingress strip, who is calling and with
+                what access, the whois cache), warm.rs (window warmups), rawjson.rs
+                (in-place JSON edits); in slopmax-daemon
   daemon.rs     the long-running proxy and its background tasks
   background.rs the proxy seen from outside: its client, starting it, the login service
   ledger.rs     the usage ledger; summary.rs totals it; history.rs charts it (for the
@@ -105,7 +116,7 @@ slopmax-common/src/ time.rs, log.rs, ids.rs, human.rs: small in-house replacemen
 
 ## A request's path
 
-1. **`proxy::handle`** answers slopmax's own endpoints (`/healthz`, `/slopmax/*`, the OpenAI-style `/v1/models`) and hands the rest to `proxy`, which checks the slopmax key.
+1. **`proxy::handle`** first takes what the tailnet says of the request (`tailnet::take`). The listener that accepted the connection set its `Channel` (`Tcp` for the local port, `Tailnet` for the owner-only socket tailscaled connects to), and only the listener sets it. On the tailnet channel `take` reads the login `tailscale serve` adds, the peer's tailnet address, and whether it came through Funnel; on both channels it then removes every `Tailscale-*`, `X-Forwarded-*` and `Forwarded` header, so none is trusted from a local client and none goes upstream. `handle` answers slopmax's own endpoints (`/healthz`, `/slopmax/*`, the OpenAI-style `/v1/models`) and hands the rest to `proxy`. Each asks `tailnet::admit` for the access it needs: `use` for the proxy and the model list, `view` for status, events, usage, history and the tailnet's view, and `admin` for everything else. The owner key is admin and a client key is use. A login in `[tailscale] users` is use and view, and admin only from a machine in `[tailscale] admins`, which `tailscale whois` on the peer's address must confirm (it fails closed). Funnel is refused before anything else, even with a key.
 2. **`proxy::route`** reads the path into a `Target`: the client's format, the provider the path belongs to (`/claude/*`, `/codex/*`, or `/v1/*` by shape), and whether the body's model picks the provider.
 3. **`forward::Inbound`** buffers the body (so it can be replayed on another account) and reads the agent, the session, and the model from it.
 4. **`route::plan`** turns the model into `Step`s: each provider with an account that serves the model, subscriptions first, then paid overflow, selectors, aliases, and fallbacks. It drops accounts that may not serve this client (`agent_only`) or that speak a format it cannot be translated into.
@@ -227,7 +238,7 @@ State a format cannot carry back is kept by slopmax: the encrypted reasoning an 
 
 ## Background work
 
-`daemon::run` takes the home's serve lock (`.serve.lock`, so a second daemon on the same home refuses to start), binds the listener, and starts the background tasks:
+`daemon::run` takes the home's serve lock (`.serve.lock`, so a second daemon on the same home refuses to start), binds the listener, and starts the background tasks. On unix it also binds a second listener, `tailnet.sock`, every time, whatever the config says, so `slopmax tailscale on` needs no restart. The socket is 0600 in the home's 0700 directory, and each connection's peer must be root (tailscaled) or the home's owner. A stale socket left by a crash is replaced (the serve lock proves no daemon owns it), anything else at that path is left alone, and a socket that can't be bound never stops the proxy. Both listeners stop together, and the socket file is removed after the drain. The background tasks are:
 
 - reloading the accounts when told (`POST /slopmax/api/sync`), and otherwise when a stat every 30 seconds shows a file changed, with config.toml when it changed. Requests use the accounts the pool holds in memory and read no files; a refresh puts its new tokens back into the pool. `App::config` is swapped whole; only the listener is bound for good;
 - saving pool state (windows, blocks, sessions) every 10 seconds, so a restart keeps sessions on their accounts;
@@ -277,6 +288,8 @@ The login service runs `~/.slopmax/bin/slopmax`, a link the handoff and `slopmax
   bin/slopmax               the link the login service runs, moved to each new binary
   update.toml               the newest release, as last looked up
   setup-backup.json         what `setup` replaced
+  tailnet.sock              the owner-only socket `tailscale serve` reaches slopmax through
+                            (unix; bound while the daemon runs)
   app.toml                  the desktop app's own choices (whether it posts notifications)
   slopmax.log
 ```
@@ -295,6 +308,12 @@ and a torn last line repairable (a TOML document cannot be appended to safely);
 `setup-backup.json` holds other tools' settings exactly as they were, `null`s included, which TOML
 cannot hold; and the files of other tools (Claude Code's `settings.json`, Codex's `auth.json`,
 CLIProxyAPI's) are theirs.
+
+## Tailscale
+
+slopmax talks to Tailscale only through its CLI (`slopmax-core/src/tailscale.rs`), never through LocalAPI. LocalAPI has three transports (a unix socket on Linux, TCP with a same-user proof for the Mac app, a named pipe on Windows) and no promise of stability, and changing the serve config through it would mean rebuilding it and swapping it by ETag. The CLI's `--json` output is read loosely, so new fields don't break it, and every run has a timeout: 5 seconds to read, 2 for whois, 30 to change what is served, where the CLI's own output passes through so a prompt to enable HTTPS reaches the user. Nothing on the request path runs the CLI except whois for admin checks, cached for 10 minutes (10 seconds for a failure) with one lookup per address in flight; a request that only needs use never waits for it. slopmax never runs `sudo`, `tailscale set`, `up`, `down`, `funnel` or `serve reset`.
+
+`tailscale serve` reaches slopmax on `unix:<home>/tailnet.sock` where it can, which tells slopmax who is asking. On Windows, and with Tailscale's macOS app, whose sandbox can't reach the socket, it reaches 127.0.0.1 instead (`--socket` tries the socket anyway, and falls back when the check through the tailnet fails), and there only keys work: a local process could otherwise forge the headers serve adds. Machine names are the first label of a machine's DNS name, never its HostName, which can be any text.
 
 ## Dependencies
 

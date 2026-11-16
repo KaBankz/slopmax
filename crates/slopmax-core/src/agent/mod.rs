@@ -157,7 +157,7 @@ pub enum Wiring {
 /// Where `agent`'s own config sends it, judged against this `config`.
 pub fn wiring(agent: &dyn Agent, config: &Config, home: &Home) -> Wiring {
     match agent.wired_to(home) {
-        Some(target) if target.contains(&config.base_url()) || target.starts_with("slopmax") => {
+        Some(target) if target.contains(&config.agent_base()) || target.starts_with("slopmax") => {
             Wiring::Slopmax
         }
         Some(target) => Wiring::Elsewhere(target),
@@ -335,6 +335,31 @@ mod tests {
         let missing = dir.join("absent.json");
         assert_eq!(resolve(missing.clone()), missing);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn wiring_is_judged_against_the_hub_when_there_is_one() {
+        let root = crate::testkit::temp_dir("wiring-hub");
+        let home = Home::sandbox(root.to_path_buf());
+        let local = Config {
+            api_key: "sm-test".into(),
+            ..Config::default()
+        };
+        let hub = Config {
+            hub: Some(crate::config::HubLink {
+                url: "https://hub.example.ts.net:7567".into(),
+                key: None,
+            }),
+            ..local.clone()
+        };
+        setup(&ClaudeCode, &hub, &home).unwrap();
+        assert_eq!(wiring(&ClaudeCode, &hub, &home), Wiring::Slopmax);
+        assert_eq!(
+            wiring(&ClaudeCode, &local, &home),
+            Wiring::Elsewhere("https://hub.example.ts.net:7567".into())
+        );
+        setup(&ClaudeCode, &local, &home).unwrap();
+        assert_eq!(wiring(&ClaudeCode, &local, &home), Wiring::Slopmax);
     }
 
     #[test]

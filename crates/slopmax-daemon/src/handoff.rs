@@ -225,7 +225,14 @@ async fn attempt(app: &Arc<App>, exe: &Path, newer: bool) -> Result<()> {
     }
     app.handed_over.store(true, Ordering::SeqCst);
     app.stop.cancel();
+    let_go(app).await;
     Ok(())
+}
+
+/// Waits until this process takes no more connections, so whoever hears
+/// the proxy moved reaches the new process with their next one.
+async fn let_go(app: &App) {
+    let _ = tokio::time::timeout(Duration::from_secs(2), app.let_go.cancelled()).await;
 }
 
 /// Makes way for a process that already listens on this proxy's socket
@@ -245,6 +252,7 @@ pub async fn make_way(app: &Arc<App>) -> Result<()> {
     drop(app.serving.lock().unwrap_or_else(|p| p.into_inner()).take());
     log::info!("another slopmax takes over this proxy's socket; finishing what this one started");
     app.stop.cancel();
+    let_go(app).await;
     Ok(())
 }
 

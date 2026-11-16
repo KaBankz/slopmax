@@ -1,0 +1,7 @@
+{
+  "status": 403,
+  "body": {
+    "_tag": "Unauthorized",
+    "message": "the key \"phone\" reaches the proxy only, not slopmax's own API"
+  }
+}

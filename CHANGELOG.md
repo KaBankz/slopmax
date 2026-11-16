@@ -4,8 +4,24 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+Your other machines can now use one machine's accounts over your Tailscale tailnet, without a key. Only that machine, the hub, refreshes each login, so copies no longer sign each other out.
+
+### Added
+
+- `slopmax tailscale on` publishes slopmax to your tailnet with `tailscale serve`; the proxy itself still listens on 127.0.0.1 only. On Linux it first needs `sudo tailscale set --operator=$USER` once, and says so; slopmax never runs sudo. `slopmax tailscale off` stops publishing, and `slopmax tailscale status` shows where slopmax is published and who may use it.
+- Your machines use the hub without a key: Tailscale tells slopmax which machine is asking. Machines signed in as a login in `[tailscale] users` use the proxy and see slopmax's status, usage and history; machines in `[tailscale] admins` may also manage it. `slopmax tailscale users` and `slopmax tailscale admins` change the lists. Tagged machines, and hubs on Windows or with Tailscale's macOS app, use client keys as before.
+- `slopmax setup --hub <machine>` on another machine points its Claude Code and Codex at the hub; it runs no proxy of its own, and its commands go to the hub. `slopmax setup --hub off` goes back to its own accounts. On a new machine, `slopmax setup` offers a hub it finds on your tailnet.
+- `slopmax usage --by machine` shows which of your machines sent what. The ledger records the machine that sent each request: a client key's name, or a tailnet machine's.
+- The dashboard opens from your tailnet without a key, on any of your machines or your phone, read-only unless the machine is an admin. Its Access page shows how your other machines reach slopmax, its Usage page sums usage by machine, and its live feed names the machine each request came from.
+- `GET` and `PATCH /slopmax/api/tailnet`, and `/healthz` says what the caller may do (`access`, `login`, `machine`, and `via` over the tailnet). `slopmax doctor` checks the published hub, or the hub a machine uses.
+
 ### Changed
 
+- Tailscale and forwarding headers (`Tailscale-*`, `X-Forwarded-*`, `Forwarded`) are no longer sent on to providers.
+- The dashboard and `/slopmax/api` need view or admin access per endpoint: the owner key has both, a machine's tailnet identity may have either, and client keys have neither, as before. A machine set up with `slopmax setup --hub` sends its client key, and may still do what its tailnet login may, so `slopmax status` works there.
+- A client key sent to `/slopmax/api` now gets 403 instead of 401: slopmax knows the key, and it reaches the proxy only.
+- Requests that come through Tailscale Funnel are refused with 403, even with a key.
+- An older slopmax can't read a config.toml with `[tailscale]` or `[hub]`. Remove those tables before going back to one.
 - The web dashboard is rebuilt on shadcn/ui: its components, its neutral theme and the Geist font, in light and dark. The page content is centred, up to 1152 px wide.
 - The usage and performance charts are Recharts charts. Each bar or point shows its figures on hover.
 - The sidebar collapses to the edge and becomes a sheet on a narrow window. Its edge still drags to resize it, and `\` still shows or hides it.

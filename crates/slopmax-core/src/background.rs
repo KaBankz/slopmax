@@ -130,8 +130,11 @@ pub fn current_exe() -> Result<PathBuf> {
 }
 
 /// Starts the proxy unless one already answers. Returns whether it started
-/// one.
+/// one. A machine that uses a hub runs none, and says so.
 pub async fn ensure_running(config: &Config, home: &Home, exe: &Path) -> Result<bool> {
+    if let Some(refusal) = config.hub_refusal() {
+        return Err(anyhow!(refusal));
+    }
     if Daemon::new(config).running().await?.is_some() {
         return Ok(false);
     }
@@ -354,6 +357,29 @@ mod tests {
         assert!(daemon.shutdown().await.is_err());
         // `stop` with nothing running says so instead of failing.
         assert!(!stop(&config).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_machine_that_uses_a_hub_starts_no_proxy() {
+        // A proxy answers here, and the hub's refusal still comes first:
+        // nothing is asked of it, and nothing is started.
+        let mock = proxy("slopmax").await;
+        let config = Config {
+            hub: Some(crate::config::HubLink {
+                url: "https://hub.example.ts.net:7567".into(),
+                key: None,
+            }),
+            ..config_at(&mock)
+        };
+        let dir = temp_dir("hub-refusal");
+        let home = Home::at(dir.to_path_buf());
+        let error = ensure_running(&config, &home, Path::new("/nonexistent/slopmax"))
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), config.hub_refusal().unwrap());
+        assert!(mock.seen_at("/healthz").is_empty());
+        // The daemon it would talk to stays this machine's own.
+        assert_eq!(Daemon::new(&config).client.base(), config.base_url());
     }
 
     #[tokio::test]

@@ -158,4 +158,25 @@ impl Home {
     pub fn windows(&self) -> PathBuf {
         self.dir.join("windows.jsonl")
     }
+
+    /// The unix socket `tailscale serve` passes the tailnet's requests to,
+    /// which tells slopmax who sent each one.
+    pub fn tailnet_socket(&self) -> PathBuf {
+        self.dir.join("tailnet.sock")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_tailnet_socket_is_in_the_slopmax_directory() {
+        let home = Home::sandbox("/home/me");
+        assert_eq!(
+            home.tailnet_socket(),
+            Path::new("/home/me").join(".slopmax").join("tailnet.sock")
+        );
+        assert_eq!(home.tailnet_socket().parent(), Some(home.dir()));
+    }
 }

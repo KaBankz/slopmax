@@ -1,9 +1,10 @@
 //! `slopmax usage`: token totals and API-equivalent cost from the ledger,
-//! by day, model, or account.
+//! by day, model, account, or machine.
 
 use std::collections::HashMap;
 
 use anyhow::{Result, bail};
+use slopmax_client::api::ledger::{SummaryBy, SummaryRange};
 
 use crate::ui;
 use slopmax_core::account::Store;
@@ -13,8 +14,56 @@ use slopmax_core::time::Timestamp;
 use slopmax_core::{human, waste};
 
 /// Prints usage since the start of `range` (`today`, `7d`, `30d`, `all`),
-/// grouped `by` day, model, or account.
-pub fn run(config: &Config, store: &Store, range: &str, by: &str, json: bool) -> Result<()> {
+/// grouped `by` day, model, account, or machine: the hub's, on a machine
+/// that uses one, else this machine's.
+pub async fn run(config: &Config, store: &Store, range: &str, by: &str, json: bool) -> Result<()> {
+    if config.hub.is_some() {
+        return hub(config, range, by, json).await;
+    }
+    local(config, store, range, by, json)
+}
+
+/// The hub's usage, through its API.
+async fn hub(config: &Config, range: &str, by: &str, json: bool) -> Result<()> {
+    let word = |w: &str| serde_json::Value::String(w.to_owned());
+    let Ok(span) = serde_json::from_value::<SummaryRange>(word(range)) else {
+        bail!("unknown range {range:?}; use today, 7d, 30d, or all");
+    };
+    let grouped: SummaryBy = serde_json::from_value(word(by))?;
+    let Some(client) = super::daemon(config).await? else {
+        bail!("the hub isn't answering");
+    };
+    let answer = client.usage(span, grouped).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&answer)?);
+        return Ok(());
+    }
+    let totals = |t: &slopmax_client::api::ledger::Totals| Totals {
+        requests: t.requests,
+        input: t.input,
+        output: t.output,
+        cache_read: t.cache_read,
+        cache_write: t.cache_write,
+        cost: t.cost,
+        unpriced: t.unpriced,
+        failed: t.failed,
+    };
+    let report = summary::Summary {
+        since: answer.since,
+        by: by.to_owned(),
+        rows: answer
+            .rows
+            .iter()
+            .map(|row| (row.key.clone(), totals(&row.totals)))
+            .collect(),
+        total: totals(&answer.total),
+    };
+    print(&report, range, by, true);
+    Ok(())
+}
+
+/// This machine's usage, from its ledger.
+fn local(config: &Config, store: &Store, range: &str, by: &str, json: bool) -> Result<()> {
     let Some(since) = summary::since(range, Timestamp::now()) else {
         bail!("unknown range {range:?}; use today, 7d, 30d, or all");
     };
@@ -24,8 +73,14 @@ pub fn run(config: &Config, store: &Store, range: &str, by: &str, json: bool) ->
         .into_iter()
         .map(|a| (a.id.clone(), a.name()))
         .collect();
-    let report = summary::build(&super::home().usage(), since, by, &config.prices, &names);
-    let (rows, total) = (&report.rows, &report.total);
+    let report = summary::build(
+        &super::home().usage(),
+        since,
+        by,
+        &config.prices,
+        &names,
+        summary::HERE_LOCAL,
+    );
     let lapsed = waste::read_home(super::home(), since);
     let left = waste::left(&lapsed, &config.plan_prices, &names);
 
@@ -35,6 +90,21 @@ pub fn run(config: &Config, store: &Store, range: &str, by: &str, json: bool) ->
         println!("{}", serde_json::to_string_pretty(&value)?);
         return Ok(());
     }
+    if print(&report, range, by, false) {
+        print_left(&left);
+    }
+    Ok(())
+}
+
+/// Prints `report`, the usage since `range` began grouped `by` something,
+/// read here or from the hub. Returns whether it had any.
+fn print(report: &summary::Summary, range: &str, by: &str, from_hub: bool) -> bool {
+    let (rows, total) = (&report.rows, &report.total);
+    let logs = if from_hub {
+        "`slopmax logs` on the hub"
+    } else {
+        "`slopmax logs`"
+    };
     let title = match range {
         "today" => "today".to_owned(),
         "all" => "all time".to_owned(),
@@ -42,7 +112,7 @@ pub fn run(config: &Config, store: &Store, range: &str, by: &str, json: bool) ->
     };
     if total.requests == 0 && total.failed == 0 {
         println!("No requests recorded for {title}.");
-        return Ok(());
+        return false;
     }
     if total.requests == 0 {
         let when = match range {
@@ -51,10 +121,10 @@ pub fn run(config: &Config, store: &Store, range: &str, by: &str, json: bool) ->
             _ => format!("in {title}"),
         };
         println!(
-            "No successful requests {when}; {} failed (see `slopmax logs`).",
+            "No successful requests {when}; {} failed (see {logs}).",
             total.failed
         );
-        return Ok(());
+        return false;
     }
     // Rows of only failed requests are all zeros; the note counts them.
     let rows: Vec<_> = rows.iter().filter(|(_, t)| t.requests > 0).collect();
@@ -97,11 +167,15 @@ pub fn run(config: &Config, store: &Store, range: &str, by: &str, json: bool) ->
     );
     if total.unpriced > 0 {
         let n = total.unpriced;
+        let config = if from_hub {
+            "the hub's config.toml".to_owned()
+        } else {
+            super::home().config().display().to_string()
+        };
         note.push_str(&format!(
             "\n+ leaves out {n} request{} to models without a price; set one under \
-             [prices] in {}.",
+             [prices] in {config}.",
             if n == 1 { "" } else { "s" },
-            super::home().config().display()
         ));
     }
     if total.failed > 0 {
@@ -114,8 +188,7 @@ pub fn run(config: &Config, store: &Store, range: &str, by: &str, json: bool) ->
         ));
     }
     println!("\n{}", ui::dim(note));
-    print_left(&left);
-    Ok(())
+    true
 }
 
 /// What the weeks that reset left unused, and what that part of the plans

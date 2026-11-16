@@ -661,6 +661,11 @@ async fn harness_of(
         ("https://api.openai.com", openai.as_str()),
     ]);
     let app = App::new(config, Home::at(&dir), PoolState::default(), origins);
+    // No Tailscale here, whatever the machine the tests run on has.
+    app.set_tailnet(proxy::Tailnet {
+        cli: Arc::new(|| None),
+        ..proxy::Tailnet::default()
+    });
     app.pool.sync(app.store.list().unwrap());
     let proxy = serve({
         let app = app.clone();
@@ -2330,7 +2335,16 @@ async fn client_keys_are_held_to_their_models() {
         .send()
         .await
         .unwrap();
-    assert_eq!(status.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(status.status(), StatusCode::FORBIDDEN);
+    let refusal: Value = status.json().await.unwrap();
+    assert_eq!(refusal["_tag"], "Unauthorized");
+    assert!(
+        refusal["message"]
+            .as_str()
+            .unwrap()
+            .contains("reaches the proxy only"),
+        "{refusal}"
+    );
 }
 
 #[tokio::test]

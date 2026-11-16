@@ -37,6 +37,8 @@ const STUBS: &[&str] = &[
     "security",
     "open",
     "xdg-open",
+    // This host may have the real one on PATH: no test may run it.
+    "tailscale",
 ];
 
 struct Sandbox {
@@ -84,12 +86,22 @@ fn free_port() -> u16 {
 
 impl Sandbox {
     fn new(name: &str) -> Self {
+        Self::under(&std::env::temp_dir(), name)
+    }
+
+    /// A sandbox whose paths are short enough for the tailnet socket
+    /// (macOS's temp dir is long).
+    #[cfg(unix)]
+    fn short(name: &str) -> Self {
+        Self::under(Path::new("/tmp"), name)
+    }
+
+    fn under(dir: &Path, name: &str) -> Self {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root =
-            std::env::temp_dir().join(format!("slopmax-cli-{name}-{}-{nanos}", std::process::id()));
+        let root = dir.join(format!("slopmax-cli-{name}-{}-{nanos}", std::process::id()));
         let sandbox = Self {
             home: root.join("home"),
             slopmax: root.join("slopmax"),
@@ -149,6 +161,17 @@ impl Sandbox {
             .env("HTTP_PROXY", NOWHERE)
             .env("ALL_PROXY", NOWHERE)
             .env("STUB_LOG", self.root.join("stubs.log"))
+            // The stub, or the fake that tests write over it; Windows can't
+            // run either, so there Tailscale isn't installed.
+            .env(
+                "SLOPMAX_TAILSCALE",
+                if cfg!(windows) {
+                    PathBuf::new()
+                } else {
+                    self.stubs.join("tailscale")
+                },
+            )
+            .env("FAKE_TS", self.root.join("ts"))
             .env("SLOPMAX_NO_SERVICE", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -215,6 +238,19 @@ impl Sandbox {
 
     fn config(&self) -> PathBuf {
         self.slopmax.join("config.toml")
+    }
+
+    /// Fails if anything ran a `tailscale` command that changes Tailscale
+    /// itself, which slopmax never does.
+    #[track_caller]
+    fn assert_no_mutating_tailscale(&self) {
+        let log = self.stub_calls();
+        for line in log.lines().filter(|l| l.starts_with("tailscale ")) {
+            let mutating = [" set", " up", " down", "funnel", "serve reset"]
+                .iter()
+                .any(|word| line.contains(word));
+            assert!(!mutating, "slopmax ran `{line}`:\n{log}");
+        }
     }
 }
 
@@ -329,7 +365,7 @@ fn mistakes_explain_themselves_and_fail() {
     s.run(&["status", "--watch", "--json"])
         .fails(1, "--json cannot be combined with --watch");
     s.run(&["usage", "--by", "week"])
-        .fails(1, "--by takes day, model, or account");
+        .fails(1, "--by takes day, model, account, or machine");
     s.run(&["usage", "fortnight"]).fails(2, "fortnight");
     let out = s
         .run(&["logs", "-n", "many"])
@@ -610,6 +646,7 @@ fn entry(at: Timestamp, account: &str, model: &str, status: u16) -> Entry {
         agent: Some("claude".into()),
         session: None,
         end: None,
+        machine: None,
     }
 }
 
@@ -695,6 +732,14 @@ fn usage_totals_the_ledger() {
         .take_while(|l| !l.starts_with("total"))
         .collect();
     assert_eq!(rows.len(), 1, "{accounts}");
+    // Requests another machine sent are its; this one's own read as such.
+    let mut sent = entry(now, &a.id, "claude-sonnet-4-6", 200);
+    sent.machine = Some("laptop".into());
+    write_ledger(&s, &[sent]);
+    let machines = s.run(&["usage", "today", "--by", "machine"]).ok().stdout;
+    assert!(machines.contains("MACHINE"), "{machines}");
+    assert!(machines.contains("this machine"), "{machines}");
+    assert!(machines.contains("laptop"), "{machines}");
 
     // With nothing but failures, it says so rather than show zeros.
     let s = Sandbox::new("usage-failed");
@@ -2069,6 +2114,12 @@ async fn handing_the_proxy_to_another_binary_refuses_and_cuts_off_nothing() {
         health(http.clone(), base.clone()).await.unwrap()["pid"],
         first.id()
     );
+    // A connection opened before the move, idle through it.
+    let held = Client::builder().plain_http().build();
+    assert_eq!(
+        health(held.clone(), base.clone()).await.unwrap()["pid"],
+        first.id()
+    );
 
     // A stream under way when the proxy moves…
     let streaming = {
@@ -2124,7 +2175,7 @@ async fn handing_the_proxy_to_another_binary_refuses_and_cuts_off_nothing() {
     assert_ne!(second, first.id(), "{now}");
     // …and one opened before the move still answers, from the old one,
     // which closes it after: no client finds its connection gone.
-    let kept = http.get(format!("{base}/healthz")).send().await.unwrap();
+    let kept = held.get(format!("{base}/healthz")).send().await.unwrap();
     assert_eq!(
         kept.headers()
             .get("connection")
@@ -2379,4 +2430,621 @@ async fn a_proxy_started_on_the_kept_socket_takes_over_without_refusing_a_connec
         );
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// A fake `tailscale`: it answers from the files in `$FAKE_TS`, logs each
+/// run to the stub log, and keeps what `serve` publishes in serve.json.
+/// Marker files there make it hang, find tailscaled down, or refuse serve
+/// changes as Tailscale does without operator rights.
+#[cfg(unix)]
+const FAKE_TAILSCALE: &str = r#"#!/bin/sh
+echo "tailscale $*" >> "$STUB_LOG"
+d="$FAKE_TS"
+[ -f "$d/hang" ] && exec sleep 60
+if [ -f "$d/daemon-down" ]; then
+  echo "failed to connect to local tailscaled; it doesn't appear to be running" >&2
+  exit 1
+fi
+case "$*" in
+  "status --json"*) cat "$d/status.json" ;;
+  "serve status --json")
+    if [ -f "$d/serve.json" ]; then cat "$d/serve.json"; else echo '{}'; fi ;;
+  "serve --bg --yes --https="*)
+    if [ -f "$d/access-denied" ]; then echo "Access denied: serve config denied" >&2; exit 1; fi
+    port="${4#--https=}"
+    printf '{"TCP":{"%s":{"HTTPS":true}},"Web":{"hub.example.ts.net:%s":{"Handlers":{"/":{"Proxy":"%s"}}}}}\n' "$port" "$port" "$5" > "$d/serve.json" ;;
+  "serve --https="*" off")
+    if [ -f "$d/access-denied" ]; then echo "Access denied: serve config denied" >&2; exit 1; fi
+    echo '{}' > "$d/serve.json" ;;
+  "debug prefs") cat "$d/prefs.json" ;;
+  *) exit 1 ;;
+esac
+"#;
+
+/// A `tailscale status --json` recorded from Tailscale 1.104.5, scrubbed.
+#[cfg(unix)]
+fn status_fixture(name: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../slopmax-core/tests-data/tailscale")
+        .join(format!("status-{name}.json"));
+    std::fs::read_to_string(path).unwrap()
+}
+
+#[cfg(unix)]
+impl Sandbox {
+    /// Puts the fake `tailscale` in the stub's place, signed in and
+    /// running, with this user as tailscaled's operator.
+    fn fake_tailscale(&self) {
+        let path = self.stubs.join("tailscale");
+        std::fs::write(&path, FAKE_TAILSCALE).unwrap();
+        make_executable(&path);
+        std::fs::create_dir_all(self.ts_dir()).unwrap();
+        self.ts_file("status.json", &status_fixture("running"));
+        self.ts_file("prefs.json", r#"{"OperatorUser": "tester"}"#);
+    }
+
+    fn ts_dir(&self) -> PathBuf {
+        self.root.join("ts")
+    }
+
+    fn ts_file(&self, name: &str, text: &str) {
+        std::fs::write(self.ts_dir().join(name), text).unwrap();
+    }
+
+    fn ts_marker(&self, name: &str, on: bool) {
+        let path = self.ts_dir().join(name);
+        if on {
+            std::fs::write(path, "").unwrap();
+        } else {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    /// Runs as the user `tester`, tailscaled's operator in the fake.
+    fn ts(&self, args: &[&str]) -> Out {
+        self.finish(self.command(args).env("USER", "tester").spawn().unwrap())
+    }
+
+    /// The `tailscale serve` runs that change what is published.
+    fn serve_changes(&self) -> Vec<String> {
+        self.stub_calls()
+            .lines()
+            .filter(|l| l.starts_with("tailscale serve --"))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn clear_stub_log(&self) {
+        let _ = std::fs::remove_file(self.root.join("stubs.log"));
+    }
+
+    /// Answers `/healthz` on the proxy's tailnet socket, as the proxy does,
+    /// for as long as the test runs. A proxy that binds the socket itself
+    /// replaces it.
+    fn answer_on_socket(&self) {
+        use std::io::Read as _;
+        std::fs::create_dir_all(&self.slopmax).unwrap();
+        let listener =
+            std::os::unix::net::UnixListener::bind(self.slopmax.join("tailnet.sock")).unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 2\r\n\r\n{}",
+                );
+            }
+        });
+    }
+
+    /// What `tailscale serve` would say publishes `proxy` on the
+    /// sandbox's port.
+    fn serving(&self, proxy: &str) -> String {
+        json!({
+            "TCP": { self.port.to_string(): { "HTTPS": true } },
+            "Web": { format!("hub.example.ts.net:{}", self.port): {
+                "Handlers": { "/": { "Proxy": proxy } }
+            } }
+        })
+        .to_string()
+    }
+
+    fn socket_target(&self) -> String {
+        format!("unix:{}", self.slopmax.join("tailnet.sock").display())
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn tailscale_on_publishes_the_socket_and_off_takes_it_down() {
+    let s = Sandbox::short("ts-on");
+    s.fake_tailscale();
+    s.answer_on_socket();
+    let port = s.port;
+
+    // Without operator rights, serve says so, and slopmax says what to run.
+    s.ts_marker("access-denied", true);
+    s.ts(&["tailscale", "on"])
+        .fails(1, "sudo tailscale set --operator=$USER");
+    s.ts_marker("access-denied", false);
+    s.clear_stub_log();
+
+    // `--user` adds a login to the hub's own.
+    let out = s.ts(&["tailscale", "on", "--user", "you@github"]).ok();
+    assert_eq!(
+        s.serve_changes(),
+        [format!(
+            "tailscale serve --bg --yes --https={port} {}",
+            s.socket_target()
+        )]
+    );
+    let url = format!("https://hub.example.ts.net:{port}");
+    assert!(out.stdout.contains(&url), "{out:?}");
+    assert!(
+        out.stdout
+            .contains("Machines signed in as me@github or you@github use it without a key"),
+        "{out:?}"
+    );
+    // Not on the port `setup --hub <name>` looks on: the whole address.
+    assert!(
+        out.stdout
+            .contains(&format!("On another machine: slopmax setup --hub {url}\n")),
+        "{out:?}"
+    );
+    // The fake address doesn't resolve from here: a note, not a failure.
+    assert!(
+        out.stdout
+            .contains("couldn't check the address from this machine"),
+        "{out:?}"
+    );
+    let config = std::fs::read_to_string(s.config()).unwrap();
+    let doc: toml_edit::DocumentMut = config.parse().unwrap();
+    let users: Vec<&str> = doc["tailscale"]["users"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(users, ["me@github", "you@github"], "{config}");
+
+    // The dashboard says where the other machines find it.
+    let out = s.ts(&["dashboard", "--print"]).ok();
+    assert!(
+        out.stdout.contains(&format!(
+            "From your other machines and phone: {url}/slopmax/ (no key needed)"
+        )),
+        "{out:?}"
+    );
+    let out = s
+        .command(&["dashboard", "--print"])
+        .env("SLOPMAX_TAILSCALE", "")
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&out.stdout).contains("ssh -L"));
+    // A key for another machine comes with how that machine uses it.
+    let out = s.ts(&["key", "add", "ci"]).ok();
+    assert!(
+        out.stderr.contains(&format!(
+            "On that machine: slopmax setup --hub {url} --key sm-"
+        )),
+        "{out:?}"
+    );
+
+    let view: slopmax_client::api::tailnet::TailnetView =
+        serde_json::from_str(&s.ts(&["tailscale", "status", "--json"]).ok().stdout).unwrap();
+    assert_eq!(view.url.as_deref(), Some(url.as_str()));
+    assert_eq!(view.users, ["me@github", "you@github"]);
+    assert_eq!(
+        view.tailscale,
+        slopmax_client::api::tailnet::TailscaleState::Running
+    );
+    let table = s.ts(&["tailscale"]).ok().stdout;
+    assert!(
+        table.contains("running, me@github on hub (1.104.5)"),
+        "{table}"
+    );
+    assert!(table.contains(&format!("{url} -> ")), "{table}");
+    assert!(
+        table.contains("me@github, you@github (use and view)"),
+        "{table}"
+    );
+
+    // On the usual port, other machines find it by name.
+    let out = s.ts(&["tailscale", "on", "--port", "7567"]).ok();
+    assert!(
+        out.stdout
+            .contains("On another machine: slopmax setup --hub hub\n"),
+        "{out:?}"
+    );
+
+    // On again changes nothing but what serve publishes.
+    s.ts(&["tailscale", "on"]).ok();
+
+    s.clear_stub_log();
+    let out = s.ts(&["tailscale", "off"]).ok();
+    assert!(
+        out.stdout
+            .contains("Stopped publishing slopmax to your tailnet."),
+        "{out:?}"
+    );
+    assert_eq!(
+        s.serve_changes(),
+        [format!("tailscale serve --https={port} off")]
+    );
+    let out = s.ts(&["tailscale", "off"]).ok();
+    assert!(
+        out.stdout
+            .contains("slopmax isn't published to your tailnet."),
+        "{out:?}"
+    );
+    let out = s.ts(&["dashboard", "--print"]).ok();
+    assert!(
+        out.stdout
+            .contains("To open it from your other machines, run slopmax tailscale on"),
+        "{out:?}"
+    );
+
+    // The proxy's port instead: every machine needs a key then.
+    s.clear_stub_log();
+    let out = s.ts(&["tailscale", "on", "--loopback"]).ok();
+    assert_eq!(
+        s.serve_changes(),
+        [format!(
+            "tailscale serve --bg --yes --https={port} http://127.0.0.1:{port}"
+        )]
+    );
+    assert!(out.stdout.contains("every machine needs a key"), "{out:?}");
+    s.ts(&["tailscale", "off"]).ok();
+    s.run(&["stop"]).ok();
+    s.assert_no_mutating_tailscale();
+}
+
+#[cfg(unix)]
+#[test]
+fn tailscale_on_says_what_stops_it() {
+    let s = Sandbox::short("ts-refused");
+    s.fake_tailscale();
+    let port = s.port;
+    let refused = |says: &str| {
+        s.ts(&["tailscale", "on"]).fails(1, says);
+        assert!(s.serve_changes().is_empty(), "{}", s.stub_calls());
+    };
+    s.ts_file("status.json", &status_fixture("needslogin"));
+    refused("Tailscale on this machine is signed out");
+    s.ts_file("status.json", &status_fixture("stopped"));
+    refused("Tailscale on this machine is turned off\ntailscale up");
+    s.ts_file("status.json", &status_fixture("nocerts"));
+    refused("your tailnet has HTTPS certificates turned off\nTurn on HTTPS");
+    s.ts_file("status.json", &status_fixture("running"));
+
+    s.ts_file("serve.json", &s.serving("http://127.0.0.1:3000"));
+    refused(&format!(
+        "port {port} of this machine already serves http://127.0.0.1:3000 to your tailnet\n\
+         slopmax tailscale on --port {}",
+        port + 1
+    ));
+    // slopmax published from another home: `on` leaves it, and says how to
+    // turn it off, as status does.
+    let old = "unix:/home/old/.slopmax/tailnet.sock";
+    s.ts_file("serve.json", &s.serving(old));
+    refused(&format!(
+        "If that is slopmax from before, turn it off first: tailscale serve --https={port} off"
+    ));
+    let table = s.ts(&["tailscale"]).ok().stdout;
+    assert!(
+        table.contains(&format!(
+            "port {port} serves {old}, likely slopmax from before: `tailscale serve \
+             --https={port} off`, then `slopmax tailscale on`"
+        )),
+        "{table}"
+    );
+    s.ts_file(
+        "serve.json",
+        &json!({ "TCP": { port.to_string(): { "TCPForward": "127.0.0.1:22" } } }).to_string(),
+    );
+    refused("already serves 127.0.0.1:22");
+    let mut funnel: Value = serde_json::from_str(&s.serving(&s.socket_target())).unwrap();
+    funnel["AllowFunnel"] = json!({ format!("hub.example.ts.net:{port}"): true });
+    s.ts_file("serve.json", &funnel.to_string());
+    refused(&format!(
+        "port {port} is open to the internet through Tailscale Funnel\n\
+         tailscale funnel --https={port} off"
+    ));
+    let _ = std::fs::remove_file(s.ts_dir().join("serve.json"));
+
+    s.ts_marker("daemon-down", true);
+    refused("Tailscale isn't running on this machine");
+    s.ts_marker("daemon-down", false);
+
+    let out = s
+        .command(&["tailscale", "on"])
+        .env("SLOPMAX_TAILSCALE", "")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("Tailscale isn't installed here"),
+        "{out:?}"
+    );
+    s.run(&["tailscale", "on", "--loopback", "--socket"])
+        .fails(1, "give one");
+    // Nothing started a proxy for it.
+    assert!(s.run(&["stop"]).ok().stdout.contains("not running"));
+    s.assert_no_mutating_tailscale();
+}
+
+/// Without operator rights, `on` stops before it publishes anything, and
+/// says what to run once.
+#[cfg(target_os = "linux")]
+#[test]
+fn tailscale_on_without_operator_rights_says_how_to_get_them() {
+    let s = Sandbox::short("ts-operator");
+    if slopmax_core::tailscale::is_root() {
+        eprintln!("skipped: root needs no operator rights");
+        return;
+    }
+    s.fake_tailscale();
+    s.ts_file("prefs.json", "{}");
+    let out = s.ts(&["tailscale", "on"]).fails(
+        1,
+        "Tailscale lets only root change what this machine serves.",
+    );
+    assert!(
+        out.stderr.contains("  sudo tailscale set --operator=$USER"),
+        "{out:?}"
+    );
+    assert!(
+        out.stderr.contains(&format!(
+            "sudo tailscale serve --bg --yes --https={} {}",
+            s.port,
+            s.socket_target()
+        )),
+        "{out:?}"
+    );
+    assert!(s.serve_changes().is_empty(), "{}", s.stub_calls());
+    assert!(s.run(&["stop"]).ok().stdout.contains("not running"));
+    s.assert_no_mutating_tailscale();
+}
+
+#[cfg(unix)]
+#[test]
+fn tailscale_users_and_admins_edit_the_config() {
+    let s = Sandbox::short("ts-users");
+    s.fake_tailscale();
+    let out = s.ts(&["tailscale", "users"]).ok();
+    assert!(out.stdout.contains("No login is let in"), "{out:?}");
+    s.ts(&["tailscale", "users", "add", "me@github,you@github"])
+        .ok();
+    s.ts(&["tailscale", "users", "add", "nobody"])
+        .fails(1, "is not a tailnet login");
+    s.ts(&["tailscale", "admins", "add", "ci-runner"])
+        .fails(1, "ci-runner is tagged (tag:ci)");
+    s.ts(&["tailscale", "admins", "add", "phone"])
+        .fails(1, "no machine on your tailnet is called phone");
+    let out = s.ts(&["tailscale", "admins", "add", "me-macbook-pro"]).ok();
+    assert!(
+        out.stdout.contains("me-macbook-pro may now manage"),
+        "{out:?}"
+    );
+    s.ts(&["tailscale", "users", "remove", "you@github"]).ok();
+    s.ts(&["tailscale", "users", "remove", "you@github"])
+        .fails(1, "isn't among the logins");
+
+    let doc: toml_edit::DocumentMut = std::fs::read_to_string(s.config())
+        .unwrap()
+        .parse()
+        .unwrap();
+    let table = &doc["tailscale"];
+    assert_eq!(
+        table["users"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect::<Vec<_>>(),
+        ["me@github"]
+    );
+    let admin = table["admins"].as_array().unwrap().get(0).unwrap();
+    let admin = admin.as_inline_table().unwrap();
+    assert_eq!(
+        admin.get("machine").and_then(|v| v.as_str()),
+        Some("me-macbook-pro")
+    );
+    assert_eq!(admin.get("id").and_then(|v| v.as_str()), Some("nMAC1CNTRL"));
+    let list = s.ts(&["tailscale", "admins"]).ok().stdout;
+    assert!(
+        list.contains("me-macbook-pro") && list.contains("nMAC1CNTRL"),
+        "{list}"
+    );
+    s.ts(&["tailscale", "admins", "remove", "me-macbook-pro"])
+        .ok();
+    assert!(
+        !std::fs::read_to_string(s.config())
+            .unwrap()
+            .contains("nMAC1CNTRL")
+    );
+    s.assert_no_mutating_tailscale();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_tailscale_that_hangs_times_out() {
+    let s = Sandbox::short("ts-hang");
+    s.fake_tailscale();
+    s.ts_marker("hang", true);
+    let started = Instant::now();
+    s.ts(&["tailscale", "on"]).fails(1, "didn't answer in time");
+    let took = started.elapsed();
+    assert!(took < Duration::from_secs(8), "{took:?}");
+    let out = s.ts(&["tailscale", "status"]).ok();
+    assert!(out.stdout.contains("didn't answer in time"), "{out:?}");
+    s.assert_no_mutating_tailscale();
+}
+
+#[cfg(unix)]
+#[test]
+fn looking_for_a_hub_with_no_other_machines_says_how_to_name_one() {
+    let s = Sandbox::short("ts-discover");
+    s.fake_tailscale();
+    let mut status: Value = serde_json::from_str(&status_fixture("running")).unwrap();
+    status.as_object_mut().unwrap().remove("Peer");
+    s.ts_file("status.json", &status.to_string());
+    let says = "no slopmax answered on your tailnet at port 7567; pass one: slopmax setup --hub";
+    s.ts(&["setup", "--find-hub"]).fails(1, says);
+    s.ts(&["setup", "--hub="]).fails(1, says);
+    s.ts(&["setup", "--hub", "phone"])
+        .fails(1, "no machine on your tailnet is called phone");
+    // A name with a port is still looked up, not dialed as it stands.
+    s.ts(&["setup", "--hub", "phone:7600"])
+        .fails(1, "no machine on your tailnet is called phone");
+    assert!(!has_hub(&s));
+    s.assert_no_mutating_tailscale();
+}
+
+/// Whether a sandbox's config.toml sets `[hub]` (its template only shows
+/// one, commented out).
+fn has_hub(s: &Sandbox) -> bool {
+    let text = std::fs::read_to_string(s.config()).unwrap_or_default();
+    let doc: toml_edit::DocumentMut = text.parse().unwrap();
+    doc.get("hub").is_some()
+}
+
+/// The owner's key from a sandbox's config.toml.
+fn owner_key(s: &Sandbox) -> String {
+    let doc: toml_edit::DocumentMut = std::fs::read_to_string(s.config())
+        .unwrap()
+        .parse()
+        .unwrap();
+    doc["api_key"].as_str().unwrap().to_owned()
+}
+
+#[test]
+fn a_machine_uses_another_as_its_hub() {
+    let hub = Sandbox::new("hub");
+    hub.add(&key(ProviderId::Anthropic, "sk-ant-hub"));
+    hub.run(&["start"]).ok();
+    let owner = owner_key(&hub);
+    let at = format!("http://127.0.0.1:{}", hub.port);
+
+    let client = Sandbox::new("client");
+    client.add(&claude("mine@x.dev"));
+    let accounts_before = client.store().list().unwrap().len();
+    let out = client
+        .run(&[
+            "setup", "--hub", &at, "--key", &owner, "--name", "laptop", "--yes",
+        ])
+        .ok();
+    assert!(
+        out.stdout.contains(&format!(
+            "Found slopmax {} at {at}",
+            env!("CARGO_PKG_VERSION")
+        )),
+        "{out:?}"
+    );
+    assert!(out.stdout.contains("Made the key \"laptop\""), "{out:?}");
+    assert!(
+        out.stdout.contains("Claude Code now uses the hub"),
+        "{out:?}"
+    );
+
+    // Only the key made for it is kept, never the owner's.
+    let doc: toml_edit::DocumentMut = std::fs::read_to_string(client.config())
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert_eq!(doc["hub"]["url"].as_str(), Some(at.as_str()));
+    let kept = doc["hub"]["key"].as_str().unwrap().to_owned();
+    assert!(kept.starts_with("sm-") && kept != owner, "{kept}");
+    let keys = hub.run(&["key", "list"]).ok().stdout;
+    assert!(keys.contains("laptop"), "{keys}");
+    let hub_config = std::fs::read_to_string(hub.config()).unwrap();
+    assert!(hub_config.contains(&kept), "{hub_config}");
+
+    // Its agents use the hub, with that key.
+    let settings: Value = serde_json::from_str(
+        &std::fs::read_to_string(client.claude.join("settings.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        settings["env"]["ANTHROPIC_BASE_URL"],
+        at.as_str(),
+        "{settings:#}"
+    );
+    assert_eq!(settings["env"]["ANTHROPIC_AUTH_TOKEN"], kept.as_str());
+    let codex = std::fs::read_to_string(client.codex.join("config.toml")).unwrap();
+    assert!(codex.contains(&format!("{at}/codex")), "{codex}");
+    let env = client.run(&["env", "claude"]).ok().stdout;
+    assert!(env.contains(&at), "{env}");
+
+    assert!(
+        out.stdout.contains("It knows this machine as laptop: use."),
+        "{out:?}"
+    );
+    // A client key may use the hub, not see its accounts: the hub says so.
+    client.run(&["status"]).fails(
+        1,
+        &format!(
+            "the hub at {at} takes this machine's key for its agents only, not for \
+             `slopmax status`; run it on the hub"
+        ),
+    );
+
+    // Nothing runs a proxy here.
+    let refusal = format!("This machine uses the hub at {at} and runs no proxy of its own.");
+    client.run(&["start"]).fails(1, &refusal);
+    client.run(&["serve"]).fails(1, &refusal);
+    client.run(&["import"]).fails(1, &refusal);
+    client
+        .run(&["logs"])
+        .fails(1, "The hub's log is on 127.0.0.1");
+    client.run(&["tailscale", "on"]).fails(1, &refusal);
+    let out = client.run(&["tailscale"]).ok();
+    assert!(
+        out.stdout
+            .contains(&format!("This machine uses the hub at {at}.")),
+        "{out:?}"
+    );
+    let json: Value =
+        serde_json::from_str(&client.run(&["tailscale", "status", "--json"]).ok().stdout).unwrap();
+    assert_eq!(json, json!({ "hub": at }));
+    let doctor = client.run(&["doctor"]).stdout;
+    assert!(
+        doctor.contains(&format!("the hub at {at} answers")),
+        "{doctor}"
+    );
+
+    // With the hub gone, commands fail, and never fall back to the
+    // accounts here.
+    hub.run(&["stop"]).ok();
+    eventually("the hub stops", || {
+        hub.run(&["stop"]).stdout.contains("not running")
+    });
+    client
+        .run(&["status"])
+        .fails(1, &format!("the hub at {at} isn't answering"));
+    client.run(&["use", "1"]).fails(1, "isn't answering");
+    assert_eq!(client.store().list().unwrap().len(), accounts_before);
+
+    // And back to its own proxy.
+    let out = client.run(&["setup", "--hub", "off"]).ok();
+    assert!(
+        out.stdout
+            .contains("Its agents now use this machine's proxy."),
+        "{out:?}"
+    );
+    assert!(!has_hub(&client));
+    let settings: Value = serde_json::from_str(
+        &std::fs::read_to_string(client.claude.join("settings.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        settings["env"]["ANTHROPIC_BASE_URL"],
+        format!("http://127.0.0.1:{}", client.port).as_str()
+    );
+    assert_eq!(client.store().list().unwrap().len(), accounts_before);
+    let json: Value = serde_json::from_str(&client.run(&["status", "--json"]).ok().stdout).unwrap();
+    assert_eq!(json["accounts"].as_array().unwrap().len(), accounts_before);
+    hub.assert_no_mutating_tailscale();
+    client.assert_no_mutating_tailscale();
 }

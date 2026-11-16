@@ -1,6 +1,7 @@
 // Requests as slopmax answers them, newest first, straight off the event
-// stream: who sent it, the model, the account that answered (and whether a
-// failover rescued it), its status, its tokens and how long it took.
+// stream: who sent it and from which machine, the model, the account that
+// answered (and whether a failover rescued it), its status, its tokens and
+// how long it took.
 import { useAtomValue } from "@effect/atom-react"
 import { cva } from "class-variance-authority"
 import { Option } from "effect"

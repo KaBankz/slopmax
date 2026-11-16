@@ -254,6 +254,7 @@ pub fn record(e: &Entry) -> api::ledger::RequestRecord {
         }),
         session: e.session.clone(),
         via: Via::Http,
+        machine: e.machine.clone(),
     }
 }
 
@@ -590,5 +591,19 @@ mod tests {
             api::report::Condition::Limited { until }.at(later),
             api::report::Condition::Ready
         );
+    }
+
+    #[test]
+    fn records_carry_the_machine_that_sent_them() {
+        let line = r#"{"at":"2026-10-02T00:00:00Z","account":"claude-1","provider":"claude","status":200,"ms":5,"agent":"claude","machine":"laptop"}"#;
+        let entry: Entry = serde_json::from_str(line).unwrap();
+        let mapped = record(&entry);
+        assert_eq!(mapped.machine.as_deref(), Some("laptop"));
+        assert_eq!(mapped.agent, Some(api::ledger::Sender::ClaudeCode));
+        let owner = Entry {
+            machine: None,
+            ..entry
+        };
+        assert_eq!(record(&owner).machine, None);
     }
 }

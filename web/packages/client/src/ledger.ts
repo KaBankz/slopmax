@@ -60,6 +60,8 @@ export const LedgerRecord = Schema.TaggedUnion({
     agent: Schema.optionalKey(RequestSender),
     session: Schema.optionalKey(Schema.String),
     via: Schema.Literals(["http", "socket"]).pipe(withDefault("http")),
+    /** The machine that sent it: a client key's name or a tailnet machine; left out for the hub's own key. */
+    machine: Schema.optionalKey(Schema.String),
   },
   /** A usage window that reset, with how much of it had been used: the rest was thrown away. */
   WindowEnded: {
@@ -80,8 +82,8 @@ export const SummaryRange = Schema.Literals(["today", "7d", "30d", "all"]).annot
   message: "range is today, 7d, 30d, or all",
 })
 export type SummaryRange = typeof SummaryRange.Type
-export const SummaryBy = Schema.Literals(["day", "model", "account"]).annotate({
-  message: "by is day, model, or account",
+export const SummaryBy = Schema.Literals(["day", "model", "account", "machine"]).annotate({
+  message: "by is day, model, account, or machine",
 })
 export type SummaryBy = typeof SummaryBy.Type
 export const HistoryRange = Schema.Literals(["today", "7d", "30d"]).annotate({ message: "range is today, 7d, or 30d" })
@@ -111,12 +113,16 @@ export class Totals extends Schema.Class<Totals>("Totals")({
 }
 
 export class SummaryRow extends Schema.Class<SummaryRow>("SummaryRow")({
-  /** The local day (`2026-10-31`), the model (`-` when none), or the account's name. */
+  /**
+   * The local day (`2026-10-31`), the model (`-` when none), the account's
+   * name, or the machine's (`this machine`, or `hub` read from another
+   * machine, for the hub's own key).
+   */
   key: Schema.String,
   totals: Totals,
 }) {}
 
-/** `slopmax usage` and `GET /usage`: totals since the range's start, in rows by day, model or account. */
+/** `slopmax usage` and `GET /usage`: totals since the range's start, in rows by day, model, account or machine. */
 export class Summary extends Schema.Class<Summary>("Summary")({
   range: SummaryRange,
   by: SummaryBy,

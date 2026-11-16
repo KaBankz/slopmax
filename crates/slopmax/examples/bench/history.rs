@@ -169,6 +169,7 @@ pub fn ledger(home: &str, days: i64, per_day: u64) -> Result<()> {
                 ),
                 session,
                 end: None,
+                machine: None,
             };
             let name = month_name(entry.at);
             if file.as_ref().is_none_or(|(open, _)| *open != name) {

@@ -26,7 +26,10 @@ import {
   Settings,
   settingsView,
   Summary,
+  SummaryRow,
+  TailnetView,
   Totals,
+  type Unauthorized,
   UpstreamFailed,
   Usage,
   Window,
@@ -46,7 +49,7 @@ import {
   Stopping,
 } from "@slopmax/client/api"
 import { MemoryFileSystem } from "@slopmax/test"
-import { DateTime, Duration, Effect, Layer, PubSub, Redacted, Stream } from "effect"
+import { DateTime, Deferred, Duration, Effect, Layer, PubSub, Redacted, Stream } from "effect"
 import { Etag, FetchHttpClient, HttpClient, HttpPlatform, HttpRouter, HttpServerResponse } from "effect/http"
 import { HttpApiBuilder } from "effect/http-api"
 import {
@@ -70,12 +73,20 @@ export interface StubOptions {
   readonly key?: string | undefined
   /** How long each answer takes, so loading states can be seen. */
   readonly latency?: Duration.Input
+  /** What `/healthz` answers; by default, a local slopmax that says nothing of the caller. */
+  readonly health?: Record<string, unknown>
+  /** slopmax on the tailnet; none answers 404, as an older proxy does. */
+  readonly tailnet?: TailnetView
+  /** Usage by machine; none sums everything as this machine's own. */
+  readonly machines?: ReadonlyArray<SummaryRow>
 }
 
 /** One call the stub answered. */
 export interface Call {
   readonly endpoint: string
   readonly payload?: unknown
+  /** The credential it came with, for `/healthz`. */
+  readonly authorization?: string
 }
 
 export interface Stub {
@@ -88,15 +99,26 @@ export interface Stub {
   readonly report: () => Report
   /** Replaces the report, telling watchers. */
   readonly setReport: (report: Report) => void
-  /** Makes the next call to an endpoint fail with this error, as the daemon would send it. */
-  readonly failNext: (endpoint: string, error: Refusal) => void
+  /**
+   * Makes the next call to an endpoint fail with this error, as the daemon
+   * would send it: with its own status, or `status` (403 for an
+   * `Unauthorized` to a caller the daemon knows but that may not do this).
+   */
+  readonly failNext: (endpoint: string, error: Refusal, status?: number) => void
+  /** Changes what `/healthz` answers from now on. */
+  readonly setHealth: (health: Record<string, unknown>) => void
+  /** Refuses every API call from now on (401), as the daemon does once it stops taking the caller. */
+  readonly refuseAll: (refuse: boolean) => void
+  /** Ends every open event stream, as the daemon does when a caller's access drops. */
+  readonly endStreams: () => void
   readonly dispose: () => Promise<void>
 }
 
 /** An error the API answers with, and its status. */
-export type Refusal = BadRequest | UpstreamFailed | NotFound | Conflict | Internal
+export type Refusal = BadRequest | UpstreamFailed | NotFound | Conflict | Internal | Unauthorized
 
 const statuses: { readonly [K in Refusal["_tag"]]: number } = {
+  Unauthorized: 401,
   BadRequest: 400,
   NotFound: 404,
   Conflict: 409,
@@ -122,7 +144,10 @@ export const makeStub = (options: StubOptions = {}): Stub => {
   let agents: ReadonlyArray<AgentWiring> = fixtureAgents()
   const doctor: ReadonlyArray<Section> = fixtureDoctor()
   const calls: Array<Call> = []
-  const failures = new Map<string, Refusal>()
+  const failures = new Map<string, { readonly error: Refusal; readonly status: number }>()
+  let health: Record<string, unknown> = options.health ?? { status: "ok", service: "slopmax", version, pid: 4242 }
+  let refusing = false
+  let ended = Deferred.makeUnsafe<void>()
   let logins = 0
   let accounts = 0
   const events = Effect.runSync(PubSub.unbounded<Event>())
@@ -147,10 +172,11 @@ export const makeStub = (options: StubOptions = {}): Stub => {
       const failure = failures.get(endpoint)
       if (failure === undefined) return yield* effect
       failures.delete(endpoint)
+      const { error, status } = failure
       // Sent as the daemon encodes it, so the client decodes it into the endpoint's own error.
       return HttpServerResponse.jsonUnsafe(
-        { _tag: failure._tag, message: failure.message, ...("what" in failure ? { what: failure.what } : {}) },
-        { status: statuses[failure._tag] },
+        { _tag: error._tag, message: error.message, ...("what" in error ? { what: error.what } : {}) },
+        { status },
       )
     })
 
@@ -536,7 +562,14 @@ export const makeStub = (options: StubOptions = {}): Stub => {
           "summary",
           query,
           Effect.sync(
-            () => new Summary({ range: query.range, by: query.by, since: now(), rows: [], total: Totals.zero }),
+            () =>
+              new Summary({
+                range: query.range,
+                by: query.by,
+                since: now(),
+                rows: query.by === "machine" ? (options.machines ?? []) : [],
+                total: Totals.zero,
+              }),
           ),
         ),
       )
@@ -555,10 +588,15 @@ export const makeStub = (options: StubOptions = {}): Stub => {
         "events",
         undefined,
         Effect.sync(() =>
-          Stream.concat(
-            Stream.make(Event.cases.Hello.make({ version }), Event.cases.Status.make({ report })),
-            Stream.fromPubSub(events),
-          ),
+          // Subscribed before Hello, as the daemon does: what is published once the first report is in reaches the page.
+          Stream.unwrap(
+            Effect.map(PubSub.subscribe(events), (subscription) =>
+              Stream.concat(
+                Stream.make(Event.cases.Hello.make({ version }), Event.cases.Status.make({ report })),
+                Stream.fromSubscription(subscription),
+              ),
+            ),
+          ).pipe(Stream.interruptWhen(Deferred.await(ended))),
         ),
       ),
     ),
@@ -568,28 +606,86 @@ export const makeStub = (options: StubOptions = {}): Stub => {
     handlers.handle("test", () => answer("notifyTest", undefined, Effect.void)),
   )
 
+  let tailnet = options.tailnet
+  const Tailnet = HttpApiBuilder.group(SlopmaxApi, "tailnet", (handlers) =>
+    handlers
+      .handle("view", () =>
+        answer(
+          "tailnet",
+          undefined,
+          tailnet === undefined ? Effect.fail(NotFound.of({ what: "slopmax endpoint" })) : Effect.succeed(tailnet),
+        ),
+      )
+      .handle("change", ({ payload }) =>
+        answer(
+          "changeTailnet",
+          payload,
+          Effect.suspend(() => {
+            const was = tailnet
+            if (was === undefined) return Effect.fail(new Internal({ message: "no tailnet here" }))
+            tailnet = new TailnetView({
+              ...was,
+              users: payload.users ?? was.users,
+              admins: payload.admins ?? was.admins,
+            })
+            return Effect.succeed(tailnet)
+          }),
+        ),
+      ),
+  )
+
   const owner =
     options.key === undefined
       ? Layer.succeed(OwnerKey, { bearer: (effect) => effect, header: (effect) => effect })
       : OwnerKey.layer(Effect.succeed(Redacted.make(options.key)))
   const platform = Layer.mergeAll(HttpPlatform.layer, Etag.layer).pipe(Layer.provideMerge(MemoryFileSystem.layer))
   const live = HttpApiBuilder.layer(SlopmaxApi).pipe(
-    Layer.provide(Layer.mergeAll(System, Accounts, Logins, Config, Agents, UsageGroup, Events, Notify)),
+    Layer.provide(Layer.mergeAll(System, Accounts, Logins, Config, Agents, UsageGroup, Events, Notify, Tailnet)),
     Layer.provide([owner, InputErrors.layer]),
     Layer.provide(platform),
   )
   const { handler, dispose } = HttpRouter.toWebHandler(live, { disableLogger: true })
 
+  /** `/healthz` is outside the API: it needs no key, and says what the caller may do when it sent one. */
+  const healthz = (request: Request): Response => {
+    const authorization = request.headers.get("authorization") ?? undefined
+    calls.push(authorization === undefined ? { endpoint: "healthz" } : { endpoint: "healthz", authorization })
+    return Response.json(health)
+  }
+
   return {
-    fetch: (request) => handler(request),
+    fetch: (request) => {
+      const path = new URL(request.url).pathname
+      if (path === "/healthz") return Promise.resolve(healthz(request))
+      if (refusing && path.startsWith("/slopmax/api/")) {
+        calls.push({ endpoint: "refused", payload: path })
+        return Promise.resolve(
+          Response.json(
+            { _tag: "Unauthorized", message: "missing or invalid slopmax key; see `slopmax env`" },
+            { status: 401 },
+          ),
+        )
+      }
+      return handler(request)
+    },
     publish,
     calls,
     report: () => report,
     setReport: (next) => {
       change(next)
     },
-    failNext: (endpoint, error) => {
-      failures.set(endpoint, error)
+    failNext: (endpoint, error, status) => {
+      failures.set(endpoint, { error, status: status ?? statuses[error._tag] })
+    },
+    setHealth: (next) => {
+      health = next
+    },
+    refuseAll: (refuse) => {
+      refusing = refuse
+    },
+    endStreams: () => {
+      Deferred.doneUnsafe(ended, Effect.void)
+      ended = Deferred.makeUnsafe<void>()
     },
     dispose,
   }

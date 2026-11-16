@@ -17,6 +17,7 @@ import {
   openCreditsAtom,
   pollOffAtom,
   proxyAtom,
+  readOnlyAtom,
   redeem,
   redeemingAtom,
   settingsAtom,
@@ -44,7 +45,7 @@ import {
 import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "../components/ui/item.tsx"
 import { askOwn, askPriority, askRedeem, askRemove, askRename, readPriority } from "../view/asks.ts"
 import { across, type Gauge, type Group, type Row } from "../view/groups.ts"
-import { needsProxy } from "../view/live.ts"
+import { cannotChange } from "../view/live.ts"
 import { autoRedeem, limitsNotRead, resetsLine, resetsUnlisted } from "../view/words.ts"
 
 function PoolCells({ group }: { readonly group: Group }) {
@@ -222,6 +223,7 @@ function CreditsWell({ row, provider }: { readonly row: Row; readonly provider: 
   const canChange = useAtomValue(canChangeAtom)
   const proxy = useAtomValue(proxyAtom)
   const unanswered = useAtomValue(unansweredAtom)
+  const readOnly = useAtomValue(readOnlyAtom)
   const settings = useAtomValue(settingsAtom)
   const spend = useAtomSet(redeem)
   const ask = useAsk()
@@ -231,7 +233,9 @@ function CreditsWell({ row, provider }: { readonly row: Row; readonly provider: 
   const policy = Option.flatMap(AsyncResult.value(settings), (view) =>
     Option.fromUndefinedOr(autoRedeem(view.settings, providerFacts[provider].title)),
   )
-  const held = !canChange ? (needsProxy(proxy, "redeem one", unanswered) ?? "Waiting for slopmax") : credits.held
+  const held = !canChange
+    ? (cannotChange(proxy, "redeem one", unanswered, readOnly) ?? "Waiting for slopmax")
+    : credits.held
   return (
     <div className="flex animate-in fade-in slide-in-from-top-1 flex-col px-3 pb-2.5">
       <Item variant="muted">

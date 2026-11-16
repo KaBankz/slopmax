@@ -14,6 +14,7 @@ import {
   agentLine,
   agentsInOrder,
   anyWired,
+  cannotChange,
   feedRow,
   feedSize,
   loginService,
@@ -157,6 +158,14 @@ describe("the proxy, agents and the login service", () => {
     expect(needsProxy(ProxyState.cases.Stopped.make({}), "x", true)).toBe("Start the proxy to x")
   })
 
+  test("a page that may only look says so before anything about the proxy", () => {
+    const running = ProxyState.cases.Running.make({ version: "0.4.0" })
+    expect(cannotChange(running, "x", false, true)).toBe("Read-only from this machine")
+    expect(cannotChange(ProxyState.cases.Checking.make({}), "x", true, true)).toBe("Read-only from this machine")
+    expect(cannotChange(running, "x", false, false)).toBeUndefined()
+    expect(cannotChange(ProxyState.cases.Stopped.make({}), "x", false, false)).toBe("Start the proxy to x")
+  })
+
   test("the web dashboard's proxy label follows its stream, the same in the sidebar and Settings", () => {
     const checking = ProxyState.cases.Checking.make({})
     expect(shownProxy(checking, "Reconnecting")).toEqual({ text: "Reconnecting…", tone: "warn" })
@@ -210,6 +219,10 @@ describe("live requests", () => {
     })
     const rescued = feedRow(record({ attempts: 2, via: "socket", agent: "slopmax" }), name, zone)
     expect(rescued.detail).toBe("ana@studio.dev · after failover · WebSocket")
+    // Another machine's request says which machine sent it.
+    expect(feedRow(record({ machine: "laptop", attempts: 2 }), name, zone).detail).toBe(
+      "ana@studio.dev · from laptop · after failover",
+    )
     expect(rescued.who).toBe("Warmup")
     const { account: _account, ...unplacedFields } = record({ status: 429, usage: Usage.zero })
     const unplaced = feedRow(LedgerRecord.cases.Request.make(unplacedFields), name, zone)

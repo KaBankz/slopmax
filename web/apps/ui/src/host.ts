@@ -30,7 +30,11 @@ export interface HostShape {
   readonly kind: "web" | "desktop"
   /** Where slopmax's API is: this page's own origin in both hosts. */
   readonly origin: string
-  /** The owner key the web dashboard holds for this tab; the desktop's main process adds it instead. */
+  /**
+   * The owner key the web dashboard holds for this tab; the desktop's main
+   * process adds it instead. The tailnet token a page opened over the
+   * tailnet uses is never kept here: it lives in the page's memory only.
+   */
   readonly key: Effect.Effect<Option.Option<string>>
   readonly saveKey: (key: string) => Effect.Effect<void>
   readonly forgetKey: Effect.Effect<void>

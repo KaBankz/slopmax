@@ -1,0 +1,21 @@
+{
+  "status": 200,
+  "body": {
+    "tailscale": "missing",
+    "identity": false,
+    "users": [
+      "you@github"
+    ],
+    "admins": [
+      {
+        "machine": "laptop",
+        "id": "nLAPTOP1CNTRL"
+      }
+    ],
+    "funnel": false,
+    "problem": {
+      "text": "Tailscale isn't installed here",
+      "fix": "Install Tailscale from https://tailscale.com/download"
+    }
+  }
+}

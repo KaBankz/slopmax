@@ -4,11 +4,13 @@
 //! every endpoint is listed in one place. Handlers return the API's types
 //! or an [`ApiError`], which goes out as its `_tag`ged body and status.
 //! Bodies are capped at 64 KiB and read strictly: a key the API does not
-//! know is refused. Everything needs the owner key.
+//! know is refused. Each endpoint names the access it needs: the owner key
+//! and admin machines may do everything, the tailnet's other machines of
+//! the user may look, and client keys reach none of it.
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use http::{HeaderValue, Method, StatusCode, header};
@@ -23,15 +25,18 @@ use slopmax_api::requests::{
     Shutdown, StartLogin, Stopping, StoppingStatus,
 };
 use slopmax_api::settings::{LivePatch, NewKey, SettingsView};
+use slopmax_api::tailnet::{Access, TailnetPatch, TailnetView};
 use slopmax_api::{AgentId, ApiError};
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use super::{App, RedeemError, authorized};
+use super::tailnet::Seen;
+use super::{App, Caller, Denied, RedeemError};
 use crate::config::Config;
 use crate::net::body;
-use crate::net::server::{Request, Response};
+use crate::net::server::{Channel, Request, Response};
 use crate::provider::credits::Outcome;
+use crate::tailscale::{self, Target};
 use crate::time::Timestamp;
 use crate::{api, doctor, log, summary};
 
@@ -75,6 +80,8 @@ enum Route<'a> {
     History,
     Events,
     NotifyTest,
+    Tailnet,
+    ChangeTailnet,
 }
 
 impl<'a> Route<'a> {
@@ -113,16 +120,61 @@ impl<'a> Route<'a> {
             (&Method::GET, ["history"]) => Self::History,
             (&Method::GET, ["events"]) => Self::Events,
             (&Method::POST, ["notify", "test"]) => Self::NotifyTest,
+            (&Method::GET, ["tailnet"]) => Self::Tailnet,
+            (&Method::PATCH, ["tailnet"]) => Self::ChangeTailnet,
             _ => return None,
         })
     }
+
+    /// What a caller may do to use it: look, or manage.
+    fn needs(&self) -> Access {
+        match self {
+            Self::Status | Self::Usage | Self::History | Self::Events | Self::Tailnet => {
+                Access::View
+            }
+            Self::Refresh
+            | Self::Sync
+            | Self::Shutdown
+            | Self::Doctor
+            | Self::AddAccount
+            | Self::UpdateAccount(_)
+            | Self::Pin(_)
+            | Self::UnpinAll
+            | Self::Own(_)
+            | Self::RemoveAccount(_)
+            | Self::Redeem(_)
+            | Self::Import
+            | Self::StartLogin
+            | Self::PasteLogin(_)
+            | Self::CancelLogin(_)
+            | Self::Settings
+            | Self::ChangeSettings
+            | Self::Keys
+            | Self::MakeKey
+            | Self::RemoveKey(_)
+            | Self::Agents
+            | Self::Connect(_)
+            | Self::Disconnect(_)
+            | Self::NotifyTest
+            | Self::ChangeTailnet => Access::Admin,
+        }
+    }
+}
+
+/// Who asked, as far as the answer depends on it.
+struct Asker {
+    /// What they may do.
+    access: Access,
+    /// Whether they are this machine's own: the owner key, over TCP.
+    here: bool,
+    /// The request's headers and what it said about where it came from,
+    /// for an event stream to check them again as the config changes.
+    headers: http::HeaderMap,
+    seen: Seen,
 }
 
 /// Answers a request under `/slopmax/api/`.
-pub(super) async fn handle(app: Arc<App>, request: Request) -> Response {
-    if !authorized(&app.config(), request.headers()) {
-        return fail(&ApiError::unauthorized());
-    }
+pub(super) async fn handle(app: Arc<App>, request: Request, seen: &Seen) -> Response {
     let (parts, incoming) = request.into_parts();
     let path = parts
         .uri
@@ -130,20 +182,48 @@ pub(super) async fn handle(app: Arc<App>, request: Request) -> Response {
         .trim_start_matches(slopmax_api::PREFIX)
         .to_owned();
     let query = parts.uri.query().unwrap_or("").to_owned();
+    let config = app.config();
     let Some(route) = Route::parse(&parts.method, &path) else {
-        return fail(&ApiError::not_found("slopmax endpoint"));
+        // Only a caller slopmax knows learns which endpoints there are.
+        return match super::caller(&app, &config, &parts.headers, seen, Access::Use).await {
+            Ok(_) => fail(&ApiError::not_found("slopmax endpoint")),
+            Err(denied) => refuse(&denied),
+        };
     };
+    let asker = match super::caller(&app, &config, &parts.headers, seen, route.needs()).await {
+        Ok(caller) => Asker {
+            access: caller.access(),
+            here: matches!(caller, Caller::Owner) && seen.channel == Channel::Tcp,
+            headers: parts.headers.clone(),
+            seen: seen.clone(),
+        },
+        Err(denied) => return refuse(&denied),
+    };
+    drop(config);
     let body = match body::read(incoming, MAX_BODY).await {
         Ok(body) => body,
         Err(e) => return fail(&ApiError::bad_request(format!("reading the body: {e}"))),
     };
-    match answer(&app, route, &query, &body).await {
+    match answer(&app, route, &query, &body, asker).await {
         Ok(response) => response,
         Err(error) => fail(&error),
     }
 }
 
-async fn answer(app: &Arc<App>, route: Route<'_>, query: &str, body: &[u8]) -> Answer {
+/// A refusal, as the API's error: `Unauthorized`, with 401 or 403 as the
+/// reason has it.
+fn refuse(denied: &Denied) -> Response {
+    let (status, message) = denied.answer();
+    json(status, &ApiError::Unauthorized { message })
+}
+
+async fn answer(
+    app: &Arc<App>,
+    route: Route<'_>,
+    query: &str,
+    body: &[u8],
+    asker: Asker,
+) -> Answer {
     match route {
         Route::Status => ok(&app.api_report()),
         Route::Refresh => {
@@ -159,6 +239,20 @@ async fn answer(app: &Arc<App>, route: Route<'_>, query: &str, body: &[u8]) -> A
             let stopping = Stopping {
                 status: StoppingStatus::Stopping,
             };
+            // Both name this machine's processes and files: a binary to run,
+            // a daemon to make way for. Only its own slopmax may ask.
+            let elsewhere =
+                asked.make_way || asked.exe.as_ref().is_some_and(|e| !e.trim().is_empty());
+            if elsewhere && !asker.here {
+                return Ok(json(
+                    StatusCode::FORBIDDEN,
+                    &ApiError::Unauthorized {
+                        message:
+                            "only slopmax on the hub itself may move its proxy to another process"
+                                .into(),
+                    },
+                ));
+            }
             if asked.make_way {
                 return match crate::handoff::make_way(app).await {
                     Ok(()) => ok(&stopping),
@@ -259,10 +353,12 @@ async fn answer(app: &Arc<App>, route: Route<'_>, query: &str, body: &[u8]) -> A
         Route::Agents => ok(&agents(&app.config(), &app.home)),
         Route::Connect(id) => connect_agent(app, id).await,
         Route::Disconnect(id) => disconnect_agent(app, id).await,
-        Route::Usage => usage(app, query).await,
+        Route::Usage => usage(app, query, asker.here).await,
         Route::History => history(app, query).await,
-        Route::Events => Ok(events(app)),
+        Route::Events => Ok(events(app, asker)),
         Route::NotifyTest => notify_test(app).await,
+        Route::Tailnet => ok(&tailnet_view(app).await),
+        Route::ChangeTailnet => change_tailnet(app, strict(body)?).await,
     }
 }
 
@@ -344,7 +440,7 @@ fn changed(app: &App, change: Result<(), crate::error::StoreError>) -> Answer {
 }
 
 async fn doctor(app: &App) -> Answer {
-    let sections = doctor::check(&app.config(), &app.store, &app.home)
+    let sections = doctor::check(&app.config(), &app.store, &app.home, app.tailscale_cli())
         .await
         .map_err(|e| ApiError::internal(format!("{e:#}")))?;
     let sections: Vec<Section> = sections
@@ -800,14 +896,21 @@ fn names(app: &App) -> HashMap<String, String> {
         .collect()
 }
 
-async fn usage(app: &App, query: &str) -> Answer {
+/// Usage over a range. Requests the owner key sent are this machine's own:
+/// `this machine` to this machine's own tools, `hub` to other machines.
+async fn usage(app: &App, query: &str, here: bool) -> Answer {
     let range = param(
         query,
         "range",
         SummaryRange::Week,
         "range is today, 7d, 30d, or all",
     )?;
-    let by = param(query, "by", SummaryBy::Day, "by is day, model, or account")?;
+    let by = param(
+        query,
+        "by",
+        SummaryBy::Day,
+        "by is day, model, account, or machine",
+    )?;
     let range_text = match range {
         SummaryRange::Today => "today",
         SummaryRange::Week => "7d",
@@ -818,12 +921,24 @@ async fn usage(app: &App, query: &str) -> Answer {
         SummaryBy::Day => "day",
         SummaryBy::Model => "model",
         SummaryBy::Account => "account",
+        SummaryBy::Machine => "machine",
     };
     let since = summary::since(range_text, Timestamp::now()).expect("every range has a start");
     let (dir, config, names) = (app.home.usage(), app.config(), names(app));
-    let built =
-        crate::blocking::run(move || summary::build(&dir, since, by_text, &config.prices, &names))
-            .await;
+    let built = crate::blocking::run(move || {
+        summary::build(
+            &dir,
+            since,
+            by_text,
+            &config.prices,
+            &names,
+            match here {
+                true => summary::HERE_LOCAL,
+                false => summary::HERE_HUB,
+            },
+        )
+    })
+    .await;
     ok(&api::summary(&built, range, by))
 }
 
@@ -859,9 +974,17 @@ async fn notify_test(app: &App) -> Answer {
 /// The event stream: `Hello`, the report, then each request answered, each
 /// sign-in's progress, and the report again whenever it changes. The report
 /// is built only while someone watches; the stream ends when the daemon
-/// stops.
-fn events(app: &Arc<App>) -> Response {
+/// stops, or when the asker may do less than it could before: the config
+/// no longer lets it look, or its machine may no longer manage slopmax.
+///
+/// Sign-in progress carries the addresses and codes that finish a sign-in,
+/// so only those who may manage slopmax now see it, asked as each comes.
+fn events(app: &Arc<App>, asker: Asker) -> Response {
     let mut feed = app.api_events.subscribe();
+    let mut machine = None;
+    // What the asker could do at most so far; less ends the stream.
+    let mut held =
+        access_now(app, &asker, &mut machine).map_or(asker.access, |now| now.max(asker.access));
     let (app, stop) = (Arc::clone(app), app.stop.clone());
     let (tx, rx) = mpsc::channel::<Bytes>(64);
     app.clone().spawn(async move {
@@ -882,11 +1005,25 @@ fn events(app: &Arc<App>) -> Response {
         loop {
             let frame = tokio::select! {
                 event = feed.recv() => match event {
+                    Ok(frame) if frame.starts_with(LOGIN_FRAME) => {
+                        match access_now(&app, &asker, &mut machine) {
+                            Some(now) if now >= held => held = now,
+                            _ => break,
+                        }
+                        if held < Access::Admin {
+                            continue;
+                        }
+                        frame
+                    }
                     Ok(frame) => frame,
                     Err(broadcast::error::RecvError::Lagged(_)) => continue,
                     Err(broadcast::error::RecvError::Closed) => break,
                 },
                 _ = check.tick() => {
+                    match access_now(&app, &asker, &mut machine) {
+                        Some(now) if now >= held => held = now,
+                        _ => break,
+                    }
                     let (seen, frame) = status(&app);
                     if seen == last {
                         continue;
@@ -910,6 +1047,114 @@ fn events(app: &Arc<App>) -> Response {
     );
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     response
+}
+
+/// How a sign-in's progress starts on the event stream.
+const LOGIN_FRAME: &[u8] = br#"data: {"_tag":"Login""#;
+
+/// What `asker` may do as the config stands now; `None` once its key no
+/// longer matches or its login is no longer allowed. A tailnet machine is
+/// judged by what whois said of it lately, kept in `machine` between asks:
+/// when nothing recent is known, the last answer stands while whois is
+/// asked again in the background, so an answer running out does not demote
+/// it, but an answer naming another login, or none, does.
+fn access_now(
+    app: &Arc<App>,
+    asker: &Asker,
+    machine: &mut Option<super::tailnet::Machine>,
+) -> Option<Access> {
+    let config = app.config();
+    let login = match super::known(&config, &asker.headers, &asker.seen) {
+        Ok(super::Known::Key(caller @ Caller::Client(_))) => {
+            super::login_beside_key(&config, &asker.headers, &asker.seen).ok_or(caller)
+        }
+        Ok(super::Known::Key(caller)) => Err(caller),
+        Ok(super::Known::Login(login)) => Ok(login),
+        Err(_) => return None,
+    };
+    match login {
+        Err(caller) => Some(caller.access()),
+        Ok(login) => {
+            if let Some(peer) = asker.seen.peer {
+                match app.peers.lately(peer) {
+                    Some(found) => *machine = found.filter(|m| m.is(login)),
+                    None => app.peers.warm(app, peer, login),
+                }
+            }
+            Some(super::member_access(&config, machine.as_ref()))
+        }
+    }
+}
+
+/// How long what Tailscale said about publishing is reused.
+const TAILNET_FRESH: Duration = Duration::from_secs(30);
+
+/// slopmax on the tailnet: as Tailscale last told it (within
+/// [`TAILNET_FRESH`]), and who may use it as the config says now.
+async fn tailnet_view(app: &App) -> TailnetView {
+    let config = app.config();
+    let kept = app
+        .tailnet_view
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_ref()
+        .filter(|(at, _)| at.elapsed() < TAILNET_FRESH)
+        .map(|(_, view)| view.clone());
+    let view = match kept {
+        Some(view) => view,
+        None => {
+            let port = config.listen.port();
+            let targets = [
+                Target::Socket(app.home.tailnet_socket()),
+                Target::Loopback(port),
+            ];
+            let cli = app.tailscale_cli();
+            let inspection = tailscale::inspect(cli.as_ref(), &targets, port).await;
+            let view = inspection.view();
+            *app.tailnet_view.lock().unwrap_or_else(|p| p.into_inner()) =
+                Some((Instant::now(), view.clone()));
+            view
+        }
+    };
+    tailscale::with_config(view, &config)
+}
+
+/// Changes who may use slopmax over the tailnet: checked as config.toml is,
+/// written there, and in force at once. A login or a machine named twice is
+/// kept once.
+async fn change_tailnet(app: &App, patch: TailnetPatch) -> Answer {
+    let mut tailnet = app.config().tailscale.clone().unwrap_or_default();
+    if let Some(users) = patch.users {
+        tailnet.users = Vec::new();
+        for user in users.iter().map(|u| u.trim()) {
+            if !tailnet.users.iter().any(|u| u.eq_ignore_ascii_case(user)) {
+                tailnet.users.push(user.to_owned());
+            }
+        }
+    }
+    if let Some(admins) = patch.admins {
+        tailnet.admins = Vec::new();
+        for admin in admins {
+            let (machine, id) = (admin.machine.trim(), admin.id.trim());
+            if !tailnet.admins.iter().any(|a| a.id == id) {
+                tailnet.admins.push(crate::config::AdminMachine {
+                    machine: machine.to_owned(),
+                    id: id.to_owned(),
+                });
+            }
+        }
+    }
+    let path = app.home.config();
+    crate::blocking::run(move || Config::set_tailnet(&path, &tailnet)).await?;
+    app.reload_config();
+    log::info!("who may use slopmax over the tailnet changed from the API");
+    *app.tailnet_view.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    let view = tailnet_view(app).await;
+    // A change of who may use it comes before Tailscale publishes it, as
+    // `slopmax tailscale on` makes them: the next look asks Tailscale again
+    // rather than keeping what it said before.
+    *app.tailnet_view.lock().unwrap_or_else(|p| p.into_inner()) = None;
+    ok(&view)
 }
 
 /// The report as a `Status` event, and what tells it apart from the last:
@@ -975,5 +1220,54 @@ mod tests {
         assert_eq!(at(Method::POST, "/agents/vim/connect"), None);
         assert_eq!(at(Method::GET, "/accounts/a"), None);
         assert_eq!(at(Method::POST, "/status"), None);
+        assert_eq!(at(Method::GET, "/tailnet"), Some(Route::Tailnet));
+        assert_eq!(at(Method::PATCH, "/tailnet"), Some(Route::ChangeTailnet));
+    }
+
+    #[test]
+    fn looking_needs_view_and_everything_else_admin() {
+        let needs =
+            |method: Method, path: &'static str| Route::parse(&method, path).unwrap().needs();
+        for (method, path) in [
+            (Method::GET, "/status"),
+            (Method::GET, "/usage"),
+            (Method::GET, "/history"),
+            (Method::GET, "/events"),
+            (Method::GET, "/tailnet"),
+        ] {
+            assert_eq!(needs(method, path), Access::View, "{path}");
+        }
+        for (method, path) in [
+            (Method::GET, "/settings"),
+            (Method::GET, "/keys"),
+            (Method::GET, "/doctor"),
+            (Method::GET, "/agents"),
+            (Method::POST, "/logins"),
+            (Method::POST, "/refresh"),
+            (Method::POST, "/shutdown"),
+            (Method::PATCH, "/settings"),
+            (Method::PATCH, "/tailnet"),
+            (Method::DELETE, "/keys/x"),
+        ] {
+            assert_eq!(needs(method, path), Access::Admin, "{path}");
+        }
+    }
+
+    #[test]
+    fn sign_in_progress_is_told_from_other_events() {
+        let login = Event::Login {
+            id: "x".into(),
+            event: LoginEvent::Note { text: "hi".into() },
+        };
+        assert!(login.frame().starts_with(LOGIN_FRAME));
+        for other in [
+            Event::Ping {},
+            Event::Hello {
+                version: "1".into(),
+                exe: None,
+            },
+        ] {
+            assert!(!other.frame().starts_with(LOGIN_FRAME));
+        }
     }
 }

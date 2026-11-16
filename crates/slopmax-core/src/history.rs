@@ -285,6 +285,7 @@ mod tests {
             agent: None,
             session: None,
             end: None,
+            machine: None,
         }
     }
 

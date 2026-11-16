@@ -19,6 +19,7 @@ use crate::ui;
 use slopmax_core::account::{self, Store};
 use slopmax_core::auth::{self, LoginOptions, callback};
 use slopmax_core::config::Config;
+use slopmax_core::error::{Match, StoreError};
 use slopmax_core::import::{self, Source};
 use slopmax_core::net::Origins;
 use slopmax_core::pool::State;
@@ -41,10 +42,17 @@ pub(super) async fn login(
             spec.title
         );
     }
+    // On a machine that uses a hub, the sign-in happens on the hub: its
+    // address is opened here and pasted back, as no browser of the hub's
+    // is at hand.
+    let on_hub = config.hub.is_some();
+    if on_hub && spec.is_subscription() {
+        options.no_browser = true;
+    }
     // A label another provider's account has is refused before signing in;
     // one of this provider's may be the account being signed in again,
     // which the sign-in tells.
-    if let Some(label) = &label {
+    if let Some(label) = label.as_ref().filter(|_| !on_hub) {
         let held_elsewhere = store.list()?.iter().any(|a| {
             a.provider != provider
                 && (a.label.as_deref() == Some(label) || a.email.as_deref() == Some(label))
@@ -63,6 +71,12 @@ pub(super) async fn login(
     // its page shows, pasted at this terminal: refused before a link is
     // shown when nothing can be pasted.
     let pastes = spec.is_subscription() && options.no_browser && !spec.device_login();
+    if pastes && !std::io::stdin().is_terminal() && on_hub {
+        bail!(
+            "slopmax login {provider} needs a terminal to paste the code into; run it in an \
+             interactive shell"
+        );
+    }
     if pastes && !std::io::stdin().is_terminal() {
         let source = match provider {
             ProviderId::Claude => "claude-code",
@@ -83,7 +97,7 @@ pub(super) async fn login(
     }
     // A key or an endpoint is the account's identity, so whether it is one
     // already connected is known before it is checked.
-    let earlier = (!spec.is_subscription())
+    let earlier = (!spec.is_subscription() && !on_hub)
         .then(|| {
             let mut probe = account::Account::new(
                 provider,
@@ -421,7 +435,7 @@ pub(super) async fn use_account(config: &Config, store: &Store, query: &str) -> 
         println!("slopmax will choose accounts automatically.");
         return Ok(());
     }
-    let account = store.find(query)?;
+    let account = find(config, store, client.as_ref(), query).await?;
     let name = account.name();
     if account.disabled {
         bail!(
@@ -461,6 +475,110 @@ fn handle(store: &Store, account: &account::Account) -> String {
     }
 }
 
+/// The account `query` names: among the hub's, on a machine that uses one,
+/// else among this home's.
+async fn find(
+    config: &Config,
+    store: &Store,
+    client: Option<&Client>,
+    query: &str,
+) -> Result<account::Account> {
+    match client.filter(|_| config.hub.is_some()) {
+        Some(client) => Ok(find_in(&on_hub(client).await?, query)?),
+        None => Ok(store.find(query)?),
+    }
+}
+
+/// The accounts commands name: the hub's, on a machine that uses one, else
+/// this home's.
+async fn listed(
+    config: &Config,
+    store: &Store,
+    client: Option<&Client>,
+) -> Result<Vec<account::Account>> {
+    match client.filter(|_| config.hub.is_some()) {
+        Some(client) => on_hub(client).await,
+        None => Ok(store.list()?),
+    }
+}
+
+/// The hub's accounts in its order, as stand-ins made of what its report
+/// tells: no tokens, which never leave the hub.
+async fn on_hub(client: &Client) -> Result<Vec<account::Account>> {
+    let report = client.status().await?;
+    let mut places: Vec<(ProviderId, u32)> = Vec::new();
+    Ok(report
+        .accounts
+        .iter()
+        .map(|view| {
+            let provider = api::provider_id(view.provider);
+            let place = match places.iter_mut().find(|(p, _)| *p == provider) {
+                Some((_, place)) => {
+                    *place += 1;
+                    *place
+                }
+                None => {
+                    places.push((provider, 1));
+                    1
+                }
+            };
+            let mut stand_in = account::Account::new(provider, account::Tokens::default());
+            stand_in.id.clone_from(&view.id);
+            stand_in.label = Some(view.name.clone());
+            stand_in.email.clone_from(&view.email);
+            stand_in.plan.clone_from(&view.plan);
+            stand_in.disabled = view.disabled;
+            stand_in.priority = view.priority;
+            stand_in.order = Some(place);
+            if let slopmax_client::api::report::Condition::SignInNeeded { error } = &view.condition
+            {
+                stand_in.auth_error = Some(error.clone());
+            }
+            stand_in
+        })
+        .collect())
+}
+
+/// The one of `accounts` `query` names, as [`Store::find`] finds it: by
+/// number, id, label or email, else by id prefix.
+fn find_in(accounts: &[account::Account], query: &str) -> Result<account::Account, StoreError> {
+    if let Ok(n) = query.parse::<usize>()
+        && let Some(account) = n.checked_sub(1).and_then(|i| accounts.get(i))
+    {
+        return Ok(account.clone());
+    }
+    let named = |a: &account::Account| {
+        a.id == query || a.label.as_deref() == Some(query) || a.email.as_deref() == Some(query)
+    };
+    let mut matches: Vec<(usize, &account::Account)> = accounts
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| named(a))
+        .collect();
+    if matches.is_empty() {
+        matches = accounts
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.id.starts_with(query))
+            .collect();
+    }
+    match matches.as_slice() {
+        [(_, account)] => Ok((*account).clone()),
+        [] => Err(StoreError::NotFound(query.to_owned())),
+        many => Err(StoreError::Ambiguous {
+            query: query.to_owned(),
+            matches: many
+                .iter()
+                .map(|(i, a)| Match {
+                    number: i + 1,
+                    name: a.name(),
+                    id: a.id.clone(),
+                })
+                .collect(),
+        }),
+    }
+}
+
 /// Changes an account through the daemon, or on disk while none runs, and
 /// gives its name after.
 async fn change(
@@ -470,8 +588,9 @@ async fn change(
     patch: AccountPatch,
     edit: impl FnOnce(&mut slopmax_core::account::Account),
 ) -> Result<String> {
-    let id = store.find(query)?.id;
-    match daemon(config).await? {
+    let client = daemon(config).await?;
+    let id = find(config, store, client.as_ref(), query).await?.id;
+    match client {
         Some(client) => {
             let report = client.update_account(&id, &patch).await?;
             let account = report.accounts.into_iter().find(|a| a.id == id);
@@ -503,8 +622,12 @@ pub(super) async fn rename(
     query: &str,
     label: String,
 ) -> Result<()> {
-    let id = store.find(query)?.id;
-    store.check_label(&label, &id)?;
+    let client = daemon(config).await?;
+    let id = find(config, store, client.as_ref(), query).await?.id;
+    // The hub checks the label itself.
+    if config.hub.is_none() {
+        store.check_label(&label, &id)?;
+    }
     let patch = AccountPatch {
         label: Some(Some(label.clone())),
         ..AccountPatch::default()
@@ -532,7 +655,8 @@ pub(super) async fn set_priority(
 /// Shows the order fill-first uses accounts in, or puts `queries` first in
 /// it, in the order given.
 pub(super) async fn order(config: &Config, store: &Store, queries: &[String]) -> Result<()> {
-    let accounts = store.list()?;
+    let client = daemon(config).await?;
+    let accounts = listed(config, store, client.as_ref()).await?;
     if accounts.is_empty() {
         println!(
             "No accounts yet. Connect one with `slopmax login claude` or `slopmax login codex`."
@@ -564,11 +688,10 @@ pub(super) async fn order(config: &Config, store: &Store, queries: &[String]) ->
     }
     let ids = queries
         .iter()
-        .map(|q| store.find(q).map(|a| a.id))
+        .map(|q| find_in(&accounts, q).map(|a| a.id))
         .collect::<Result<Vec<_>, _>>()?;
     let first: Vec<&str> = ids.iter().map(String::as_str).collect();
     let changes = account::reorder(&accounts, &first).map_err(anyhow::Error::msg)?;
-    let client = daemon(config).await?;
     for (id, place) in changes {
         match &client {
             Some(client) => {
@@ -581,7 +704,7 @@ pub(super) async fn order(config: &Config, store: &Store, queries: &[String]) ->
             None => drop(store.update(id, |a| a.order = Some(place))?),
         }
     }
-    let accounts = store.list()?;
+    let accounts = listed(config, store, client.as_ref()).await?;
     let provider = accounts
         .iter()
         .find(|a| a.id == ids[0])
@@ -640,8 +763,9 @@ fn strategy_note(config: &Config) {
 }
 
 pub(super) async fn remove(config: &Config, store: &Store, query: &str) -> Result<()> {
-    let account = store.find(query)?;
-    match daemon(config).await? {
+    let client = daemon(config).await?;
+    let account = find(config, store, client.as_ref(), query).await?;
+    match client {
         Some(client) => drop(client.remove_account(&account.id).await?),
         None => account::forget(store, super::home(), &account)?,
     }
@@ -650,7 +774,8 @@ pub(super) async fn remove(config: &Config, store: &Store, query: &str) -> Resul
 }
 
 pub(super) async fn redeem(config: &Config, store: &Store, query: &str, yes: bool) -> Result<()> {
-    let account = store.find(query)?;
+    let client = daemon(config).await?;
+    let account = find(config, store, client.as_ref(), query).await?;
     let Some(credits) = account.provider.get().credits() else {
         bail!(
             "{} is a {} account, which has no limit resets",
@@ -658,7 +783,7 @@ pub(super) async fn redeem(config: &Config, store: &Store, query: &str, yes: boo
             account.provider.spec().title
         );
     };
-    if let Some(client) = daemon(config).await? {
+    if let Some(client) = client {
         return redeem_through(&client, &account.id, yes).await;
     }
     let http = auth::http_client(Origins::default());
@@ -751,4 +876,34 @@ async fn redeem_through(client: &Client, id: &str, yes: bool) -> Result<()> {
         ),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stand_in(id: &str, label: &str) -> account::Account {
+        let mut account = account::Account::new(ProviderId::Claude, account::Tokens::default());
+        account.id = id.into();
+        account.label = Some(label.into());
+        account
+    }
+
+    #[test]
+    fn the_hubs_accounts_are_named_as_this_homes_are() {
+        let accounts = [
+            stand_in("claude-1a", "work"),
+            stand_in("claude-1b", "home"),
+            stand_in("claude-2c", "spare"),
+        ];
+        assert_eq!(find_in(&accounts, "2").unwrap().id, "claude-1b");
+        assert_eq!(find_in(&accounts, "spare").unwrap().id, "claude-2c");
+        assert_eq!(find_in(&accounts, "claude-2").unwrap().id, "claude-2c");
+        let many = find_in(&accounts, "claude-1").unwrap_err().to_string();
+        assert!(many.contains("matches 2 accounts: #1 work"), "{many}");
+        assert!(matches!(
+            find_in(&accounts, "nobody"),
+            Err(StoreError::NotFound(_))
+        ));
+    }
 }

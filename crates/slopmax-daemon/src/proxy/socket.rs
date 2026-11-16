@@ -17,10 +17,10 @@ use hyper_util::rt::TokioIo;
 use serde_json::Value;
 use tokio::time::Instant;
 
-use super::{App, Target, error};
+use super::tailnet::Seen;
+use super::{App, Target, Who, error};
 use crate::account::Account;
 use crate::agent;
-use crate::config::ClientKey;
 use crate::ledger::{End, Entry};
 use crate::limits::Refusal;
 use crate::log;
@@ -43,12 +43,15 @@ const CONNECT: Duration = Duration::from_secs(15);
 type Socket = TokioIo<Upgraded>;
 
 /// Answers a WebSocket handshake on Codex's path: relays it, or refuses
-/// with 426 so Codex streams over HTTP instead.
+/// with 426 so Codex streams over HTTP instead. `seen` is what the
+/// handshake said about where it came from, for the socket to check its
+/// opener against the config again as it carries each request.
 pub(super) async fn accept(
     app: Arc<App>,
     target: Target,
     mut request: Request,
-    client: Option<&ClientKey>,
+    who: &Who,
+    seen: &Seen,
 ) -> Response {
     let headers = request.headers().clone();
     let refuse = |why: &str| {
@@ -63,7 +66,7 @@ pub(super) async fn accept(
     }
     // A socket carries many requests, each naming its own model; a key
     // held to some models is checked request by request, over HTTP.
-    if client.is_some_and(|key| !key.models.is_empty()) {
+    if who.key.as_ref().is_some_and(|key| !key.models.is_empty()) {
         return refuse("the key is held to some models");
     }
     let Some(key) = text(&headers, "sec-websocket-key").map(str::to_owned) else {
@@ -154,6 +157,9 @@ pub(super) async fn accept(
     let origin = Origin {
         agent: agent.map(|a| a.id()),
         session,
+        machine: who.label.clone(),
+        headers,
+        seen: seen.clone(),
     };
     // Tracked, so a stop closes the socket and records its turn.
     app.clone().spawn(async move {
@@ -255,10 +261,25 @@ struct Turn {
     first_byte: Option<Instant>,
 }
 
-/// Who opened the socket, for the usage ledger.
+/// Who opened the socket, for the usage ledger and for checking it again.
 struct Origin {
     agent: Option<&'static str>,
     session: Option<String>,
+    /// What the ledger records as the machine it came from.
+    machine: Option<String>,
+    /// The handshake's headers, and what it said about where it came from.
+    headers: HeaderMap,
+    seen: Seen,
+}
+
+impl Origin {
+    /// Whether the config as it stands still lets the socket's opener use
+    /// the proxy: its key still matches, or its tailnet login is still
+    /// allowed. A socket carries many requests, so this is asked again
+    /// before each, as each request over HTTP is.
+    fn allowed(&self, app: &App) -> bool {
+        super::known(&app.config(), &self.headers, &self.seen).is_ok()
+    }
 }
 
 /// How long a socket may carry nothing either way before it is closed.
@@ -339,6 +360,19 @@ async fn relay(
             }
             Woke::Client(read) => {
                 last = Instant::now();
+                let carries = matches!(read, Ok(Some(Message::Text(_) | Message::Binary(_))));
+                if carries && !origin.allowed(&app) {
+                    log::info!("websocket closed: slopmax no longer takes who opened it");
+                    let _ = ends.upstream.send(&Message::Close(None)).await;
+                    let _ = ends
+                        .client
+                        .send(&Message::close(
+                            1008,
+                            "slopmax no longer takes this machine",
+                        ))
+                        .await;
+                    break End::Cut;
+                }
                 match from_codex(read, &mut ends, &mut turn, moved).await {
                     // The client began closing: the upstream has a moment
                     // to answer, for the client to hear it.
@@ -674,6 +708,7 @@ fn record(
         agent: origin.agent.map(str::to_owned),
         session: origin.session.clone(),
         end,
+        machine: origin.machine.clone(),
     };
     app.record(&entry);
 }

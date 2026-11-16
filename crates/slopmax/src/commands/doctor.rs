@@ -16,7 +16,8 @@ use slopmax_core::error::ConfigError;
 pub async fn run(config: &Config, store: &Store, broken: Option<&ConfigError>) -> Result<i32> {
     let mut worst = Level::Ok;
     let (mut problems, mut warnings) = (0, 0);
-    let mut sections = doctor::check(config, store, super::home()).await?;
+    let ts = slopmax_core::tailscale::Tailscale::find().ok();
+    let mut sections = doctor::check(config, store, super::home(), ts).await?;
     if let Some(error) = broken {
         let (text, fix) = match error {
             ConfigError::Invalid { path, message } => (

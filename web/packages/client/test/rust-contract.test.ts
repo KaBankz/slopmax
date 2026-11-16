@@ -5,7 +5,18 @@
 // package (the web UI, the desktop window) agree on every field.
 import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
-import { ApiErrors, Event, History, KeyInfo, NewKey, Report, SettingsView, Summary } from "../src/index.ts"
+import {
+  ApiErrors,
+  Event,
+  Forbidden,
+  History,
+  KeyInfo,
+  NewKey,
+  Report,
+  SettingsView,
+  Summary,
+  TailnetView,
+} from "../src/index.ts"
 import { strict } from "../src/settings.ts"
 
 const dir = `${import.meta.dir}/../../../../contract/fixtures`
@@ -27,6 +38,17 @@ const successes: Readonly<Record<string, Schema.Decoder<unknown>>> = {
   "usage.summary": Summary,
   "usage.history": History,
   "events.watch": Schema.Array(Event),
+  "tailnet.view": TailnetView,
+  "tailnet.change": TailnetView,
+}
+
+/**
+ * A fixture's name: `group.endpoint.outcome.json`, or with a case between
+ * (`usage.summary.machine.ok.json`). The outcome is always last.
+ */
+const parseName = (name: string) => {
+  const parts = name.replace(/\.json$/, "").split(".")
+  return { group: parts[0] ?? "", endpoint: parts[1] ?? "", outcome: parts.length > 2 ? (parts.at(-1) ?? "") : "" }
 }
 
 /** A fixture: the status the daemon answered with, and its body. */
@@ -39,9 +61,15 @@ describe("the Rust daemon's answers", () => {
     expect(fixtures.length).toBeGreaterThan(20)
   })
 
+  test("are named by endpoint and outcome, with an optional case between", () => {
+    expect(parseName("usage.summary.ok.json")).toEqual({ group: "usage", endpoint: "summary", outcome: "ok" })
+    expect(parseName("usage.summary.machine.ok.json")).toEqual({ group: "usage", endpoint: "summary", outcome: "ok" })
+    expect(parseName("system.status.unauthorized.json").outcome).toBe("unauthorized")
+  })
+
   for (const name of fixtures) {
-    const [group, endpoint, outcome = ""] = name.replace(/\.json$/, "").split(".")
-    test(`${group}.${endpoint} ${outcome} decodes strictly`, async () => {
+    const { group, endpoint, outcome } = parseName(name)
+    test(`${name.replace(/\.json$/, "")} decodes strictly`, async () => {
       const { status, body } = Schema.decodeUnknownSync(Fixture)(await Bun.file(`${dir}/${name}`).json())
       if (outcome === "ok") {
         const schema = successes[`${group}.${endpoint}`]
@@ -51,7 +79,11 @@ describe("the Rust daemon's answers", () => {
       }
       const error = Schema.decodeUnknownSync(Schema.Union(ApiErrors), strict)(body)
       expect(error._tag.toLowerCase()).toBe(outcome.toLowerCase())
-      expect(status).toBeGreaterThanOrEqual(400)
+      // Sent with a status the client declares for it, or the client could not read it.
+      const declared = [...ApiErrors, Forbidden].filter(
+        (schema) => Schema.is(schema)(error) && Schema.resolveAnnotations(schema)?.["httpApiStatus"] === status,
+      )
+      expect(declared.length).toBeGreaterThan(0)
     })
   }
 })

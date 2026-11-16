@@ -6,12 +6,13 @@ import { Option } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import { Copy, RefreshCw } from "lucide-react"
 import { Fragment } from "react"
-import { copy, doctorAtom, offlineAtom } from "../atoms.ts"
+import { copy, doctorAtom, offlineAtom, readOnlyAtom } from "../atoms.ts"
 import { Dot, Empty, Failed, Panel } from "../components/parts.tsx"
 import { Tip } from "../components/tip.tsx"
 import { Button } from "../components/ui/button.tsx"
 import { Item, ItemActions, ItemContent, ItemMedia } from "../components/ui/item.tsx"
 import { Separator } from "../components/ui/separator.tsx"
+import { readOnlyShort } from "../view/tailnet.ts"
 import { failureText, levelTone, sentenceCase } from "../view/words.ts"
 
 function Findings({ sections }: { readonly sections: ReadonlyArray<DoctorSection> }) {
@@ -58,8 +59,11 @@ export function DiagnosticsPage() {
   const offline = AsyncResult.getOrElse(useAtomValue(offlineAtom), () => Option.none())
   const doctor = useAtomValue(doctorAtom)
   const again = useAtomRefresh(doctorAtom)
+  const readOnly = useAtomValue(readOnlyAtom)
   const sections = Option.isSome(offline) ? Option.some(offline.value.doctor) : AsyncResult.value(doctor)
-  const body = Option.isSome(sections) ? (
+  const body = readOnly ? (
+    <Empty title={readOnlyShort} detail="Run slopmax doctor on the hub to check its setup." />
+  ) : Option.isSome(sections) ? (
     <Findings sections={sections.value} />
   ) : AsyncResult.isFailure(doctor) ? (
     <Failed title="Could not check the setup" detail={failureText(doctor.cause)} onRetry={again} />
@@ -77,6 +81,7 @@ export function DiagnosticsPage() {
 export function DiagnosticsTools() {
   const doctor = useAtomValue(doctorAtom)
   const again = useAtomRefresh(doctorAtom)
+  if (useAtomValue(readOnlyAtom)) return null
   return (
     <Button variant="outline" disabled={AsyncResult.isWaiting(doctor) || AsyncResult.isInitial(doctor)} onClick={again}>
       <RefreshCw />

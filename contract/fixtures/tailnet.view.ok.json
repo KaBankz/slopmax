@@ -1,0 +1,14 @@
+{
+  "status": 200,
+  "body": {
+    "tailscale": "missing",
+    "identity": false,
+    "users": [],
+    "admins": [],
+    "funnel": false,
+    "problem": {
+      "text": "Tailscale isn't installed here",
+      "fix": "Install Tailscale from https://tailscale.com/download"
+    }
+  }
+}

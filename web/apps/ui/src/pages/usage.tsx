@@ -1,12 +1,15 @@
 // What went through slopmax over a range: the Usage page (tokens, requests,
-// value, models, agents, when you work, accounts, quota left on the table)
+// value, models, agents, machines, when you work, accounts, quota left on
+// the table)
 // and the Performance page (reliability, cache, speed, first byte).
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react"
 import type { History, HistoryRange } from "@slopmax/client"
 import { compact, grouped, providerTitle } from "@slopmax/client/format"
 import { cva } from "class-variance-authority"
+import { Option } from "effect"
+import { AsyncResult } from "effect/reactivity"
 import type { ReactNode } from "react"
-import { historyAtom, rangeAtom } from "../atoms.ts"
+import { historyAtom, machinesAtom, rangeAtom } from "../atoms.ts"
 import { Columns, Heatmap, type Ink, Legend, Lines, SplitBar, Swatch } from "../components/charts.tsx"
 import { Loaded, Meter, Section, Skeleton, Stats } from "../components/parts.tsx"
 import { Quiet } from "../components/quiet.tsx"
@@ -34,6 +37,7 @@ import {
   agentRows,
   type BarRow,
   isQuiet,
+  machineRows,
   modelRows,
   perRequest,
   performanceStats,
@@ -341,6 +345,18 @@ function LeftOnTheTable({ history }: { readonly history: History }) {
   )
 }
 
+/** Usage by the machine that sent it, once machines other than this one use slopmax. */
+function Machines({ range }: { readonly range: HistoryRange }) {
+  const summary = useAtomValue(machinesAtom(range))
+  const rows = Option.match(AsyncResult.value(summary), { onNone: () => [], onSome: machineRows })
+  if (rows.length === 0) return null
+  return (
+    <ChartPanel title="Machines">
+      <Bars rows={rows} requests />
+    </ChartPanel>
+  )
+}
+
 function UsageBody({ history, range }: { readonly history: History; readonly range: HistoryRange }) {
   const every = labelEvery(range)
   const tokensMost = Math.max(0, ...history.buckets.map((b) => b.tokens.reduce((s, n) => s + n, 0)))
@@ -424,6 +440,7 @@ function UsageBody({ history, range }: { readonly history: History; readonly ran
       <ChartPanel title="Agents">
         <Bars rows={agentRows(history)} requests />
       </ChartPanel>
+      <Machines range={range} />
       {range !== "today" && (
         <ChartPanel title="When you work">
           <Heatmap activity={history.activity} />

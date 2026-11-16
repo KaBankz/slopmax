@@ -31,6 +31,7 @@ pub mod route;
 pub mod service;
 pub mod state;
 pub mod summary;
+pub mod tailscale;
 #[cfg(test)]
 mod testkit;
 pub mod update;

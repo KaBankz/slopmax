@@ -31,6 +31,8 @@ import {
   Report,
   settingsView,
   Summary,
+  TailnetPatch,
+  TailnetView,
   Totals,
   Usage,
 } from "../src/index.ts"
@@ -150,7 +152,35 @@ const Events = HttpApiBuilder.group(SlopmaxApi, "events", (handlers) =>
 
 const Notify = HttpApiBuilder.group(SlopmaxApi, "notify", (handlers) => handlers.handle("test", () => Effect.void))
 
-const handlers = Layer.mergeAll(System, Accounts, Logins, Config, Agents, UsageGroup, Events, Notify)
+/** The hub before anyone was let in: published, with identity on for one login. */
+const tailnetView = new TailnetView({
+  tailscale: "running",
+  url: "https://hub.example.ts.net:7567",
+  transport: "socket",
+  identity: true,
+  host: "hub",
+  users: ["you@github"],
+  admins: [],
+  funnel: false,
+})
+
+const Tailnet = HttpApiBuilder.group(SlopmaxApi, "tailnet", (handlers) =>
+  handlers
+    .handle("view", () => Effect.succeed(tailnetView))
+    .handle("change", ({ payload }) =>
+      Effect.sync(() => received.push(payload)).pipe(
+        Effect.as(
+          new TailnetView({
+            ...tailnetView,
+            users: payload.users ?? tailnetView.users,
+            admins: payload.admins ?? tailnetView.admins,
+          }),
+        ),
+      ),
+    ),
+)
+
+const handlers = Layer.mergeAll(System, Accounts, Logins, Config, Agents, UsageGroup, Events, Notify, Tailnet)
 const platform = Layer.mergeAll(HttpPlatform.layer, Etag.layer).pipe(Layer.provideMerge(MemoryFileSystem.layer))
 
 const ApiLive = HttpApiBuilder.layer(SlopmaxApi).pipe(
@@ -185,6 +215,7 @@ const typedClient = HttpApiTest.groups(SlopmaxApi, [
   "usage",
   "events",
   "notify",
+  "tailnet",
 ]).pipe(Effect.provide(Layer.mergeAll(handlers, platform)))
 
 /** The middleware the typed client's calls run through. */
@@ -274,7 +305,11 @@ describe("SlopmaxApi", () => {
       expect(bad.status).toBe(400)
       expect(JSON.parse(bad.body)).toEqual({ _tag: "BadRequest", message: "range: range is today, 7d, 30d, or all" })
       const by = yield* call("/slopmax/api/usage?by=week", { headers: { authorization: `Bearer ${ownerKey}` } })
-      expect(JSON.parse(by.body).message).toBe("by: by is day, model, or account")
+      expect(JSON.parse(by.body).message).toBe("by: by is day, model, account, or machine")
+      const machines = yield* call("/slopmax/api/usage?by=machine", {
+        headers: { authorization: `Bearer ${ownerKey}` },
+      })
+      expect(JSON.parse(machines.body)).toMatchObject({ range: "7d", by: "machine" })
       const history = yield* call("/slopmax/api/history?range=all", {
         headers: { authorization: `Bearer ${ownerKey}` },
       })
@@ -389,5 +424,31 @@ describe("SlopmaxApi", () => {
       expect(JSON.parse(key.body).message).toBe("provider: only claude, codex and grok accounts sign in")
       expect(received).toEqual([{ provider: "codex", device: true, noBrowser: false }])
     }),
+  )
+
+  it.live("shows slopmax on the tailnet, and changes only what a patch names", () =>
+    Effect.gen(function* () {
+      received.length = 0
+      const client = yield* typedClient
+      expect(yield* client.tailnet.view()).toEqual(tailnetView)
+      const changed = yield* client.tailnet.change({
+        payload: new TailnetPatch({ users: ["you@github", "me@github"] }),
+      })
+      expect(changed.users).toEqual(["you@github", "me@github"])
+      expect(received).toEqual([{ users: ["you@github", "me@github"] }])
+      const unknown = yield* call("/slopmax/api/tailnet", json({ funnel: true }, "PATCH"))
+      expect(unknown.status).toBe(400)
+      const shown = yield* call("/slopmax/api/tailnet", { headers: { authorization: `Bearer ${ownerKey}` } })
+      expect(JSON.parse(shown.body)).toEqual({
+        tailscale: "running",
+        url: "https://hub.example.ts.net:7567",
+        transport: "socket",
+        identity: true,
+        host: "hub",
+        users: ["you@github"],
+        admins: [],
+        funnel: false,
+      })
+    }).pipe(Effect.provide(clientMiddleware)),
   )
 })

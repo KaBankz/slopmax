@@ -945,6 +945,7 @@ mod tests {
             agent: Some("claude".into()),
             session: Some(session.into()),
             end: None,
+            machine: None,
         };
         let early: Vec<Entry> = (0..40)
             .map(|i| entry(i * 13, &format!("s{}", i % 7), 300 + i as u64 * 41))
@@ -1016,6 +1017,7 @@ mod timing {
                     agent: Some("claude".into()),
                     session: Some(format!("s-{}", (minute / 30) * 30 + k as i64)),
                     end: None,
+                    machine: None,
                 };
                 index.add(&entry);
             }

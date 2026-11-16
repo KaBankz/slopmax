@@ -19,6 +19,7 @@ import {
   proxyAction,
   proxyAtom,
   proxyStatusAtom,
+  readOnlyAtom,
   savePrefs,
   serviceAction,
   serviceAtom,
@@ -34,7 +35,7 @@ import { Alert, AlertTitle } from "../components/ui/alert.tsx"
 import { Button } from "../components/ui/button.tsx"
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "../components/ui/input-group.tsx"
 import { Switch } from "../components/ui/switch.tsx"
-import { loginService, needsProxy } from "../view/live.ts"
+import { cannotChange, loginService } from "../view/live.ts"
 import { advancedRows, livePatch, restartLine } from "../view/settings.ts"
 import {
   affinityDetail,
@@ -286,7 +287,8 @@ export function SettingsPage() {
   const settings = useAtomValue(settingsAtom)
   const proxy = useAtomValue(proxyAtom)
   const listen = Option.getOrUndefined(Option.map(AsyncResult.value(settings), (view) => view.settings.listen))
-  const waiting = needsProxy(proxy, "change settings", useAtomValue(unansweredAtom))
+  const readOnly = useAtomValue(readOnlyAtom)
+  const waiting = cannotChange(proxy, "change settings", useAtomValue(unansweredAtom), readOnly)
   return (
     <>
       <AppearanceSection />
@@ -297,7 +299,11 @@ export function SettingsPage() {
       ) : (
         <Empty
           title={waiting}
-          detail="Routing, limit resets and the rest are changed through the running proxy; slopmax config changes them from a terminal."
+          detail={
+            readOnly
+              ? "Routing, limit resets and the rest are changed on the hub, or from a machine that may manage it."
+              : "Routing, limit resets and the rest are changed through the running proxy; slopmax config changes them from a terminal."
+          }
         />
       )}
     </>

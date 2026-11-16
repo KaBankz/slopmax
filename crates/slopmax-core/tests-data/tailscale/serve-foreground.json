@@ -1,0 +1,20 @@
+{
+  "Foreground": {
+    "6f3c2a1b": {
+      "TCP": {
+        "7567": {
+          "HTTPS": true
+        }
+      },
+      "Web": {
+        "hub.example.ts.net:7567": {
+          "Handlers": {
+            "/": {
+              "Proxy": "http://127.0.0.1:3000"
+            }
+          }
+        }
+      }
+    }
+  }
+}

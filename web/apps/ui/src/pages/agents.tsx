@@ -2,17 +2,26 @@
 // Connecting edits the agent's own settings; disconnecting puts back what
 // was there.
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
-import { agentsAtom, canChangeAtom, connectAgent, disconnectAgent, proxyAtom, unansweredAtom } from "../atoms.ts"
+import {
+  agentsAtom,
+  canChangeAtom,
+  connectAgent,
+  disconnectAgent,
+  proxyAtom,
+  readOnlyAtom,
+  unansweredAtom,
+} from "../atoms.ts"
 import { Empty, Label, Loaded, Panel, SettingRow, Skeleton } from "../components/parts.tsx"
 import { Button } from "../components/ui/button.tsx"
-import { agentLine, agentsInOrder, needsProxy, notAnswering } from "../view/live.ts"
+import { agentLine, agentsInOrder, cannotChange, notAnswering } from "../view/live.ts"
+import { readOnlyShort } from "../view/tailnet.ts"
 
 export function AgentsPage() {
   const agents = useAtomValue(agentsAtom)
   const again = useAtomRefresh(agentsAtom)
   const canChange = useAtomValue(canChangeAtom)
   const unanswered = useAtomValue(unansweredAtom)
-  const waiting = needsProxy(useAtomValue(proxyAtom), "connect agents", unanswered)
+  const waiting = cannotChange(useAtomValue(proxyAtom), "connect agents", unanswered, useAtomValue(readOnlyAtom))
   const connect = useAtomSet(connectAgent)
   const disconnect = useAtomSet(disconnectAgent)
   return (
@@ -28,9 +37,11 @@ export function AgentsPage() {
           <Empty
             title={waiting}
             detail={
-              waiting === notAnswering
-                ? "Agents can be connected once it answers again."
-                : "Agents are wired to the running proxy's address."
+              waiting === readOnlyShort
+                ? "Agents on this machine use the hub once it is set up with slopmax setup --hub."
+                : waiting === notAnswering
+                  ? "Agents can be connected once it answers again."
+                  : "Agents are wired to the running proxy's address."
             }
           />
         )
