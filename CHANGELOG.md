@@ -4,6 +4,10 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Fixed
+
+- Claude Code's advisor works with a model you name through slopmax: an alias, a selector such as `work/claude-opus-5-5`, or a fallback. slopmax asked for the routed model but sent the advisor tool's own model on under the name Claude Code used, so Claude refused the request (`tools.N.model: work/claude-opus-5-5`) and Claude Code turned the advisor off for the conversation. The advisor now asks for the same model the request does, where it named the same one.
+
 ## [0.13.0] - 2026-11-16
 
 Your other machines can now use one machine's accounts over your Tailscale tailnet, without a key. Only that machine, the hub, refreshes each login, so copies no longer sign each other out. The dashboard is rebuilt on shadcn/ui, forecasts each subscription pool, and looks back over every request. Changes to rely on: a client key sent to `/slopmax/api` now gets 403 instead of 401, and an older slopmax can't read a config.toml with `[tailscale]` or `[hub]`.

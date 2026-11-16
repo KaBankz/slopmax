@@ -42,7 +42,7 @@ use crate::time::{SignedDuration, Timestamp};
 use crate::wire::ir::{self, Answer, Event, Part};
 use crate::wire::rawjson::{self, Seg};
 use crate::wire::sse::{Shape, Tap};
-use crate::wire::{Dialect, responses, translate};
+use crate::wire::{Dialect, messages, responses, translate};
 
 /// Largest request body accepted (images make Messages bodies big).
 const MAX_BODY: usize = 256 * 1024 * 1024;
@@ -158,18 +158,24 @@ impl Inbound {
     }
 
     /// The body to send for `step`: as the agent sent it, except for asking
-    /// for the step's model when routing renamed it, and dropping state
-    /// bound to another account when the session moved.
+    /// for the step's model when routing renamed it (in Claude's advisor
+    /// tool too), and dropping state bound to another account when the
+    /// session moved.
     fn body(&self, step: &Step, strip_state: bool) -> Bytes {
         if !self.json {
             return self.body.clone();
         }
         let mut body = Cow::Borrowed(&self.body[..]);
-        if self.model.as_deref().is_some_and(|m| m != step.model)
-            && let Some(range) = rawjson::find(&body, &[Seg::Key("model")])
-        {
-            let model = serde_json::to_vec(&step.model).expect("strings serialize");
-            body = Cow::Owned(rawjson::splice(&body, range, &model));
+        if let Some(asked) = self.model.as_deref().filter(|m| *m != step.model) {
+            if let Some(range) = rawjson::find(&body, &[Seg::Key("model")]) {
+                let model = serde_json::to_vec(&step.model).expect("strings serialize");
+                body = Cow::Owned(rawjson::splice(&body, range, &model));
+            }
+            if self.target.dialect == Dialect::Messages
+                && let Some(renamed) = messages::rename_advisor(&body, asked, step.model)
+            {
+                body = Cow::Owned(renamed);
+            }
         }
         if strip_state && let Some(rebound) = step.provider.get().rebind(&body) {
             body = Cow::Owned(rebound);

@@ -1586,6 +1586,36 @@ async fn claude_accounts_serve_claude_code_only() {
     );
 }
 
+#[tokio::test]
+async fn claudes_advisor_asks_for_the_model_routing_chose() {
+    let h = harness_of(
+        |_| vec![account(ProviderId::Claude, "max", "tok-ok", 1000)],
+        |config| {
+            config
+                .aliases
+                .insert("big".into(), "claude-opus-5-5".into());
+        },
+    )
+    .await;
+    // Claude Code gives its advisor tool the session's model by default,
+    // in whatever name the user chose: an alias or a selector.
+    for asked in ["big", "claude/claude-opus-5-5"] {
+        let body = CLAUDE_BODY.replace(
+            r#""model":"claude-opus-5-5","#,
+            &format!(
+                r#""model":"{asked}","tools":[{{"name":"Read","input_schema":{{"type":"object"}}}},{{"type":"advisor_20260301","name":"advisor","model":"{asked}","defer_loading":true}}],"#
+            ),
+        );
+        let response = claude_request(&h).body(body).send().await.unwrap();
+        assert_eq!(response.status(), 200, "{asked}");
+        let seen = h.log.lock().unwrap().last().cloned().unwrap();
+        let sent: Value = serde_json::from_slice(&seen.body).unwrap();
+        assert_eq!(sent["model"], "claude-opus-5-5", "{asked}");
+        assert_eq!(sent["tools"][1]["model"], "claude-opus-5-5", "{asked}");
+        assert_eq!(sent["tools"][1]["defer_loading"], true, "{asked}");
+    }
+}
+
 /// An API-key account.
 fn key(provider: ProviderId, key: &str) -> Account {
     Account::new(

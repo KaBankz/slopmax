@@ -58,6 +58,31 @@ pub fn find_str(body: &[u8], path: &[Seg]) -> Option<String> {
     serde_json::from_slice(&body[find(body, path)?]).ok()
 }
 
+/// Byte ranges of the elements of the array at `path`, in order: empty
+/// when there is no array there.
+pub fn elements(body: &[u8], path: &[Seg]) -> Vec<Range<usize>> {
+    let mut out = Vec::new();
+    let Some(array) = find(body, path) else {
+        return out;
+    };
+    if body.get(array.start) != Some(&b'[') {
+        return out;
+    }
+    let mut pos = skip_ws(body, array.start + 1);
+    if body.get(pos) == Some(&b']') {
+        return out;
+    }
+    while let Some(end) = skip_value(body, pos) {
+        out.push(pos..end);
+        pos = skip_ws(body, end);
+        match body.get(pos) {
+            Some(b',') => pos = skip_ws(body, pos + 1),
+            _ => break,
+        }
+    }
+    out
+}
+
 /// `body` with `range` replaced by `with`.
 pub fn splice(body: &[u8], range: Range<usize>, with: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(body.len() + with.len());
@@ -216,6 +241,20 @@ mod tests {
     }
 
     #[test]
+    fn lists_an_arrays_elements() {
+        let body = br#"{"tools":[ {"a":"],"} , 2,"x" ],"n":[],"o":{}}"#;
+        let found: Vec<&[u8]> = elements(body, &[Seg::Key("tools")])
+            .into_iter()
+            .map(|r| &body[r])
+            .collect();
+        assert_eq!(found, [&br#"{"a":"],"}"#[..], b"2", br#""x""#]);
+        assert!(elements(body, &[Seg::Key("n")]).is_empty());
+        assert!(elements(body, &[Seg::Key("o")]).is_empty());
+        assert!(elements(body, &[Seg::Key("missing")]).is_empty());
+        assert_eq!(elements(br#"{"t":[1,{"#, &[Seg::Key("t")]).len(), 0);
+    }
+
+    #[test]
     fn splice_replaces_in_place() {
         let body = br#"{"model":"a","keep":1}"#;
         let r = find(body, &[Seg::Key("model")]).unwrap();
@@ -294,6 +333,22 @@ mod tests {
                 }
             }
 
+            /// Every array's elements are the ones serde_json reads.
+            #[test]
+            fn elements_are_what_serde_json_reads((doc, pretty) in object()) {
+                let body = encode(&doc, pretty);
+                for (key, value) in doc.as_object().unwrap() {
+                    let (Value::Array(items), false) = (value, key.contains(['"', '\\'])) else {
+                        continue;
+                    };
+                    let found: Vec<Value> = elements(&body, &[Seg::Key(key)])
+                        .into_iter()
+                        .map(|r| serde_json::from_slice(&body[r]).unwrap())
+                        .collect();
+                    prop_assert_eq!(&found, items);
+                }
+            }
+
             /// Cut anywhere, a document is never taken for a whole object,
             /// and nothing panics.
             #[test]
@@ -305,6 +360,7 @@ mod tests {
                     let _ = find(cut, &[Seg::Key("model")]);
                     let _ = find(cut, &[Seg::Key("a"), Seg::Index(1), Seg::Key("")]);
                     let _ = find_str(cut, &[Seg::Key("model")]);
+                    let _ = elements(cut, &[Seg::Key("a")]);
                 }
             }
 
@@ -326,6 +382,7 @@ mod tests {
                 let _ = find(body, &[Seg::Key("a")]);
                 let _ = find(body, &[Seg::Key("a"), Seg::Index(0)]);
                 let _ = find_str(body, &[Seg::Key("a")]);
+                let _ = elements(body, &[Seg::Key("a")]);
             }
         }
     }
