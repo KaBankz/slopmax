@@ -88,8 +88,12 @@ export interface ColumnBucket {
   readonly tip: string
 }
 
-/** A value axis at the left, from the scale, and the buckets' labels beneath, every `every`th. */
-function axes(scale: Axis, tick: (value: number) => string, every: number) {
+/**
+ * A value axis at the left, from the scale, and the buckets' labels beneath,
+ * every `every`th. `inset` pads the ends of the label axis, for lines, whose
+ * first and last points sit on the plot's edges and would cut their labels.
+ */
+function axes(scale: Axis, tick: (value: number) => string, every: number, inset = 0) {
   return [
     <CartesianGrid key="grid" vertical={false} />,
     <XAxis
@@ -99,6 +103,7 @@ function axes(scale: Axis, tick: (value: number) => string, every: number) {
       axisLine={false}
       tickMargin={8}
       interval={Math.max(0, every - 1)}
+      padding={{ left: inset, right: inset }}
     />,
     <YAxis
       key="y"
@@ -188,7 +193,7 @@ export function Lines({
     <div className={heights({ size })}>
       <ChartContainer config={configFor(series.map((line) => line.ink))} className="aspect-auto size-full">
         <LineChart accessibilityLayer data={data}>
-          {axes(scale, tick, every)}
+          {axes(scale, tick, every, 20)}
           <ChartTooltip cursor={false} content={TipContent} />
           {series.map((line, k) => (
             <Line
