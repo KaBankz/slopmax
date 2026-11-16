@@ -102,6 +102,7 @@ pub fn report(report: &Report, config: &Config, now: Timestamp) -> api::report::
         accounts: report.accounts.iter().map(|a| account(a, now)).collect(),
         pools: report.pools.iter().map(pool).collect(),
         nudges: nudges.iter().map(|(key, e)| notice(key, e)).collect(),
+        update: None,
     }
 }
 

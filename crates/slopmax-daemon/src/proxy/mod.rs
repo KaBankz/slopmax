@@ -132,6 +132,8 @@ pub struct App {
     pub successor_exit: Mutex<Option<i32>>,
     /// The binary this daemon runs, to notice a newer one installed.
     pub running: Option<crate::handoff::Running>,
+    /// A release newer than this binary, as the last lookup found.
+    release: Mutex<Option<String>>,
     /// What looking for a newer install has seen.
     pub install_seen: tokio::sync::Mutex<crate::handoff::Seen>,
     /// The machines behind the tailnet addresses requests came from.
@@ -170,6 +172,9 @@ impl App {
         let store = Store::at(home.accounts());
         let ledger = Ledger::at(home.usage());
         let config_text = std::fs::read_to_string(home.config()).ok();
+        let release = crate::update::Checked::read(&home)
+            .and_then(|c| c.newer())
+            .map(|v| v.to_string());
         let http = Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .read_timeout(Duration::from_secs(600))
@@ -216,6 +221,7 @@ impl App {
             let_go: CancellationToken::new(),
             successor_exit: Mutex::default(),
             running: crate::handoff::Running::now(),
+            release: Mutex::new(release),
             install_seen: Default::default(),
             peers: tailnet::Peers::default(),
             tailscale: RwLock::new(Tailnet::default()),
@@ -544,7 +550,30 @@ impl App {
 
     /// The status report in the API's types.
     pub fn api_report(&self) -> slopmax_api::report::Report {
-        crate::api::report(&self.report(), &self.config(), Timestamp::now())
+        let mut report = crate::api::report(&self.report(), &self.config(), Timestamp::now());
+        report.update = self.newer_release();
+        report
+    }
+
+    /// The newer release the last lookup found, and how this install takes
+    /// it.
+    fn newer_release(&self) -> Option<slopmax_api::report::UpdateView> {
+        let version = self
+            .release
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()?;
+        let command = self
+            .running
+            .as_ref()
+            .map_or_else(|| "slopmax update".to_owned(), |r| r.update_command());
+        Some(slopmax_api::report::UpdateView { version, command })
+    }
+
+    /// Notes the newest release, as `look_for_releases` found it.
+    pub fn saw_release(&self, checked: &crate::update::Checked) {
+        *self.release.lock().unwrap_or_else(|p| p.into_inner()) =
+            checked.newer().map(|v| v.to_string());
     }
 
     pub fn report(&self) -> Report {

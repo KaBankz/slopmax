@@ -122,6 +122,14 @@ describe("the web dashboard", () => {
     expect(document.querySelector("main")?.textContent).not.toContain("ana@studio.dev")
   })
 
+  test("the overview says when a newer slopmax is out, and copies the command that updates this install", async () => {
+    const { host } = await web()
+    await showsSoon("slopmax 0.5.0 is out")
+    await press("Copy command")
+    await showsSoon("Copied the update command.")
+    expect(host.recorded.copied).toContain("slopmax update")
+  })
+
   test("a limited account can be checked again now, and comes back when its limit has passed", async () => {
     await web("#/claude")
     await showsSoon("Limited · back in")

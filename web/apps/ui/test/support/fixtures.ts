@@ -32,6 +32,7 @@ import {
   type SettingsView,
   Speed,
   Totals,
+  UpdateView,
   Usage,
   Window,
 } from "@slopmax/client"
@@ -240,6 +241,7 @@ export const fixtureReport = (now: DateTime.Utc): Report =>
     accounts: fixtureAccounts(now),
     pools: fixturePools(now),
     nudges: fixtureNudges(now),
+    update: new UpdateView({ version: "0.5.0", command: "slopmax update" }),
   })
 
 /** slopmax before any account was added. */

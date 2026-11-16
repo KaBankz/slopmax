@@ -24,6 +24,7 @@ Your other machines can now use one machine's accounts over your Tailscale tailn
 - A limited or throttled account has a Check now button, and every account's menu has Check its limits now: slopmax lifts its own hold on the account and reads its usage again, so an account whose limit has passed is back at once. `POST /slopmax/api/accounts/{id}/check` does the same for any client.
 - The overview has a Last day section: each subscription account's requests in half hours, and today's failed requests with a link to all of them on the Requests page.
 - The Usage page's figures and the overview's Today say how each moved since the span before: yesterday up to this hour, or the 7 days before. The history API carries the earlier span's totals as `previous`.
+- The overview says when a newer slopmax is out, with the command that updates this install (`slopmax update`, or the package manager's), a button that copies it, and a link to the release notes. The report carries it as `update`.
 - Settings › Appearance › Hide email addresses masks every address the dashboard shows, as `a•••@s•••.dev`, for screen sharing and streams: account names, nudges, toasts, notifications and exports.
 
 ### Changed

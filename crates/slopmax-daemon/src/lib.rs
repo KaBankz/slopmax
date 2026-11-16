@@ -402,6 +402,7 @@ async fn look_for_releases(app: &Arc<App>) {
         checked_at: now,
         latest: latest.to_string(),
     };
+    app.saw_release(&checked);
     if let Some(newer) = checked.newer() {
         log::info!(
             "slopmax {newer} is out (this is {}); `slopmax update` installs it",

@@ -4,17 +4,19 @@ import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
 import { type Report, SubscriptionId } from "@slopmax/client"
 import { DateTime, Duration, Option, Schema } from "effect"
 import { AsyncResult } from "effect/reactivity"
-import { ChevronRight, Plus, Radio, Users } from "lucide-react"
+import { ArrowUpCircle, ChevronRight, Plus, Radio, Users } from "lucide-react"
 import { hostAtom } from "../api.ts"
 import {
   askNotifications,
   attentionAtom,
   canChangeAtom,
+  copy,
   go,
   groupsAtom,
   historyAtom,
   nowAtom,
   openCreditsAtom,
+  openExternal,
   permissionAtom,
   pollOffAtom,
   settingsAtom,
@@ -26,6 +28,7 @@ import { HealthCard, RecentFailures } from "../components/health.tsx"
 import { Dot, Empty, Label, Loaded, Panel, Section, SegmentedBar, Skeleton, Stats } from "../components/parts.tsx"
 import { Quiet } from "../components/quiet.tsx"
 import { Tip } from "../components/tip.tsx"
+import { Alert, AlertAction, AlertDescription, AlertTitle } from "../components/ui/alert.tsx"
 import { Badge } from "../components/ui/badge.tsx"
 import { Button } from "../components/ui/button.tsx"
 import { Card, CardContent } from "../components/ui/card.tsx"
@@ -34,7 +37,39 @@ import { type Attention, standing } from "../view/attention.ts"
 import { type Group, resetsLeft } from "../view/groups.ts"
 import { Pages } from "../view/pages.ts"
 import { hourly, isQuiet, todayStats } from "../view/usage.ts"
-import { limitsNotRead, resetCount, resetsLine, routing, updated } from "../view/words.ts"
+import { limitsNotRead, releaseNotes, resetCount, resetsLine, routing, updated } from "../view/words.ts"
+
+/** A newer slopmax, with the command that updates this install and its release notes. */
+function UpdateBanner({ report }: { readonly report: Report }) {
+  const copyText = useAtomSet(copy)
+  const open = useAtomSet(openExternal)
+  const update = report.update
+  if (update === undefined) return null
+  return (
+    <Alert>
+      <ArrowUpCircle />
+      <AlertTitle>slopmax {update.version} is out</AlertTitle>
+      <AlertDescription>
+        This is {report.version}. Update with <code className="font-mono text-xs">{update.command}</code>; the proxy
+        moves to the new one without dropping a request.
+      </AlertDescription>
+      <AlertAction>
+        <span className="flex gap-2">
+          <Button variant="ghost" size="sm" onClick={() => open(releaseNotes(update.version))}>
+            What's new
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => copyText({ text: update.command, said: "Copied the update command." })}
+          >
+            Copy command
+          </Button>
+        </span>
+      </AlertAction>
+    </Alert>
+  )
+}
 
 function Standing({ report }: { readonly report: Report }) {
   const now = useAtomValue(nowAtom)
@@ -267,6 +302,7 @@ export function OverviewPage() {
   const metered = all.filter((group) => !group.subscription)
   return (
     <>
+      <UpdateBanner report={report} />
       <Standing report={report} />
       {items.length > 0 && (
         <Section

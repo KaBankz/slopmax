@@ -302,3 +302,6 @@ export const updated = (seconds: number): string => {
   if (s < 86_400) return `Updated ${Math.floor(s / 3_600)}h ago`
   return `Updated ${Math.floor(s / 86_400)}d ago`
 }
+
+/** A release's notes on GitHub. */
+export const releaseNotes = (version: string): string => `https://github.com/KaBankz/slopmax/releases/tag/v${version}`
