@@ -6,6 +6,7 @@
 //! whose remote address is the server's end: its uid is who connected.
 //! Other systems have no such list; there the answer is `None`.
 
+#[cfg(any(target_os = "linux", test))]
 use std::net::SocketAddr;
 
 use crate::server::TcpEnds;
@@ -30,6 +31,7 @@ pub fn uid(ends: TcpEnds) -> Option<u32> {
 
 /// The uid of the row in a `/proc/net/tcp` `table` whose own address is
 /// the peer's and whose remote address is the server's.
+#[cfg(any(target_os = "linux", test))]
 fn find(table: &str, ends: TcpEnds) -> Option<u32> {
     let peer = canonical(ends.peer);
     let local = canonical(ends.local);
@@ -44,6 +46,7 @@ fn find(table: &str, ends: TcpEnds) -> Option<u32> {
 
 /// `addr` with an IPv4-mapped IPv6 address as plain IPv4, as a dual-stack
 /// listener sees an IPv4 client and its own end.
+#[cfg(any(target_os = "linux", test))]
 fn canonical(addr: SocketAddr) -> SocketAddr {
     SocketAddr::new(addr.ip().to_canonical(), addr.port())
 }
@@ -51,6 +54,7 @@ fn canonical(addr: SocketAddr) -> SocketAddr {
 /// A `/proc/net/tcp` address: hex `ADDR:PORT`, the address as 32-bit words
 /// in the machine's byte order (8 digits for IPv4, 32 for IPv6), the port
 /// as written.
+#[cfg(any(target_os = "linux", test))]
 fn address(text: &str) -> Option<SocketAddr> {
     let (ip, port) = text.split_once(':')?;
     let port = u16::from_str_radix(port, 16).ok()?;
