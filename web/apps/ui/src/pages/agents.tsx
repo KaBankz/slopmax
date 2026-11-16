@@ -13,7 +13,7 @@ import {
 } from "../atoms.ts"
 import { Empty, Label, Loaded, Panel, SettingRow, Skeleton } from "../components/parts.tsx"
 import { Button } from "../components/ui/button.tsx"
-import { agentLine, agentsInOrder, cannotChange, notAnswering } from "../view/live.ts"
+import { agentLine, agentsInOrder, cannotChange } from "../view/live.ts"
 import { readOnlyShort } from "../view/tailnet.ts"
 
 export function AgentsPage() {
@@ -21,7 +21,7 @@ export function AgentsPage() {
   const again = useAtomRefresh(agentsAtom)
   const canChange = useAtomValue(canChangeAtom)
   const unanswered = useAtomValue(unansweredAtom)
-  const waiting = cannotChange(useAtomValue(proxyAtom), "connect agents", unanswered, useAtomValue(readOnlyAtom))
+  const waiting = cannotChange(useAtomValue(proxyAtom), unanswered, useAtomValue(readOnlyAtom))
   const connect = useAtomSet(connectAgent)
   const disconnect = useAtomSet(disconnectAgent)
   return (
@@ -39,9 +39,7 @@ export function AgentsPage() {
             detail={
               waiting === readOnlyShort
                 ? "Agents on this machine use the hub once it is set up with slopmax setup --hub."
-                : waiting === notAnswering
-                  ? "Agents can be connected once it answers again."
-                  : "Agents are wired to the running proxy's address."
+                : "Agents can be connected once it answers again."
             }
           />
         )

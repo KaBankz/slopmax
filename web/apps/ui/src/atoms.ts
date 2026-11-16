@@ -32,8 +32,6 @@ import {
   SlopmaxApi,
   StartLogin,
 } from "@slopmax/client/api"
-import { ProxyState } from "@slopmax/client/desktop"
-import type { OfflineView, ProxyAction } from "@slopmax/client/desktop"
 import { clock, noticeBody, noticeTitle } from "@slopmax/client/format"
 import { Cause, Data, DateTime, Duration, Effect, Exit, FiberHandle, Option, Schedule, Schema, Stream } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/http"
@@ -45,16 +43,16 @@ import { attention, type Attention } from "./view/attention.ts"
 import { type Group, groups } from "./view/groups.ts"
 import {
   type FeedEntry,
+  type ProxyState,
   pushFeed,
   shownProxy,
   type SignIn,
   signInDone,
   startSignIn,
   stepSignIn,
-  type StreamState,
   tell,
 } from "./view/live.ts"
-import { type Page, pageHash, Pages, parseRoute, type Route, toggleSidebar as toggled } from "./view/pages.ts"
+import { type Page, pageHash, parsePage, toggleSidebar as toggled } from "./view/pages.ts"
 import { maskEmails, maskReport } from "./view/privacy.ts"
 import { tailnetAccess } from "./view/tailnet.ts"
 import { allRequests, csv, csvName, pageSize, type RequestFilter } from "./view/requests.ts"
@@ -186,7 +184,7 @@ const signOut = (store: Store) =>
     const host = yield* Host
     const held = store.read(ownerKeyAtom)
     // Already signed out: a call that was on its way without a key says nothing new.
-    if (host.kind === "web" && Option.isNone(held)) return
+    if (Option.isNone(held)) return
     if (Option.contains(held, tailnetToken)) {
       store.set(accessAtom, "admin")
       store.set(machineAtom, Option.none())
@@ -258,7 +256,6 @@ const rereadOnReconnect: ReadonlyArray<string> = ["settings", "keys", "agents", 
 
 const onEvent = (event: Event, store: Store, later: FiberHandle.FiberHandle) =>
   Effect.gen(function* () {
-    const host = yield* Host
     switch (event._tag) {
       case "Hello": {
         const back = store.read(liveAtom)._tag === "Reconnecting"
@@ -270,8 +267,7 @@ const onEvent = (event: Event, store: Store, later: FiberHandle.FiberHandle) =>
       }
       case "Status":
         store.set(reportAtom, Option.some(event.report))
-        if (host.kind === "web" && event.report.nudges.length > 0)
-          yield* notifyOnce(event.report.nudges, store.read(prefsAtom).hideEmails)
+        if (event.report.nudges.length > 0) yield* notifyOnce(event.report.nudges, store.read(prefsAtom).hideEmails)
         return
       case "Request": {
         const seq = store.read(feedSeqAtom) + 1
@@ -284,8 +280,7 @@ const onEvent = (event: Event, store: Store, later: FiberHandle.FiberHandle) =>
         return
       }
       case "Notice":
-        // The desktop's main process posts notices; the web dashboard posts them itself.
-        if (host.kind === "web") yield* notifyOnce([event.notice], store.read(prefsAtom).hideEmails)
+        yield* notifyOnce([event.notice], store.read(prefsAtom).hideEmails)
         return
       case "Login":
         yield* onLogin(store, event.id, event.event)
@@ -364,65 +359,28 @@ export const eventsAtom = appRuntime.atom((get) =>
   }),
 )
 
-// --- The proxy, in the desktop window ------------------------------------------------------
-
-const checking: ProxyState = ProxyState.cases.Checking.make({})
-
-const desktopProxyAtom = appRuntime.atom(
-  Stream.unwrap(
-    Effect.gen(function* () {
-      const host = yield* Host
-      if (Option.isNone(host.desktop)) return Stream.empty
-      return host.desktop.value.proxyStates
-    }),
-  ),
-)
+// --- The proxy --------------------------------------------------------------------------
 
 /**
- * Where the proxy stands. The desktop's main process knows (it starts and
- * stops it). The web dashboard knows only whether its stream is up: the
- * proxy serves the page, so while the stream is down the dashboard is
- * waiting for it, never sure it stopped.
+ * Where the proxy stands, as far as the dashboard knows: whether its stream
+ * is up. The proxy serves the page, so while the stream is down the
+ * dashboard is waiting for it, never sure it stopped.
  */
 export const proxyAtom = Atom.make((get): ProxyState => {
-  const host = get(hostAtom)
-  if (Option.isSome(host) && host.value.kind === "desktop") {
-    return AsyncResult.getOrElse(get(desktopProxyAtom), () => checking)
-  }
   const live = get(liveAtom)
-  return live._tag === "Running" ? ProxyState.cases.Running.make({ version: live.version }) : checking
-})
-
-/** In the web dashboard, whether its event stream is up; none in the desktop window, whose main process knows the proxy. */
-const webStreamAtom = Atom.make((get): StreamState | undefined => {
-  const host = get(hostAtom)
-  return Option.isSome(host) && host.value.kind === "web" ? get(liveAtom)._tag : undefined
+  return live._tag === "Running" ? { _tag: "Running", version: live.version } : { _tag: "Checking" }
 })
 
 /** The proxy's state in a label, the same in the sidebar's foot and in Settings. */
-export const proxyStatusAtom = Atom.make((get) => shownProxy(get(proxyAtom), get(webStreamAtom)))
+export const proxyStatusAtom = Atom.make((get) => shownProxy(get(proxyAtom), get(liveAtom)._tag))
 
-/** Whether the web dashboard lost slopmax and is trying to reach it again. */
-export const unansweredAtom = Atom.make((get): boolean => get(webStreamAtom) === "Reconnecting")
+/** Whether the dashboard lost slopmax and is trying to reach it again. */
+export const unansweredAtom = Atom.make((get): boolean => get(liveAtom)._tag === "Reconnecting")
 
-/** The report and the doctor read from disk while the proxy is stopped (desktop only). */
-export const offlineAtom = appRuntime.atom((get) =>
-  Effect.gen(function* () {
-    const host = yield* Host
-    if (Option.isNone(host.desktop) || get(proxyAtom)._tag !== "Stopped") return Option.none<OfflineView>()
-    return Option.some(yield* host.desktop.value.offline)
-  }),
+/** The report to show, its email addresses masked when the preferences say so. */
+export const shownReportAtom = Atom.make((get): Option.Option<Report> =>
+  get(prefsAtom).hideEmails ? Option.map(get(reportAtom), maskReport) : get(reportAtom),
 )
-
-/** The report to show: the live one, or the one read from disk while the desktop's proxy is stopped. */
-export const shownReportAtom = Atom.make((get): Option.Option<Report> => {
-  const hide = get(prefsAtom).hideEmails
-  if (get(proxyAtom)._tag === "Stopped") {
-    const offline = AsyncResult.getOrElse(get(offlineAtom), () => Option.none<OfflineView>())
-    if (Option.isSome(offline)) return Option.some(hide ? maskReport(offline.value.report) : offline.value.report)
-  }
-  return hide ? Option.map(get(reportAtom), maskReport) : get(reportAtom)
-})
 
 /**
  * Whether this page may only look: it was opened over the tailnet, from a
@@ -1071,60 +1029,10 @@ export const askNotifications = task((store) =>
   }),
 )
 
-const proxyWords: { readonly [K in ProxyAction]: { readonly done: string; readonly failed: string } } = {
-  start: { done: "Started the proxy.", failed: "Could not start the proxy: " },
-  stop: { done: "Stopped the proxy.", failed: "Could not stop the proxy: " },
-  restart: { done: "Restarted the proxy.", failed: "Could not restart the proxy: " },
-}
-
-/** Starts, stops or restarts the proxy (desktop only). */
-export const proxyAction = act((action: ProxyAction) =>
-  Effect.gen(function* () {
-    const host = yield* Host
-    if (Option.isNone(host.desktop)) return {}
-    const result = yield* host.desktop.value.proxy(action)
-    return result.ok
-      ? { text: proxyWords[action].done }
-      : { text: `${proxyWords[action].failed}${result.message}`, error: true }
-  }),
-)
-
-/** What `service status` answers, as JSON in its message. */
-const ServiceStatus = Schema.fromJsonString(Schema.Struct({ installed: Schema.Boolean, running: Schema.Boolean }))
-
-/** The login service, as the desktop's main process reads it; none where the system has no service manager. */
-export const serviceAtom = appRuntime.atom((get) =>
-  Effect.gen(function* () {
-    // Read again whenever the proxy starts or stops.
-    get(proxyAtom)
-    const host = yield* Host
-    if (Option.isNone(host.desktop)) return Option.none<typeof ServiceStatus.Type>()
-    const result = yield* host.desktop.value.service("status")
-    return result.ok ? Schema.decodeUnknownOption(ServiceStatus)(result.message) : Option.none()
-  }),
-)
-
-const serviceWords = {
-  install: { done: "slopmax now starts at login.", failed: "Could not install the service: " },
-  uninstall: { done: "slopmax no longer starts at login.", failed: "Could not remove the service: " },
-} as const
-
-export const serviceAction = act((action: "install" | "uninstall", store) =>
-  Effect.gen(function* () {
-    const host = yield* Host
-    if (Option.isNone(host.desktop)) return {}
-    const result = yield* host.desktop.value.service(action)
-    store.refresh(serviceAtom)
-    return result.ok
-      ? { text: serviceWords[action].done }
-      : { text: `${serviceWords[action].failed}${result.message}`, error: true }
-  }),
-)
-
 /** How the page looks, where its sidebar stands, and whether it posts notifications; loaded from the host at startup. */
 export const prefsAtom = Atom.make<UiPrefs>(UiPrefs.defaults).pipe(Atom.keepAlive)
 
-/** Whether the last show or hide of the sidebar was instant (the keyboard, a menu) rather than a slide. */
+/** Whether the last show or hide of the sidebar was instant (the keyboard) rather than a slide. */
 export const sidebarInstantAtom = Atom.make(false).pipe(Atom.keepAlive)
 
 /**
@@ -1195,7 +1103,7 @@ export const checkKey = keyCheckRuntime.fn<string>()((key) =>
 /** Whether a failure is slopmax refusing the key. */
 export const refusedKey = isUnauthorized
 
-/** Shows or hides the sidebar: the button slides it, the keyboard and the menus move it at once. */
+/** Shows or hides the sidebar: the button slides it, the keyboard moves it at once. */
 export const toggleSidebar = appRuntime.fn<"button" | "keyboard">()(
   (via) =>
     Effect.gen(function* () {
@@ -1227,71 +1135,19 @@ export const savePrefs = appRuntime.fn<Partial<UiPrefs>>()(
   concurrent,
 )
 
-/** Opens the main window at a page, from the menu bar's panel (desktop only). */
-export const openWindow = act((page: string) =>
-  Effect.gen(function* () {
-    const host = yield* Host
-    if (Option.isSome(host.desktop)) yield* host.desktop.value.openWindow(page)
-    return {}
-  }),
-)
-
-/** Quits the desktop app. */
-export const quit = task(() =>
-  Effect.gen(function* () {
-    const host = yield* Host
-    if (Option.isSome(host.desktop)) yield* host.desktop.value.quit
-    return {}
-  }),
-)
-
-/** Tells the desktop's main process how tall the panel's content is, so the panel fits it. */
-export const panelHeight = appRuntime.fn<number>()(
-  (px) =>
-    Effect.gen(function* () {
-      const host = yield* Host
-      if (Option.isSome(host.desktop)) yield* host.desktop.value.panelHeight(px)
-    }),
-  concurrent,
-)
-
-/**
- * What the desktop app's menus and keys ask of the window: refresh usage,
- * open Settings, show or hide the sidebar.
- */
-export const menuAtom = appRuntime.atom((get) =>
-  Effect.gen(function* () {
-    const host = yield* Host
-    if (Option.isNone(host.desktop)) return
-    yield* Stream.runForEach(host.desktop.value.menu, (action) =>
-      Effect.sync(() => {
-        if (action === "refresh") get.set(refresh, undefined)
-        else if (action === "open-settings") go(Pages.settings)
-        else if (action === "toggle-sidebar") get.set(toggleSidebar, "keyboard")
-      }),
-    )
-  }),
-)
-
 // --- Where the app is ---------------------------------------------------------------------
 
-const readRoute = (): Route => parseRoute(location.hash)
+const readPage = (): Page => parsePage(location.hash)
 
-/** Where the app is, from the address's fragment. */
-export const routeAtom = Atom.make((get): Route => {
-  const onChange = () => get.setSelf(readRoute())
+/** The page the app is on, from the address's fragment. */
+export const pageAtom = Atom.make((get): Page => {
+  const onChange = () => get.setSelf(readPage())
   window.addEventListener("hashchange", onChange)
   get.addFinalizer(() => window.removeEventListener("hashchange", onChange))
-  return readRoute()
+  return readPage()
 }).pipe(Atom.keepAlive)
 
 /** Goes to a page. */
 export const go = (page: Page): void => {
   location.hash = pageHash(page)
 }
-
-/**
- * The web dashboard's address on the proxy. The desktop window holds no key,
- * so the app's main process adds it when it opens this address.
- */
-export const dashboardUrl = (listen: string): string => `http://${listen}/slopmax/`

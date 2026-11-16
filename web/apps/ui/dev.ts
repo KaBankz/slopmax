@@ -19,7 +19,7 @@ const scenario = process.env["SCENARIO"] === "empty" ? "empty" : "full"
 const latency = Number(process.env["LATENCY"] ?? 0)
 const outdir = `${import.meta.dir}/dist/dev`
 
-await build({ host: "web", outdir, minify: false, compress: false })
+await build({ outdir, minify: false, compress: false })
 const stub = makeStub({ scenario, latency: `${latency} millis`, key: process.env["KEY"] })
 
 /** A request answered every couple of seconds, so the live feed and the history move. */

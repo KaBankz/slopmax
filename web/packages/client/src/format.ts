@@ -1,6 +1,5 @@
 // Numbers, times and states written for people, the same in every front end:
-// the CLI's tables, the dashboard, the desktop window and its menu bar, and
-// the messages agents read. Times of day take the zone to show them in, so
+// the CLI's tables, the dashboard, and the messages agents read. Times of day take the zone to show them in, so
 // tests and the CLI agree on what "local" is.
 import { DateTime, Duration, Option } from "effect"
 import { agentFacts } from "./agents.ts"
@@ -8,7 +7,7 @@ import type { Window } from "./limits.ts"
 import { upcomingReset, usedAt } from "./limits.ts"
 import type { Notice, NoticeKind } from "./notice.ts"
 import { providerFacts } from "./providers.ts"
-import type { Condition, NextReason, Note, Report, Tone } from "./report.ts"
+import type { Condition, NextReason, Note, Tone } from "./report.ts"
 
 const numbers = new Map<string, Intl.NumberFormat>()
 
@@ -166,18 +165,6 @@ export const pace = (window: Window, now: DateTime.DateTime, zone: DateTime.Time
     }
     return Option.some({ elapsed, text: `${fixed(-ahead, 0)}% in reserve`, tone: "muted" })
   })
-}
-
-/** The menu bar's title: each pool's 5-hour use, `Claude 42% · ChatGPT —`, or `slopmax` with no pools. */
-export const menuBar = (report: Report, now: DateTime.DateTime): string => {
-  const parts = report.pools.map((pool) => {
-    const title = providerFacts[pool.provider].title
-    const window = pool.windows.find((w) => w.span === "5h")
-    if (window === undefined) return `${title} —`
-    const passed = window.resetsAt !== undefined && DateTime.isLessThanOrEqualTo(window.resetsAt, now)
-    return `${title} ${percent(passed ? 0 : window.used)}`
-  })
-  return parts.length === 0 ? "slopmax" : parts.join(" · ")
 }
 
 /** An account's condition as every front end words it. */

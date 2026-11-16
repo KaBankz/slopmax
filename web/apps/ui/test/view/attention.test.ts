@@ -52,12 +52,6 @@ describe("what wants a look", () => {
         "look",
       ],
     ])
-    // The short form for the menu bar's panel.
-    expect(items.map((item) => [item.who, item.what])).toEqual([
-      ["lab", "sign in again"],
-      ["ana", "reset expires in 1d6h"],
-      ["ana", "week ends in 19h50m, 45% unused"],
-    ])
     expect(worstTone(items, "codex")).toBe("bad")
     expect(worstTone(items, "claude")).toBeUndefined()
   })
@@ -73,8 +67,8 @@ describe("what wants a look", () => {
       })
     expect(attention(withAccounts([limited([])]), now, zone)).toEqual([])
     const holding = attention(withAccounts([limited([new LimitReset({ id: "r", expiresAt: at(20_000) })])]), now, zone)
-    expect(holding.map((item) => [item.text, item.what, item.remedy])).toEqual([
-      ["a@x.dev is limited until 13:30, and holds 1 limit reset", "limited until 13:30, 1 held", "redeem"],
+    expect(holding.map((item) => [item.text, item.remedy])).toEqual([
+      ["a@x.dev is limited until 13:30, and holds 1 limit reset", "redeem"],
     ])
   })
 
@@ -107,8 +101,8 @@ describe("what wants a look", () => {
       now,
       zone,
     )
-    expect(items.map((item) => [item.text, item.what, item.remedy])).toEqual([
-      ["A limit reset on a@x.dev expires in 10h00m · 22:00", "reset expires in 10h00m", "redeem"],
+    expect(items.map((item) => [item.text, item.remedy])).toEqual([
+      ["A limit reset on a@x.dev expires in 10h00m · 22:00", "redeem"],
     ])
   })
 

@@ -9,7 +9,7 @@ import {
   pageOrder,
   Pages,
   pageTitle,
-  parseRoute,
+  parsePage,
   providersWithAccounts,
   toggleSidebar,
 } from "../../src/view/pages.ts"
@@ -49,11 +49,10 @@ describe("pages", () => {
   test("live in the address's fragment, so a reload or a link lands on the same page", () => {
     expect(pageHash(Pages.provider("codex"))).toBe("#/codex")
     expect(pageHash(Pages.diagnostics)).toBe("#/diagnostics")
-    expect(parseRoute("#/codex")).toEqual({ _tag: "Page", page: Pages.provider("codex") })
-    expect(parseRoute("#/settings")).toEqual({ _tag: "Page", page: Pages.settings })
-    expect(parseRoute("#/panel")).toEqual({ _tag: "Panel" })
-    expect(parseRoute("")).toEqual({ _tag: "Page", page: Pages.overview })
-    expect(parseRoute("#/nowhere")).toEqual({ _tag: "Page", page: Pages.overview })
+    expect(parsePage("#/codex")).toEqual(Pages.provider("codex"))
+    expect(parsePage("#/settings")).toEqual(Pages.settings)
+    expect(parsePage("")).toEqual(Pages.overview)
+    expect(parsePage("#/nowhere")).toEqual(Pages.overview)
   })
 
   test("the web dashboard takes its key out of the address and leaves the rest", () => {

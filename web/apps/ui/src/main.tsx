@@ -1,20 +1,17 @@
-// Starts the app in whichever host it finds itself: the web dashboard (the
-// key arrives once in the address, `#key=…`, and is moved into this tab's
-// storage at once) or the desktop window (its main process holds the key).
+// Starts the web dashboard. The key arrives once in the address, `#key=…`,
+// and is moved into this tab's storage at once.
 import { Effect, Option } from "effect"
 import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 import { hostAtom, ownerKeyAtom } from "./api.ts"
 import { Root, takeKeyFromAddress } from "./app.tsx"
 import { prefsAtom } from "./atoms.ts"
-import { detectHost } from "./host.ts"
+import { webHost } from "./host.ts"
 
-const host = detectHost()
+const host = webHost()
 
-if (host.kind === "web") {
-  const key = takeKeyFromAddress()
-  if (key !== undefined) Effect.runSync(host.saveKey(key))
-}
+const handed = takeKeyFromAddress()
+if (handed !== undefined) Effect.runSync(host.saveKey(handed))
 
 const [key, prefs] = await Promise.all([Effect.runPromise(host.key), Effect.runPromise(host.prefs)])
 

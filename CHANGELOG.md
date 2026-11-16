@@ -6,7 +6,7 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ### Removed
 
-- The desktop apps: the macOS app (`apple/`), `slopmax-app` and the GPUI app, with their CI workflows and the icon files only they used. The CLI, with the dashboard it serves, is slopmax's interface. A plain `cargo build` no longer compiles `slopmax-app`, and the lockfile sheds GPUI's dependencies.
+- The desktop apps: the macOS app (`apple/`), `slopmax-app` and the GPUI app, with their CI workflows, the icon files only they used, and the dashboard's code for running in a desktop window (its menu bar panel, start and stop buttons, and the bridge to an app). The CLI, with the dashboard it serves, is slopmax's interface. A plain `cargo build` no longer compiles `slopmax-app`, and the lockfile sheds GPUI's dependencies.
 
 ## [0.13.1] - 2026-11-16
 

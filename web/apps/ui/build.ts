@@ -1,7 +1,7 @@
-// Builds the UI twice from one source: `dist/web/` (embedded in the CLI and
-// served at /slopmax/, with brotli and gzip copies beside each file) and
-// `dist/desktop/` (shipped in the desktop app and served from app://slopmax/).
-// Asset URLs are relative, so both hosts load the same files.
+// Builds the web dashboard: `dist/web/`, with Geist and brotli and gzip
+// copies beside each file, or with `--rust`, `dist/rust/`, the copy the CLI
+// embeds and serves at /slopmax/. Asset URLs are relative, so the page loads
+// wherever it is served.
 //
 // Tailwind runs through the small plugin below rather than Tailwind's own
 // Bun plugin, which bundles an older Tailwind than the one installed.
@@ -67,10 +67,10 @@ const tailwind = (minify: boolean, withFonts: boolean): BunPlugin => ({
 })
 
 export interface BuildOptions {
-  readonly host: "web" | "desktop"
+  /** Where the files land; `dist/web/` unless told otherwise. */
   readonly outdir?: string
   readonly minify?: boolean
-  /** Brotli and gzip copies for the server to pick from; the web copy has them unless told otherwise. */
+  /** Brotli and gzip copies for the server to pick from. On unless told otherwise. */
   readonly compress?: boolean
   /** Geist shipped as a file; without them, the page uses the system's font. On unless told otherwise. */
   readonly fonts?: boolean
@@ -78,9 +78,9 @@ export interface BuildOptions {
   readonly brotli?: boolean
 }
 
-/** Builds one host's copy and answers the files it wrote, with their sizes. */
-export const build = async (options: BuildOptions): Promise<ReadonlyArray<{ path: string; bytes: number }>> => {
-  const outdir = options.outdir ?? path.join(root, outputs[options.host])
+/** Builds the UI and answers the files it wrote, with their sizes. */
+export const build = async (options: BuildOptions = {}): Promise<ReadonlyArray<{ path: string; bytes: number }>> => {
+  const outdir = options.outdir ?? path.join(root, outputs.web)
   const minify = options.minify ?? true
   await rm(outdir, { recursive: true, force: true })
   const result = await Bun.build({
@@ -116,7 +116,7 @@ export const build = async (options: BuildOptions): Promise<ReadonlyArray<{ path
     await Bun.write(license, Bun.file(path.join(root, "node_modules/@fontsource-variable/geist/LICENSE")))
   }
   const written = result.outputs.map((output) => output.path).concat(fontFiles, fontFiles.length > 0 ? [license] : [])
-  if (options.compress ?? options.host === "web") {
+  if (options.compress ?? true) {
     // Fonts are compressed already; the rest gets a brotli and a gzip copy for the server to pick from.
     for (const file of written.filter((name) => !name.endsWith(".woff2"))) {
       const bytes = new Uint8Array(await Bun.file(file).arrayBuffer())
@@ -136,18 +136,15 @@ if (import.meta.main && Bun.argv.includes("--rust")) {
   // The copy the Rust daemon embeds and serves at /slopmax/: the system's
   // font, and one gzip copy of each file (every browser takes gzip).
   const files = await build({
-    host: "web",
-    outdir: path.join(root, "dist/rust"),
+    outdir: path.join(root, outputs.rust),
     fonts: false,
     brotli: false,
     compress: true,
   })
   console.log(`rust: ${files.length} files, ${files.reduce((sum, file) => sum + file.bytes, 0)} bytes`)
 } else if (import.meta.main) {
-  for (const host of ["web", "desktop"] as const) {
-    const files = await build({ host })
-    const total = files.reduce((sum, file) => sum + file.bytes, 0)
-    console.log(`${host}: ${files.length} files, ${total} bytes`)
-    for (const file of files) console.log(`  ${file.path} ${file.bytes}`)
-  }
+  const files = await build()
+  const total = files.reduce((sum, file) => sum + file.bytes, 0)
+  console.log(`web: ${files.length} files, ${total} bytes`)
+  for (const file of files) console.log(`  ${file.path} ${file.bytes}`)
 }

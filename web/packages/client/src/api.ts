@@ -1,9 +1,9 @@
 // slopmax's own API, under `/slopmax/api`. The daemon serves it, the CLI
-// calls it while a proxy runs, and the dashboard and the desktop window are
-// built on it, so all of them share this one typed definition. Every
-// endpoint needs the owner key; over the tailnet the daemon may take a
-// machine's identity instead, with the `tailnet` token in its place, and
-// decides per endpoint whether to look (view) is enough or it takes an admin.
+// calls it while a proxy runs, and the dashboard is built on it, so all of
+// them share this one typed definition. Every endpoint needs the owner key;
+// over the tailnet the daemon may take a machine's identity instead, with
+// the `tailnet` token in its place, and decides per endpoint whether to look
+// (view) is enough or it takes an admin.
 import { Effect, Layer, Redacted, Schema, SchemaTransformation } from "effect"
 import { Mac } from "effect/crypto"
 import {

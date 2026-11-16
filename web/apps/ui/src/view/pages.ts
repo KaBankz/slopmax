@@ -1,6 +1,6 @@
 // The app's pages: their order in the sidebar (and for the arrow keys),
 // their titles, and how they live in the address's fragment, so a reload, a
-// link from the menu bar panel, or the back button lands on the same page.
+// link, or the back button lands on the same page.
 import { parseProviderId, providerFacts, providerOrder, type ProviderId, type Report } from "@slopmax/client"
 import { Result } from "effect"
 
@@ -65,28 +65,22 @@ export const pageTitle = (page: Page): string =>
 export const pageHash = (page: Page): string =>
   page._tag === "Provider" ? `#/${page.provider}` : `#/${page._tag.toLowerCase()}`
 
-/** Where the app is, read from the address's fragment. */
-export type Route =
-  | { readonly _tag: "Page"; readonly page: Page }
-  /** The menu bar's panel, a window of its own in the desktop app. */
-  | { readonly _tag: "Panel" }
-
-export const parseRoute = (hash: string): Route => {
+/** The page the address's fragment names; the overview when it names none. */
+export const parsePage = (hash: string): Page => {
   const name = hash.replace(/^#\/?/, "").split(/[?&]/)[0] ?? ""
-  if (name === "panel") return { _tag: "Panel" }
   const provider = parseProviderId(name)
-  if (Result.isSuccess(provider)) return { _tag: "Page", page: Pages.provider(provider.success) }
+  if (Result.isSuccess(provider)) return Pages.provider(provider.success)
   const found = Object.values(Pages).find(
     (page): page is { readonly _tag: Simple } => typeof page !== "function" && page._tag.toLowerCase() === name,
   )
-  return { _tag: "Page", page: found ?? Pages.overview }
+  return found ?? Pages.overview
 }
 
 /** Where the sidebar stands: shown or hidden, and whether the last change slides or is instant. */
 export interface SidebarState {
   readonly hidden: boolean
   readonly width: number
-  /** The keyboard and the menus show and hide it at once; the button slides it. */
+  /** The keyboard shows and hides it at once; the button slides it. */
   readonly instant: boolean
 }
 

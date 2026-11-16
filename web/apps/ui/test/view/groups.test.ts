@@ -123,7 +123,6 @@ describe("where new sessions go", () => {
   test("a pool says which account takes the next session, and why", () => {
     const claude = byProvider("claude")
     expect(claude?.next).toEqual({ text: "New sessions → ben@studio.dev · its quota resets soonest", tone: "muted" })
-    expect(claude?.nextShort.text).toBe("New sessions → ben · its quota resets soonest")
     expect(claude?.rows.map((row) => row.next)).toEqual([false, true, false])
   })
 
@@ -138,7 +137,6 @@ describe("where new sessions go", () => {
       text: "No account can take a new session until 13:30, when soon@x.dev is back",
       tone: "warn",
     })
-    expect(claude?.nextShort.text).toBe("No account can take a new session until 13:30, when soon is back")
     const none = new Report({ ...stuck, accounts: [account({ id: "claude-3", provider: "claude", name: "x" })] })
     expect(groups(none, now, zone)[0]?.next.text).toBe("No account can take a new session")
   })

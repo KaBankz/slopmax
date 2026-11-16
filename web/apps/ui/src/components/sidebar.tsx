@@ -26,7 +26,7 @@ import {
   useRef,
   useState,
 } from "react"
-import { attentionAtom, go, prefsAtom, proxyStatusAtom, routeAtom, savePrefs, shownReportAtom } from "../atoms.ts"
+import { attentionAtom, go, pageAtom, prefsAtom, proxyStatusAtom, savePrefs, shownReportAtom } from "../atoms.ts"
 import { worstTone } from "../view/attention.ts"
 import { clampWidth, dragSidebar, movePage, type Page, pageOrder, Pages, pageTitle, samePage } from "../view/pages.ts"
 import { Dot, Logo } from "./parts.tsx"
@@ -152,13 +152,12 @@ export function SidebarFrame({ onToggle, children }: { readonly onToggle: () => 
 }
 
 export function Sidebar({ address }: { readonly address: string }) {
-  const route = useAtomValue(routeAtom)
+  const current = useAtomValue(pageAtom)
   const report = Option.getOrUndefined(useAtomValue(shownReportAtom))
   const items = useAtomValue(attentionAtom)
   const save = useAtomSet(savePrefs)
   const { width, setDragged } = useContext(DragContext)
   const list = useRef<HTMLDivElement>(null)
-  const current = route._tag === "Page" ? route.page : Pages.overview
   const order = pageOrder(report)
   const providers = order.flatMap((page) => (page._tag === "Provider" ? [page] : []))
 
@@ -203,7 +202,7 @@ export function Sidebar({ address }: { readonly address: string }) {
 
   return (
     <SidebarRoot aria-label="Sidebar">
-      <SidebarHeader className="drag mac:mt-7">
+      <SidebarHeader>
         <div className="flex h-8 items-center gap-2 px-2">
           <Logo />
           <span className="truncate text-sm font-semibold">slopmax</span>

@@ -1,10 +1,9 @@
 // The app's state and actions against the stub API: the report arriving on
 // the event stream, every action's call and what it says, sign-in steps,
-// a refused key, browser notifications, and the desktop's proxy states.
+// a refused key, and browser notifications.
 import { afterEach, describe, expect, test } from "bun:test"
 import { BadRequest, Event, Internal, LedgerRecord, Notice, UpstreamFailed, Usage } from "@slopmax/client"
 import { ImportOutcome, ImportResult } from "@slopmax/client/api"
-import { OfflineView, ProxyState } from "@slopmax/client/desktop"
 import { DateTime, Effect, Option } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import { ownerKeyAtom } from "../src/api.ts"
@@ -23,7 +22,6 @@ import {
   liveAtom,
   makeKey,
   newKeyAtom,
-  offlineAtom,
   pasteAddress,
   proxyAtom,
   redeem,
@@ -31,13 +29,12 @@ import {
   refusedKey,
   reportAtom,
   settingsAtom,
-  shownReportAtom,
   signIn,
   signInAtom,
   toastsAtom,
 } from "../src/atoms.ts"
 import { type Harness, harness, until } from "./support/app.ts"
-import { emptyReport, fixtureDoctor, ownerKey } from "./support/fixtures.ts"
+import { emptyReport, ownerKey } from "./support/fixtures.ts"
 
 let open: Harness | undefined
 afterEach(async () => {
@@ -337,31 +334,5 @@ describe("notifications in a browser", () => {
     h.stub.setReport(h.stub.report())
     await Bun.sleep(50)
     expect(h.host.recorded.notified).toEqual([])
-  })
-})
-
-describe("the desktop window", () => {
-  test("follows the proxy's state as the main process tells it", async () => {
-    const h = harness({ host: { kind: "desktop", proxy: ProxyState.cases.Starting.make({}) } })
-    open = h
-    h.registry.mount(proxyAtom)
-    await until(() => h.registry.get(proxyAtom)._tag === "Starting", "starting")
-    h.host.setProxy(ProxyState.cases.Running.make({ version: "0.4.0" }))
-    await until(() => h.registry.get(proxyAtom)._tag === "Running", "running")
-  })
-
-  test("shows the report and doctor read from disk while the proxy is stopped", async () => {
-    const report = emptyReport(DateTime.nowUnsafe())
-    const h = harness({
-      host: {
-        kind: "desktop",
-        proxy: ProxyState.cases.Stopped.make({}),
-        offline: new OfflineView({ report, doctor: fixtureDoctor() }),
-      },
-    })
-    open = h
-    h.registry.mount(shownReportAtom)
-    await until(() => Option.isSome(h.registry.get(shownReportAtom)), "the offline report")
-    expect(AsyncResult.getOrElse(h.registry.get(offlineAtom), () => Option.none()).pipe(Option.isSome)).toBe(true)
   })
 })

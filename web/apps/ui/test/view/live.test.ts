@@ -8,7 +8,6 @@ import {
   type RequestRecord,
   Usage,
 } from "@slopmax/client"
-import { ProxyState } from "@slopmax/client/desktop"
 import { DateTime } from "effect"
 import {
   agentLine,
@@ -17,8 +16,8 @@ import {
   cannotChange,
   feedRow,
   feedSize,
-  loginService,
   needsProxy,
+  type ProxyState,
   proxyLabel,
   pushFeed,
   secs,
@@ -137,44 +136,34 @@ describe("sign-in", () => {
   })
 })
 
-describe("the proxy, agents and the login service", () => {
-  test("the proxy's label says how it stands, and what needs it running says how to get there", () => {
-    expect(proxyLabel(ProxyState.cases.Checking.make({}))).toEqual({ text: "Looking for the proxy…", tone: "muted" })
-    expect(proxyLabel(ProxyState.cases.Running.make({ version: "0.4.0" }))).toEqual({
-      text: "Running 0.4.0",
-      tone: "good",
-    })
-    expect(proxyLabel(ProxyState.cases.Stopped.make({}))).toEqual({ text: "Stopped", tone: "bad" })
-    expect(proxyLabel(ProxyState.cases.Starting.make({}))).toEqual({ text: "Starting…", tone: "warn" })
-    expect(needsProxy(ProxyState.cases.Stopped.make({}), "connect agents")).toBe("Start the proxy to connect agents")
-    expect(
-      needsProxy(ProxyState.cases.OtherVersion.make({ running: "0.3.0", bundled: "0.4.0", service: true }), "x"),
-    ).toBe("Restart the proxy to x")
-    // While the window is still finding out, it waits rather than saying the proxy is stopped.
-    expect(needsProxy(ProxyState.cases.Checking.make({}), "x")).toBeUndefined()
-    expect(needsProxy(ProxyState.cases.Running.make({ version: "0.4.0" }), "x")).toBeUndefined()
-    // Once the web dashboard's stream has dropped, it says slopmax is not answering rather than pulse.
-    expect(needsProxy(ProxyState.cases.Checking.make({}), "x", true)).toBe("slopmax is not answering")
-    expect(needsProxy(ProxyState.cases.Stopped.make({}), "x", true)).toBe("Start the proxy to x")
+const checking: ProxyState = { _tag: "Checking" }
+const running: ProxyState = { _tag: "Running", version: "0.4.0" }
+
+describe("the proxy and agents", () => {
+  test("the proxy's label says how it stands, and what needs it running waits for it", () => {
+    expect(proxyLabel(checking)).toEqual({ text: "Looking for the proxy…", tone: "muted" })
+    expect(proxyLabel(running)).toEqual({ text: "Running 0.4.0", tone: "good" })
+    // While the window is still finding out, it waits rather than saying anything.
+    expect(needsProxy(checking)).toBeUndefined()
+    expect(needsProxy(running)).toBeUndefined()
+    // Once the stream has dropped, it says slopmax is not answering rather than pulse.
+    expect(needsProxy(checking, true)).toBe("slopmax is not answering")
   })
 
   test("a page that may only look says so before anything about the proxy", () => {
-    const running = ProxyState.cases.Running.make({ version: "0.4.0" })
-    expect(cannotChange(running, "x", false, true)).toBe("Read-only from this machine")
-    expect(cannotChange(ProxyState.cases.Checking.make({}), "x", true, true)).toBe("Read-only from this machine")
-    expect(cannotChange(running, "x", false, false)).toBeUndefined()
-    expect(cannotChange(ProxyState.cases.Stopped.make({}), "x", false, false)).toBe("Start the proxy to x")
+    expect(cannotChange(running, false, true)).toBe("Read-only from this machine")
+    expect(cannotChange(checking, true, true)).toBe("Read-only from this machine")
+    expect(cannotChange(running, false, false)).toBeUndefined()
+    expect(cannotChange(checking, true, false)).toBe("slopmax is not answering")
   })
 
-  test("the web dashboard's proxy label follows its stream, the same in the sidebar and Settings", () => {
-    const checking = ProxyState.cases.Checking.make({})
+  test("the proxy's label follows the stream, the same in the sidebar and Settings", () => {
     expect(shownProxy(checking, "Reconnecting")).toEqual({ text: "Reconnecting…", tone: "warn" })
     expect(shownProxy(checking, "Connecting")).toEqual({ text: "Connecting…", tone: "muted" })
-    expect(shownProxy(ProxyState.cases.Running.make({ version: "0.4.0" }), "Running").text).toBe("Running 0.4.0")
-    expect(shownProxy(checking, undefined).text).toBe("Looking for the proxy…")
+    expect(shownProxy(running, "Running").text).toBe("Running 0.4.0")
   })
 
-  test("agents and the login service read plainly", () => {
+  test("agents read plainly", () => {
     // Connected says so in its label alone.
     expect(agentLine(agent(true, "http://127.0.0.1:7567"))).toEqual({ connected: true })
     expect(agentLine(new AgentWiring({ ...agent(false), installed: false })).text).toBe(
@@ -189,19 +178,6 @@ describe("the proxy, agents and the login service", () => {
       connected: false,
     })
     expect(agentLine(agent(false))).toEqual({ text: "Goes straight to its provider", connected: false })
-    expect(loginService(undefined)).toEqual({
-      on: false,
-      available: false,
-      detail: "This system has no login service slopmax can use, so the app starts the proxy while it runs.",
-    })
-    expect(loginService({ installed: true, running: false }).detail).toBe(
-      "Runs the proxy whenever you log in. It is not running now.",
-    )
-    expect(loginService({ installed: true, running: true })).toEqual({
-      on: true,
-      available: true,
-      detail: "Runs the proxy whenever you log in, even while the app is closed.",
-    })
   })
 })
 

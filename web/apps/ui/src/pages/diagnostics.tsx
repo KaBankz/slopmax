@@ -1,12 +1,11 @@
-// The checks `slopmax doctor` runs, with what to do about each. While the
-// desktop's proxy is stopped, the findings come from the CLI instead.
+// The checks `slopmax doctor` runs, with what to do about each.
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
 import type { Section as DoctorSection } from "@slopmax/client"
 import { Option } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import { Copy, RefreshCw } from "lucide-react"
 import { Fragment } from "react"
-import { copy, doctorAtom, offlineAtom, readOnlyAtom } from "../atoms.ts"
+import { copy, doctorAtom, readOnlyAtom } from "../atoms.ts"
 import { Dot, Empty, Failed, Panel } from "../components/parts.tsx"
 import { Tip } from "../components/tip.tsx"
 import { Button } from "../components/ui/button.tsx"
@@ -56,11 +55,10 @@ function Findings({ sections }: { readonly sections: ReadonlyArray<DoctorSection
 const checking = <Empty title="Checking your setup…" detail="The same checks slopmax doctor runs." />
 
 export function DiagnosticsPage() {
-  const offline = AsyncResult.getOrElse(useAtomValue(offlineAtom), () => Option.none())
   const doctor = useAtomValue(doctorAtom)
   const again = useAtomRefresh(doctorAtom)
   const readOnly = useAtomValue(readOnlyAtom)
-  const sections = Option.isSome(offline) ? Option.some(offline.value.doctor) : AsyncResult.value(doctor)
+  const sections = AsyncResult.value(doctor)
   const body = readOnly ? (
     <Empty title={readOnlyShort} detail="Run slopmax doctor on the hub to check its setup." />
   ) : Option.isSome(sections) ? (

@@ -28,7 +28,6 @@ import {
   Usage,
   worstLevel,
 } from "../src/index.ts"
-import { DesktopPrefs, OfflineView, ProxyState } from "../src/desktop.ts"
 
 const ts = (seconds: number) => DateTime.makeUnsafe(seconds * 1000)
 const roundTrip = <S extends Schema.Codec<unknown, unknown>>(schema: S, value: S["Type"]): S["Type"] =>
@@ -177,33 +176,5 @@ describe("events", () => {
     ]
     for (const event of events) expect(roundTrip(Event, event)).toEqual(event)
     expect(Schema.encodeSync(Event)(Event.cases.Ping.make({}))).toEqual({ _tag: "Ping" })
-  })
-})
-
-describe("the desktop bridge", () => {
-  it("reads window preferences with every missing field at its default", () => {
-    expect(Schema.decodeUnknownSync(DesktopPrefs)({})).toEqual(DesktopPrefs.defaults)
-    const prefs = Schema.decodeUnknownSync(DesktopPrefs)({ sidebarWidth: 300, appearance: "dark" })
-    expect([prefs.sidebarWidth, prefs.appearance, prefs.notifications]).toEqual([300, "dark", true])
-    expect(() => Schema.decodeUnknownSync(DesktopPrefs)({ appearance: "neon" })).toThrow()
-  })
-
-  it("says where the proxy stands, and carries the offline report", () => {
-    const state = ProxyState.cases.OtherVersion.make({ running: "0.3.0", bundled: "0.4.0", service: true })
-    expect(roundTrip(ProxyState, state)).toEqual(state)
-    expect(
-      Schema.decodeUnknownSync(OfflineView)({
-        report: {
-          version: "0.4.0",
-          live: false,
-          generatedAt: "2026-10-31T00:00:00Z",
-          strategy: "reset-first",
-          accounts: [],
-          pools: [],
-          nudges: [],
-        },
-        doctor: [],
-      }).report.live,
-    ).toBe(false)
   })
 })

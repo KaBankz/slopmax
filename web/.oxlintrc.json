@@ -267,10 +267,6 @@
                 "message": "Packages never import apps."
               },
               {
-                "name": "slopmax-desktop",
-                "message": "Packages never import apps."
-              },
-              {
                 "name": "@slopmax/bench",
                 "message": "Packages never import apps."
               },
@@ -293,7 +289,7 @@
                 "message": "The client is the API's types and its HTTP client, and loads in the browser: no files and no platform layers."
               },
               {
-                "group": ["slopmax/*", "@slopmax/ui/*", "slopmax-desktop/*", "@slopmax/bench/*"],
+                "group": ["slopmax/*", "@slopmax/ui/*", "@slopmax/bench/*"],
                 "message": "Packages never import apps."
               },
               {
@@ -328,21 +324,21 @@
               },
               {
                 "name": "bun",
-                "message": "The UI runs in a browser and in Electron's renderer, never on Bun."
+                "message": "The UI runs in a browser, never on Bun."
               },
               {
                 "name": "@slopmax/core",
-                "message": "The engine never loads in the UI or on Electron's Node; talk to the daemon's HttpApi."
+                "message": "The engine never loads in the UI; talk to the daemon's HttpApi."
               },
               {
                 "name": "@slopmax/wire",
-                "message": "The engine never loads in the UI or on Electron's Node; talk to the daemon's HttpApi."
+                "message": "The engine never loads in the UI; talk to the daemon's HttpApi."
               }
             ],
             "patterns": [
               {
                 "group": ["bun:*", "!bun:test"],
-                "message": "The UI runs in a browser and in Electron's renderer, never on Bun."
+                "message": "The UI runs in a browser, never on Bun."
               },
               {
                 "group": ["@effect/platform-bun", "@effect/platform-bun/*"],
@@ -354,7 +350,7 @@
               },
               {
                 "group": ["@slopmax/core/*", "@slopmax/wire/*"],
-                "message": "The engine never loads in the UI or on Electron's Node; talk to the daemon's HttpApi."
+                "message": "The engine never loads in the UI; talk to the daemon's HttpApi."
               }
             ]
           }
@@ -375,11 +371,11 @@
               },
               {
                 "name": "@slopmax/core",
-                "message": "The engine never loads in the UI or on Electron's Node; talk to the daemon's HttpApi."
+                "message": "The engine never loads in the UI; talk to the daemon's HttpApi."
               },
               {
                 "name": "@slopmax/wire",
-                "message": "The engine never loads in the UI or on Electron's Node; talk to the daemon's HttpApi."
+                "message": "The engine never loads in the UI; talk to the daemon's HttpApi."
               }
             ],
             "patterns": [
@@ -393,7 +389,7 @@
               },
               {
                 "group": ["@slopmax/core/*", "@slopmax/wire/*"],
-                "message": "The engine never loads in the UI or on Electron's Node; talk to the daemon's HttpApi."
+                "message": "The engine never loads in the UI; talk to the daemon's HttpApi."
               }
             ]
           }
@@ -409,7 +405,7 @@
             "globals": [
               {
                 "name": "Bun",
-                "message": "The UI runs in a browser and in Electron's renderer, never on Bun."
+                "message": "The UI runs in a browser, never on Bun."
               }
             ],
             "checkGlobalObject": true
@@ -483,7 +479,7 @@
                 "message": "Nothing here runs on Node."
               },
               {
-                "group": ["@slopmax/*", "slopmax", "slopmax-desktop"],
+                "group": ["@slopmax/*", "slopmax"],
                 "message": "@slopmax/test imports effect only, so every package can use it."
               }
             ]
@@ -510,7 +506,7 @@
                 "message": "Nothing here runs on Node."
               },
               {
-                "group": ["@slopmax/*", "slopmax", "slopmax-desktop"],
+                "group": ["@slopmax/*", "slopmax"],
                 "message": "@slopmax/test imports effect only, so every package can use it."
               }
             ]

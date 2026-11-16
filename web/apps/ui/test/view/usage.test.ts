@@ -11,7 +11,6 @@ import {
   perRequest,
   performanceStats,
   speedRows,
-  todayLine,
   todayStats,
   tokenMix,
   usageStats,
@@ -35,7 +34,6 @@ describe("the figures across the top", () => {
       { title: "Saved by failover", value: "36", note: "answered by another account" },
     ])
     expect(todayStats(quietHistory("today"))[0]?.note).toBe("none failed")
-    expect(todayLine(today)).toBe("34.5M tokens, $21.70 at API prices")
   })
 
   test("the usage page: conversations, what keys billed, and a month at this pace", () => {

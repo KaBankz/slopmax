@@ -314,18 +314,12 @@ export function TrendChart({ view, zone }: { readonly view: TrendView; readonly 
   )
 }
 
-/** Small columns for the hours of a day, without axes: the overview's and the panel's Today. */
-export function Hours({
-  values,
-  size = "md",
-}: {
-  readonly values: ReadonlyArray<number>
-  readonly size?: "sm" | "md"
-}) {
+/** Small columns for the hours of a day, without axes: the overview's Today. */
+export function Hours({ values }: { readonly values: ReadonlyArray<number> }) {
   const data = values.map((value, hour) => ({ hour, value }))
   return (
     <div className="flex flex-col gap-1">
-      <div className={size === "md" ? "h-16 w-full" : "h-8 w-full"}>
+      <div className="h-16 w-full">
         <ChartContainer config={{ value: { color: "var(--primary)" } }} className="aspect-auto size-full">
           <BarChart data={data} barCategoryGap="25%" margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
             <Bar
@@ -338,15 +332,13 @@ export function Hours({
           </BarChart>
         </ChartContainer>
       </div>
-      {size === "md" && (
-        <div className="flex text-xs text-muted-foreground">
-          {["00:00", "06:00", "12:00", "18:00"].map((label) => (
-            <span key={label} className="flex-1">
-              {label}
-            </span>
-          ))}
-        </div>
-      )}
+      <div className="flex text-xs text-muted-foreground">
+        {["00:00", "06:00", "12:00", "18:00"].map((label) => (
+          <span key={label} className="flex-1">
+            {label}
+          </span>
+        ))}
+      </div>
     </div>
   )
 }

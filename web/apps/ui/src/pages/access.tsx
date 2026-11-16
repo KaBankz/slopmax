@@ -327,12 +327,7 @@ function ClientKeys() {
   const keys = useAtomValue(keysAtom)
   const again = useAtomRefresh(keysAtom)
   const canChange = useAtomValue(canChangeAtom)
-  const waiting = cannotChange(
-    useAtomValue(proxyAtom),
-    "list and make keys",
-    useAtomValue(unansweredAtom),
-    useAtomValue(readOnlyAtom),
-  )
+  const waiting = cannotChange(useAtomValue(proxyAtom), useAtomValue(unansweredAtom), useAtomValue(readOnlyAtom))
   const make = useAtomSet(makeKey, { mode: "promiseExit" })
   const revoke = useAtomSet(revokeKey)
   const ask = useAsk()

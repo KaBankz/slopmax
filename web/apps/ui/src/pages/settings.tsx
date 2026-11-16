@@ -3,26 +3,20 @@
 // settings, each saved to config.json and applied at once.
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
 import type { LiveKey } from "@slopmax/client"
-import type { Appearance } from "@slopmax/client/desktop"
 import { Option } from "effect"
 import { AsyncResult } from "effect/reactivity"
-import { Copy, ExternalLink, TriangleAlert } from "lucide-react"
+import { Copy, TriangleAlert } from "lucide-react"
 import { hostAtom } from "../api.ts"
 import {
   askNotifications,
   changeSettings,
   copy,
-  dashboardUrl,
-  openExternal,
   permissionAtom,
   prefsAtom,
-  proxyAction,
   proxyAtom,
   proxyStatusAtom,
   readOnlyAtom,
   savePrefs,
-  serviceAction,
-  serviceAtom,
   settingsAtom,
   testNotifications,
   unansweredAtom,
@@ -35,7 +29,8 @@ import { Alert, AlertTitle } from "../components/ui/alert.tsx"
 import { Button } from "../components/ui/button.tsx"
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "../components/ui/input-group.tsx"
 import { Switch } from "../components/ui/switch.tsx"
-import { cannotChange, loginService } from "../view/live.ts"
+import type { Appearance } from "../host.ts"
+import { cannotChange } from "../view/live.ts"
 import { advancedRows, livePatch, restartLine } from "../view/settings.ts"
 import {
   affinityDetail,
@@ -83,35 +78,15 @@ function AppearanceSection() {
 
 function ProxySection({ listen }: { readonly listen: string | undefined }) {
   const host = useAtomValue(hostAtom)
-  const proxy = useAtomValue(proxyAtom)
-  const service = useAtomValue(serviceAtom)
-  const act = useAtomSet(proxyAction)
-  const install = useAtomSet(serviceAction)
   const copyText = useAtomSet(copy)
-  const open = useAtomSet(openExternal)
-  const desktop = Option.isSome(host) && host.value.kind === "desktop"
   const address =
     listen === undefined ? Option.match(host, { onNone: () => "", onSome: (h) => h.origin }) : `http://${listen}`
   const status = useAtomValue(proxyStatusAtom)
-  const running = proxy._tag === "Running"
-  const login = loginService(Option.getOrUndefined(AsyncResult.getOrElse(service, () => Option.none())))
   return (
     <Section title="Proxy">
       <Panel>
         <SettingRow title="Status" detail="slopmax serves your agents while it runs.">
           <Label tone={status.tone} text={status.text} raw />
-          {desktop &&
-            (running ? (
-              <Button variant="outline" onClick={() => act("stop")}>
-                Stop
-              </Button>
-            ) : proxy._tag === "OtherVersion" ? (
-              <Button onClick={() => act("restart")}>Restart</Button>
-            ) : (
-              <Button disabled={proxy._tag === "Starting"} onClick={() => act("start")}>
-                Start
-              </Button>
-            ))}
         </SettingRow>
         <SettingRow title="Address for agents" detail="Where an agent sends its requests.">
           <InputGroup className="w-64">
@@ -124,73 +99,37 @@ function ProxySection({ listen }: { readonly listen: string | undefined }) {
             </InputGroupAddon>
           </InputGroup>
         </SettingRow>
-        {desktop && (
-          <>
-            <SettingRow title="Web dashboard" detail="The same at a glance, in your browser.">
-              <Button
-                variant="outline"
-                disabled={!running || listen === undefined}
-                onClick={() => open(dashboardUrl(listen ?? ""))}
-              >
-                <ExternalLink />
-                Open in browser
-              </Button>
-            </SettingRow>
-            <SettingRow title="Start at login" detail={login.detail}>
-              <Switch
-                aria-label="Start at login"
-                checked={login.on}
-                disabled={!login.available}
-                onCheckedChange={(on) => install(on ? "install" : "uninstall")}
-              />
-            </SettingRow>
-          </>
-        )}
       </Panel>
     </Section>
   )
 }
 
 function NotificationsSection() {
-  const host = useAtomValue(hostAtom)
-  const prefs = useAtomValue(prefsAtom)
   const permission = AsyncResult.getOrElse(useAtomValue(permissionAtom), () => "unsupported" as const)
-  const save = useAtomSet(savePrefs)
   const ask = useAtomSet(askNotifications)
   const test = useAtomSet(testNotifications)
-  const desktop = Option.isSome(host) && host.value.kind === "desktop"
   const detail = "When a limit reset is about to lapse unredeemed, or a week is about to reset with quota to spare."
   return (
     <Section title="Notifications">
       <Panel>
-        {desktop ? (
-          <SettingRow title="Notify me" detail={detail}>
-            <Switch
-              aria-label="Notifications"
-              checked={prefs.notifications}
-              onCheckedChange={(notifications) => save({ notifications })}
-            />
-          </SettingRow>
-        ) : (
-          <SettingRow
-            title="Notify me"
-            detail={
-              permission === "unsupported"
-                ? "This browser cannot show notifications."
-                : permission === "denied"
-                  ? "This browser blocks notifications from slopmax; allow them in its site settings."
-                  : detail
-            }
-          >
-            {permission === "granted" ? (
-              <Label tone="good" text="On in this browser" raw />
-            ) : (
-              <Button variant="outline" disabled={permission !== "default"} onClick={() => ask()}>
-                Notify me
-              </Button>
-            )}
-          </SettingRow>
-        )}
+        <SettingRow
+          title="Notify me"
+          detail={
+            permission === "unsupported"
+              ? "This browser cannot show notifications."
+              : permission === "denied"
+                ? "This browser blocks notifications from slopmax; allow them in its site settings."
+                : detail
+          }
+        >
+          {permission === "granted" ? (
+            <Label tone="good" text="On in this browser" raw />
+          ) : (
+            <Button variant="outline" disabled={permission !== "default"} onClick={() => ask()}>
+              Notify me
+            </Button>
+          )}
+        </SettingRow>
         <SettingRow title="Webhook and command" detail="Where else notices go, as config.json's notify sets it.">
           <Button variant="outline" onClick={() => test()}>
             Send a test notice
@@ -298,7 +237,7 @@ export function SettingsPage() {
   const proxy = useAtomValue(proxyAtom)
   const listen = Option.getOrUndefined(Option.map(AsyncResult.value(settings), (view) => view.settings.listen))
   const readOnly = useAtomValue(readOnlyAtom)
-  const waiting = cannotChange(proxy, "change settings", useAtomValue(unansweredAtom), readOnly)
+  const waiting = cannotChange(proxy, useAtomValue(unansweredAtom), readOnly)
   return (
     <>
       <AppearanceSection />

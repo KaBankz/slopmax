@@ -5,7 +5,6 @@ import { type Report, SubscriptionId } from "@slopmax/client"
 import { DateTime, Duration, Option, Schema } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import { ArrowUpCircle, ChevronRight, Plus, Radio, Users } from "lucide-react"
-import { hostAtom } from "../api.ts"
 import {
   askNotifications,
   attentionAtom,
@@ -115,12 +114,10 @@ function Standing({ report }: { readonly report: Report }) {
 }
 
 function NotifyMe({ report }: { readonly report: Report }) {
-  const host = useAtomValue(hostAtom)
   const permission = useAtomValue(permissionAtom)
   const ask = useAtomSet(askNotifications)
-  const web = Option.isSome(host) && host.value.kind === "web"
   const undecided = AsyncResult.getOrElse(permission, () => "unsupported") === "default"
-  if (!web || !undecided || report.nudges.length === 0) return null
+  if (!undecided || report.nudges.length === 0) return null
   return (
     <Button variant="outline" size="sm" onClick={() => ask()}>
       Notify me

@@ -1,7 +1,6 @@
 // The status report: every account, how it stands, and each subscription's
-// accounts read as one pool. The engine builds it; `slopmax status`, the
-// dashboard, the desktop window and its menu bar all read the same one, so
-// they never disagree about an account.
+// accounts read as one pool. The engine builds it; `slopmax status` and the
+// dashboard read the same one, so they never disagree about an account.
 import { Schema } from "effect"
 import { AccountId, Instant, NonNegativeInt, ProviderId, Strategy } from "./ids.ts"
 import { Usage } from "./ledger.ts"

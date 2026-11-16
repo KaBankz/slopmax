@@ -1,6 +1,6 @@
 // The app's state against the stub API, without React: a registry holding
 // the host, the key and the stub as the page's transport, the way the app
-// starts in a browser or in the desktop window.
+// starts in a browser.
 import { Effect, Option } from "effect"
 import { type Atom, AtomRegistry } from "effect/reactivity"
 import { hostAtom, ownerKeyAtom, transportAtom } from "../../src/api.ts"

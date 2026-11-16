@@ -2,9 +2,8 @@
 
 The slopmax UI is built on [shadcn/ui](https://ui.shadcn.com): its design
 system, its components, and its conventions, with as little of our own as we
-can manage. The same React app is the web dashboard (served by the daemon at
-`/slopmax/`), the desktop window, and on macOS the menu bar panel; `src/host.ts`
-decides what differs between hosts.
+can manage. It is the web dashboard, served by the daemon at `/slopmax/`;
+`src/host.ts` holds what it needs from the browser.
 
 The stack is React 19, Tailwind CSS 4 and shadcn/ui's `base-nova` style, whose
 components sit on [Base UI](https://base-ui.com). Run `mise run check` from

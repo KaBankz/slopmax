@@ -150,8 +150,6 @@ export interface Group {
   readonly credits?: string
   /** Where a new session would go, and why; a warning when none can take one. */
   readonly next: Label
-  /** The same, naming the account by its address's local part. */
-  readonly nextShort: Label
 }
 
 /** How soon a limit reset's expiry is worth a warning. */
@@ -345,13 +343,11 @@ const nextLine = (
   accounts: ReadonlyArray<AccountView>,
   now: DateTime.Utc,
   zone: DateTime.TimeZone,
-  short: boolean,
 ): Label => {
-  const call = (name: string) => (short ? shortName(name) : name)
   const next = pool?.next
   if (next !== undefined) {
     const name = accounts.find((account) => account.id === next.account)?.name ?? next.account
-    return { text: `New sessions → ${call(name)} · ${next.why}`, tone: "muted" }
+    return { text: `New sessions → ${name} · ${next.why}`, tone: "muted" }
   }
   let back: { readonly until: DateTime.Utc; readonly name: string } | undefined
   for (const account of accounts) {
@@ -363,7 +359,7 @@ const nextLine = (
     text:
       back === undefined
         ? "No account can take a new session"
-        : `No account can take a new session until ${clock(back.until, now, zone)}, when ${call(back.name)} is back`,
+        : `No account can take a new session until ${clock(back.until, now, zone)}, when ${back.name} is back`,
     tone: "warn",
   }
 }
@@ -426,8 +422,7 @@ export const groups = (report: Report, now: DateTime.Utc, zone: DateTime.TimeZon
           onNone: () => ({}),
           onSome: (text) => ({ credits: text }),
         }),
-        next: nextLine(pool, accounts, now, zone, false),
-        nextShort: nextLine(pool, accounts, now, zone, true),
+        next: nextLine(pool, accounts, now, zone),
       },
     ]
   })

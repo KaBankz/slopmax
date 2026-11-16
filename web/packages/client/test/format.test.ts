@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { it } from "@slopmax/test"
 import { DateTime, Duration, Option } from "effect"
-import { Notice, NoticeKind, PoolView, PoolWindow, Report, Window } from "../src/index.ts"
+import { Notice, NoticeKind, Window } from "../src/index.ts"
 import {
   agentTitle,
   ago,
@@ -11,7 +11,6 @@ import {
   duration,
   fixed,
   grouped,
-  menuBar,
   money,
   noticeBody,
   noticeTitle,
@@ -110,32 +109,6 @@ describe("pace", () => {
     expect(pace(Window.of("5h", 10, ts(start + length)), ts(start + 60), utc)).toEqual(Option.none())
     expect(text(100)).toEqual(Option.none())
     expect(pace(Window.of("5h", 50), now, utc)).toEqual(Option.none())
-  })
-})
-
-const pool = (provider: "claude" | "codex", windows: ReadonlyArray<PoolWindow>) =>
-  new PoolView({ provider, accounts: 1, windows, scoped: [], shares: {} })
-
-describe("the menu bar", () => {
-  it("shows each pool's 5-hour use, a dash without one, and the name with no pools", () => {
-    const report = (pools: ReadonlyArray<PoolView>) =>
-      new Report({
-        version: "0",
-        live: true,
-        generatedAt: ts(0),
-        strategy: "reset-first",
-        accounts: [],
-        pools,
-        nudges: [],
-      })
-    expect(menuBar(report([]), ts(0))).toBe("slopmax")
-    const both = report([
-      pool("claude", [new PoolWindow({ span: "5h", used: 42.4, resetsAt: ts(100), weighted: false })]),
-      pool("codex", [new PoolWindow({ span: "7d", used: 10, weighted: false })]),
-    ])
-    expect(menuBar(both, ts(0))).toBe("Claude 42% · ChatGPT —")
-    // A window whose reset has passed reads as fresh.
-    expect(menuBar(both, ts(100))).toBe("Claude 0% · ChatGPT —")
   })
 })
 
