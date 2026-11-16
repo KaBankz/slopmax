@@ -28,20 +28,23 @@ const root = import.meta.dir
  */
 const fontScheme = "https://fonts.slopmax.invalid/"
 
-const fonts = ["400", "500", "600"].map((weight) => ({
-  source: path.join(root, `node_modules/@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-${weight}-normal.woff2`),
-  weight,
-}))
+/** Geist, shadcn/ui's font: one variable file covers every weight. */
+const fonts = [
+  {
+    source: path.join(root, "node_modules/@fontsource-variable/geist/files/geist-latin-wght-normal.woff2"),
+    weight: "100 900",
+  },
+]
 
 const fontName = async (font: (typeof fonts)[number]): Promise<string> =>
-  `ibm-plex-sans-${font.weight}-${Bun.hash(await Bun.file(font.source).arrayBuffer()).toString(36)}.woff2`
+  `geist-${Bun.hash(await Bun.file(font.source).arrayBuffer()).toString(36)}.woff2`
 
 const fontFaces = async (): Promise<string> =>
   (
     await Promise.all(
       fonts.map(
         async (font) =>
-          `@font-face{font-family:"IBM Plex Sans";font-style:normal;font-display:swap;font-weight:${font.weight};src:url("${fontScheme}${await fontName(font)}") format("woff2")}`,
+          `@font-face{font-family:"Geist Variable";font-style:normal;font-display:swap;font-weight:${font.weight};src:url("${fontScheme}${await fontName(font)}") format("woff2-variations")}`,
       ),
     )
   ).join("\n")
@@ -69,7 +72,7 @@ export interface BuildOptions {
   readonly minify?: boolean
   /** Brotli and gzip copies for the server to pick from; the web copy has them unless told otherwise. */
   readonly compress?: boolean
-  /** IBM Plex shipped as files; without them, the page uses the system's font. On unless told otherwise. */
+  /** Geist shipped as a file; without them, the page uses the system's font. On unless told otherwise. */
   readonly fonts?: boolean
   /** A brotli copy beside the gzip one, when compressing. On unless told otherwise. */
   readonly brotli?: boolean
@@ -110,7 +113,7 @@ export const build = async (options: BuildOptions): Promise<ReadonlyArray<{ path
   // The fonts' license travels with them.
   const license = path.join(outdir, "OFL.txt")
   if (fontFiles.length > 0) {
-    await Bun.write(license, Bun.file(path.join(root, "node_modules/@fontsource/ibm-plex-sans/LICENSE")))
+    await Bun.write(license, Bun.file(path.join(root, "node_modules/@fontsource-variable/geist/LICENSE")))
   }
   const written = result.outputs.map((output) => output.path).concat(fontFiles, fontFiles.length > 0 ? [license] : [])
   if (options.compress ?? options.host === "web") {

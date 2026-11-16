@@ -8,7 +8,8 @@ import { Atom } from "effect/reactivity"
 import { type FormEvent, useId, useState } from "react"
 import type { Ask } from "../view/asks.ts"
 import { Button } from "./ui/button.tsx"
-import { Dialog, DialogDescription } from "./ui/dialog.tsx"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog.tsx"
+import { Field, FieldError, FieldLabel } from "./ui/field.tsx"
 import { Input } from "./ui/input.tsx"
 
 interface Asking {
@@ -31,6 +32,7 @@ function AskForm({ asking, close }: { readonly asking: Asking; readonly close: (
   const { ask } = asking
   const [value, setValue] = useState(ask.field?.value ?? "")
   const [refused, setRefused] = useState<string | undefined>(undefined)
+  const fieldId = useId()
   const errorId = useId()
   const submit = (event: FormEvent) => {
     event.preventDefault()
@@ -40,20 +42,24 @@ function AskForm({ asking, close }: { readonly asking: Asking; readonly close: (
   }
   return (
     <form onSubmit={submit} className="flex flex-col gap-4">
-      <DialogDescription>{ask.body}</DialogDescription>
+      <DialogHeader>
+        <DialogTitle>{ask.title}</DialogTitle>
+        <DialogDescription>{ask.body}</DialogDescription>
+      </DialogHeader>
       {ask.facts !== undefined && ask.facts.length > 0 && (
-        <ul className="flex flex-col gap-1 rounded-lg bg-well px-3 py-2.5 text-small">
+        <ul className="flex flex-col gap-1 rounded-lg bg-muted px-3 py-2.5 text-sm">
           {ask.facts.map((fact, i) => (
-            <li key={fact} className={i === 0 ? "font-medium text-foreground" : "text-muted-foreground tabular"}>
+            <li key={fact} className={i === 0 ? "font-medium" : "text-muted-foreground tabular-nums"}>
               {fact}
             </li>
           ))}
         </ul>
       )}
       {ask.field !== undefined && (
-        <label className="flex flex-col gap-1.5 text-small text-muted-foreground">
-          {ask.field.label}
+        <Field data-invalid={refused !== undefined || undefined}>
+          <FieldLabel htmlFor={fieldId}>{ask.field.label}</FieldLabel>
           <Input
+            id={fieldId}
             autoFocus
             aria-label={ask.field.label}
             value={value}
@@ -66,21 +72,17 @@ function AskForm({ asking, close }: { readonly asking: Asking; readonly close: (
               setRefused(undefined)
             }}
           />
-          {refused !== undefined && (
-            <span id={errorId} role="alert" className="text-danger">
-              {refused}
-            </span>
-          )}
-        </label>
+          {refused !== undefined && <FieldError id={errorId}>{refused}</FieldError>}
+        </Field>
       )}
-      <div className="flex justify-end gap-2">
-        <Button type="button" onClick={() => close(null)}>
+      <DialogFooter>
+        <Button type="button" variant="outline" onClick={() => close(null)}>
           Cancel
         </Button>
-        <Button type="submit" variant={ask.danger ? "danger" : "primary"} autoFocus={ask.field === undefined}>
+        <Button type="submit" variant={ask.danger ? "destructive" : "default"} autoFocus={ask.field === undefined}>
           {ask.confirm}
         </Button>
-      </div>
+      </DialogFooter>
     </form>
   )
 }
@@ -98,9 +100,10 @@ export function AskHost() {
       onOpenChange={(open) => {
         if (!open) close(null)
       }}
-      title={Option.match(asking, { onNone: () => "", onSome: (a) => a.ask.title })}
     >
-      {Option.isSome(asking) && <AskForm key={asking.value.ask.title} asking={asking.value} close={close} />}
+      <DialogContent showCloseButton={false}>
+        {Option.isSome(asking) && <AskForm key={asking.value.ask.title} asking={asking.value} close={close} />}
+      </DialogContent>
     </Dialog>
   )
 }

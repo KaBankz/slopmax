@@ -4,6 +4,18 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Changed
+
+- The web dashboard is rebuilt on shadcn/ui: its components, its neutral theme and the Geist font, in light and dark. The page content is centred, up to 1152 px wide.
+- The usage and performance charts are Recharts charts. Each bar or point shows its figures on hover.
+- The sidebar collapses to the edge and becomes a sheet on a narrow window. Its edge still drags to resize it, and `\` still shows or hides it.
+- Toasts use Sonner. The dashboard's content security policy now allows Sonner's stylesheet by its hash, and nothing else inline.
+- The dashboard's scripts are larger: about 390 KB with brotli, up from 310 KB, mostly the charts.
+
+### Fixed
+
+- The dashboard's sidebar had been drawn in the page's background color instead of its own.
+
 ## [0.12.0] - 2026-11-15
 
 The login service keeps the proxy's listening socket open, so a crash or a restart no longer refuses a single connection, and on macOS an update leaves no stand-in process behind. One change to rely on: on macOS, `slopmax stop` now unloads the login agent until `slopmax start` or the next login.

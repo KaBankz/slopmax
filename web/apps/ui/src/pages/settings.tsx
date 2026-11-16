@@ -6,7 +6,7 @@ import type { LiveKey } from "@slopmax/client"
 import type { Appearance } from "@slopmax/client/desktop"
 import { Option } from "effect"
 import { AsyncResult } from "effect/reactivity"
-import { Copy, ExternalLink } from "lucide-react"
+import { Copy, ExternalLink, TriangleAlert } from "lucide-react"
 import { hostAtom } from "../api.ts"
 import {
   askNotifications,
@@ -27,10 +27,12 @@ import {
   unansweredAtom,
 } from "../atoms.ts"
 import { Empty, Label, Loaded, Panel, Section, SettingRow, Skeleton } from "../components/parts.tsx"
+import { Choices } from "../components/choices.tsx"
+import { Segmented } from "../components/segmented.tsx"
+import { Stepper } from "../components/stepper.tsx"
+import { Alert, AlertTitle } from "../components/ui/alert.tsx"
 import { Button } from "../components/ui/button.tsx"
-import { Choices } from "../components/ui/choices.tsx"
-import { Segmented } from "../components/ui/segmented.tsx"
-import { Stepper } from "../components/ui/stepper.tsx"
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "../components/ui/input-group.tsx"
 import { Switch } from "../components/ui/switch.tsx"
 import { loginService, needsProxy } from "../view/live.ts"
 import { advancedRows, livePatch, restartLine } from "../view/settings.ts"
@@ -89,28 +91,36 @@ function ProxySection({ listen }: { readonly listen: string | undefined }) {
           <Label tone={status.tone} text={status.text} raw />
           {desktop &&
             (running ? (
-              <Button onClick={() => act("stop")}>Stop</Button>
-            ) : proxy._tag === "OtherVersion" ? (
-              <Button variant="primary" onClick={() => act("restart")}>
-                Restart
+              <Button variant="outline" onClick={() => act("stop")}>
+                Stop
               </Button>
+            ) : proxy._tag === "OtherVersion" ? (
+              <Button onClick={() => act("restart")}>Restart</Button>
             ) : (
-              <Button variant="primary" disabled={proxy._tag === "Starting"} onClick={() => act("start")}>
+              <Button disabled={proxy._tag === "Starting"} onClick={() => act("start")}>
                 Start
               </Button>
             ))}
         </SettingRow>
         <SettingRow title="Address for agents" detail="Where an agent sends its requests.">
-          <code className="rounded-md bg-well px-2.5 py-1 font-mono text-small tabular">{address}</code>
-          <Button onClick={() => copyText({ text: address, said: `Copied ${address}` })}>
-            <Copy />
-            Copy
-          </Button>
+          <InputGroup className="w-64">
+            <InputGroupInput readOnly aria-label="Address for agents" value={address} />
+            <InputGroupAddon align="inline-end">
+              <InputGroupButton onClick={() => copyText({ text: address, said: `Copied ${address}` })}>
+                <Copy />
+                Copy
+              </InputGroupButton>
+            </InputGroupAddon>
+          </InputGroup>
         </SettingRow>
         {desktop && (
           <>
             <SettingRow title="Web dashboard" detail="The same at a glance, in your browser.">
-              <Button disabled={!running || listen === undefined} onClick={() => open(dashboardUrl(listen ?? ""))}>
+              <Button
+                variant="outline"
+                disabled={!running || listen === undefined}
+                onClick={() => open(dashboardUrl(listen ?? ""))}
+              >
                 <ExternalLink />
                 Open in browser
               </Button>
@@ -164,14 +174,16 @@ function NotificationsSection() {
             {permission === "granted" ? (
               <Label tone="good" text="On in this browser" raw />
             ) : (
-              <Button disabled={permission !== "default"} onClick={() => ask()}>
+              <Button variant="outline" disabled={permission !== "default"} onClick={() => ask()}>
                 Notify me
               </Button>
             )}
           </SettingRow>
         )}
         <SettingRow title="Webhook and command" detail="Where else notices go, as config.json's notify sets it.">
-          <Button onClick={() => test()}>Send a test notice</Button>
+          <Button variant="outline" onClick={() => test()}>
+            Send a test notice
+          </Button>
         </SettingRow>
       </Panel>
     </Section>
@@ -191,9 +203,10 @@ function LiveSections() {
         return (
           <>
             {restart !== undefined && (
-              <div role="note" className="rounded-xl border border-warning px-4 py-2.5 text-small text-warning">
-                {restart}
-              </div>
+              <Alert role="note" variant="warning">
+                <TriangleAlert />
+                <AlertTitle>{restart}</AlertTitle>
+              </Alert>
             )}
             <Section title="Routing">
               <div className="flex flex-col gap-2">
@@ -217,7 +230,7 @@ function LiveSections() {
                     />
                   </SettingRow>
                 </Panel>
-                <p className="text-caption text-faint">{affinityHeader}</p>
+                <p className="text-xs text-muted-foreground">{affinityHeader}</p>
               </div>
             </Section>
             <Section title="Limit resets">
@@ -257,7 +270,7 @@ function LiveSections() {
                     </SettingRow>
                   ))}
                 </Panel>
-                <p className="text-caption text-faint">
+                <p className="text-xs text-muted-foreground">
                   Each is saved to config.json and applied at once; slopmax config changes them too.
                 </p>
               </div>

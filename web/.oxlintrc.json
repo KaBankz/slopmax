@@ -439,7 +439,8 @@
         "shadcn/no-restyle": [
           "error",
           {
-            "allow": ["layout"]
+            "allow": ["layout"],
+            "contracts": [{ "pattern": "^CardTitle$", "allow": ["layout", "typography"] }]
           }
         ],
         "shadcn/require-static-classes": "error",
@@ -448,11 +449,16 @@
       }
     },
     {
-      "files": ["apps/ui/src/components/ui/**"],
+      "files": ["apps/ui/src/components/ui/**", "apps/ui/src/hooks/**"],
       "rules": {
         "shadcn/no-restyle": "off",
         "shadcn/no-arbitrary-values": "off",
-        "shadcn/require-static-classes": "off"
+        "shadcn/require-static-classes": "off",
+        "shadcn/no-raw-colors": "off",
+        "shadcn/no-inline-styles": "off",
+        "shadcn/no-unknown-classes": "off",
+        "typescript/consistent-type-assertions": "off",
+        "no-shadow": "off"
       }
     },
     {

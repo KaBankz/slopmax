@@ -5,30 +5,34 @@ import type { Section as DoctorSection } from "@slopmax/client"
 import { Option } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import { Copy, RefreshCw } from "lucide-react"
+import { Fragment } from "react"
 import { copy, doctorAtom, offlineAtom } from "../atoms.ts"
 import { Dot, Empty, Failed, Panel } from "../components/parts.tsx"
+import { Tip } from "../components/tip.tsx"
 import { Button } from "../components/ui/button.tsx"
-import { Tip } from "../components/ui/tooltip.tsx"
+import { Item, ItemActions, ItemContent, ItemMedia } from "../components/ui/item.tsx"
+import { Separator } from "../components/ui/separator.tsx"
 import { failureText, levelTone, sentenceCase } from "../view/words.ts"
 
 function Findings({ sections }: { readonly sections: ReadonlyArray<DoctorSection> }) {
   const copyText = useAtomSet(copy)
+  const rows = sections.flatMap((section) =>
+    section.findings.map((finding, i) => ({ section: i === 0 ? section.title : "", key: section.title, finding })),
+  )
   return (
     <Panel>
-      {sections.flatMap((section) =>
-        section.findings.map((finding, i) => (
-          <div
-            key={`${section.title}-${finding.text}`}
-            className="flex items-start gap-3 border-t border-separator px-4 py-2.5 first:border-t-0"
-          >
-            <span className="w-30 shrink-0 text-small text-muted-foreground">{i === 0 ? section.title : ""}</span>
-            <span className="flex h-4.5 items-center">
+      {rows.map(({ section, key, finding }, n) => (
+        <Fragment key={`${key}-${finding.text}`}>
+          {n > 0 && <Separator />}
+          <Item className="items-start">
+            <span className="w-30 shrink-0 text-xs/5 text-muted-foreground">{section}</span>
+            <ItemMedia className="h-5">
               <Dot tone={levelTone(finding.level)} />
-            </span>
-            <span className="min-w-0 flex-1">{sentenceCase(finding.text.replaceAll("`", ""))}</span>
+            </ItemMedia>
+            <ItemContent>{sentenceCase(finding.text.replaceAll("`", ""))}</ItemContent>
             {finding.fix !== undefined && (
-              <span className="flex shrink-0 items-center gap-1">
-                <code className="rounded-sm border bg-well px-1.5 py-0.5 font-mono text-caption">{finding.fix}</code>
+              <ItemActions className="shrink-0">
+                <code className="rounded-sm border bg-muted px-1.5 py-0.5 font-mono text-xs">{finding.fix}</code>
                 <Tip content="Copy the command">
                   <Button
                     variant="ghost"
@@ -39,11 +43,11 @@ function Findings({ sections }: { readonly sections: ReadonlyArray<DoctorSection
                     <Copy />
                   </Button>
                 </Tip>
-              </span>
+              </ItemActions>
             )}
-          </div>
-        )),
-      )}
+          </Item>
+        </Fragment>
+      ))}
     </Panel>
   )
 }
@@ -74,7 +78,7 @@ export function DiagnosticsTools() {
   const doctor = useAtomValue(doctorAtom)
   const again = useAtomRefresh(doctorAtom)
   return (
-    <Button disabled={AsyncResult.isWaiting(doctor) || AsyncResult.isInitial(doctor)} onClick={again}>
+    <Button variant="outline" disabled={AsyncResult.isWaiting(doctor) || AsyncResult.isInitial(doctor)} onClick={again}>
       <RefreshCw />
       Check again
     </Button>

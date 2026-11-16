@@ -139,7 +139,11 @@ describe("the web dashboard", () => {
     await web()
     await key("3")
     await settle(() => location.hash === "#/codex", "the ChatGPT page")
-    await settle(() => document.querySelector("[aria-current=page]")?.getAttribute("data-page") === "codex", "the row")
+    await settle(
+      () =>
+        document.querySelector("[aria-current=page]")?.closest("[data-page]")?.getAttribute("data-page") === "codex",
+      "the row",
+    )
     await key("ArrowDown", document.querySelector("[aria-current=page]") ?? window)
     await settle(() => location.hash === "#/anthropic", "the next page")
     await key(",")
@@ -221,6 +225,8 @@ describe("what the dashboard says while waiting, failing or quiet", () => {
   test("adding a key says it is being checked, and a taken key name keeps what was typed", async () => {
     drawn = await draw({ stub: { key: ownerKey, latency: "150 millis" }, host: { key: ownerKey }, at: "#/access" })
     await showsSoon("laptop", 5_000)
+    // Changes wait for slopmax to answer on the event stream.
+    await showsSoon("Running 0.4.0", 5_000)
     await type("Paste an API key", "sk-ant-good")
     await press("Add key")
     await showsSoon("Checking key…")
