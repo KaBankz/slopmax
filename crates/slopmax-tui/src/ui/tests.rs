@@ -578,9 +578,12 @@ fn overlays() -> Vec<Overlay> {
     ]
 }
 
+/// A screen made for a page, by what it holds.
+type Maker = (&'static str, fn(Page) -> App);
+
 #[test]
 fn nothing_panics_at_the_smallest_sizes_with_or_without_data() {
-    let makers: [(&str, fn(Page) -> App); 3] = [("full", app), ("empty", empty), ("bare", bare)];
+    let makers: [Maker; 3] = [("full", app), ("empty", empty), ("bare", bare)];
     for (data, make) in makers {
         for (name, page) in pages() {
             for (overlay, put) in overlays() {
