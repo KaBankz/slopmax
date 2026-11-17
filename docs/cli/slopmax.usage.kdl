@@ -637,7 +637,7 @@ cmd notify help_heading=Maintenance help="Show how slopmax notifies you, or send
     long_help #"""
 Show how slopmax notifies you, or send a test notification.
 
-Notifications are set under [notify] in config.toml.
+Without a subcommand, shows where notices go and which events send one (`--json` prints that as JSON). Notifications are set under [notify] in config.toml.
 """#
     use list-json
     flag "-h --help" help="Print help" action=help builtin=#true

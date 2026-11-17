@@ -938,7 +938,7 @@ api_key = "{api_key}"
 # Discord show it); a command runs in the shell with SLOPMAX_EVENT,
 # SLOPMAX_PROVIDER, SLOPMAX_ACCOUNT, SLOPMAX_UNTIL, and SLOPMAX_MESSAGE set.
 # Add "limited" and "available" to events to hear about each account too.
-# Check the setup with `slopmax notify`.
+# Check the setup with `slopmax notify test`.
 #   [notify]
 #   webhook = "https://hooks.slack.com/services/..."
 #   command = 'notify-send slopmax "$SLOPMAX_MESSAGE"'

@@ -158,7 +158,7 @@ pub static MISTRAL: KeyProvider = KeyProvider {
 };
 ```
 
-Then add `Mistral` to `ProviderId`, its `ALL` list, and `ProviderId::get`, and a choice to `PROVIDERS` in `slopmax/src/commands.rs`. Login, routing, translation from every client format, model lists, status, the ledger, and notifications all follow from the trait.
+Then add `Mistral` to `ProviderId`, its `ALL` list, and `ProviderId::get`, and a variant to `ProviderArg` in `slopmax/src/cli.rs`. Login, routing, translation from every client format, model lists, status, the ledger, and notifications all follow from the trait.
 
 ### A subscription: SuperGrok
 
@@ -212,7 +212,7 @@ pub trait Agent: Send + Sync {
 
 Grok Build stores the token it gets and keeps a bare one for good, even after a 401. So `run` and `env` point `GROK_AUTH_PATH` at a file in slopmax's home named after the key (`Home::grok_auth`): a new key is a new file, and Grok Build's own sign-in in `~/.grok/auth.json` is never touched. `agent connect` has no such setting, so `agent connect` and `disconnect` remove the tokens an auth provider handed it from `~/.grok/auth.json` (`auth_mode = "external"`), keeping its own sign-in, which `doctor` flags since it would come first. Grok Build reads `/v1/settings` and `/v1/models` from the CLI chat proxy, which xAI keys can't answer, so `served_by_keys` is false: a key alone doesn't make it servable.
 
-Add the agent to `AGENTS` and a choice to `AGENTS` in `slopmax/src/commands.rs`; `slopmax run grok`, `env grok`, `setup grok`, session affinity, and the `agent_only` policy then work for it.
+Add the agent to `AGENTS` and a variant to `AgentArg` in `slopmax/src/cli.rs`; `slopmax run grok`, `agent env grok`, `agent connect grok`, session affinity, and the `agent_only` policy then work for it.
 
 ## Formats
 

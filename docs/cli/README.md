@@ -1571,7 +1571,7 @@ Check the setup and say how to fix what's wrong
 
 Show how slopmax notifies you, or send a test notification.
 
-Notifications are set under [notify] in config.toml.
+Without a subcommand, shows where notices go and which events send one (`--json` prints that as JSON). Notifications are set under [notify] in config.toml.
 
 ### Flags
 - **`--json`** — With no subcommand: print JSON instead of text, for scripts and agents

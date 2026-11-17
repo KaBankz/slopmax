@@ -54,7 +54,7 @@ pub enum Kind {
     /// A week (or month) resets within the day with much of its quota
     /// unused: work put on the account now costs nothing extra.
     QuotaUnused,
-    /// Sent by `slopmax notify` to check the setup.
+    /// Sent by `slopmax notify test` to check the setup.
     Test,
 }
 

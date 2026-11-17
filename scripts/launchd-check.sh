@@ -36,7 +36,7 @@ pid() { curl -s --max-time 5 http://127.0.0.1:7599/healthz | sed -n 's/.*"pid":\
 jobpid() { launchctl print "$T" 2>/dev/null | awk '/^\tpid = /{print $3}'; }
 serving() { pgrep -f "slopmax2? serve" | tr '\n' ' '; }
 
-"$B" service install || { cat "$H/home/slopmax.log"; exit 1; }
+"$B" proxy install || { cat "$H/home/slopmax.log"; exit 1; }
 cat ~/Library/LaunchAgents/dev.slopmax.plist
 sleep 1
 P=$(pid); echo "pid $P, launchd's $(jobpid)"
@@ -53,7 +53,7 @@ check "launchd started it again" '[ -n "$P" ] && [ "$P" = "$(jobpid)" ]'
 
 echo "== handoff"
 cp "$B" "$H/slopmax2"
-# The owner's key, which `service install` added to the config.toml above.
+# The owner's key, which `proxy install` added to the config.toml above.
 KEY=$(sed -n 's/^api_key = "\([^"]*\)".*/\1/p' "$H/home/config.toml")
 knock 12 > "$H/k2" & sleep 1.5
 curl -s -X POST -H "Authorization: Bearer $KEY" -H 'content-type: application/json' \
@@ -67,16 +67,16 @@ check "launchd's new process took over" '[ -n "$N" ] && [ "$N" = "$J" ] && [ "$N
 check "no other slopmax left running" '[ "$(serving | wc -w | tr -d " ")" = 1 ]'
 
 echo "== stop"
-"$B" stop
+"$B" proxy stop
 sleep 1
 check "stopped: nothing answers" '[ "$(curl -s -o /dev/null -w %{http_code} --max-time 3 http://127.0.0.1:7599/healthz)" = 000 ]'
 check "stopped: the agent is unloaded" '! launchctl print "$T" >/dev/null 2>&1'
 check "stopped: no slopmax runs" '[ -z "$(serving)" ]'
 
 echo "== start"
-"$B" start || cat "$H/home/slopmax.log"
+"$B" proxy start || cat "$H/home/slopmax.log"
 check "started under launchd" '[ -n "$(pid)" ] && [ "$(pid)" = "$(jobpid)" ]'
 
-"$B" service uninstall
+"$B" proxy uninstall
 echo "== log"; cat "$H/home/slopmax.log"
 exit $fail

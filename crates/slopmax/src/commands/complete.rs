@@ -12,8 +12,12 @@ use slopmax_client::api::settings::{LIVE, LiveKind};
 use slopmax_core::account::Store;
 use slopmax_core::config::Config;
 
-/// This home's config, unless it reads badly or uses a hub.
+/// This home's config, unless there is none yet (reading it would write
+/// one: a Tab writes nothing), it reads badly, or it uses a hub.
 fn own_config() -> Option<Config> {
+    if !home().config().is_file() {
+        return None;
+    }
     Config::load(home()).ok().filter(|c| c.hub.is_none())
 }
 

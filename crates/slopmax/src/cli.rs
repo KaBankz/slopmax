@@ -1105,7 +1105,9 @@ pub struct Doctor {
 
 /// Show how slopmax notifies you, or send a test notification.
 ///
-/// Notifications are set under [notify] in config.toml.
+/// Without a subcommand, shows where notices go and which events send one
+/// (`--json` prints that as JSON). Notifications are set under [notify] in
+/// config.toml.
 #[derive(Args)]
 #[usage(effect = "read")]
 pub struct Notify {

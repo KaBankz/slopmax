@@ -237,7 +237,7 @@ export class Settings extends Schema.Class<Settings>("Settings")({
     .pipe(withDefault({})),
   notify: NotifySettings.annotate({
     description:
-      "Where notices go: when every account of a provider is limited, recovers, or needs signing in again, when a limit reset would expire unused, and when a week is about to reset with quota unused. Check it with `slopmax notify`.",
+      "Where notices go: when every account of a provider is limited, recovers, or needs signing in again, when a limit reset would expire unused, and when a week is about to reset with quota unused. Check it with `slopmax notify test`.",
   }).pipe(withDefault({})),
   keys: Schema.Array(ClientKey)
     .annotate({
