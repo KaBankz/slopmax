@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::ui;
 use slopmax_core::background::{self, Daemon};
@@ -109,12 +109,61 @@ pub(super) fn uninstall() -> Result<()> {
     Ok(())
 }
 
-/// `slopmax proxy restart`.
+/// How long `proxy restart` waits for the new proxy.
+const RESTART_WAIT: Duration = Duration::from_secs(20);
+
+/// `slopmax proxy restart`: the proxy hands its socket to a new process of
+/// the binary the login service runs (else its own), which takes new
+/// connections while the old one finishes the requests it has, as an
+/// update does. Where it can't hand over, it exits for its supervisor to
+/// start again, or for this to start it.
 pub(super) async fn restart(config: &Config) -> Result<()> {
-    if background::stop(config).await? {
-        println!("slopmax stopped");
+    let client = slopmax_client::Client::new(config.base_url(), &config.api_key);
+    let before = match client.health_within(Duration::from_secs(1)).await {
+        None => return start(config).await,
+        Some(health) if health.owner == Some(false) => {
+            bail!(background::foreign(config.listen, health.pid))
+        }
+        Some(health) => health,
+    };
+    client.shutdown(true).await?;
+    let started = std::time::Instant::now();
+    let mut gone_since = None;
+    while started.elapsed() < RESTART_WAIT {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        match client.health_within(Duration::from_millis(500)).await {
+            // A new process answers. A proxy too old to say its pid can't
+            // be told from its successor, so a few seconds have to do.
+            Some(health)
+                if (before.pid.is_some() && health.pid != before.pid)
+                    || (before.pid.is_none() && started.elapsed() > Duration::from_secs(3)) =>
+            {
+                println!(
+                    "slopmax restarted on {} {}",
+                    config.base_url(),
+                    ui::dim(format!(
+                        "(slopmax {}{})",
+                        health.version,
+                        health.pid.map(|p| format!(", pid {p}")).unwrap_or_default()
+                    ))
+                );
+                return Ok(());
+            }
+            Some(_) => gone_since = None,
+            None => {
+                // Nothing answers: no supervisor started it again, so this
+                // does, once the old process has given the port back.
+                let since = *gone_since.get_or_insert_with(std::time::Instant::now);
+                if since.elapsed() > Duration::from_secs(2) {
+                    return start(config).await;
+                }
+            }
+        }
     }
-    start(config).await
+    bail!(
+        "the proxy didn't come back within {}s; `slopmax proxy logs` says why",
+        RESTART_WAIT.as_secs()
+    )
 }
 
 /// `slopmax proxy status`: whether the proxy runs, where, and whether it
@@ -136,10 +185,18 @@ pub(super) async fn status(config: &Config, json: bool) -> Result<()> {
     }
     let client = slopmax_client::Client::new(config.base_url(), &config.api_key);
     let health = client.health_within(Duration::from_secs(1)).await;
+    // A proxy that refuses this home's key was started from another home.
+    let foreign = health.as_ref().is_some_and(|h| h.owner == Some(false));
+    let state = match &health {
+        None => "stopped",
+        Some(_) if foreign => "another home's",
+        Some(_) => "running",
+    };
     let service = Manager::detect().map(|m| (m, m.status(super::home())));
     if json {
         let view = serde_json::json!({
-            "running": health.is_some(),
+            "state": if foreign { "foreign" } else { state },
+            "running": state == "running",
             "address": config.base_url(),
             "version": health.as_ref().map(|h| h.version.clone()),
             "pid": health.as_ref().and_then(|h| h.pid),
@@ -153,6 +210,19 @@ pub(super) async fn status(config: &Config, json: bool) -> Result<()> {
         return Ok(());
     }
     match &health {
+        Some(health) if foreign => println!(
+            "proxy    {} on {} {}",
+            ui::yellow("another home's"),
+            config.base_url(),
+            ui::dim(format!(
+                "(started from another SLOPMAX_HOME, or before api_key changed; stop it from \
+                 there{})",
+                health
+                    .pid
+                    .map(|p| format!(", or end pid {p}"))
+                    .unwrap_or_default()
+            ))
+        ),
         Some(health) => println!(
             "proxy    {} on {} {}",
             ui::green("running"),

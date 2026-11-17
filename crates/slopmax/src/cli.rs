@@ -82,10 +82,10 @@ pub enum Command {
     )]
     Account(Account),
     /// Show token usage and what it would have cost on the API
-    #[usage(display_order = 6, help_heading = "Accounts")]
+    #[usage(display_order = 6, help_heading = "Activity")]
     Usage(Usage),
     /// Show the requests the proxy answered
-    #[usage(display_order = 7, help_heading = "Accounts")]
+    #[usage(display_order = 7, help_heading = "Activity")]
     Requests(Requests),
 
     // Agents
@@ -262,7 +262,7 @@ pub struct Status {
 
 /// Open the dashboard in a browser, starting the proxy if needed.
 #[derive(Args)]
-#[usage(effect = "read")]
+#[usage(effect = "write")]
 pub struct Dashboard {
     /// Print the dashboard's address instead of opening a browser
     #[usage(long)]
@@ -276,7 +276,14 @@ pub struct Dashboard {
 ///
 /// Without a subcommand, lists the accounts.
 #[derive(Args)]
+#[usage(
+    effect = "read",
+    output("human", default),
+    output("json", media_type = "application/json", select = "--json")
+)]
 pub struct Account {
+    #[usage(flatten)]
+    pub json: Json,
     #[usage(subcommand)]
     pub command: Option<AccountCommand>,
 }
@@ -312,7 +319,7 @@ pub enum AccountCommand {
     Disable(AccountRef),
     /// Lift slopmax's hold on an account and read its usage again
     #[usage(display_order = 10)]
-    Check(AccountRef),
+    Check(AccountCheck),
     /// Spend a banked limit reset, resetting the account's usage windows
     #[usage(display_order = 11)]
     Redeem(AccountRedeem),
@@ -326,7 +333,11 @@ pub enum AccountCommand {
 
 /// List the accounts, numbered.
 #[derive(Args)]
-#[usage(effect = "read")]
+#[usage(
+    effect = "read",
+    output("human", default),
+    output("json", media_type = "application/json", select = "--json")
+)]
 pub struct AccountList {
     #[usage(flatten)]
     pub json: Json,
@@ -377,14 +388,15 @@ pub struct AccountAdd {
         help_heading = "Compatible endpoints"
     )]
     pub dialect: Option<DialectArg>,
-    /// Models it serves, comma-separated patterns (else what it lists)
+    /// Models it serves, as patterns (else what it lists)
     #[usage(
         long,
         value_name = "MODELS",
+        delimiter = ',',
         requires("--url"),
         help_heading = "Compatible endpoints"
     )]
-    pub models: Option<String>,
+    pub models: Vec<String>,
 }
 
 /// Copy the logins Claude Code, Codex, or CLIProxyAPI hold.
@@ -409,7 +421,7 @@ pub struct AccountImport {
 #[derive(Args)]
 #[usage(effect = "write")]
 pub struct AccountUse {
-    /// The account to prefer
+    /// A number from `slopmax status`, or the account's id, email, or label
     #[usage(complete = complete::accounts, required_unless("--auto"), conflicts("--auto"))]
     pub account: Option<String>,
     /// Let slopmax choose accounts again
@@ -447,12 +459,16 @@ pub struct AccountPriority {
 #[derive(Args)]
 #[usage(
     effect = "write",
+    output("human", default),
+    output("json", media_type = "application/json", select = "--json"),
     example("slopmax account order 3 1", header = "Use account 3 first, then 1")
 )]
 pub struct AccountOrder {
     /// Accounts to use first, in order
     #[usage(complete = complete::accounts)]
     pub accounts: Vec<String>,
+    #[usage(flatten)]
+    pub json: Json,
 }
 
 /// An account, for the commands that take one and nothing else.
@@ -462,6 +478,21 @@ pub struct AccountRef {
     /// A number from `slopmax status`, or the account's id, email, or label
     #[usage(complete = complete::accounts)]
     pub account: String,
+}
+
+/// Lift slopmax's hold on an account and read its usage again.
+#[derive(Args)]
+#[usage(
+    effect = "write",
+    output("human", default),
+    output("json", media_type = "application/json", select = "--json")
+)]
+pub struct AccountCheck {
+    /// A number from `slopmax status`, or the account's id, email, or label
+    #[usage(complete = complete::accounts)]
+    pub account: String,
+    #[usage(flatten)]
+    pub json: Json,
 }
 
 /// Spend a banked limit reset, resetting the account's usage windows.
@@ -486,7 +517,7 @@ pub struct AccountRedeem {
 #[usage(effect = "write")]
 pub struct AccountAdopt {
     /// A number from `slopmax status`, the account's id, email, or label, or `all`
-    #[usage(complete = complete::accounts)]
+    #[usage(complete = complete::adoptable)]
     pub account: String,
 }
 
@@ -505,7 +536,9 @@ pub struct AccountRemove {
 #[derive(Args)]
 #[usage(
     effect = "read",
-    example("slopmax usage 30d --by model", header = "The last 30 days, by model")
+    example("slopmax usage 30d --by model", header = "The last 30 days, by model"),
+    output("human", default),
+    output("json", media_type = "application/json", select = "--json")
 )]
 pub struct Usage {
     /// Which period
@@ -525,7 +558,9 @@ pub struct Usage {
     example(
         "slopmax requests --failed --limit 5",
         header = "The last five requests that failed"
-    )
+    ),
+    output("human", default),
+    output("json", media_type = "application/json", select = "--json")
 )]
 pub struct Requests {
     /// Which period
@@ -540,9 +575,12 @@ pub struct Requests {
     /// Only those that failed
     #[usage(long)]
     pub failed: bool,
-    /// How many to show
+    /// How many to show, at most 1000
     #[usage(short = 'n', long, default = "20")]
     pub limit: usize,
+    /// How many of the newest to skip, to page back
+    #[usage(long, default = "0")]
+    pub offset: usize,
     #[usage(flatten)]
     pub json: Json,
 }
@@ -554,7 +592,14 @@ pub struct Requests {
 ///
 /// Without a subcommand, lists the agents and whether each is connected.
 #[derive(Args)]
+#[usage(
+    effect = "read",
+    output("human", default),
+    output("json", media_type = "application/json", select = "--json")
+)]
 pub struct Agent {
+    #[usage(flatten)]
+    pub json: Json,
     #[usage(subcommand)]
     pub command: Option<AgentCommand>,
 }
@@ -580,7 +625,11 @@ pub enum AgentCommand {
 
 /// List the agents and whether each is connected.
 #[derive(Args)]
-#[usage(effect = "read")]
+#[usage(
+    effect = "read",
+    output("human", default),
+    output("json", media_type = "application/json", select = "--json")
+)]
 pub struct AgentList {
     #[usage(flatten)]
     pub json: Json,
@@ -637,7 +686,14 @@ pub struct AgentRun {
 ///
 /// Without a subcommand, shows whether the proxy runs.
 #[derive(Args)]
+#[usage(
+    effect = "read",
+    output("human", default),
+    output("json", media_type = "application/json", select = "--json")
+)]
 pub struct Proxy {
+    #[usage(flatten)]
+    pub json: Json,
     #[usage(subcommand)]
     pub command: Option<ProxyCommand>,
 }
@@ -672,7 +728,11 @@ pub enum ProxyCommand {
 
 /// Show whether the proxy runs, where, and whether it starts at login.
 #[derive(Args)]
-#[usage(effect = "read")]
+#[usage(
+    effect = "read",
+    output("human", default),
+    output("json", media_type = "application/json", select = "--json")
+)]
 pub struct ProxyStatus {
     #[usage(flatten)]
     pub json: Json,
@@ -730,13 +790,16 @@ pub struct ProxyLogs {
     example(
         "slopmax config strategy round-robin",
         header = "Take turns between accounts"
-    )
+    ),
+    output("human", default),
+    output("json", media_type = "application/json", select = "--json")
 )]
 pub struct ConfigCmd {
     /// The setting, e.g. strategy
     #[usage(complete = complete::settings)]
     pub name: Option<String>,
     /// Its new value, e.g. round-robin
+    #[usage(complete = complete::setting_values)]
     pub value: Option<String>,
     #[usage(flatten)]
     pub json: Json,
@@ -746,7 +809,14 @@ pub struct ConfigCmd {
 ///
 /// Without a subcommand, lists the keys.
 #[derive(Args)]
+#[usage(
+    effect = "read",
+    output("human", default),
+    output("json", media_type = "application/json", select = "--json")
+)]
 pub struct Key {
+    #[usage(flatten)]
+    pub json: Json,
     #[usage(subcommand)]
     pub command: Option<KeyCommand>,
 }
@@ -766,7 +836,11 @@ pub enum KeyCommand {
 
 /// List the keys.
 #[derive(Args)]
-#[usage(effect = "read")]
+#[usage(
+    effect = "read",
+    output("human", default),
+    output("json", media_type = "application/json", select = "--json")
+)]
 pub struct KeyList {
     #[usage(flatten)]
     pub json: Json,
@@ -781,9 +855,9 @@ pub struct KeyList {
 pub struct KeyAdd {
     /// What to call it
     pub name: String,
-    /// Models it may use, comma-separated patterns (else any)
-    #[usage(long, value_name = "MODELS")]
-    pub models: Option<String>,
+    /// Models it may use, as patterns (else any)
+    #[usage(long, value_name = "MODELS", delimiter = ',')]
+    pub models: Vec<String>,
 }
 
 /// Revoke a key.
@@ -793,6 +867,8 @@ pub struct KeyRemove {
     /// The key's name
     #[usage(complete = complete::keys)]
     pub name: String,
+    #[usage(flatten)]
+    pub yes: Yes,
 }
 
 /// Share slopmax with your own machines over Tailscale.
@@ -800,7 +876,14 @@ pub struct KeyRemove {
 /// Without a subcommand, shows whether slopmax is published to your
 /// tailnet, and who uses it.
 #[derive(Args)]
+#[usage(
+    effect = "read",
+    output("human", default),
+    output("json", media_type = "application/json", select = "--json")
+)]
 pub struct Tailscale {
+    #[usage(flatten)]
+    pub json: Json,
     #[usage(subcommand)]
     pub command: Option<TailscaleCommand>,
 }
@@ -813,20 +896,24 @@ pub enum TailscaleCommand {
     /// Publish slopmax to your own machines with `tailscale serve`
     #[usage(display_order = 2)]
     On(TailscaleOn),
-    /// Stop publishing it
+    /// Stop publishing slopmax to your tailnet
     #[usage(display_order = 3)]
     Off(TailscaleOff),
-    /// Tailnet logins whose machines use slopmax without a key
+    /// The tailnet logins whose machines use slopmax without a key
     #[usage(display_order = 4, alias_hidden = "users")]
-    User(TailnetList),
-    /// Machines that may also manage slopmax
+    User(TailnetUsers),
+    /// The machines that may also manage slopmax
     #[usage(display_order = 5, alias_hidden = "admins")]
-    Admin(TailnetList),
+    Admin(TailnetAdmins),
 }
 
 /// Show whether slopmax is published to your tailnet, and who uses it.
 #[derive(Args)]
-#[usage(effect = "read")]
+#[usage(
+    effect = "read",
+    output("human", default),
+    output("json", media_type = "application/json", select = "--json")
+)]
 pub struct TailscaleStatus {
     #[usage(flatten)]
     pub json: Json,
@@ -864,38 +951,93 @@ pub struct TailscaleOn {
 #[usage(effect = "write")]
 pub struct TailscaleOff;
 
-/// Tailnet logins or machines: without a subcommand, lists them.
+/// The tailnet logins whose machines use slopmax without a key.
+///
+/// Without a subcommand, lists them.
 #[derive(Args)]
-pub struct TailnetList {
+#[usage(
+    effect = "read",
+    output("human", default),
+    output("json", media_type = "application/json", select = "--json")
+)]
+pub struct TailnetUsers {
+    #[usage(flatten)]
+    pub json: Json,
     #[usage(subcommand)]
-    pub command: Option<TailnetListCommand>,
+    pub command: Option<UserCommand>,
 }
 
 #[derive(Subcommands)]
-pub enum TailnetListCommand {
-    /// List them
+pub enum UserCommand {
+    /// List the logins let in without a key
     #[usage(display_order = 1, alias = "ls")]
-    List(TailnetNone),
-    /// Add some
+    List(TailnetShow),
+    /// Let these logins' machines in without a key
     #[usage(display_order = 2)]
-    Add(TailnetNames),
-    /// Remove some
+    Add(Logins),
+    /// Make these logins' machines use a key again
     #[usage(display_order = 3, alias = "rm")]
-    Remove(TailnetNames),
+    Remove(Logins),
 }
 
-/// Nothing more.
+/// The machines that may also manage slopmax: its settings, accounts, and
+/// keys.
+///
+/// Without a subcommand, lists them.
 #[derive(Args)]
-#[usage(effect = "read")]
-pub struct TailnetNone;
+#[usage(
+    effect = "read",
+    output("human", default),
+    output("json", media_type = "application/json", select = "--json")
+)]
+pub struct TailnetAdmins {
+    #[usage(flatten)]
+    pub json: Json,
+    #[usage(subcommand)]
+    pub command: Option<AdminCommand>,
+}
 
-/// Logins (you@github) or machine names.
+#[derive(Subcommands)]
+pub enum AdminCommand {
+    /// List the machines that may manage slopmax
+    #[usage(display_order = 1, alias = "ls")]
+    List(TailnetShow),
+    /// Let these machines manage slopmax
+    #[usage(display_order = 2)]
+    Add(Machines),
+    /// Stop these machines managing slopmax
+    #[usage(display_order = 3, alias = "rm")]
+    Remove(Machines),
+}
+
+/// List them.
+#[derive(Args)]
+#[usage(
+    effect = "read",
+    output("human", default),
+    output("json", media_type = "application/json", select = "--json")
+)]
+pub struct TailnetShow {
+    #[usage(flatten)]
+    pub json: Json,
+}
+
+/// Tailnet logins.
 #[derive(Args)]
 #[usage(effect = "write")]
-pub struct TailnetNames {
-    /// Logins (you@github) or machine names
-    #[usage(arg, required, delimiter = ',')]
-    pub names: Vec<String>,
+pub struct Logins {
+    /// Tailnet logins, such as you@github
+    #[usage(arg, required, value_name = "LOGIN", delimiter = ',')]
+    pub logins: Vec<String>,
+}
+
+/// Tailnet machines.
+#[derive(Args)]
+#[usage(effect = "write")]
+pub struct Machines {
+    /// Machine names, as Tailscale shows them
+    #[usage(arg, required, value_name = "MACHINE", delimiter = ',')]
+    pub machines: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -906,7 +1048,9 @@ pub struct TailnetNames {
 #[usage(
     effect = "read",
     exit_code(0, "nothing is broken"),
-    exit_code(1, "something is broken")
+    exit_code(1, "something is broken"),
+    output("human", default),
+    output("json", media_type = "application/json", select = "--json")
 )]
 pub struct Doctor {
     #[usage(flatten)]
@@ -917,7 +1061,14 @@ pub struct Doctor {
 ///
 /// Notifications are set under [notify] in config.toml.
 #[derive(Args)]
+#[usage(
+    effect = "read",
+    output("human", default),
+    output("json", media_type = "application/json", select = "--json")
+)]
 pub struct Notify {
+    #[usage(flatten)]
+    pub json: Json,
     #[usage(subcommand)]
     pub command: Option<NotifyCommand>,
 }
@@ -944,6 +1095,9 @@ pub struct Update {
     /// Only say whether a newer release is out
     #[usage(long)]
     pub check: bool,
+    /// With --check: print JSON instead of text, for scripts and agents
+    #[usage(long, requires("--check"))]
+    pub json: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -1137,7 +1291,8 @@ impl Slopmax {
             self.command,
             Some(Command::Serve(_))
                 | Some(Command::Proxy(Proxy {
-                    command: Some(ProxyCommand::Serve(_))
+                    command: Some(ProxyCommand::Serve(_)),
+                    ..
                 }))
         )
     }
@@ -1240,6 +1395,7 @@ mod tests {
         assert_eq!(run.args, ["exec", "-c", "model=m", "--help"]);
         let Some(Command::Account(Account {
             command: Some(AccountCommand::Priority(p)),
+            ..
         })) = parses("account priority 2 -3").command
         else {
             panic!()
@@ -1247,6 +1403,7 @@ mod tests {
         assert_eq!(p.tier, -3);
         let Some(Command::Tailscale(Tailscale {
             command: Some(TailscaleCommand::On(on)),
+            ..
         })) = parses("tailscale on --user a@github,b@github --user c@github").command
         else {
             panic!()

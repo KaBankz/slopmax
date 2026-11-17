@@ -21,7 +21,7 @@ curl -fsSL https://raw.githubusercontent.com/KaBankz/slopmax/master/install.sh |
 
 On Windows, download `slopmax-x86_64-pc-windows-msvc.zip` (or the `aarch64` one) from the [latest release](https://github.com/KaBankz/slopmax/releases/latest) and keep its two programs together, in a folder on your `PATH`: `slopmax.exe`, and `slopmaxw.exe`, which runs the proxy at login.
 
-Or build it with Cargo (Rust 1.89 or newer):
+Or build it with Cargo (Rust 1.91 or newer):
 
 ```sh
 cargo install --locked --git https://github.com/KaBankz/slopmax slopmax
@@ -460,7 +460,7 @@ Things are nouns with verbs under them, and a noun alone shows its things: `slop
 | `[plan_prices]`           | list prices      | What each plan costs a month (`"claude/ultra" = 200`), for what unused quota is worth |
 | `[notify]`                | none             | Webhook, command, and events for notifications                      |
 | `[[keys]]`                | none             | Client keys, made with `slopmax key add`, each possibly limited to some models |
-| `[tailscale]` `users`, `admins` | none       | Tailnet logins whose machines use slopmax without a key, and machines that may also manage it (`slopmax tailscale user`, `admins`) |
+| `[tailscale]` `users`, `admins` | none       | Tailnet logins whose machines use slopmax without a key, and machines that may also manage it (`slopmax tailscale user`, `slopmax tailscale admin`) |
 | `[hub]` `url`, `key`      | none             | On your other machines: the hub their agents use, and a key when the hub can't tell the machine by its tailnet login (`slopmax setup --hub`) |
 
 The proxy applies a changed config.toml within two seconds, without a restart; only `listen` and `proxy` need one. The background proxy logs to `~/.slopmax/slopmax.log`. `SLOPMAX_LOG` sets the log level, for example `SLOPMAX_LOG=debug`.
@@ -495,8 +495,8 @@ The proxy applies a changed config.toml within two seconds, without a restart; o
 
 ```sh
 mise run check     # rustfmt, clippy with warnings denied, and the tests
-mise run msrv      # builds with the minimum supported Rust (1.89)
-mise run budget    # at most 71 crates and a 10 MiB binary
+mise run msrv      # builds with the minimum supported Rust (1.91)
+mise run budget    # at most 74 crates and a 10 MiB binary
 mise run bench     # the latency, throughput, memory, and startup slopmax adds
 mise run build     # optimized release binary
 ```

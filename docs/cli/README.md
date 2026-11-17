@@ -151,7 +151,7 @@ Reads the running proxy, else the files on disk. Accounts are numbered; commands
 ## `slopmax dashboard`
 
 - **Usage:** `slopmax dashboard [--no-browser]`
-- **Effect:** read-only
+- **Effect:** modifies state
 
 Open the dashboard in a browser, starting the proxy if needed
 
@@ -192,7 +192,7 @@ Subscriptions (claude, codex, grok) sign in through the provider's own page. API
 - **`--dialect <DIALECT>`** — The API it speaks
 
   **Choices:** `chat`, `responses`, `messages`
-- **`--models <MODELS>`** — Models it serves, comma-separated patterns (else what it lists)
+- **`--models <MODELS>`** — Models it serves, as patterns (else what it lists)
 
 ### Exit Status
 
@@ -224,14 +224,27 @@ slopmax login compat --url http://localhost:11434/v1
 
 ## `slopmax account`
 
-- **Usage:** `slopmax account [SUBCOMMAND]`
+- **Usage:** `slopmax account [--json] [SUBCOMMAND]`
+- **Effect:** read-only
 
 List, add, and manage the accounts slopmax pools.
 
 Without a subcommand, lists the accounts.
 
 ### Flags
+- **`--json`** — Print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`; **Select:** `--json`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -252,6 +265,17 @@ List the accounts, numbered
 ### Flags
 - **`--json`** — Print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`; **Select:** `--json`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -286,7 +310,18 @@ Subscriptions (claude, codex, grok) sign in through the provider's own page. API
 - **`--dialect <DIALECT>`** — The API it speaks
 
   **Choices:** `chat`, `responses`, `messages`
-- **`--models <MODELS>`** — Models it serves, comma-separated patterns (else what it lists)
+- **`--models <MODELS>`** — Models it serves, as patterns (else what it lists)
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -336,6 +371,17 @@ An imported login shares its refresh token with the tool it came from. CLIProxyA
 - **`--adopt`** — Refresh CLIProxyAPI's logins here instead of following its files
 - **`-h --help`** — Print help
 
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
+
 ### Exit Status
 
 | Code | Meaning |
@@ -354,11 +400,22 @@ Prefer an account for new sessions, or let slopmax choose again.
 New sessions of that provider go to the account while it has quota.
 
 ### Arguments
-- **`[ACCOUNT]`** — The account to prefer
+- **`[ACCOUNT]`** — A number from `slopmax status`, or the account's id, email, or label
 
 ### Flags
 - **`--auto`** — Let slopmax choose accounts again
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -382,6 +439,17 @@ Set an account's display name
 ### Flags
 - **`-h --help`** — Print help
 
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
+
 ### Exit Status
 
 | Code | Meaning |
@@ -404,6 +472,17 @@ Set an account's priority tier; higher tiers are used first
 ### Flags
 - **`-h --help`** — Print help
 
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
+
 ### Exit Status
 
 | Code | Meaning |
@@ -414,7 +493,7 @@ Set an account's priority tier; higher tiers are used first
 
 ## `slopmax account order`
 
-- **Usage:** `slopmax account order [ACCOUNTS]…`
+- **Usage:** `slopmax account order [--json] [ACCOUNTS]…`
 - **Effect:** modifies state
 
 Show or set the order new sessions use accounts in.
@@ -425,7 +504,19 @@ With accounts, puts them first, in the order given; the rest follow as they were
 - **`[ACCOUNTS]…`** — Accounts to use first, in order
 
 ### Flags
+- **`--json`** — Print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`; **Select:** `--json`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -456,6 +547,17 @@ Route to an account again
 ### Flags
 - **`-h --help`** — Print help
 
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
+
 ### Exit Status
 
 | Code | Meaning |
@@ -477,6 +579,17 @@ Stop routing to an account; its sign-in is still kept fresh
 ### Flags
 - **`-h --help`** — Print help
 
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
+
 ### Exit Status
 
 | Code | Meaning |
@@ -487,7 +600,7 @@ Stop routing to an account; its sign-in is still kept fresh
 
 ## `slopmax account check`
 
-- **Usage:** `slopmax account check <ACCOUNT>`
+- **Usage:** `slopmax account check [--json] <ACCOUNT>`
 - **Effect:** modifies state
 
 Lift slopmax's hold on an account and read its usage again
@@ -496,7 +609,19 @@ Lift slopmax's hold on an account and read its usage again
 - **`<ACCOUNT>`** — A number from `slopmax status`, or the account's id, email, or label
 
 ### Flags
+- **`--json`** — Print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`; **Select:** `--json`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -522,6 +647,17 @@ Claude and ChatGPT accounts can hold limit resets; this spends the one that expi
 - **`-y --yes`** — Don't ask for confirmation
 - **`-h --help`** — Print help
 
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
+
 ### Exit Status
 
 | Code | Meaning |
@@ -545,6 +681,17 @@ The first refresh signs the other tool's copy out, so stop that tool first.
 ### Flags
 - **`-h --help`** — Print help
 
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
+
 ### Exit Status
 
 | Code | Meaning |
@@ -567,6 +714,17 @@ Forget an account
 ### Flags
 - **`-y --yes`** — Don't ask for confirmation
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -598,6 +756,17 @@ Show token usage and what it would have cost on the API
   **Default:** `day`
 - **`--json`** — Print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`; **Select:** `--json`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -633,11 +802,25 @@ Show the requests the proxy answered
 - **`--account <ACCOUNT>`** — Only those served by this account
 - **`--model <MODEL>`** — Only this model
 - **`--failed`** — Only those that failed
-- **`-n --limit <LIMIT>`** — How many to show
+- **`-n --limit <LIMIT>`** — How many to show, at most 1000
 
   **Default:** `20`
+- **`--offset <OFFSET>`** — How many of the newest to skip, to page back
+
+  **Default:** `0`
 - **`--json`** — Print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`; **Select:** `--json`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -691,14 +874,27 @@ slopmax run claude --continue
 
 ## `slopmax agent`
 
-- **Usage:** `slopmax agent [SUBCOMMAND]`
+- **Usage:** `slopmax agent [--json] [SUBCOMMAND]`
+- **Effect:** read-only
 
 Point Claude Code, Codex, and Grok Build at slopmax.
 
 Without a subcommand, lists the agents and whether each is connected.
 
 ### Flags
+- **`--json`** — Print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`; **Select:** `--json`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -719,6 +915,17 @@ List the agents and whether each is connected
 ### Flags
 - **`--json`** — Print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`; **Select:** `--json`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -743,6 +950,17 @@ Point an agent at slopmax for good, in its own config file
 ### Flags
 - **`-h --help`** — Print help
 
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
+
 ### Exit Status
 
 | Code | Meaning |
@@ -765,6 +983,17 @@ Restore what `agent connect` replaced
 
 ### Flags
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -791,6 +1020,17 @@ Everything after the agent goes to it unchanged.
 
 ### Flags
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -823,6 +1063,17 @@ Print shell setup that points an agent at the proxy, for `eval`
 ### Flags
 - **`-h --help`** — Print help
 
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
+
 ### Exit Status
 
 | Code | Meaning |
@@ -841,14 +1092,27 @@ eval "$(slopmax agent env claude)"
 
 ## `slopmax proxy`
 
-- **Usage:** `slopmax proxy [SUBCOMMAND]`
+- **Usage:** `slopmax proxy [--json] [SUBCOMMAND]`
+- **Effect:** read-only
 
 Start, stop, and inspect the proxy, and run it at login.
 
 Without a subcommand, shows whether the proxy runs.
 
 ### Flags
+- **`--json`** — Print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`; **Select:** `--json`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -869,6 +1133,17 @@ Show whether the proxy runs, where, and whether it starts at login
 - **`--json`** — Print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
 
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`; **Select:** `--json`
+
+  **Media type:** `application/json`
+
 ### Exit Status
 
 | Code | Meaning |
@@ -886,6 +1161,17 @@ Start the proxy in the background
 
 ### Flags
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -905,6 +1191,17 @@ Stop the background proxy
 ### Flags
 - **`-h --help`** — Print help
 
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
+
 ### Exit Status
 
 | Code | Meaning |
@@ -922,6 +1219,17 @@ Stop the proxy and start it again
 
 ### Flags
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -945,6 +1253,17 @@ Show the proxy's log
   **Default:** `40`
 - **`-h --help`** — Print help
 
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
+
 ### Exit Status
 
 | Code | Meaning |
@@ -962,6 +1281,17 @@ Start the proxy at login (a systemd user unit, launchd agent, or Windows login i
 
 ### Flags
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -981,6 +1311,17 @@ Stop starting the proxy at login
 ### Flags
 - **`-h --help`** — Print help
 
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
+
 ### Exit Status
 
 | Code | Meaning |
@@ -998,6 +1339,17 @@ Run the proxy in the foreground
 
 ### Flags
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1024,6 +1376,17 @@ A change applies at once to a running proxy, and is saved to config.toml. The ot
 - **`--json`** — Print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
 
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`; **Select:** `--json`
+
+  **Media type:** `application/json`
+
 ### Exit Status
 
 | Code | Meaning |
@@ -1042,14 +1405,27 @@ slopmax config strategy round-robin
 
 ## `slopmax key`
 
-- **Usage:** `slopmax key [SUBCOMMAND]`
+- **Usage:** `slopmax key [--json] [SUBCOMMAND]`
+- **Effect:** read-only
 
 Manage keys that let other machines and tools use the proxy.
 
 Without a subcommand, lists the keys.
 
 ### Flags
+- **`--json`** — Print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`; **Select:** `--json`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1071,6 +1447,17 @@ List the keys
 - **`--json`** — Print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
 
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`; **Select:** `--json`
+
+  **Media type:** `application/json`
+
 ### Exit Status
 
 | Code | Meaning |
@@ -1090,8 +1477,19 @@ Make a key, and print it once
 - **`<NAME>`** — What to call it
 
 ### Flags
-- **`--models <MODELS>`** — Models it may use, comma-separated patterns (else any)
+- **`--models <MODELS>`** — Models it may use, as patterns (else any)
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1111,7 +1509,7 @@ slopmax key add laptop
 
 ## `slopmax key remove`
 
-- **Usage:** `slopmax key remove <NAME>`
+- **Usage:** `slopmax key remove [-y --yes] <NAME>`
 - **Aliases:** `rm`
 - **Effect:** destructive — may delete or irreversibly overwrite
 
@@ -1121,7 +1519,19 @@ Revoke a key
 - **`<NAME>`** — The key's name
 
 ### Flags
+- **`-y --yes`** — Don't ask for confirmation
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1133,14 +1543,27 @@ Revoke a key
 
 ## `slopmax tailscale`
 
-- **Usage:** `slopmax tailscale [SUBCOMMAND]`
+- **Usage:** `slopmax tailscale [--json] [SUBCOMMAND]`
+- **Effect:** read-only
 
 Share slopmax with your own machines over Tailscale.
 
 Without a subcommand, shows whether slopmax is published to your tailnet, and who uses it.
 
 ### Flags
+- **`--json`** — Print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`; **Select:** `--json`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1160,6 +1583,17 @@ Show whether slopmax is published to your tailnet, and who uses it
 ### Flags
 - **`--json`** — Print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`; **Select:** `--json`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1184,6 +1618,17 @@ Publish slopmax to your own machines with `tailscale serve`
 - **`--socket`** — Serve the proxy's socket, which Tailscale lets only root publish
 - **`-h --help`** — Print help
 
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
+
 ### Exit Status
 
 | Code | Meaning |
@@ -1205,10 +1650,21 @@ slopmax tailscale on --user you@github
 - **Usage:** `slopmax tailscale off`
 - **Effect:** modifies state
 
-Stop publishing it
+Stop publishing slopmax to your tailnet
 
 ### Flags
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1220,12 +1676,27 @@ Stop publishing it
 
 ## `slopmax tailscale user`
 
-- **Usage:** `slopmax tailscale user [SUBCOMMAND]`
+- **Usage:** `slopmax tailscale user [--json] [SUBCOMMAND]`
+- **Effect:** read-only
 
-Tailnet logins whose machines use slopmax without a key
+The tailnet logins whose machines use slopmax without a key.
+
+Without a subcommand, lists them.
 
 ### Flags
+- **`--json`** — Print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`; **Select:** `--json`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1237,14 +1708,26 @@ Tailnet logins whose machines use slopmax without a key
 
 ## `slopmax tailscale user list`
 
-- **Usage:** `slopmax tailscale user list`
+- **Usage:** `slopmax tailscale user list [--json]`
 - **Aliases:** `ls`
 - **Effect:** read-only
 
-List them
+List the logins let in without a key
 
 ### Flags
+- **`--json`** — Print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`; **Select:** `--json`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1256,16 +1739,27 @@ List them
 
 ## `slopmax tailscale user add`
 
-- **Usage:** `slopmax tailscale user add <NAMES>…`
+- **Usage:** `slopmax tailscale user add <LOGIN>…`
 - **Effect:** modifies state
 
-Add some
+Let these logins' machines in without a key
 
 ### Arguments
-- **`<NAMES>…`** — Logins (you@github) or machine names
+- **`<LOGIN>…`** — Tailnet logins, such as you@github
 
 ### Flags
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1277,17 +1771,28 @@ Add some
 
 ## `slopmax tailscale user remove`
 
-- **Usage:** `slopmax tailscale user remove <NAMES>…`
+- **Usage:** `slopmax tailscale user remove <LOGIN>…`
 - **Aliases:** `rm`
 - **Effect:** modifies state
 
-Remove some
+Make these logins' machines use a key again
 
 ### Arguments
-- **`<NAMES>…`** — Logins (you@github) or machine names
+- **`<LOGIN>…`** — Tailnet logins, such as you@github
 
 ### Flags
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1299,12 +1804,27 @@ Remove some
 
 ## `slopmax tailscale admin`
 
-- **Usage:** `slopmax tailscale admin [SUBCOMMAND]`
+- **Usage:** `slopmax tailscale admin [--json] [SUBCOMMAND]`
+- **Effect:** read-only
 
-Machines that may also manage slopmax
+The machines that may also manage slopmax: its settings, accounts, and keys.
+
+Without a subcommand, lists them.
 
 ### Flags
+- **`--json`** — Print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`; **Select:** `--json`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1316,14 +1836,26 @@ Machines that may also manage slopmax
 
 ## `slopmax tailscale admin list`
 
-- **Usage:** `slopmax tailscale admin list`
+- **Usage:** `slopmax tailscale admin list [--json]`
 - **Aliases:** `ls`
 - **Effect:** read-only
 
-List them
+List the machines that may manage slopmax
 
 ### Flags
+- **`--json`** — Print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`; **Select:** `--json`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1335,16 +1867,27 @@ List them
 
 ## `slopmax tailscale admin add`
 
-- **Usage:** `slopmax tailscale admin add <NAMES>…`
+- **Usage:** `slopmax tailscale admin add <MACHINE>…`
 - **Effect:** modifies state
 
-Add some
+Let these machines manage slopmax
 
 ### Arguments
-- **`<NAMES>…`** — Logins (you@github) or machine names
+- **`<MACHINE>…`** — Machine names, as Tailscale shows them
 
 ### Flags
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1356,17 +1899,28 @@ Add some
 
 ## `slopmax tailscale admin remove`
 
-- **Usage:** `slopmax tailscale admin remove <NAMES>…`
+- **Usage:** `slopmax tailscale admin remove <MACHINE>…`
 - **Aliases:** `rm`
 - **Effect:** modifies state
 
-Remove some
+Stop these machines managing slopmax
 
 ### Arguments
-- **`<NAMES>…`** — Logins (you@github) or machine names
+- **`<MACHINE>…`** — Machine names, as Tailscale shows them
 
 ### Flags
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1387,6 +1941,17 @@ Check the setup and say how to fix what's wrong
 - **`--json`** — Print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
 
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`; **Select:** `--json`
+
+  **Media type:** `application/json`
+
 ### Exit Status
 
 | Code | Meaning |
@@ -1397,14 +1962,27 @@ Check the setup and say how to fix what's wrong
 
 ## `slopmax notify`
 
-- **Usage:** `slopmax notify [SUBCOMMAND]`
+- **Usage:** `slopmax notify [--json] [SUBCOMMAND]`
+- **Effect:** read-only
 
 Show how slopmax notifies you, or send a test notification.
 
 Notifications are set under [notify] in config.toml.
 
 ### Flags
+- **`--json`** — Print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`; **Select:** `--json`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1424,6 +2002,17 @@ Send a test notification
 ### Flags
 - **`-h --help`** — Print help
 
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `text`
+
+  **Media type:** `application/json`
+
 ### Exit Status
 
 | Code | Meaning |
@@ -1434,7 +2023,7 @@ Send a test notification
 
 ## `slopmax update`
 
-- **Usage:** `slopmax update [--check]`
+- **Usage:** `slopmax update [--check] [--json]`
 - **Effect:** modifies state
 
 Install the newest slopmax and move the running proxy to it.
@@ -1443,6 +2032,7 @@ It updates the way slopmax was installed, and the proxy changes over without dro
 
 ### Flags
 - **`--check`** — Only say whether a newer release is out
+- **`--json`** — With --check: print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
 
 ### Exit Status

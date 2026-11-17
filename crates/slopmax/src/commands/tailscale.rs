@@ -29,7 +29,8 @@ pub enum Args {
 
 /// `tailscale user|admin`'s verbs.
 pub enum ListOp {
-    List,
+    /// Lists them; as JSON when true.
+    List(bool),
     Add(Vec<String>),
     Remove(Vec<String>),
 }
@@ -711,7 +712,8 @@ async fn users(config: &Config, op: ListOp) -> Result<()> {
                 logins.join(" or ")
             );
         }
-        ListOp::List => {
+        ListOp::List(true) => println!("{}", serde_json::to_string_pretty(&tailnet.users)?),
+        ListOp::List(false) => {
             if tailnet.users.is_empty() {
                 println!(
                     "No login is let in without a key. `slopmax tailscale user add <login>` \
@@ -759,7 +761,15 @@ async fn admins(config: &Config, op: ListOp) -> Result<()> {
             save(config, &tailnet).await?;
             println!("{} may no longer manage slopmax.", machines.join(" and "));
         }
-        ListOp::List => {
+        ListOp::List(true) => {
+            let admins: Vec<serde_json::Value> = tailnet
+                .admins
+                .iter()
+                .map(|a| serde_json::json!({ "machine": a.machine, "id": a.id }))
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&admins)?);
+        }
+        ListOp::List(false) => {
             if tailnet.admins.is_empty() {
                 println!(
                     "No machine manages slopmax but this one. `slopmax tailscale admin add \

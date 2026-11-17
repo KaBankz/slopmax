@@ -659,9 +659,18 @@ pub(super) async fn set_priority(
 
 /// Shows the order fill-first uses accounts in, or puts `queries` first in
 /// it, in the order given.
-pub(super) async fn order(config: &Config, store: &Store, queries: &[String]) -> Result<()> {
+pub(super) async fn order(
+    config: &Config,
+    store: &Store,
+    queries: &[String],
+    json: bool,
+) -> Result<()> {
     let client = daemon(config).await?;
     let accounts = listed(config, store, client.as_ref()).await?;
+    if json && queries.is_empty() {
+        println!("{}", serde_json::to_string_pretty(&order_view(&accounts))?);
+        return Ok(());
+    }
     if accounts.is_empty() {
         println!(
             "No accounts yet. Connect one with `slopmax login claude` or `slopmax login codex`."
@@ -710,6 +719,10 @@ pub(super) async fn order(config: &Config, store: &Store, queries: &[String]) ->
         }
     }
     let accounts = listed(config, store, client.as_ref()).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&order_view(&accounts))?);
+        return Ok(());
+    }
     let provider = accounts
         .iter()
         .find(|a| a.id == ids[0])
@@ -751,6 +764,38 @@ fn show_order(accounts: &[account::Account], provider: ProviderId) {
         };
         println!("  {:>2}  {}{notes}", n + 1, account.name());
     }
+}
+
+/// The order as JSON: each provider's accounts in the order new sessions
+/// use them, numbered as every `<ACCOUNT>` takes them.
+fn order_view(accounts: &[account::Account]) -> serde_json::Value {
+    let mut providers: Vec<ProviderId> = Vec::new();
+    for account in accounts {
+        if !providers.contains(&account.provider) {
+            providers.push(account.provider);
+        }
+    }
+    providers
+        .into_iter()
+        .map(|provider| {
+            let listed: Vec<serde_json::Value> = accounts
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| a.provider == provider)
+                .map(|(n, a)| {
+                    serde_json::json!({
+                        "number": n + 1,
+                        "id": a.id,
+                        "name": a.name(),
+                        "priority": a.priority,
+                        "disabled": a.disabled,
+                        "signedOut": a.auth_error.is_some(),
+                    })
+                })
+                .collect();
+            serde_json::json!({ "provider": provider.as_str(), "accounts": listed })
+        })
+        .collect()
 }
 
 /// Says when the order is not what places sessions.
@@ -896,7 +941,7 @@ pub(super) async fn add(ctx: &super::Ctx, add: AccountAdd) -> Result<()> {
         .parse()
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     let endpoint = match add.url.as_deref() {
-        Some(url) => Some(endpoint(url, add.dialect, add.models.as_deref())?),
+        Some(url) => Some(endpoint(url, add.dialect, &add.models)?),
         None if provider == ProviderId::Compat => {
             bail!("a compatible endpoint needs its address: --url <base url>")
         }
@@ -915,7 +960,7 @@ pub(super) async fn add(ctx: &super::Ctx, add: AccountAdd) -> Result<()> {
 }
 
 /// A compatible endpoint from `login compat`'s flags.
-fn endpoint(url: &str, dialect: Option<DialectArg>, models: Option<&str>) -> Result<Endpoint> {
+fn endpoint(url: &str, dialect: Option<DialectArg>, models: &[String]) -> Result<Endpoint> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
         bail!("--url takes an http:// or https:// base URL, got {url:?}");
     }
@@ -925,9 +970,8 @@ fn endpoint(url: &str, dialect: Option<DialectArg>, models: Option<&str>) -> Res
         DialectArg::Messages => Dialect::Messages,
     };
     let models = models
-        .unwrap_or_default()
-        .split(',')
-        .map(str::trim)
+        .iter()
+        .map(|m| m.trim())
         .filter(|m| !m.is_empty())
         .map(str::to_owned)
         .collect();
@@ -1005,7 +1049,7 @@ fn kind(account: &AccountView) -> String {
 
 /// `slopmax account check`: lifts slopmax's hold on an account and reads
 /// its usage again, through the running proxy, which holds both.
-pub(super) async fn check(config: &Config, store: &Store, query: &str) -> Result<()> {
+pub(super) async fn check(config: &Config, store: &Store, query: &str, json: bool) -> Result<()> {
     let Some(client) = daemon(config).await? else {
         bail!(
             "the proxy isn't running, so nothing holds the account back; \
@@ -1015,7 +1059,12 @@ pub(super) async fn check(config: &Config, store: &Store, query: &str) -> Result
     let account = find(config, store, Some(&client), query).await?;
     let report = client.check(&account.id).await?;
     let now = Timestamp::now();
-    match report.accounts.iter().find(|a| a.id == account.id) {
+    let view = report.accounts.iter().find(|a| a.id == account.id);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&view)?);
+        return Ok(());
+    }
+    match view {
         Some(view) => println!(
             "{}  {}",
             ui::bold(&view.name),

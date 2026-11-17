@@ -485,6 +485,15 @@ fn every_listing_prints_json() {
         &["requests", "--json"][..],
         &["usage", "--json"][..],
         &["tailscale", "status", "--json"][..],
+        &["tailscale", "user", "--json"][..],
+        &["tailscale", "admin", "list", "--json"][..],
+        &["account", "--json"][..],
+        &["account", "order", "--json"][..],
+        &["agent", "--json"][..],
+        &["key", "--json"][..],
+        &["proxy", "--json"][..],
+        &["notify", "--json"][..],
+        &["config", "listen", "--json"][..],
     ] {
         let out = s.run(args);
         assert!(
@@ -498,6 +507,18 @@ fn every_listing_prints_json() {
     let proxy: Value =
         serde_json::from_str(&s.run(&["proxy", "status", "--json"]).ok().stdout).unwrap();
     assert_eq!(proxy["running"], false, "{proxy:#}");
+    assert_eq!(proxy["state"], "stopped", "{proxy:#}");
+    // Settings come keyed as `config` takes them, with typed values.
+    let config: Value = serde_json::from_str(&s.run(&["config", "--json"]).ok().stdout).unwrap();
+    assert_eq!(config["strategy"], "fill-first", "{config:#}");
+    assert!(config["listen"].is_string(), "{config:#}");
+    assert!(config["websockets"].is_boolean(), "{config:#}");
+    let order: Value =
+        serde_json::from_str(&s.run(&["account", "order", "--json"]).ok().stdout).unwrap();
+    assert_eq!(order[0]["accounts"][0]["number"], 1, "{order:#}");
+    // Forgetting an account asks first; without a terminal, it takes --yes.
+    s.run(&["account", "remove", "1"]).fails(1, "Pass --yes");
+    assert_eq!(s.store().list().unwrap().len(), 1);
     let doctor = s.run(&["doctor", "--json"]);
     let sections: Value = serde_json::from_str(&doctor.stdout).unwrap();
     assert!(
@@ -686,7 +707,9 @@ fn keys_are_added_listed_and_revoked() {
     assert!(list.contains("any model"), "{list}");
     assert!(!list.contains(secret), "keys are never listed: {list}");
 
-    let out = s.run(&["key", "remove", "laptop"]).ok();
+    // Revoking asks first; without a terminal to ask at, it takes --yes.
+    s.run(&["key", "remove", "laptop"]).fails(1, "Pass --yes");
+    let out = s.run(&["key", "remove", "laptop", "--yes"]).ok();
     assert!(out.stdout.contains("Revoked the key \"laptop\""), "{out:?}");
     let list = s.run(&["key", "list"]).ok().stdout;
     assert!(!list.contains("laptop"), "{list}");
@@ -1507,6 +1530,19 @@ fn the_background_proxy_starts_reports_and_stops() {
     assert!(out.stdout.contains("slopmax running on"), "{out:?}");
     let out = s.run(&["proxy", "start"]).ok();
     assert!(out.stdout.contains("already running"), "{out:?}");
+    let before: Value =
+        serde_json::from_str(&s.run(&["proxy", "status", "--json"]).ok().stdout).unwrap();
+    assert_eq!(before["state"], "running", "{before:#}");
+    // A restart leaves a new process serving.
+    let out = s.run(&["proxy", "restart"]).ok();
+    assert!(
+        out.stdout.contains("restarted on") || out.stdout.contains("slopmax running on"),
+        "{out:?}"
+    );
+    let after: Value =
+        serde_json::from_str(&s.run(&["proxy", "status", "--json"]).ok().stdout).unwrap();
+    assert_eq!(after["running"], true, "{after:#}");
+    assert_ne!(after["pid"], before["pid"], "{before:#} {after:#}");
 
     // The status now comes from the proxy.
     let json: Value = serde_json::from_str(&s.run(&["status", "--json"]).ok().stdout).unwrap();

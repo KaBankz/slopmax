@@ -18,7 +18,7 @@ use slopmax_core::time::Timestamp;
 use slopmax_core::update::install::{self, Install};
 use slopmax_core::update::{self, Checked, Version};
 
-pub(super) async fn run(config: &Config, check: bool) -> Result<i32> {
+pub(super) async fn run(config: &Config, check: bool, json: bool) -> Result<i32> {
     let home = super::home();
     let ours = Version::current();
     let http = auth::http_client(Origins::default());
@@ -33,12 +33,24 @@ pub(super) async fn run(config: &Config, check: bool) -> Result<i32> {
         .context("locating the slopmax binary")?;
     let install = Install::of(&exe);
     if check {
+        let running = Daemon::new(config).running().await?;
+        if json {
+            let view = serde_json::json!({
+                "current": ours.to_string(),
+                "latest": latest.to_string(),
+                "newer": latest > ours,
+                "proxy": running,
+                "update": install.update_command(),
+            });
+            println!("{}", serde_json::to_string_pretty(&view)?);
+            return Ok(0);
+        }
         if latest > ours {
             println!("slopmax {latest} is out; this is {ours}. {}", how(&install));
         } else {
             println!("slopmax {ours} is the newest release.");
         }
-        if let Some(running) = Daemon::new(config).running().await?
+        if let Some(running) = running
             && running != ours.to_string()
         {
             println!("The proxy runs {running}; `slopmax update` moves it to {ours}.");
@@ -238,12 +250,12 @@ async fn restart_once(
     );
     let service = Manager::detect().is_some_and(|m| m.status(home).installed);
     let args: &[&str] = if service {
-        &["service", "install"]
+        &["proxy", "install"]
     } else {
         background::stop(config).await?;
         // Give the port back before the new proxy takes it.
         tokio::time::sleep(Duration::from_millis(300)).await;
-        &["start"]
+        &["proxy", "start"]
     };
     let status = std::process::Command::new(exe)
         .args(args)

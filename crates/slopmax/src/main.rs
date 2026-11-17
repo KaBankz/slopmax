@@ -20,11 +20,12 @@ fn main() -> ExitCode {
     #[cfg(windows)]
     keep_standard_handles();
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if let Some(now) = commands::moved(&args) {
+    if let Some((old, now)) = commands::moved(&args) {
+        // The help of the command alone, without flags like `--auto`.
+        let command = now.split(" --").next().unwrap_or(&now);
         eprintln!(
-            "{} `slopmax {}` is now `slopmax {now}`; see `slopmax {now} --help`.",
+            "{} `slopmax {old}` is now `slopmax {now}`; see `slopmax {command} --help`.",
             ui::red("error:"),
-            args.first().map(String::as_str).unwrap_or_default(),
         );
         return ExitCode::from(2);
     }

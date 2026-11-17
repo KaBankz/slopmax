@@ -40,8 +40,8 @@ pub(super) async fn run(ctx: &Ctx, r: Requests) -> Result<()> {
         },
         account,
         model: r.model,
-        offset: 0,
-        limit: r.limit as u64,
+        offset: r.offset as u64,
+        limit: r.limit.clamp(1, browse::MOST) as u64,
     };
     let page = match &client {
         Some(client) => client.requests(&query).await?,
@@ -139,8 +139,11 @@ fn print(page: &RequestPage, names: &HashMap<&str, &str>) {
         println!("{}", cells.join("  ").trim_end());
     }
     let shown = page.rows.len() as u64;
-    let more = if page.matched > shown {
-        format!(" ({shown} shown; --limit shows more)")
+    let more = if page.matched > page.offset + shown {
+        format!(
+            " ({shown} shown; --offset {} shows the next)",
+            page.offset + shown
+        )
     } else {
         String::new()
     };

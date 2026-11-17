@@ -22,8 +22,9 @@ use anyhow::{Context, Result, bail};
 
 use self::background::ensure_running;
 use crate::cli::{
-    Account, AccountCommand, Agent, AgentCommand, Command, Key, KeyCommand, Notify, NotifyCommand,
-    OnOff, Proxy, ProxyCommand, Setup, Slopmax, TailnetListCommand, Tailscale, TailscaleCommand,
+    Account, AccountCommand, AdminCommand, Agent, AgentCommand, Command, Key, KeyCommand, Notify,
+    NotifyCommand, OnOff, Proxy, ProxyCommand, Setup, Slopmax, TailnetAdmins, TailnetUsers,
+    Tailscale, TailscaleCommand, UserCommand,
 };
 use crate::{term, ui};
 use slopmax_core::account::Store;
@@ -55,9 +56,10 @@ pub(super) struct StatusArgs {
 /// They fail with the new spelling rather than run, so a script learns it
 /// once.
 const MOVED: &[(&[&str], &str)] = &[
-    (&["ls"], "account list"),
+    (&["ls"], "status"),
     (&["import"], "account import"),
     (&["own"], "account adopt"),
+    (&["use", "auto"], "account use --auto"),
     (&["use"], "account use"),
     (&["label"], "account rename"),
     (&["priority"], "account priority"),
@@ -75,9 +77,10 @@ const MOVED: &[(&[&str], &str)] = &[
     (&["env"], "agent env"),
 ];
 
-/// The new spelling of a command line that uses a moved command, if it
-/// does: `slopmax account rename 1 work` → `slopmax account rename`.
-pub fn moved(args: &[String]) -> Option<String> {
+/// The old spelling and the new of a command line that uses a moved
+/// command, if it does: `slopmax label 1 work` → (`label`, `account
+/// rename`).
+pub fn moved(args: &[String]) -> Option<(String, String)> {
     let first = args.first()?.as_str();
     // `setup <agent>` became `agent connect`, and `--undo` `disconnect`.
     if first == "setup"
@@ -90,12 +93,17 @@ pub fn moved(args: &[String]) -> Option<String> {
         } else {
             "connect"
         };
-        return Some(format!("agent {verb} {agent}"));
+        let old = if verb == "connect" {
+            format!("setup {agent}")
+        } else {
+            format!("setup {agent} --undo")
+        };
+        return Some((old, format!("agent {verb} {agent}")));
     }
     MOVED
         .iter()
         .find(|(words, _)| words.len() <= args.len() && words.iter().zip(args).all(|(w, a)| w == a))
-        .map(|(_, to)| (*to).to_owned())
+        .map(|(words, to)| (words.join(" "), (*to).to_owned()))
 }
 
 impl Command {
@@ -130,7 +138,7 @@ impl Command {
         match self {
             Self::Doctor(_) => true,
             Self::Config(c) => c.value.is_some(),
-            Self::Proxy(Proxy { command }) => matches!(
+            Self::Proxy(Proxy { command, .. }) => matches!(
                 command,
                 None | Some(
                     ProxyCommand::Status(_) | ProxyCommand::Stop(_) | ProxyCommand::Logs(_)
@@ -147,6 +155,7 @@ impl Command {
             Self::Serve(_) => true,
             Self::Proxy(Proxy {
                 command: Some(command),
+                ..
             }) => matches!(
                 command,
                 ProxyCommand::Start(_)
@@ -156,6 +165,7 @@ impl Command {
             ),
             Self::Account(Account {
                 command: Some(command),
+                ..
             }) => {
                 matches!(
                     command,
@@ -241,9 +251,9 @@ async fn dispatch(command: Command, ctx: &Ctx) -> Result<i32> {
         }
         Command::Dashboard(d) => dashboard(config, d.no_browser).await?,
         Command::Login(add) => accounts::add(ctx, add).await?,
-        Command::Account(Account { command }) => match command {
-            None => accounts::list(ctx, false).await?,
-            Some(AccountCommand::List(l)) => accounts::list(ctx, l.json.json).await?,
+        Command::Account(Account { json, command }) => match command {
+            None => accounts::list(ctx, json.json).await?,
+            Some(AccountCommand::List(l)) => accounts::list(ctx, json.json || l.json.json).await?,
             Some(AccountCommand::Add(add)) => accounts::add(ctx, add).await?,
             Some(AccountCommand::Import(i)) => {
                 let source = i.source.word().parse().map_err(anyhow::Error::msg)?;
@@ -258,14 +268,18 @@ async fn dispatch(command: Command, ctx: &Ctx) -> Result<i32> {
             Some(AccountCommand::Priority(p)) => {
                 accounts::set_priority(config, store, &p.account, p.tier).await?;
             }
-            Some(AccountCommand::Order(o)) => accounts::order(config, store, &o.accounts).await?,
+            Some(AccountCommand::Order(o)) => {
+                accounts::order(config, store, &o.accounts, json.json || o.json.json).await?;
+            }
             Some(AccountCommand::Enable(a)) => {
                 accounts::set_disabled(config, store, &a.account, false).await?;
             }
             Some(AccountCommand::Disable(a)) => {
                 accounts::set_disabled(config, store, &a.account, true).await?;
             }
-            Some(AccountCommand::Check(a)) => accounts::check(config, store, &a.account).await?,
+            Some(AccountCommand::Check(a)) => {
+                accounts::check(config, store, &a.account, json.json || a.json.json).await?;
+            }
             Some(AccountCommand::Redeem(r)) => {
                 accounts::redeem(config, store, &r.account, r.yes.yes).await?;
             }
@@ -279,17 +293,19 @@ async fn dispatch(command: Command, ctx: &Ctx) -> Result<i32> {
         }
         Command::Requests(r) => requests::run(ctx, r).await?,
         Command::Run(run) => return agents::run(config, run).await,
-        Command::Agent(Agent { command }) => match command {
-            None => agents::list(config, false)?,
-            Some(AgentCommand::List(l)) => agents::list(config, l.json.json)?,
+        Command::Agent(Agent { json, command }) => match command {
+            None => agents::list(config, json.json)?,
+            Some(AgentCommand::List(l)) => agents::list(config, json.json || l.json.json)?,
             Some(AgentCommand::Connect(a)) => agents::connect(config, store, a.agent).await?,
             Some(AgentCommand::Disconnect(a)) => agents::disconnect(a.agent)?,
             Some(AgentCommand::Run(run)) => return agents::run(config, run).await,
             Some(AgentCommand::Env(a)) => agents::env(config, a.agent)?,
         },
-        Command::Proxy(Proxy { command }) => match command {
-            None => background::status(config, false).await?,
-            Some(ProxyCommand::Status(s)) => background::status(config, s.json.json).await?,
+        Command::Proxy(Proxy { json, command }) => match command {
+            None => background::status(config, json.json).await?,
+            Some(ProxyCommand::Status(s)) => {
+                background::status(config, json.json || s.json.json).await?;
+            }
             Some(ProxyCommand::Start(_)) => background::start(config).await?,
             Some(ProxyCommand::Stop(_)) => background::stop(config).await?,
             Some(ProxyCommand::Restart(_)) => background::restart(config).await?,
@@ -308,45 +324,57 @@ async fn dispatch(command: Command, ctx: &Ctx) -> Result<i32> {
             )
             .await?;
         }
-        Command::Key(Key { command }) => match command {
-            None => key_list(config, false).await?,
-            Some(KeyCommand::List(l)) => key_list(config, l.json.json).await?,
-            Some(KeyCommand::Add(a)) => key_add(config, &a.name, a.models.as_deref()).await?,
-            Some(KeyCommand::Remove(r)) => key_remove(config, &r.name).await?,
+        Command::Key(Key { json, command }) => match command {
+            None => key_list(config, json.json).await?,
+            Some(KeyCommand::List(l)) => key_list(config, json.json || l.json.json).await?,
+            Some(KeyCommand::Add(a)) => key_add(config, &a.name, a.models).await?,
+            Some(KeyCommand::Remove(r)) => key_remove(config, &r.name, r.yes.yes).await?,
         },
-        Command::Tailscale(Tailscale { command }) => {
+        Command::Tailscale(Tailscale { json, command }) => {
+            let json = json.json;
             let args = match command {
-                None => tailscale::Args::Status { json: false },
-                Some(TailscaleCommand::Status(s)) => tailscale::Args::Status { json: s.json.json },
+                None => tailscale::Args::Status { json },
+                Some(TailscaleCommand::Status(s)) => tailscale::Args::Status {
+                    json: json || s.json.json,
+                },
                 Some(TailscaleCommand::On(on)) => tailscale::Args::On(on),
                 Some(TailscaleCommand::Off(_)) => tailscale::Args::Off,
-                Some(TailscaleCommand::User(list)) => tailscale::Args::Users(list_op(list.command)),
-                Some(TailscaleCommand::Admin(list)) => {
-                    tailscale::Args::Admins(list_op(list.command))
-                }
+                Some(TailscaleCommand::User(TailnetUsers {
+                    json: list,
+                    command,
+                })) => tailscale::Args::Users(match command {
+                    None => tailscale::ListOp::List(json || list.json),
+                    Some(UserCommand::List(l)) => {
+                        tailscale::ListOp::List(json || list.json || l.json.json)
+                    }
+                    Some(UserCommand::Add(n)) => tailscale::ListOp::Add(n.logins),
+                    Some(UserCommand::Remove(n)) => tailscale::ListOp::Remove(n.logins),
+                }),
+                Some(TailscaleCommand::Admin(TailnetAdmins {
+                    json: list,
+                    command,
+                })) => tailscale::Args::Admins(match command {
+                    None => tailscale::ListOp::List(json || list.json),
+                    Some(AdminCommand::List(l)) => {
+                        tailscale::ListOp::List(json || list.json || l.json.json)
+                    }
+                    Some(AdminCommand::Add(n)) => tailscale::ListOp::Add(n.machines),
+                    Some(AdminCommand::Remove(n)) => tailscale::ListOp::Remove(n.machines),
+                }),
             };
             tailscale::run(config, args).await?;
         }
         Command::Doctor(d) => {
             return doctor::run(config, store, ctx.broken.as_ref(), d.json.json).await;
         }
-        Command::Notify(Notify { command }) => match command {
-            None => notify_show(config).await?,
+        Command::Notify(Notify { json, command }) => match command {
+            None => notify_show(config, json.json).await?,
             Some(NotifyCommand::Test(_)) => notify_test(config).await?,
         },
-        Command::Update(u) => return update::run(config, u.check).await,
+        Command::Update(u) => return update::run(config, u.check, u.json).await,
         Command::Completion(_) => unreachable!("answered before the config is read"),
     }
     Ok(0)
-}
-
-/// `tailscale user|admin [list|add|remove]`.
-fn list_op(command: Option<TailnetListCommand>) -> tailscale::ListOp {
-    match command {
-        None | Some(TailnetListCommand::List(_)) => tailscale::ListOp::List,
-        Some(TailnetListCommand::Add(n)) => tailscale::ListOp::Add(n.names),
-        Some(TailnetListCommand::Remove(n)) => tailscale::ListOp::Remove(n.names),
-    }
 }
 
 /// `slopmax setup`: the guided setup, or with --hub, a hub's.
@@ -452,18 +480,24 @@ async fn dashboard(config: &Config, no_browser: bool) -> Result<()> {
     Ok(())
 }
 
-/// `slopmax notify`: where notifications go, and which events send one.
-async fn notify_show(config: &Config) -> Result<()> {
-    if config.hub.is_some() {
-        println!("This machine uses the hub; its notifications are set on the hub.");
+/// `slopmax notify`: where notifications go, and which events send one:
+/// the hub's, on a machine that uses one.
+async fn notify_show(config: &Config, json: bool) -> Result<()> {
+    let n = match daemon(config).await? {
+        Some(client) if config.hub.is_some() => client.settings().await?.settings.notify,
+        _ => slopmax_core::api::settings(config).notify,
+    };
+    if json {
+        println!("{}", serde_json::to_string_pretty(&n)?);
         return Ok(());
     }
-    let n = &config.notify;
-    if !n.is_enabled() {
-        println!(
-            "Notifications are off. Set a webhook or a command under [notify] in {}.",
-            home().config().display()
-        );
+    let whose = if config.hub.is_some() {
+        "the hub's config.toml".to_owned()
+    } else {
+        home().config().display().to_string()
+    };
+    if n.webhook.is_none() && n.command.is_none() {
+        println!("Notifications are off. Set a webhook or a command under [notify] in {whose}.");
         return Ok(());
     }
     if let Some(webhook) = &n.webhook {
@@ -472,12 +506,8 @@ async fn notify_show(config: &Config) -> Result<()> {
     if let Some(command) = &n.command {
         println!("command  {}", ui::bold(command));
     }
-    let events = if n.events.is_empty() {
-        notify::DEFAULT_EVENTS
-    } else {
-        &n.events
-    };
-    let words: Vec<String> = events
+    let words: Vec<String> = n
+        .events
         .iter()
         .filter_map(|e| serde_json::to_value(e).ok())
         .filter_map(|v| v.as_str().map(str::to_owned))
@@ -485,7 +515,9 @@ async fn notify_show(config: &Config) -> Result<()> {
     println!("events   {}", words.join(", "));
     println!(
         "{}",
-        ui::dim("`slopmax notify test` sends a test notification.")
+        ui::dim(format!(
+            "`slopmax notify test` sends a test notification; [notify] in {whose} changes these."
+        ))
     );
     Ok(())
 }
@@ -621,13 +653,12 @@ async fn key_list(config: &Config, json: bool) -> Result<()> {
 }
 
 /// `slopmax key add`: makes the key and prints it, once.
-async fn key_add(config: &Config, name: &str, models: Option<&str>) -> Result<()> {
+async fn key_add(config: &Config, name: &str, models: Vec<String>) -> Result<()> {
     use slopmax_client::api::requests::MakeKey;
     let models: Vec<String> = models
-        .unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
+        .iter()
+        .map(|m| m.trim())
+        .filter(|m| !m.is_empty())
         .map(str::to_owned)
         .collect();
     let (key, applied) = match daemon(config).await? {
@@ -664,9 +695,22 @@ async fn key_add(config: &Config, name: &str, models: Option<&str>) -> Result<()
 }
 
 /// `slopmax key remove`.
-async fn key_remove(config: &Config, name: &str) -> Result<()> {
+async fn key_remove(config: &Config, name: &str, yes: bool) -> Result<()> {
     use slopmax_client::api::ApiError;
-    let removed = match daemon(config).await? {
+    let client = daemon(config).await?;
+    // Asks only about a key there is.
+    let known = match &client {
+        Some(client) => client.keys().await?.iter().any(|k| k.name == name),
+        None => config.keys.iter().any(|k| k.name == name),
+    };
+    if !known {
+        bail!("no key named {name:?}; `slopmax key list` shows them");
+    }
+    let question = format!("Revoke the key {name:?}? What uses it is refused from then on.");
+    if !confirmed(yes, &question)? {
+        return Ok(());
+    }
+    let removed = match client {
         Some(client) => match client.remove_key(name).await {
             Ok(_) => true,
             Err(slopmax_client::Error::Api(ApiError::NotFound { .. })) => false,
@@ -714,19 +758,27 @@ async fn settings(config: &Config, name: &str, value: &str, json: bool) -> Resul
         path.display().to_string()
     };
     if json && value.is_empty() {
+        // Keyed as `config` takes them, with typed values.
         let settings = match &shown {
             Some(settings) => settings.clone(),
             None => slopmax_core::api::settings(config),
         };
-        let shown = if name.is_empty() {
-            serde_json::to_value(&settings.live)?
-        } else {
-            if slopmax_client::api::settings::live(name).is_none() {
-                LivePatch::parse(name, "").map_err(anyhow::Error::msg)?;
+        let mut object = serde_json::Map::new();
+        if name.is_empty() || name == "listen" {
+            object.insert("listen".into(), config.listen.to_string().into());
+        }
+        if name.is_empty() {
+            for live in LIVE {
+                object.insert(live.toml.into(), typed(settings.live.get(live.toml)));
             }
-            serde_json::json!({ name: current(config, name) })
-        };
-        println!("{}", serde_json::to_string_pretty(&shown)?);
+        } else if name != "listen" {
+            let Some(live) = slopmax_client::api::settings::live(name) else {
+                LivePatch::parse(name, "").map_err(anyhow::Error::msg)?;
+                unreachable!("an unknown name doesn't parse");
+            };
+            object.insert(live.toml.into(), typed(settings.live.get(name)));
+        }
+        println!("{}", serde_json::to_string_pretty(&object)?);
         return Ok(());
     }
     if name.is_empty() {
@@ -779,8 +831,7 @@ async fn settings(config: &Config, name: &str, value: &str, json: bool) -> Resul
     let (now, applied) = match daemon(config).await? {
         Some(client) => {
             let view = client.change_settings(&patch).await?;
-            let now = view.settings.live.get(name).map(|v| v.text());
-            (now.unwrap_or_default(), "applied now")
+            (view.settings.live.get(name), "applied now")
         }
         None => {
             let values: Vec<_> = patch
@@ -790,24 +841,40 @@ async fn settings(config: &Config, name: &str, value: &str, json: bool) -> Resul
                 .collect();
             let changed = Config::set(&path, &values)?;
             (
-                current(&changed, name),
+                slopmax_core::api::settings(&changed).live.get(name),
                 "the proxy applies it when it starts",
             )
         }
     };
     if json {
+        let toml = slopmax_client::api::settings::live(name).map_or(name, |l| l.toml);
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({ name: now }))?
+            serde_json::to_string_pretty(&serde_json::json!({ toml: typed(now) }))?
         );
         return Ok(());
     }
+    let now = now.map(|v| v.text()).unwrap_or_default();
     println!(
         "{name} = {} {}",
         ui::bold(now),
         ui::dim(format!("({applied})"))
     );
     Ok(())
+}
+
+/// A live setting's value as JSON: a switch as a boolean, minutes as a
+/// number, a strategy as its name.
+fn typed(value: Option<slopmax_client::api::settings::LiveValue>) -> serde_json::Value {
+    use slopmax_client::api::settings::LiveValue;
+    match value {
+        Some(LiveValue::Switch(on)) => on.into(),
+        Some(LiveValue::Minutes(minutes)) => minutes.into(),
+        Some(LiveValue::Strategy(strategy)) => {
+            serde_json::to_value(strategy).unwrap_or(serde_json::Value::Null)
+        }
+        None => serde_json::Value::Null,
+    }
 }
 
 /// The home this process works in: made once, from the environment, and
@@ -864,20 +931,26 @@ mod tests {
 
     #[test]
     fn moved_commands_name_their_new_spelling() {
-        for (old, new) in [
-            ("label 1 work", "account rename"),
-            ("use auto", "account use"),
-            ("own all", "account adopt"),
-            ("ls", "account list"),
-            ("start", "proxy start"),
-            ("logs -f", "proxy logs"),
-            ("service install", "proxy install"),
-            ("service", "proxy status"),
-            ("env claude", "agent env"),
-            ("setup claude", "agent connect claude"),
-            ("setup codex --undo", "agent disconnect codex"),
+        for (line, old, new) in [
+            ("label 1 work", "label", "account rename"),
+            ("use auto", "use auto", "account use --auto"),
+            ("use 2", "use", "account use"),
+            ("own all", "own", "account adopt"),
+            ("ls", "ls", "status"),
+            ("start", "start", "proxy start"),
+            ("logs -f", "logs", "proxy logs"),
+            ("service install", "service install", "proxy install"),
+            ("service", "service", "proxy status"),
+            ("env claude", "env", "agent env"),
+            ("setup claude", "setup claude", "agent connect claude"),
+            (
+                "setup codex --undo",
+                "setup codex --undo",
+                "agent disconnect codex",
+            ),
         ] {
-            assert_eq!(moved(&words(old)).as_deref(), Some(new), "{old}");
+            let found = moved(&words(line));
+            assert_eq!(found, Some((old.to_owned(), new.to_owned())), "{line}");
         }
         for current in ["setup --yes", "status", "account use 1", "proxy start", ""] {
             assert_eq!(moved(&words(current)), None, "{current}");

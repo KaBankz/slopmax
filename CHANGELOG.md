@@ -12,7 +12,8 @@ The command line is rebuilt on [usage](https://usage.jdx.dev) and regrouped: thi
 
   | Before | Now |
   | --- | --- |
-  | `import`, `own`, `use`, `label`, `priority`, `order`, `enable`, `disable`, `redeem`, `remove`, `ls` | `account import`, `account adopt`, `account use`, `account rename`, `account priority`, `account order`, `account enable`, `account disable`, `account redeem`, `account remove`, `account list` |
+  | `import`, `own`, `use`, `label`, `priority`, `order`, `enable`, `disable`, `redeem`, `remove` | `account import`, `account adopt`, `account use`, `account rename`, `account priority`, `account order`, `account enable`, `account disable`, `account redeem`, `account remove` |
+  | `ls` | `status` |
   | `use auto` | `account use --auto` |
   | `start`, `stop`, `logs`, `serve` | `proxy start`, `proxy stop`, `proxy logs`, `proxy serve` |
   | `service install`, `service uninstall`, `service status` | `proxy install`, `proxy uninstall`, `proxy status` |
@@ -23,7 +24,7 @@ The command line is rebuilt on [usage](https://usage.jdx.dev) and regrouped: thi
 
   `slopmax login` and `slopmax run` stay as shortcuts for `account add` and `agent run`, and `slopmax serve` still runs the proxy, as the login services installed before run it.
 - Flags renamed: `--own` is `--adopt` (`account import`, `setup`), `setup --hub`'s `--key` and `--name` are `--hub-key` and `--key-name`, and `dashboard --print` is `dashboard --no-browser`, as `login` has it.
-- `account remove` asks before forgetting an account, as `account redeem` asks before spending a limit reset. Without a terminal both fail unless given `--yes`, rather than doing nothing.
+- `account remove` and `key remove` ask before forgetting an account or revoking a key, as `account redeem` asks before spending a limit reset. Without a terminal all three fail unless given `--yes`, rather than doing nothing.
 - A command line that doesn't parse says so as before, with the possible values and a suggestion, and exits 2; a value outside a flag's choices (`--by week`, `--strategy sideways`) is now such an error.
 - Shell completion completes every subcommand, flag, and value, the accounts and key names included, for bash, zsh, fish, nushell, PowerShell, and elvish; `slopmax completion <shell> --install` puts the script where the shell looks.
 - `--help` shows examples, the environment variables slopmax reads, and what each exit code means.
@@ -34,8 +35,8 @@ The command line is rebuilt on [usage](https://usage.jdx.dev) and regrouped: thi
 - `slopmax account check <account>`: lifts slopmax's hold on an account and reads its usage again, as the dashboard's Check does.
 - `slopmax requests`: the requests the proxy answered, newest first, as the dashboard's Requests page lists them (`--failed`, `--account`, `--model`, `-n`, `--json`).
 - `slopmax agent list`: the agents, and whether each points at slopmax.
-- `slopmax proxy status` and `slopmax proxy restart`.
-- `--json` on `account list`, `agent list`, `proxy status`, `key list`, `config`, `doctor`, and `requests`.
+- `slopmax proxy status`, which also tells a proxy started from another home, and `slopmax proxy restart`, which hands the proxy's connections to a new process as an update does.
+- `--json` on every command that prints data: `account [list]`, `account order`, `account check`, `agent [list]`, `proxy [status]`, `key [list]`, `config` (keyed as `config` takes the settings, with typed values), `tailscale user` and `admin`, `notify`, `doctor`, `requests` (with `--offset` to page back), and `update --check`.
 - `slopmax __usage_spec__` prints the command line as a usage spec, each command marked as reading, changing, or destroying; the spec and a CLI reference made from it are in [docs/cli](docs/cli/README.md).
 
 ### Fixed
