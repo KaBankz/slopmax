@@ -114,10 +114,13 @@ echo "$llvm" >> "$GITHUB_PATH"
 export XWIN_CACHE_DIR="$HOME/.cache/cargo-xwin" XWIN_MSVC_SYSROOT_DOWNLOAD_URL="$SYSROOT_URL"
 sysroot="$XWIN_CACHE_DIR/windows-msvc-sysroot"
 if [ ! -f "$sysroot/DONE" ]; then
-  rm -rf "$sysroot" && mkdir -p "$sysroot"
+  # One command a line: errexit skips a failure before a && or ||.
+  rm -rf "$sysroot"
+  mkdir -p "$sysroot"
   curl -fsSL --retry 3 -o "$sysroot.tar.xz" "$SYSROOT_URL"
   echo "$SYSROOT_SHA256  $sysroot.tar.xz" | sha256sum -c -
-  tar -xJf "$sysroot.tar.xz" -C "$sysroot" && rm "$sysroot.tar.xz"
+  tar -xJf "$sysroot.tar.xz" -C "$sysroot"
+  rm "$sysroot.tar.xz"
   echo "$SYSROOT_URL" > "$sysroot/DONE"
 fi
 exports=$(PATH="$llvm:$PATH" cargo xwin env --target "$usage_target")
