@@ -11,19 +11,27 @@ run = "cargo build --release --locked"
 
 [tasks.check]
 description = "Format check, lint, and test"
+run = [{ task = "lint" }, { task = "test" }]
+
+# CI runs these two as separate jobs: each builds the workspace its own way
+# (clippy only checks it; the tests compile it), so side by side they take
+# as long as the slower one rather than both.
+[tasks.lint]
+description = "Format check and lint"
 run = [
   "cargo fmt --all --check",
   "cargo clippy --all-targets --all-features --locked -- -D warnings",
+]
+
+[tasks.test]
+description = "Run the tests"
+run = [
   "cargo test --locked",
   # Day boundaries across a daylight saving change, in a zone that has one.
   "TZ=America/New_York cargo test --locked -p slopmax-common local_midnight",
 ]
 # Windows has no TZ database for the daylight saving check.
-run_windows = [
-  "cargo fmt --all --check",
-  "cargo clippy --all-targets --all-features --locked -- -D warnings",
-  "cargo test --locked --no-fail-fast",
-]
+run_windows = "cargo test --locked --no-fail-fast"
 
 [tasks.web]
 description = "Check the web UI and @slopmax/client: format, types, lint, tests, and the contract fixtures"
@@ -79,6 +87,28 @@ run = [
   "usage lint docs/cli/slopmax.usage.kdl",
   "usage generate markdown --file docs/cli/slopmax.usage.kdl --indented-blocks-to-code-fences --out-file docs/cli/README.md",
 ]
+
+[tasks.windows-env]
+description = "On a Linux CI runner: set up a Windows release build with cargo-xwin, in $GITHUB_ENV and $GITHUB_PATH"
+usage = 'arg "<target>" help="x86_64-pc-windows-msvc or aarch64-pc-windows-msvc"'
+tools = { "github:rust-cross/cargo-xwin" = "0.23.1" }
+# The clang backend: ring builds arm64 Windows with plain clang, which the
+# clang-cl backend's flags break, and its Windows SDK downloads in about 25
+# seconds where the clang-cl backend's took over 8 minutes.
+env = { XWIN_CROSS_COMPILER = "clang" }
+run = '''
+# The runner's newest LLVM: clang, lld-link, llvm-lib, and the llvm-rc that
+# gives slopmax.exe its icon (build.rs).
+llvm=$(ls -d /usr/lib/llvm-* 2>/dev/null | sort -V | tail -1)/bin
+[ -x "$llvm/lld-link" ] || { echo "no LLVM in /usr/lib/llvm-*" >&2; exit 1; }
+echo "$llvm" >> "$GITHUB_PATH"
+exports=$(PATH="$llvm:$PATH" cargo xwin env --target "$usage_target")
+# The compiler, linker, and SDK settings, without the Wine test runner or
+# the PATH and RUSTFLAGS cargo-xwin would replace.
+printf '%s\n' "$exports" \
+  | sed -nE 's/^export ([A-Za-z0-9_]+)="(.*)";$/\1=\2/p' \
+  | grep -vE '^(PATH|RUSTFLAGS|CARGO_TARGET_[A-Z0-9_]+_RUNNER)=' >> "$GITHUB_ENV"
+'''
 
 [tasks.launchd]
 description = "On a macOS CI runner: the login agent under launchd, through a crash, a handoff, stop and start"
