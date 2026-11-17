@@ -26,6 +26,7 @@ The workspace is a flat `crates/` directory, each folder named after its crate:
 ```
 crates/
   slopmax          the CLI: the `slopmax` binary, its parser, questions, and printing
+  slopmax-tui      the terminal UI: the dashboard's pages in a terminal, on the client
   slopmax-daemon   the daemon: the proxy, /slopmax/api and its event stream, the web UI,
                    and the background jobs, on the engine
   slopmax-launcher slopmaxw.exe, which runs the proxy at login on Windows with no console
@@ -42,7 +43,7 @@ web/               the web UI the daemon serves (React), and @slopmax/client, it
 contract/          the API's answers as the daemon gives them, which the web UI's client decodes
 ```
 
-Dependencies point one way: `slopmax-common` under `slopmax-net`, `slopmax-wire` and `slopmax-api`; those under `slopmax-core` and `slopmax-client`; the core under the daemon; and the daemon, the core and the client under the CLI. The core re-exports the crates beneath it (`slopmax_core::net`, `::wire`, `::time`, `::log`).
+Dependencies point one way: `slopmax-common` under `slopmax-net`, `slopmax-wire` and `slopmax-api`; those under `slopmax-core` and `slopmax-client`; the core under the daemon; the client under the terminal UI; and the daemon, the core, the client and the terminal UI under the CLI. The terminal UI knows nothing of the engine: like the web UI it reads and changes only what `/slopmax/api` offers, so it shows a hub on another machine as it shows the local proxy. The core re-exports the crates beneath it (`slopmax_core::net`, `::wire`, `::time`, `::log`).
 
 ### One writer, many clients
 
@@ -100,6 +101,19 @@ slopmax-core/src/
   report.rs     the status report; doctor.rs the setup checks; service.rs systemd and launchd
   paths.rs      Home: a slopmax directory and its files (the proxy carries its own)
   fsx.rs        private files: atomic writes, locks, owner-only modes
+
+slopmax-tui/src/
+  lib.rs        the event loop: keys and the mouse, the event stream, answers, the clock
+  app.rs        the screen's state, and what each key and click does to it; data.rs what
+                is known of the daemon, the fetches and changes asked of it, and the
+                stream followed (and followed again when it breaks)
+  ui/           drawing: mod.rs the sidebar, header, scrolled page, key hints, dialogs,
+                toasts and help; one file per page (overview, provider, usage and
+                performance, requests, system: agents, access, diagnostics, settings);
+                widgets.rs the bars, charts and layout they share
+  theme.rs      the terminal's own palette, and surfaces a shade off its background;
+                fx.rs the motion (tachyonfx); terminal.rs taking the terminal and giving
+                it back; format.rs the words: local times, money, counts
 
 slopmax-wire/src/   errors and usage per Dialect; ir.rs and one codec per format
 slopmax-net/src/    client.rs (pooling, TLS, CONNECT and SOCKS5 proxies), server.rs, ws.rs (RFC 6455)
@@ -310,7 +324,7 @@ slopmax talks to Tailscale only through its CLI (`slopmax-core/src/tailscale.rs`
 
 ## Dependencies
 
-The binary is about 10.3 MB, from 74 crates besides slopmax's own. The async stack is tokio, hyper, and rustls (with ring). serde_json, toml_edit, memchr, base64, thiserror and anyhow round it out. Time, logging, form encoding, and the HTTP client conveniences are small in-house modules, because the crates for them each pull in far more than slopmax uses. A crate earns its place by doing its job measurably better than a small module would: faster, leaner, or more correct. The CI holds the tree to 74 crates and the binary to 10 MiB; raising either needs that reason in the commit. usage-rs (with usage-argv and usage-derive) is the newest: it replaced an in-house parser so that one set of types gives the parser, help with examples, completions that know the accounts in six shells, and a usage spec that agents and the generated docs read, for 0.64 MB. Before it, miniz_oxide (with adler2): Anthropic gzips Claude's answers, and its streaming inflate lets slopmax read a copy of them for token usage; slopmax reads the gzip header itself. Before it, tokio-util's `CancellationToken` and `TaskTracker` let the daemon stop in order, for 30 KB.
+The binary is about 11.8 MB, from 130 crates besides slopmax's own. The async stack is tokio, hyper, and rustls (with ring). serde_json, toml_edit, memchr, base64, thiserror and anyhow round it out. Time, logging, form encoding, and the HTTP client conveniences are small in-house modules, because the crates for them each pull in far more than slopmax uses. A crate earns its place by doing its job measurably better than a small module would: faster, leaner, or more correct. The CI holds the tree to 130 crates and the binary to 12 MiB; raising either needs that reason in the commit. The terminal UI is the newest: ratatui (on crossterm) draws it, tachyonfx moves it, and terminal-colorsaurus asks the terminal for its background, for 56 crates and 1.56 MB; a terminal dashboard that redraws only what changed, lays out at any size and reads every terminal's input is far more than a small module, and the web dashboard's parity in a terminal is what it buys. Before it, usage-rs (with usage-argv and usage-derive) is the newest: it replaced an in-house parser so that one set of types gives the parser, help with examples, completions that know the accounts in six shells, and a usage spec that agents and the generated docs read, for 0.64 MB. Before it, miniz_oxide (with adler2): Anthropic gzips Claude's answers, and its streaming inflate lets slopmax read a copy of them for token usage; slopmax reads the gzip header itself. Before it, tokio-util's `CancellationToken` and `TaskTracker` let the daemon stop in order, for 30 KB.
 
 ## Performance
 

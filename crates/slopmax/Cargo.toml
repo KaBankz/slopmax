@@ -23,6 +23,7 @@ serde_json.workspace = true
 slopmax-client.workspace = true
 slopmax-core.workspace = true
 slopmax-daemon.workspace = true
+slopmax-tui.workspace = true
 tokio.workspace = true
 usage-rs.workspace = true
 

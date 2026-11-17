@@ -1,0 +1,28 @@
+---
+source: crates/slopmax-tui/src/ui/tests.rs
+expression: screen
+---
+"  ◆ 10/12 Access  1 client key                                          ● 09:30 "
+" ────────────────────────────────────────────────────────────────────────────── "
+"                                                                                "
+"  Add an account ────────────────────────────────────────────────────────────┃  "
+"                                                                             ┃  "
+"    slopmax login claude            sign in to a Claude subscription         ┃  "
+"    slopmax login codex             sign in to a ChatGPT subscription        ┃  "
+"    slopmax login grok              sign in to SuperGrok                     ┃  "
+"    slopma╭ New client key ──────────────────────────────────────────╮       ┃  "
+"    slopma│                                                          │       ┃  "
+"          │ A name for the machine or tool that will use it          │       ┃  "
+"  Client k│                                                          │ revoke┃  "
+"          │ › …e-long-enough-to-run-past-the-edge-of-the-dialog-box▏ │       ┃  "
+"  ▌laptop │                                                          │       ┃  "
+"          │ ⏎ save   esc cancel                                      │       ┃  "
+"  Other ma╰──────────────────────────────────────────────────────────╯───────┃  "
+"                                                                             ┃  "
+"    Tailscale     ● not installed                                            ┃  "
+"    Published     no · `slopmax tailscale on` shares it                      ┃  "
+"    Users         none                                                       ┃  "
+"    Admins        none                                                       ┃  "
+"                                                                             ┃  "
+"    ● Tailscale isn't installed here                                         │  "
+"  ↑↓ select   a add key   x revoke   ⇥ pages   ? help   q quit                  "

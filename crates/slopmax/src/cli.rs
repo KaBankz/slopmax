@@ -36,8 +36,8 @@ Docs: https://github.com/KaBankz/slopmax#readme";
 /// proxy, so Claude Code, Codex, and Grok Build keep working when an account
 /// runs out.
 ///
-/// Run without a command to see your accounts, or to set slopmax up the
-/// first time.
+/// Run without a command to open the terminal UI (piped, it prints the
+/// accounts' standing instead), or to set slopmax up the first time.
 #[derive(Cli)]
 #[usage(
     bin = "slopmax",
@@ -66,63 +66,66 @@ pub enum Command {
     /// Show the accounts, their usage windows, and when limits reset
     #[usage(display_order = 2, help_heading = "Start here")]
     Status(Status),
-    /// Open the dashboard in a browser, starting the proxy if needed
+    /// Open the terminal UI: the dashboard's pages in this terminal
     #[usage(display_order = 3, help_heading = "Start here")]
+    Tui(Tui),
+    /// Open the dashboard in a browser, starting the proxy if needed
+    #[usage(display_order = 4, help_heading = "Start here")]
     Dashboard(Dashboard),
 
     // Accounts
     /// Connect an account: sign in, or enter an API key (`account add`)
-    #[usage(display_order = 4, help_heading = "Accounts")]
+    #[usage(display_order = 5, help_heading = "Accounts")]
     Login(AccountAdd),
     /// List, add, and manage the accounts slopmax pools
     #[usage(
-        display_order = 5,
+        display_order = 6,
         alias_hidden = "accounts",
         help_heading = "Accounts"
     )]
     Account(Account),
     /// Show token usage and what it would have cost on the API
-    #[usage(display_order = 6, help_heading = "Activity")]
+    #[usage(display_order = 7, help_heading = "Activity")]
     Usage(Usage),
     /// Show the requests the proxy answered
-    #[usage(display_order = 7, help_heading = "Activity")]
+    #[usage(display_order = 8, help_heading = "Activity")]
     Requests(Requests),
 
     // Agents
     /// Launch an agent through the proxy (`agent run`)
-    #[usage(display_order = 8, help_heading = "Agents")]
+    #[usage(display_order = 9, help_heading = "Agents")]
     Run(AgentRun),
     /// Point Claude Code, Codex, and Grok Build at slopmax
-    #[usage(display_order = 9, alias_hidden = "agents", help_heading = "Agents")]
+    #[usage(display_order = 10, alias_hidden = "agents", help_heading = "Agents")]
     Agent(Agent),
 
     // The proxy
     /// Start, stop, and inspect the proxy, and run it at login
-    #[usage(display_order = 10, help_heading = "Proxy")]
+    #[usage(display_order = 11, help_heading = "Proxy")]
     Proxy(Proxy),
     /// Show the routing settings, or change one while the proxy runs
-    #[usage(display_order = 11, help_heading = "Proxy")]
+    #[usage(display_order = 12, help_heading = "Proxy")]
     Config(ConfigCmd),
     /// Manage keys that let other machines and tools use the proxy
-    #[usage(display_order = 12, alias_hidden = "keys", help_heading = "Proxy")]
+    #[usage(display_order = 13, alias_hidden = "keys", help_heading = "Proxy")]
     Key(Key),
     /// Share slopmax with your own machines over Tailscale
-    #[usage(display_order = 13, help_heading = "Proxy")]
+    #[usage(display_order = 14, help_heading = "Proxy")]
     Tailscale(Tailscale),
 
     // Maintenance
     /// Check the setup and say how to fix what's wrong
-    #[usage(display_order = 14, help_heading = "Maintenance")]
+    #[usage(display_order = 15, help_heading = "Maintenance")]
     Doctor(Doctor),
     /// Show how slopmax notifies you, or send a test notification
-    #[usage(display_order = 15, help_heading = "Maintenance")]
+    #[usage(display_order = 16, help_heading = "Maintenance")]
     Notify(Notify),
     /// Install the newest slopmax and move the running proxy to it
-    #[usage(display_order = 16, help_heading = "Maintenance")]
+    #[usage(display_order = 17, help_heading = "Maintenance")]
     Update(Update),
     /// Print or install a shell completion script
     #[usage(
-        display_order = 17,
+        display_order = 18,
         alias_hidden = "completions",
         help_heading = "Maintenance"
     )]
@@ -130,7 +133,7 @@ pub enum Command {
 
     /// Run the proxy in the foreground (`proxy serve`); what login
     /// services run
-    #[usage(display_order = 18, hide)]
+    #[usage(display_order = 19, hide)]
     Serve(ProxyServe),
 }
 
@@ -272,6 +275,26 @@ pub struct Status {
     #[usage(flatten)]
     pub json: Json,
 }
+
+/// Open the terminal UI: the dashboard's pages in this terminal.
+///
+/// The overview, each provider's pool and forecast, usage and performance
+/// over a day, a week or a month, the requests as they are answered, and
+/// the agents, keys, diagnostics and settings, kept up to date as the proxy
+/// answers. Accounts can be turned on and off, preferred, checked and their
+/// limit resets redeemed; agents connected; settings changed. It starts the
+/// proxy if it isn't running, or shows the hub this machine uses. `slopmax`
+/// alone opens it at a terminal.
+#[derive(Args)]
+#[usage(
+    effect = "write",
+    example("slopmax tui", header = "Open the terminal UI"),
+    example(
+        "NO_COLOR=1 slopmax tui",
+        header = "Without color, in bold and dim alone"
+    )
+)]
+pub struct Tui;
 
 /// Open the dashboard in a browser, starting the proxy if needed.
 #[derive(Args)]
@@ -1528,7 +1551,8 @@ mod tests {
             .replace("\r\n", "\n");
         assert!(
             saved == spec,
-            "docs/cli/slopmax.usage.kdl is out of date: run `SLOPMAX_BLESS=1 cargo test -p slopmax`, then `mise run cli-docs`"
+            "docs/cli/slopmax.usage.kdl is out of date: run `SLOPMAX_BLESS=1 cargo test -p slopmax`, \
+             then `mise run cli-docs`. It should read:\n{spec}"
         );
     }
 }

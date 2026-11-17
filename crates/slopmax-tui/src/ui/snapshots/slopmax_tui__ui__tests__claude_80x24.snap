@@ -1,0 +1,28 @@
+---
+source: crates/slopmax-tui/src/ui/tests.rs
+expression: screen
+---
+"  ◆ 2/12 Claude  2 of 2 ready                                           ● 09:30 "
+" ────────────────────────────────────────────────────────────────────────────── "
+"                                                                                "
+"  Pool ──────────────────────────────────────────────────────────────────────┃  "
+"                                                                             ┃  "
+"   5-hour          ━━─────────────── ━━━━━━━━━━━━━━━━━━━━━━━━━━━──────  59%  ┃  "
+"                   resets in 2h30m · 12:00                                   ┃  "
+"   Weekly          ━━━━━──────────── ━━━━━━━━━━━━━━━╸─────────────────  41%  ┃  "
+"                   resets in 2h30m · 12:00                                   ┃  "
+"   Weekly · Fable  ───────────────── ━━━━━━━━━━━━━━━━━━━━━────────────  64%  ┃  "
+"                   resets in 2h30m · 12:00                                   ┃  "
+"   Across 2 accounts, weighted by plan                                       ┃  "
+"   → New sessions go to Spare · the only account ready                       │  "
+"                                                                             │  "
+"  Accounts ──────────────────────────────────────────────────────────────────│  "
+"                                                                             │  "
+"  ▌Spare  next                                                         Max 5x│  "
+"    ● ready                                                                  │  "
+"    5-hour         ━━──────────────  12%  2h30m · 12:00  38% in reserve      │  "
+"    Weekly         ━━━━━───────────  30%  2h30m · 12:00  69% in reserve      │  "
+"    priority 2                                                               │  "
+"    Last day       ································  0 ok since 20:00        │  "
+"                                                                             │  "
+"  ↑↓ select   ␣ on/off   p prefer   c check   ⇥ pages   ? help   q quit         "

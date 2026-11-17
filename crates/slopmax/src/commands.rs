@@ -112,6 +112,7 @@ impl Command {
         match self {
             Self::Setup(_) => "setup",
             Self::Status(_) => "status",
+            Self::Tui(_) => "tui",
             Self::Dashboard(_) => "dashboard",
             Self::Login(_) => "login",
             Self::Account(_) => "account",
@@ -210,8 +211,9 @@ pub async fn run(cli: Slopmax) -> Result<i32> {
         broken,
     };
     let Some(command) = command else {
-        // A first run at a terminal starts the guided setup; else the
-        // accounts' standing.
+        // A first run at a terminal starts the guided setup; a terminal
+        // after that gets the terminal UI, and a pipe the accounts'
+        // standing.
         if init::wanted(&ctx.config, &ctx.store) {
             let plan = init::Plan {
                 discover: true,
@@ -219,6 +221,13 @@ pub async fn run(cli: Slopmax) -> Result<i32> {
             };
             init::run(&ctx.config, &ctx.store, init::Answers::Ask, plan).await?;
             return Ok(0);
+        }
+        if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+            let result = tui(&ctx.config).await;
+            return match (result, ctx.config.hub_url()) {
+                (Err(e), Some(url)) => Err(from_hub(e, url, "tui")),
+                (result, _) => result.map(|()| 0),
+            };
         }
         status::run(&ctx.config, &ctx.store, StatusArgs::default()).await?;
         return Ok(0);
@@ -249,6 +258,7 @@ async fn dispatch(command: Command, ctx: &Ctx) -> Result<i32> {
             };
             status::run(config, store, args).await?;
         }
+        Command::Tui(_) => tui(config).await?,
         Command::Dashboard(d) => dashboard(config, d.no_browser).await?,
         Command::Login(add) => accounts::add(ctx, add).await?,
         Command::Account(Account { json, command }) => match command {
@@ -457,6 +467,25 @@ async fn logs(config: &Config, lines: usize, follow: bool) -> Result<()> {
         );
     }
     background::logs(lines, follow).await
+}
+
+/// `slopmax tui`, and `slopmax` alone at a terminal: the terminal UI, over
+/// this machine's proxy (started first if it isn't running) or the hub
+/// this machine uses.
+async fn tui(config: &Config) -> Result<()> {
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        bail!("slopmax tui needs a terminal");
+    }
+    if config.hub.is_none() {
+        ensure_running(config).await?;
+    }
+    let client = daemon(config)
+        .await?
+        .context("slopmax started, but doesn't answer; `slopmax proxy logs` says why")?;
+    let options = slopmax_tui::Options {
+        hub: config.hub_url().map(remote::host_name),
+    };
+    slopmax_tui::run(client, options).await
 }
 
 /// `slopmax dashboard`.

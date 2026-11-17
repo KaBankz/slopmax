@@ -1,0 +1,28 @@
+---
+source: crates/slopmax-tui/src/ui/tests.rs
+expression: screen
+---
+"  ◆ 1/12 Overview                                                       ● 09:30 "
+" ────────────────────────────────────────────────────────────────────────────── "
+"  ╭ Keys ────────────────────────────────────────────────────────────────────╮  "
+"  │                                                                          │  "
+"  │ Everywhere                              Overview                         │  "
+"  │                                                                          │  "
+"  │ ⇥ / →       next page                   ↑↓          select               │  "
+"  │ ⇧⇥ / ←      previous page               ⏎           open                 │  "
+"  │ 1–8         go to a numbered page                                        │  "
+"  │ ↑ ↓ / j k   select or scroll                                             │  "
+"  │ PgUp PgDn   ten rows at a time                                           │  "
+"  │ g / G       top / bottom                                                 │  "
+"  │ b           show or hide the sidebar                                     │  "
+"  │ F5          fetch the page again                                         │  "
+"  │ ctrl-r      read every account's usage                                   │  "
+"  │ esc         back to the overview                                         │  "
+"  │ ?           this help                                                    │  "
+"  │ q / ctrl-c  quit                                                         │  "
+"  │ ctrl-z      suspend                                                      │  "
+"  │                                                                          │  "
+"  ╰──────────────────────────────────────────────────────────────────────────╯  "
+"     → New sessions go to Spare · the only account ready                     │  "
+"                                                                             │  "
+"  ↑↓ select   ⏎ open   ⇥ pages   ? help   q quit                                "

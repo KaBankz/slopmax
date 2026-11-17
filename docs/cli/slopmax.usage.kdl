@@ -4,7 +4,7 @@ about "Pool your Claude, ChatGPT, and SuperGrok subscriptions behind one local p
 long_about #"""
 Pool your Claude, ChatGPT, and SuperGrok subscriptions behind one local proxy, so Claude Code, Codex, and Grok Build keep working when an account runs out.
 
-Run without a command to see your accounts, or to set slopmax up the first time.
+Run without a command to open the terminal UI (piped, it prints the accounts' standing instead), or to set slopmax up the first time.
 """#
 after_long_help #"""
 Environment:
@@ -110,11 +110,21 @@ Reads the running proxy, else the files on disk. Accounts are numbered; commands
     output human default=#true
     output json media_type="application/json" framing=json select=--json
 }
-cmd dashboard help_heading="Start here" help="Open the dashboard in a browser, starting the proxy if needed" effect=write display_order=3 {
+cmd tui help_heading="Start here" help="Open the terminal UI: the dashboard's pages in this terminal" effect=write display_order=3 {
+    long_help #"""
+Open the terminal UI: the dashboard's pages in this terminal.
+
+The overview, each provider's pool and forecast, usage and performance over a day, a week or a month, the requests as they are answered, and the agents, keys, diagnostics and settings, kept up to date as the proxy answers. Accounts can be turned on and off, preferred, checked and their limit resets redeemed; agents connected; settings changed. It starts the proxy if it isn't running, or shows the hub this machine uses. `slopmax` alone opens it at a terminal.
+"""#
+    flag "-h --help" help="Print help" action=help builtin=#true
+    example "slopmax tui" header="Open the terminal UI"
+    example "NO_COLOR=1 slopmax tui" header="Without color, in bold and dim alone"
+}
+cmd dashboard help_heading="Start here" help="Open the dashboard in a browser, starting the proxy if needed" effect=write display_order=4 {
     flag --no-browser help="Print the dashboard's address instead of opening a browser"
     flag "-h --help" help="Print help" action=help builtin=#true
 }
-cmd login help_heading=Accounts help="Connect an account: sign in, or enter an API key (`account add`)" effect=write display_order=4 {
+cmd login help_heading=Accounts help="Connect an account: sign in, or enter an API key (`account add`)" effect=write display_order=5 {
     long_help #"""
 Connect an account: sign in, or enter an API key.
 
@@ -157,7 +167,7 @@ Subscriptions (claude, codex, grok) sign in through the provider's own page. API
     example "slopmax login codex --device" header="Sign in with a code, from a machine with no browser"
     example "slopmax login compat --url http://localhost:11434/v1" header="Add a local OpenAI-compatible endpoint"
 }
-cmd account help_heading=Accounts help="List, add, and manage the accounts slopmax pools" effect=read display_order=5 {
+cmd account help_heading=Accounts help="List, add, and manage the accounts slopmax pools" effect=read display_order=6 {
     alias accounts hide=#true
     long_help #"""
 List, add, and manage the accounts slopmax pools.
@@ -317,7 +327,7 @@ The first refresh signs the other tool's copy out, so stop that tool first.
         complete account run="slopmax __complete_word__ --candidates account --line={{ words | shell_join | shell_quote }}"
     }
 }
-cmd usage help_heading=Activity help="Show token usage and what it would have cost on the API" effect=read display_order=6 {
+cmd usage help_heading=Activity help="Show token usage and what it would have cost on the API" effect=read display_order=7 {
     flag "-b --by" help="What to group by" default=day {
         arg <BY> {
             choices {
@@ -342,7 +352,7 @@ cmd usage help_heading=Activity help="Show token usage and what it would have co
     output human default=#true
     output json media_type="application/json" framing=json select=--json
 }
-cmd requests help_heading=Activity help="Show the requests the proxy answered" effect=read display_order=7 {
+cmd requests help_heading=Activity help="Show the requests the proxy answered" effect=read display_order=8 {
     flag --account help="Only those served by this account" {
         arg <ACCOUNT>
     }
@@ -370,7 +380,7 @@ cmd requests help_heading=Activity help="Show the requests the proxy answered" e
     output human default=#true
     output json media_type="application/json" framing=json select=--json
 }
-cmd run help_heading=Agents help="Launch an agent through the proxy (`agent run`)" effect=write display_order=8 {
+cmd run help_heading=Agents help="Launch an agent through the proxy (`agent run`)" effect=write display_order=9 {
     long_help #"""
 Launch an agent through the proxy, starting the proxy if needed.
 
@@ -387,7 +397,7 @@ Everything after the agent goes to it unchanged, and slopmax exits with the agen
     arg "[ARGS]..." help="Arguments for the agent" double_dash=automatic
     example "slopmax run claude --continue" header="Continue the last Claude Code session"
 }
-cmd agent help_heading=Agents help="Point Claude Code, Codex, and Grok Build at slopmax" effect=read display_order=9 {
+cmd agent help_heading=Agents help="Point Claude Code, Codex, and Grok Build at slopmax" effect=read display_order=10 {
     alias agents hide=#true
     long_help #"""
 Point Claude Code, Codex, and Grok Build at slopmax.
@@ -452,7 +462,7 @@ Everything after the agent goes to it unchanged, and slopmax exits with the agen
         example "eval \"$(slopmax agent env claude)\"" header="Point this shell's Claude Code at slopmax"
     }
 }
-cmd proxy help_heading=Proxy help="Start, stop, and inspect the proxy, and run it at login" effect=read display_order=10 {
+cmd proxy help_heading=Proxy help="Start, stop, and inspect the proxy, and run it at login" effect=read display_order=11 {
     long_help #"""
 Start, stop, and inspect the proxy, and run it at login.
 
@@ -492,7 +502,7 @@ Without a subcommand, shows whether the proxy runs.
         flag "-h --help" help="Print help" action=help builtin=#true
     }
 }
-cmd config help_heading=Proxy help="Show the routing settings, or change one while the proxy runs" effect=write display_order=11 {
+cmd config help_heading=Proxy help="Show the routing settings, or change one while the proxy runs" effect=write display_order=12 {
     long_help #"""
 Show the routing settings, or change one while the proxy runs.
 
@@ -508,7 +518,7 @@ A change applies at once to a running proxy, and is saved to config.toml. The ot
     output human default=#true
     output json media_type="application/json" framing=json select=--json
 }
-cmd key help_heading=Proxy help="Manage keys that let other machines and tools use the proxy" effect=read display_order=12 {
+cmd key help_heading=Proxy help="Manage keys that let other machines and tools use the proxy" effect=read display_order=13 {
     alias keys hide=#true
     long_help #"""
 Manage keys that let other machines and tools use the proxy.
@@ -540,7 +550,7 @@ Without a subcommand, lists the keys.
         complete name run="slopmax __complete_word__ --candidates name --line={{ words | shell_join | shell_quote }}"
     }
 }
-cmd tailscale help_heading=Proxy help="Share slopmax with your own machines over Tailscale" effect=read display_order=13 {
+cmd tailscale help_heading=Proxy help="Share slopmax with your own machines over Tailscale" effect=read display_order=14 {
     long_help #"""
 Share slopmax with your own machines over Tailscale.
 
@@ -625,7 +635,7 @@ Without a subcommand, lists them.
         }
     }
 }
-cmd doctor help_heading=Maintenance help="Check the setup and say how to fix what's wrong" effect=read display_order=14 {
+cmd doctor help_heading=Maintenance help="Check the setup and say how to fix what's wrong" effect=read display_order=15 {
     use json
     flag "-h --help" help="Print help" action=help builtin=#true
     output human default=#true
@@ -633,7 +643,7 @@ cmd doctor help_heading=Maintenance help="Check the setup and say how to fix wha
     exit_code 0 "nothing is broken"
     exit_code 1 "something is broken"
 }
-cmd notify help_heading=Maintenance help="Show how slopmax notifies you, or send a test notification" effect=read display_order=15 {
+cmd notify help_heading=Maintenance help="Show how slopmax notifies you, or send a test notification" effect=read display_order=16 {
     long_help #"""
 Show how slopmax notifies you, or send a test notification.
 
@@ -645,7 +655,7 @@ Without a subcommand, shows where notices go and which events send one (`--json`
         flag "-h --help" help="Print help" action=help builtin=#true
     }
 }
-cmd update help_heading=Maintenance help="Install the newest slopmax and move the running proxy to it" effect=write display_order=16 {
+cmd update help_heading=Maintenance help="Install the newest slopmax and move the running proxy to it" effect=write display_order=17 {
     long_help #"""
 Install the newest slopmax and move the running proxy to it.
 
@@ -657,7 +667,7 @@ It updates the way slopmax was installed, and the proxy changes over without dro
     output human default=#true
     output json media_type="application/json" framing=json select=--json
 }
-cmd completion help_heading=Maintenance help="Print or install a shell completion script" display_order=17 {
+cmd completion help_heading=Maintenance help="Print or install a shell completion script" display_order=18 {
     alias completions hide=#true
     flag --install help="Write the script where the shell looks for it instead of printing it" effect=write
     flag --force help="With --install, replace a file that was not generated by usage" effect=destructive requires=--install {
@@ -672,6 +682,6 @@ The file is overwritten without a backup, which is why this is labeled destructi
         choices bash elvish fish nu nushell powershell pwsh zsh
     }
 }
-cmd serve help="Run the proxy in the foreground (`proxy serve`); what login services run" hide=#true effect=write display_order=18 {
+cmd serve help="Run the proxy in the foreground (`proxy serve`); what login services run" hide=#true effect=write display_order=19 {
     flag "-h --help" help="Print help" action=help builtin=#true
 }

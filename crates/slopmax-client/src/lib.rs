@@ -24,8 +24,9 @@ use slopmax_api::ledger::{
 use slopmax_api::pools::PoolDetail;
 use slopmax_api::report::{AgentWiring, RedeemResult, Report, Section};
 use slopmax_api::requests::{
-    AccountAdded, AccountPatch, AddAccount, ImportRequest, ImportResult, LoginStarted, MakeKey,
-    PasteAddress, RedeemRequest, Shutdown, StartLogin, Stopping,
+    AccountAdded, AccountPatch, AddAccount, AgentConnected, AgentDisconnected, ImportRequest,
+    ImportResult, LoginStarted, MakeKey, PasteAddress, RedeemRequest, Shutdown, StartLogin,
+    Stopping,
 };
 use slopmax_api::settings::{KeyInfo, LivePatch, NewKey, SettingsView};
 use slopmax_api::tailnet::{Access, TailnetPatch, TailnetView};
@@ -481,6 +482,18 @@ impl Client {
     /// Each agent, and whether its config points it at slopmax.
     pub async fn agents(&self) -> Result<Vec<AgentWiring>> {
         self.call(Method::GET, "agents", Self::NONE).await
+    }
+
+    /// Points an agent's config at slopmax, as `slopmax agent connect` does.
+    pub async fn connect_agent(&self, id: slopmax_api::AgentId) -> Result<AgentConnected> {
+        let path = format!("agents/{}/connect", id.as_str());
+        self.call(Method::POST, &path, Self::NONE).await
+    }
+
+    /// Puts an agent's config back as it was before slopmax.
+    pub async fn disconnect_agent(&self, id: slopmax_api::AgentId) -> Result<AgentDisconnected> {
+        let path = format!("agents/{}/disconnect", id.as_str());
+        self.call(Method::POST, &path, Self::NONE).await
     }
 
     /// A provider's pool: its trend, forecast, and each account's spend.

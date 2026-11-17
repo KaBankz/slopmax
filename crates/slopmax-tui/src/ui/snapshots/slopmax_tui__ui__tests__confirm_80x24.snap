@@ -1,0 +1,28 @@
+---
+source: crates/slopmax-tui/src/ui/tests.rs
+expression: screen
+---
+"  ◆ 3/12 ChatGPT  0 of 1 ready                                          ● 09:30 "
+" ────────────────────────────────────────────────────────────────────────────── "
+"                                                                                "
+"  Pool ──────────────────────────────────────────────────────────────────────   "
+"                                                                                "
+"   5-hour          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100%     "
+"                   resets in 2h30m · 12:00                                      "
+"   Weekly          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸──────────────────  64%     "
+"          ╭ Redeem a limit reset on codex@example.com? ──────────────╮          "
+"   Across │                                                          │          "
+"   No acco│ It resets the account's usage windows at once and spends │om is b   "
+"          │ the one it holds.                                        │          "
+"  Accounts│                                                          │───────   "
+"          │                                                          │          "
+"  ▌codex@e│ y Redeem   n / esc cancel                                │    Pro   "
+"    ● limi╰──────────────────────────────────────────────────────────╯          "
+"    5-hour         ━━━━━━━━━━━━━━━━ 100%  2h30m · 12:00                         "
+"    Weekly         ━━━━━━━━━━──────  64%  2h30m · 12:00  35% in reserve         "
+"    1 limit reset, the next expires in 2h30m                                    "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"  ↑↓ select   ␣ on/off   p prefer   c check   ⇥ pages   ? help   q quit         "

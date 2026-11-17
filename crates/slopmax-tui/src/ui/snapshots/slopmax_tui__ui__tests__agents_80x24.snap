@@ -1,0 +1,28 @@
+---
+source: crates/slopmax-tui/src/ui/tests.rs
+expression: screen
+---
+"  ◆ 9/12 Agents  1 of 3 connected                                       ● 09:30 "
+" ────────────────────────────────────────────────────────────────────────────── "
+"                                                                                "
+"   Connecting an agent points its config at slopmax, so its requests go         "
+"   through the pool; disconnecting puts the config back as it was.              "
+"                                                                                "
+"  ▌Claude Code                                                    ● connected   "
+"    ~/.claude/settings.json → http://127.0.0.1:7567 · backed up                 "
+"                                                                                "
+"   Codex                                                      ● not connected   "
+"    ~/.codex/config.toml                                                        "
+"                                                                                "
+"   Grok Build                                                 ● not installed   "
+"    ~/.grok/settings.json                                                       "
+"                                                                                "
+"   slopmax run claude  runs an agent through slopmax without changing its con   "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"  ↑↓ select   x disconnect   ⇥ pages   ? help   q quit                          "
