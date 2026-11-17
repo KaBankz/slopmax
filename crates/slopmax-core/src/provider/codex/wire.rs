@@ -44,13 +44,30 @@ pub fn upstream_headers(
     headers
 }
 
-/// `0.159.3` from a user agent like `codex_exec/0.159.3 (Linux; x86_64) …`.
+/// Whether a request comes from Codex. Codex names itself in its user
+/// agent (`codex_exec/…`, `codex_cli_rs/…`, `Codex Desktop/…`) unless the
+/// app driving it renames it: T3 Code starts it as `T3 Code/…`. Every
+/// model request it makes, over HTTP or a socket, carries its window id
+/// either way.
+pub fn from_codex(headers: &HeaderMap) -> bool {
+    headers.contains_key("x-codex-window-id")
+        || headers.contains_key("x-codex-turn-metadata")
+        || user_agent(headers)
+            .and_then(|agent| agent.split_once('/'))
+            .is_some_and(|(product, _)| product.to_ascii_lowercase().starts_with("codex"))
+}
+
+fn user_agent(headers: &HeaderMap) -> Option<&str> {
+    headers.get("user-agent")?.to_str().ok()
+}
+
+/// `0.159.3` from Codex's user agent, `codex_exec/0.159.3 (Linux; x86_64) …`
+/// or under another app's name, `T3 Code/0.169.0 (Mac OS 26.1; arm64) …`.
 pub fn client_version(headers: &HeaderMap) -> Option<String> {
-    let agent = headers.get("user-agent")?.to_str().ok()?;
-    let (product, rest) = agent.split_once('/')?;
-    if !product.starts_with("codex") {
+    if !from_codex(headers) {
         return None;
     }
+    let (_, rest) = user_agent(headers)?.split_once('/')?;
     let version: String = rest
         .chars()
         .take_while(|c| c.is_ascii_digit() || *c == '.')
@@ -110,6 +127,37 @@ mod tests {
             map.insert(*k, HeaderValue::from_static(v));
         }
         map
+    }
+
+    #[test]
+    fn codex_is_known_under_any_name() {
+        for agent in [
+            "codex_exec/0.169.0 (Linux; x86_64) unknown",
+            "codex_cli_rs/0.169.0 (Mac OS 26.1; arm64) ghostty",
+            "Codex Desktop/0.169.0 (Mac OS 26.1; arm64) unknown",
+        ] {
+            let request = headers(&[("user-agent", agent)]);
+            assert!(from_codex(&request), "{agent}");
+            assert_eq!(client_version(&request).as_deref(), Some("0.169.0"));
+        }
+        // T3 Code drives `codex app-server` under its own name.
+        let t3 = headers(&[
+            (
+                "user-agent",
+                "T3 Code/0.169.0 (Mac OS 26.1; arm64) unknown (t3-code; 0.1.10)",
+            ),
+            (
+                "x-codex-window-id",
+                "019a7c2e-0000-7000-8000-000000000000:0",
+            ),
+        ]);
+        assert!(from_codex(&t3));
+        assert_eq!(client_version(&t3).as_deref(), Some("0.169.0"));
+        // Another client's version is not taken for Codex's.
+        let other = headers(&[("user-agent", "OpenAI/Python 2.4.0")]);
+        assert!(!from_codex(&other));
+        assert_eq!(client_version(&other), None);
+        assert!(!from_codex(&HeaderMap::new()));
     }
 
     #[test]

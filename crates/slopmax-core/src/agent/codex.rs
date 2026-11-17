@@ -19,7 +19,7 @@ use crate::fsx;
 use crate::import::Found;
 use crate::net::Client;
 use crate::paths::Home;
-use crate::provider::codex::oauth;
+use crate::provider::codex::{oauth, wire};
 use crate::provider::{BoxFuture, ProviderId};
 use crate::time::Timestamp;
 use crate::wire::rawjson::{self, Seg};
@@ -97,13 +97,10 @@ impl Agent for Codex {
         ProviderId::Codex
     }
 
-    /// Codex's clients name themselves `codex_exec/…`, `codex_cli_rs/…`,
-    /// and so on.
+    /// Under its own name or the app's that drives it; see
+    /// [`wire::from_codex`].
     fn detect(&self, headers: &HeaderMap) -> bool {
-        headers
-            .get(http::header::USER_AGENT)
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|ua| ua.starts_with("codex"))
+        wire::from_codex(headers)
     }
 
     /// Codex sends the same `session-id` for a whole tree of subagents,
