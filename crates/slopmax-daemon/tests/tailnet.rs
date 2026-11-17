@@ -297,7 +297,7 @@ impl Hub {
         ledger::read(&self.home.join("usage"), Timestamp::UNIX_EPOCH)
     }
 
-    /// Stops the daemon as `slopmax stop` does, and waits for it.
+    /// Stops the daemon as `slopmax proxy stop` does, and waits for it.
     async fn stop(self) -> PathBuf {
         let stopping = self
             .local(Method::POST, "/slopmax/api/shutdown")
@@ -657,7 +657,7 @@ async fn the_user_s_machines_look_and_admin_machines_manage() {
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(
         refused["message"],
-        "this machine may not change slopmax; on the hub: slopmax tailscale admins add phone"
+        "this machine may not change slopmax; on the hub: slopmax tailscale admin add phone"
     );
     let (status, _) = hub
         .ask(empty(member(Method::GET, "/slopmax/api/keys", PHONE)))
@@ -836,7 +836,7 @@ async fn a_client_key_s_machine_may_do_what_its_login_may() {
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(
         refused["message"],
-        "this machine may not change slopmax; on the hub: slopmax tailscale admins add phone"
+        "this machine may not change slopmax; on the hub: slopmax tailscale admin add phone"
     );
     let (status, _) = hub
         .ask(empty(keyed(

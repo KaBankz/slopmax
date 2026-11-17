@@ -339,7 +339,7 @@ function LeftOnTheTable({ history }: { readonly history: History }) {
         </CardContent>
       </Card>
       <p className="text-xs text-muted-foreground">
-        The share of each plan's weekly fee that resets threw away, at plan list prices or planPrices in config.json.
+        The share of each plan's weekly fee that resets threw away, at plan list prices or planPrices in config.toml.
       </p>
     </div>
   )

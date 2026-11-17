@@ -36,7 +36,7 @@ pub enum ApiError {
 impl ApiError {
     pub fn unauthorized() -> Self {
         Self::Unauthorized {
-            message: "missing or invalid slopmax key; see `slopmax env`".into(),
+            message: "missing or invalid slopmax key; see `slopmax agent env`".into(),
         }
     }
 

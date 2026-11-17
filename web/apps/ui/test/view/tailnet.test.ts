@@ -19,8 +19,8 @@ describe("the tailnet's gate", () => {
   })
 
   test("names the machine to make an admin, when the hub knows it", () => {
-    expect(adminCommand(Option.some("laptop"))).toBe("slopmax tailscale admins add laptop")
-    expect(adminCommand(Option.none())).toBe("slopmax tailscale admins add <machine>")
+    expect(adminCommand(Option.some("laptop"))).toBe("slopmax tailscale admin add laptop")
+    expect(adminCommand(Option.none())).toBe("slopmax tailscale admin add <machine>")
   })
 
   test("knows when the page is open on the hub itself, which can't be its own admin", () => {
@@ -71,7 +71,7 @@ describe("the Other machines card", () => {
     expect(loopback.find((row) => row.title === "Reached through")?.value).toBe("127.0.0.1")
     expect(loopback.find((row) => row.title === "No key for")?.value).toBe("No one")
     expect(loopback.find((row) => row.title === "Admins")?.detail).toBe(
-      "To let a machine manage slopmax: slopmax tailscale admins add <machine>.",
+      "To let a machine manage slopmax: slopmax tailscale admin add <machine>.",
     )
   })
 

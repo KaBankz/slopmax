@@ -257,7 +257,7 @@ impl Sandbox {
 impl Drop for Sandbox {
     fn drop(&mut self) {
         // A proxy left by a failed test would outlive it.
-        let _ = self.command(&["stop"]).output();
+        let _ = self.command(&["proxy", "stop"]).output();
         let _ = std::fs::remove_dir_all(&self.root);
     }
 }
@@ -335,7 +335,7 @@ fn eventually(what: &str, check: impl Fn() -> bool) {
 fn help_version_and_completions_print_and_succeed() {
     let s = Sandbox::new("help");
     let help = s.run(&["--help"]).ok();
-    assert!(help.stdout.contains("Multi-account switcher"), "{help:?}");
+    assert!(help.stdout.contains("Pool your"), "{help:?}");
     assert!(help.stdout.contains("setup"));
     let version = s.run(&["--version"]).ok();
     assert!(version.stdout.contains(env!("CARGO_PKG_VERSION")));
@@ -346,9 +346,8 @@ fn help_version_and_completions_print_and_succeed() {
     // Printing help never creates state.
     assert!(!s.slopmax.exists());
     for shell in ["bash", "zsh", "fish"] {
-        let script = s.run(&["completions", shell]).ok();
+        let script = s.run(&["completion", shell]).ok();
         assert!(script.stdout.contains("slopmax"), "{shell}: {script:?}");
-        assert!(script.stdout.contains("setup"), "{shell}");
     }
 }
 
@@ -357,28 +356,17 @@ fn mistakes_explain_themselves_and_fail() {
     let s = Sandbox::new("mistakes");
     // The parser's errors exit 2 with a hint.
     s.run(&["statsu"]).fails(2, "status");
-    s.run(&["label"]).fails(2, "<ACCOUNT>");
-    s.run(&["completions", "tcsh"]).fails(2, "tcsh");
+    s.run(&["account", "rename"]).fails(2, "<ACCOUNT>");
+    s.run(&["completion", "tcsh"]).fails(2, "tcsh");
     s.run(&["status", "--frobnicate"]).fails(2, "--frobnicate");
-
-    // The commands' own checks exit 1.
     s.run(&["status", "--watch", "--json"])
-        .fails(1, "--json cannot be combined with --watch");
+        .fails(2, "'--watch' cannot be used with '--json'");
     s.run(&["usage", "--by", "week"])
-        .fails(1, "--by takes day, model, account, or machine");
+        .fails(2, "[possible values: day, model, account, machine]");
     s.run(&["usage", "fortnight"]).fails(2, "fortnight");
-    let out = s
-        .run(&["logs", "-n", "many"])
-        .fails(1, "--lines must be a whole number, like 100; got \"many\"");
-    assert!(!out.stderr.contains("digit"), "{out:?}");
-    s.run(&["key", "add"]).fails(1, "needs the key's name");
-    s.run(&["key", "remove", "ghost"])
-        .fails(1, "no key named \"ghost\"");
-    s.run(&["login", "compat"]).fails(1, "--url <base url>");
-    s.run(&["login", "claude", "--url", "http://localhost:1/v1"])
-        .fails(1, "are for `slopmax login compat`");
-    s.run(&["login", "compat", "--url", "ftp://host"])
-        .fails(1, "http:// or https://");
+    s.run(&["proxy", "logs", "-n", "many"])
+        .fails(2, "invalid value 'many' for '--lines'");
+    s.run(&["key", "add"]).fails(2, "<NAME>");
     s.run(&[
         "login",
         "compat",
@@ -387,17 +375,35 @@ fn mistakes_explain_themselves_and_fail() {
         "--dialect",
         "soap",
     ])
-    .fails(1, "--dialect takes chat, responses, or messages");
+    .fails(2, "[possible values: chat, responses, messages]");
+    s.run(&["account", "priority", "x", "high"])
+        .fails(2, "invalid value 'high' for '<TIER>'");
+    s.run(&["account", "import", "nowhere"]).fails(2, "nowhere");
+    s.run(&["account", "use"]).fails(2, "[ACCOUNT]");
+    // Commands that moved fail with their new spelling.
+    s.run(&["label", "1", "work"])
+        .fails(2, "`slopmax label` is now `slopmax account rename`");
+    s.run(&["start"]).fails(2, "is now `slopmax proxy start`");
+    s.run(&["service", "install"])
+        .fails(2, "is now `slopmax proxy install`");
+
+    // The commands' own checks exit 1.
+    s.run(&["key", "remove", "ghost"])
+        .fails(1, "no key named \"ghost\"");
+    s.run(&["login", "compat"]).fails(1, "--url <base url>");
+    s.run(&["login", "claude", "--url", "http://localhost:1/v1"])
+        .fails(1, "are for `slopmax login compat`");
+    s.run(&["login", "compat", "--url", "ftp://host"])
+        .fails(1, "http:// or https://");
     s.run(&["login", "claude", "--device"])
         .fails(1, "--device works for ChatGPT and SuperGrok accounts");
-    s.run(&["notify"]).fails(1, "notifications are off");
-    s.run(&["label", "1", "work"])
+    s.run(&["notify", "test"]).fails(1, "notifications are off");
+    s.run(&["account", "rename", "1", "work"])
         .fails(1, "no account matches \"1\"");
-    s.run(&["priority", "x", "high"])
-        .fails(1, "priority must be a whole number, like 2 or -1");
-    s.run(&["setup", "claude", "--undo"])
+    s.run(&["agent", "disconnect", "claude"])
         .fails(1, "no Claude Code setup to undo");
-    s.run(&["import", "nowhere"]).fails(2, "nowhere");
+    s.run(&["account", "check", "1"])
+        .fails(1, "the proxy isn't running");
 
     // An unreadable config is reported, not overwritten.
     std::fs::create_dir_all(&s.slopmax).unwrap();
@@ -449,13 +455,71 @@ fn status_shows_accounts_from_disk() {
     assert!(names.contains(&"b@x.dev"), "{names:?}");
     assert!(names.contains(&"localhost:11434"), "{names:?}");
 
-    let table = s.run(&["ls"]).ok().stdout;
+    let table = s.run(&["status"]).ok().stdout;
     assert!(table.contains("CLAUDE"), "{table}");
     assert!(table.contains("CODEX"), "{table}");
     assert!(table.contains("a@x.dev"), "{table}");
     assert!(table.contains("max 20x"), "{table}");
     // Without a terminal, a bare `slopmax` is `status`.
     assert_eq!(s.run(&[]).ok().stdout, table);
+
+    // `account list` numbers them as every <ACCOUNT> does.
+    let list = s.run(&["account", "list"]).ok().stdout;
+    assert!(list.contains("  1  a@x.dev"), "{list}");
+    assert_eq!(s.run(&["account"]).ok().stdout, list);
+    let listed: Value =
+        serde_json::from_str(&s.run(&["account", "list", "--json"]).ok().stdout).unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 4, "{listed:#}");
+}
+
+#[test]
+fn every_listing_prints_json() {
+    let s = Sandbox::new("json");
+    s.add(&claude("a@x.dev"));
+    for args in [
+        &["agent", "list", "--json"][..],
+        &["key", "list", "--json"][..],
+        &["proxy", "status", "--json"][..],
+        &["config", "--json"][..],
+        &["config", "strategy", "--json"][..],
+        &["requests", "--json"][..],
+        &["usage", "--json"][..],
+        &["tailscale", "status", "--json"][..],
+    ] {
+        let out = s.run(args);
+        assert!(
+            serde_json::from_str::<Value>(&out.stdout).is_ok(),
+            "{args:?}: {out:?}"
+        );
+    }
+    let agents: Value =
+        serde_json::from_str(&s.run(&["agent", "list", "--json"]).ok().stdout).unwrap();
+    assert_eq!(agents.as_array().unwrap().len(), 3, "{agents:#}");
+    let proxy: Value =
+        serde_json::from_str(&s.run(&["proxy", "status", "--json"]).ok().stdout).unwrap();
+    assert_eq!(proxy["running"], false, "{proxy:#}");
+    let doctor = s.run(&["doctor", "--json"]);
+    let sections: Value = serde_json::from_str(&doctor.stdout).unwrap();
+    assert!(
+        sections.as_array().is_some_and(|s| !s.is_empty()),
+        "{doctor:?}"
+    );
+}
+
+#[test]
+fn the_usage_spec_describes_every_command() {
+    let s = Sandbox::new("spec");
+    let spec = s.run(&["__usage_spec__"]).ok().stdout;
+    for command in [
+        "cmd account",
+        "cmd agent",
+        "cmd proxy",
+        "cmd key",
+        "cmd tailscale",
+    ] {
+        assert!(spec.contains(command), "{command}: {spec}");
+    }
+    assert!(spec.contains("effect=destructive"), "{spec}");
 }
 
 #[test]
@@ -475,17 +539,17 @@ fn account_commands_change_the_store() {
     s.add(&a);
     s.add(&b);
 
-    let out = s.run(&["label", "a@x.dev", "work"]).ok();
+    let out = s.run(&["account", "rename", "a@x.dev", "work"]).ok();
     assert!(out.stdout.contains("work"), "{out:?}");
     assert_eq!(s.account(&a.id).label.as_deref(), Some("work"));
 
-    let out = s.run(&["priority", "work", "-2"]).ok();
+    let out = s.run(&["account", "priority", "work", "-2"]).ok();
     assert!(out.stdout.contains("priority -2"), "{out:?}");
     assert_eq!(s.account(&a.id).priority, -2);
 
-    s.run(&["disable", "work"]).ok();
+    s.run(&["account", "disable", "work"]).ok();
     assert!(s.account(&a.id).disabled);
-    let out = s.run(&["enable", &a.id]).ok();
+    let out = s.run(&["account", "enable", &a.id]).ok();
     assert!(out.stdout.contains("Enabled work"), "{out:?}");
     assert!(!s.account(&a.id).disabled);
 
@@ -495,20 +559,20 @@ fn account_commands_change_the_store() {
         let doc: toml_edit::DocumentMut = std::fs::read_to_string(state).unwrap().parse().unwrap();
         doc.get("pins").cloned().unwrap_or(toml_edit::Item::None)
     };
-    let out = s.run(&["use", "b@x.dev"]).ok();
+    let out = s.run(&["account", "use", "b@x.dev"]).ok();
     assert!(
         out.stdout
             .contains("New Claude sessions will use b@x.dev while it has quota."),
         "{out:?}"
     );
     assert_eq!(pins(&state)["claude"].as_str(), Some(b.id.as_str()));
-    let out = s.run(&["use", "auto"]).ok();
+    let out = s.run(&["account", "use", "--auto"]).ok();
     assert!(out.stdout.contains("automatically"), "{out:?}");
     assert!(pins(&state).get("claude").is_none());
 
     // Removing a pinned account drops its pin too.
-    s.run(&["use", "b@x.dev"]).ok();
-    let out = s.run(&["remove", "b@x.dev"]).ok();
+    s.run(&["account", "use", "b@x.dev"]).ok();
+    let out = s.run(&["account", "remove", "b@x.dev", "--yes"]).ok();
     assert!(out.stdout.contains("Removed b@x.dev"), "{out:?}");
     assert!(s.store().get(&b.id).unwrap().is_none());
     assert!(pins(&state).get("claude").is_none());
@@ -518,35 +582,39 @@ fn account_commands_change_the_store() {
     s.add(&claude("c@x.dev"));
     let numbered = s.store().list().unwrap();
     let out = s
-        .run(&["remove", "claude-"])
+        .run(&["account", "remove", "claude-", "--yes"])
         .fails(1, "\"claude-\" matches 2 accounts: #1 ");
     for (n, account) in numbered.iter().enumerate() {
         let named = format!("#{} {} ({})", n + 1, account.name(), account.id);
         assert!(out.stderr.contains(&named), "{named}: {out:?}");
     }
-    assert!(out.stderr.contains("e.g. `slopmax use 1`"), "{out:?}");
-    s.run(&["disable", "nobody"]).fails(1, "no account matches");
+    assert!(
+        out.stderr.contains("e.g. `slopmax account use 1`"),
+        "{out:?}"
+    );
+    s.run(&["account", "disable", "nobody"])
+        .fails(1, "no account matches");
 
     // A label another account goes by would name two; it is refused.
-    s.run(&["label", "c@x.dev", "work"])
+    s.run(&["account", "rename", "c@x.dev", "work"])
         .fails(1, "\"work\" is already the label of #");
-    s.run(&["label", "c@x.dev", "a@x.dev"])
+    s.run(&["account", "rename", "c@x.dev", "a@x.dev"])
         .fails(1, "\"a@x.dev\" is already the email of #");
     assert_eq!(s.account("c@x.dev").label, None);
     // Giving an account its own label again is fine.
-    s.run(&["label", "work", "work"]).ok();
+    s.run(&["account", "rename", "work", "work"]).ok();
 
     // A disabled account is not used, so `use` says so instead.
-    s.run(&["disable", "c@x.dev"]).ok();
-    s.run(&["use", "c@x.dev"]).fails(
+    s.run(&["account", "disable", "c@x.dev"]).ok();
+    s.run(&["account", "use", "c@x.dev"]).fails(
         1,
-        "c@x.dev is disabled, so it won't be used; run `slopmax enable c@x.dev` first",
+        "c@x.dev is disabled, so it won't be used; run `slopmax account enable c@x.dev` first",
     );
     assert!(pins(&state).get("claude").is_none());
     // A key has no quota to run out of.
     let openai = key(ProviderId::OpenAI, "sk-openai-1234");
     s.add(&openai);
-    let out = s.run(&["use", &openai.id]).ok();
+    let out = s.run(&["account", "use", &openai.id]).ok();
     assert!(
         out.stdout
             .contains("New OpenAI API sessions will use OpenAI API key …1234.\n"),
@@ -557,7 +625,7 @@ fn account_commands_change_the_store() {
 #[test]
 fn own_takes_over_linked_accounts() {
     let s = Sandbox::new("own");
-    let out = s.run(&["own", "all"]).ok();
+    let out = s.run(&["account", "adopt", "all"]).ok();
     assert!(
         out.stdout.contains("No accounts follow another tool"),
         "{out:?}"
@@ -571,18 +639,18 @@ fn own_takes_over_linked_accounts() {
     s.add(&linked);
     s.add(&codex("m@x.dev"));
 
-    let out = s.run(&["own", "m@x.dev"]).ok();
+    let out = s.run(&["account", "adopt", "m@x.dev"]).ok();
     assert!(out.stdout.contains("already refreshes here"), "{out:?}");
     // Nothing changed hands, so there is nothing to warn about.
     assert!(!out.stdout.contains("first refresh"), "{out:?}");
     let openai = key(ProviderId::OpenAI, "sk-openai-1234");
     s.add(&openai);
-    let out = s.run(&["own", &openai.id]).ok();
+    let out = s.run(&["account", "adopt", &openai.id]).ok();
     assert_eq!(
         out.stdout,
         "OpenAI API key …1234 uses an API key; there's nothing to take over.\n"
     );
-    let out = s.run(&["own", "all"]).ok();
+    let out = s.run(&["account", "adopt", "all"]).ok();
     assert!(
         out.stdout.contains("slopmax now refreshes l@x.dev"),
         "{out:?}"
@@ -754,7 +822,7 @@ fn usage_totals_the_ledger() {
     let out = s.run(&["usage"]).ok();
     assert_eq!(
         out.stdout,
-        "No successful requests in the last 7 days; 2 failed (see `slopmax logs`).\n"
+        "No successful requests in the last 7 days; 2 failed (see `slopmax proxy logs`).\n"
     );
     let out = s.run(&["usage", "today"]).ok();
     assert!(
@@ -774,16 +842,15 @@ fn setup_wires_the_agents_and_undo_restores_their_files_exactly() {
     std::fs::write(&toml, original_toml).unwrap();
 
     let base = format!("http://127.0.0.1:{}", s.port);
-    let out = s.run(&["setup", "claude"]).ok();
+    let out = s.run(&["agent", "connect", "claude"]).ok();
     assert!(
         out.stdout.contains("Claude Code now uses slopmax"),
         "{out:?}"
     );
-    // How to undo it, once, as a command that runs.
-    assert_eq!(out.stdout.matches("--undo").count(), 1, "{out:?}");
+    // How to undo it, as a command that runs.
     assert!(
         out.stdout
-            .contains("Undo with `slopmax setup claude --undo`."),
+            .contains("Undo with `slopmax agent disconnect claude`."),
         "{out:?}"
     );
     let wired: Value = serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
@@ -797,7 +864,7 @@ fn setup_wires_the_agents_and_undo_restores_their_files_exactly() {
     assert_eq!(wired["env"]["KEEP"], "1");
     assert_eq!(wired["model"], "opus");
 
-    let out = s.run(&["setup", "codex"]).ok();
+    let out = s.run(&["agent", "connect", "codex"]).ok();
     assert!(out.stdout.contains("Codex now uses slopmax"), "{out:?}");
     let wired_toml = std::fs::read_to_string(&toml).unwrap();
     assert!(wired_toml.contains(&base), "{wired_toml}");
@@ -805,40 +872,40 @@ fn setup_wires_the_agents_and_undo_restores_their_files_exactly() {
 
     // Setting up twice keeps the first backup, so undo still restores the
     // original.
-    s.run(&["setup", "claude"]).ok();
-    s.run(&["setup", "codex"]).ok();
+    s.run(&["agent", "connect", "claude"]).ok();
+    s.run(&["agent", "connect", "codex"]).ok();
 
     let doctor = s.run(&["doctor"]).stdout;
     assert!(doctor.contains("Claude Code"), "{doctor}");
 
-    let out = s.run(&["setup", "claude", "--undo"]).ok();
+    let out = s.run(&["agent", "disconnect", "claude"]).ok();
     assert!(out.stdout.contains("Restored Claude Code"), "{out:?}");
     let restored: Value =
         serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
     let original: Value = serde_json::from_str(original_settings).unwrap();
     assert_eq!(restored, original);
 
-    let out = s.run(&["setup", "codex", "--undo"]).ok();
+    let out = s.run(&["agent", "disconnect", "codex"]).ok();
     assert!(out.stdout.contains("Restored Codex"), "{out:?}");
     let restored_toml = std::fs::read_to_string(&toml).unwrap();
     assert_eq!(restored_toml, original_toml);
 
-    s.run(&["setup", "codex", "--undo"])
+    s.run(&["agent", "disconnect", "codex"])
         .fails(1, "no Codex setup to undo");
 }
 
 #[test]
 fn setup_on_a_fresh_machine_and_undo_leave_no_wiring() {
     let s = Sandbox::new("fresh-setup");
-    s.run(&["setup", "claude"]).ok();
-    s.run(&["setup", "codex"]).ok();
+    s.run(&["agent", "connect", "claude"]).ok();
+    s.run(&["agent", "connect", "codex"]).ok();
     let settings = s.claude.join("settings.json");
     let toml = s.codex.join("config.toml");
     assert!(settings.is_file());
     assert!(toml.is_file());
 
-    s.run(&["setup", "claude", "--undo"]).ok();
-    s.run(&["setup", "codex", "--undo"]).ok();
+    s.run(&["agent", "disconnect", "claude"]).ok();
+    s.run(&["agent", "disconnect", "codex"]).ok();
     let base = format!("127.0.0.1:{}", s.port);
     let left = std::fs::read_to_string(&settings).unwrap_or_default();
     assert!(!left.contains(&base), "{left}");
@@ -850,10 +917,10 @@ fn setup_on_a_fresh_machine_and_undo_leave_no_wiring() {
 fn env_prints_shell_setup_for_each_agent() {
     let s = Sandbox::new("env");
     let base = format!("http://127.0.0.1:{}", s.port);
-    let claude = s.run(&["env", "claude"]).ok().stdout;
+    let claude = s.run(&["agent", "env", "claude"]).ok().stdout;
     assert!(claude.contains("ANTHROPIC_BASE_URL"), "{claude}");
     assert!(claude.contains(&base), "{claude}");
-    let codex = s.run(&["env", "codex"]).ok().stdout;
+    let codex = s.run(&["agent", "env", "codex"]).ok().stdout;
     assert!(
         codex.contains(&base) || codex.contains("slopmax"),
         "{codex}"
@@ -930,7 +997,7 @@ fn write(path: &Path, text: &str) {
 #[test]
 fn import_brings_over_codex_and_cliproxyapi_logins() {
     let s = Sandbox::new("import");
-    let out = s.run(&["import"]).ok();
+    let out = s.run(&["account", "import"]).ok();
     // Where it looked, so a login kept elsewhere can be found.
     assert!(
         out.stdout.contains("No logins found to import. Looked in "),
@@ -938,7 +1005,7 @@ fn import_brings_over_codex_and_cliproxyapi_logins() {
     );
     assert!(out.stdout.contains("auth.json"), "{out:?}");
     assert!(out.stdout.contains(".cli-proxy-api"), "{out:?}");
-    let out = s.run(&["import", "codex"]).ok();
+    let out = s.run(&["account", "import", "codex"]).ok();
     assert_eq!(
         out.stdout,
         format!(
@@ -990,7 +1057,7 @@ fn import_brings_over_codex_and_cliproxyapi_logins() {
         &json!({"type": "codex"}).to_string(),
     );
 
-    let out = s.run(&["import"]).ok();
+    let out = s.run(&["account", "import"]).ok();
     let text = &out.stdout;
     assert!(text.contains("skipped"), "{text}");
     assert!(text.contains("login has expired"), "{text}");
@@ -1014,13 +1081,13 @@ fn import_brings_over_codex_and_cliproxyapi_logins() {
     assert!(s.account("b@x.dev").link.is_some());
 
     // Importing again updates the same accounts; --own stops following.
-    let out = s.run(&["import", "cliproxyapi", "--own"]).ok();
+    let out = s.run(&["account", "import", "cliproxyapi", "--adopt"]).ok();
     assert!(out.stdout.contains('~'), "{out:?}");
     assert!(!out.stdout.contains("linked:"), "{out:?}");
     assert_eq!(s.store().list().unwrap().len(), 3);
     assert!(s.account("cpa-a").link.is_none());
 
-    let out = s.run(&["import", "codex"]).ok();
+    let out = s.run(&["account", "import", "codex"]).ok();
     assert!(out.stdout.contains("auth.json"), "{out:?}");
     assert!(
         !s.stub_calls().contains("security"),
@@ -1035,7 +1102,7 @@ fn import_brings_over_codex_and_cliproxyapi_logins() {
         r#"{"tokens": {"id_token": "x"}}"#,
     );
     write(&s.claude.join(".credentials.json"), "{bad");
-    let out = s.run(&["import", "codex"]).ok();
+    let out = s.run(&["account", "import", "codex"]).ok();
     let codex_file = s.codex.join("auth.json").display().to_string();
     assert_eq!(
         out.stdout,
@@ -1043,7 +1110,7 @@ fn import_brings_over_codex_and_cliproxyapi_logins() {
             "  skipped {codex_file}: not a signed-in Codex login. Run `codex login`, then import again.\n"
         )
     );
-    let out = s.run(&["import", "claude-code"]).ok();
+    let out = s.run(&["account", "import", "claude-code"]).ok();
     assert!(
         out.stdout
             .contains(".credentials.json: not a signed-in Claude Code login."),
@@ -1059,7 +1126,7 @@ fn import_brings_over_codex_and_cliproxyapi_logins() {
         );
     }
     let before = s.store().list().unwrap().len();
-    s.run(&["import", "cliproxyapi"]).ok();
+    s.run(&["account", "import", "cliproxyapi"]).ok();
     let accounts = s.store().list().unwrap();
     assert_eq!(accounts.len(), before + 2, "{accounts:#?}");
     assert!(accounts.iter().all(|a| a.id != "claude-e3b0c442"));
@@ -1242,11 +1309,12 @@ fn sign_ins_that_need_the_network_fail_cleanly() {
 fn redeem_needs_an_account_with_resets() {
     let s = Sandbox::new("redeem");
     s.add(&key(ProviderId::OpenAI, "sk-openai-1"));
-    s.run(&["redeem", "1", "--yes"])
+    s.run(&["account", "redeem", "1", "--yes"])
         .fails(1, "has no limit resets");
     // Listing a ChatGPT account's resets needs the network.
     s.add(&codex("b@x.dev"));
-    s.run(&["redeem", "b@x.dev", "--yes"]).fails(1, "error:");
+    s.run(&["account", "redeem", "b@x.dev", "--yes"])
+        .fails(1, "error:");
 }
 
 // The command runs in a POSIX shell.
@@ -1262,7 +1330,7 @@ fn notify_sends_a_test_event_through_the_command() {
         sent.display()
     ));
     std::fs::write(s.config(), config).unwrap();
-    let out = s.run(&["notify"]).ok();
+    let out = s.run(&["notify", "test"]).ok();
     assert!(out.stdout.contains("Sent a test notification"), "{out:?}");
     assert_eq!(std::fs::read_to_string(&sent).unwrap(), "test");
 }
@@ -1277,11 +1345,11 @@ fn notify_failures_say_what_happened() {
     let with =
         |notify: &str| std::fs::write(s.config(), format!("{base}\n[notify]\n{notify}\n")).unwrap();
     with("command = 'exit 3'");
-    s.run(&["notify"])
+    s.run(&["notify", "test"])
         .fails(1, "error: the notify command exited with 3 (no output)\n");
     with("command = 'nonexistent-cmd-xyz'");
     let out = s
-        .run(&["notify"])
+        .run(&["notify", "test"])
         .fails(1, "error: the notify command exited with 127: ");
     assert!(out.stderr.contains("nonexistent-cmd-xyz"), "{out:?}");
     // A webhook that is no address is a config error, named, at once.
@@ -1330,7 +1398,7 @@ fn a_sign_in_that_needs_a_paste_needs_a_terminal() {
     let s = Sandbox::new("no-terminal");
     let out = s.run(&["login", "claude", "--no-browser"]).fails(
         1,
-        "slopmax login claude needs a terminal to paste the code into; run it in an interactive shell, or bring an existing login over with `slopmax import claude-code`",
+        "slopmax login claude needs a terminal to paste the code into; run it in an interactive shell, or bring an existing login over with `slopmax account import claude-code`",
     );
     // Refused before any link is shown.
     assert!(!out.stdout.contains("http"), "{out:?}");
@@ -1360,13 +1428,13 @@ fn signed_out_accounts_say_how_to_sign_in() {
 #[test]
 fn logs_show_the_tail_of_the_background_log() {
     let s = Sandbox::new("logs");
-    let out = s.run(&["logs"]).ok();
+    let out = s.run(&["proxy", "logs"]).ok();
     assert!(out.stdout.contains("No log yet"), "{out:?}");
     let lines: String = (1..=50).map(|n| format!("line {n}\n")).collect();
     write(&s.slopmax.join("slopmax.log"), &lines);
-    let out = s.run(&["logs", "-n", "3"]).ok();
+    let out = s.run(&["proxy", "logs", "-n", "3"]).ok();
     assert_eq!(out.stdout, "line 48\nline 49\nline 50\n");
-    let out = s.run(&["logs"]).ok();
+    let out = s.run(&["proxy", "logs"]).ok();
     assert_eq!(out.stdout.lines().count(), 40);
     assert!(out.stdout.starts_with("line 11\n"), "{out:?}");
 }
@@ -1374,7 +1442,7 @@ fn logs_show_the_tail_of_the_background_log() {
 #[test]
 fn order_shows_and_sets_the_order_new_sessions_use() {
     let s = Sandbox::new("order");
-    let out = s.run(&["order"]).ok();
+    let out = s.run(&["account", "order"]).ok();
     assert!(out.stdout.contains("No accounts yet"), "{out:?}");
     for email in ["a@x.dev", "b@x.dev", "c@x.dev"] {
         s.add(&claude(email));
@@ -1387,7 +1455,7 @@ fn order_shows_and_sets_the_order_new_sessions_use() {
     };
     assert_eq!(emails(), ["a@x.dev", "b@x.dev", "c@x.dev", "d@x.dev"]);
 
-    let out = s.run(&["order"]).ok();
+    let out = s.run(&["account", "order"]).ok();
     assert!(
         out.stdout.contains("Claude accounts, in the order"),
         "{out:?}"
@@ -1395,7 +1463,7 @@ fn order_shows_and_sets_the_order_new_sessions_use() {
     assert!(out.stdout.contains("ChatGPT"), "{out:?}");
 
     // Numbers as `order` lists them; the rest keep their order after.
-    let out = s.run(&["order", "3", "b@x.dev"]).ok();
+    let out = s.run(&["account", "order", "3", "b@x.dev"]).ok();
     assert_eq!(emails(), ["c@x.dev", "b@x.dev", "a@x.dev", "d@x.dev"]);
     let listed: Vec<&str> = out
         .stdout
@@ -1411,17 +1479,19 @@ fn order_shows_and_sets_the_order_new_sessions_use() {
         "only the kind ordered: {out:?}"
     );
 
-    s.run(&["order", "1", "d@x.dev"])
+    s.run(&["account", "order", "1", "d@x.dev"])
         .fails(1, "order one kind at a time");
-    s.run(&["order", "1", "1"]).fails(1, "listed twice");
-    s.run(&["priority", "a@x.dev", "1"]).ok();
-    s.run(&["order", "c@x.dev", "a@x.dev"])
-        .fails(1, "slopmax priority");
-    s.run(&["order", "nobody"]).fails(1, "no account matches");
+    s.run(&["account", "order", "1", "1"])
+        .fails(1, "listed twice");
+    s.run(&["account", "priority", "a@x.dev", "1"]).ok();
+    s.run(&["account", "order", "c@x.dev", "a@x.dev"])
+        .fails(1, "slopmax account priority");
+    s.run(&["account", "order", "nobody"])
+        .fails(1, "no account matches");
 
     // Under another strategy, it says the order is not what places sessions.
     std::fs::write(s.config(), "strategy = \"least-used\"\n").unwrap();
-    let out = s.run(&["order"]).ok();
+    let out = s.run(&["account", "order"]).ok();
     assert!(out.stdout.contains("strategy fill-first"), "{out:?}");
 }
 
@@ -1430,12 +1500,12 @@ fn the_background_proxy_starts_reports_and_stops() {
     let s = Sandbox::new("background");
     s.add(&key(ProviderId::Anthropic, "sk-ant-9999"));
     s.add(&key(ProviderId::Anthropic, "sk-ant-8888"));
-    let out = s.run(&["stop"]).ok();
+    let out = s.run(&["proxy", "stop"]).ok();
     assert!(out.stdout.contains("slopmax is not running"), "{out:?}");
 
-    let out = s.run(&["start"]).ok();
+    let out = s.run(&["proxy", "start"]).ok();
     assert!(out.stdout.contains("slopmax running on"), "{out:?}");
-    let out = s.run(&["start"]).ok();
+    let out = s.run(&["proxy", "start"]).ok();
     assert!(out.stdout.contains("already running"), "{out:?}");
 
     // The status now comes from the proxy.
@@ -1446,9 +1516,9 @@ fn the_background_proxy_starts_reports_and_stops() {
 
     // With it running, changes go through it rather than into the files.
     let id = s.store().list().unwrap()[0].id.clone();
-    let out = s.run(&["use", &id]).ok();
+    let out = s.run(&["account", "use", &id]).ok();
     assert!(out.stdout.contains("will use"), "{out:?}");
-    let out = s.run(&["label", &id, "work"]).ok();
+    let out = s.run(&["account", "rename", &id, "work"]).ok();
     assert!(out.stdout.contains("work"), "{out:?}");
     let out = s.run(&["config", "session_ttl_mins", "45"]).ok();
     assert!(out.stdout.contains("applied now"), "{out:?}");
@@ -1509,7 +1579,7 @@ fn the_background_proxy_starts_reports_and_stops() {
         .into_iter()
         .find(|a| a.provider == ProviderId::Compat)
         .unwrap();
-    s.run(&["remove", &compat.id]).ok();
+    s.run(&["account", "remove", &compat.id, "--yes"]).ok();
     let key = s.run(&["key", "add", "laptop"]).ok().stdout;
     assert!(key.trim().starts_with("sm-"), "{key}");
     let json: Value = serde_json::from_str(&s.run(&["status", "--json"]).ok().stdout).unwrap();
@@ -1517,10 +1587,10 @@ fn the_background_proxy_starts_reports_and_stops() {
     assert_eq!(account["name"], "work", "{json:#}");
     assert_eq!(account["pinned"], true, "{json:#}");
     // The order too, which the daemon saves and the next status shows.
-    s.run(&["order", "anthropic-"])
+    s.run(&["account", "order", "anthropic-"])
         .fails(1, "\"anthropic-\" matches 2 accounts: #1 work");
     let second = s.store().list().unwrap()[1].id.clone();
-    s.run(&["order", &second]).ok();
+    s.run(&["account", "order", &second]).ok();
     let json: Value = serde_json::from_str(&s.run(&["status", "--json"]).ok().stdout).unwrap();
     assert_eq!(json["accounts"][0]["id"], second.as_str(), "{json:#}");
     assert_eq!(s.store().list().unwrap()[0].id, second);
@@ -1531,7 +1601,7 @@ fn the_background_proxy_starts_reports_and_stops() {
             .contains(&format!("anthropic = \"{id}\""))
     });
 
-    let out = s.run(&["dashboard", "--print"]).ok();
+    let out = s.run(&["dashboard", "--no-browser"]).ok();
     assert!(
         out.stdout.contains(&format!("127.0.0.1:{}", s.port)),
         "{out:?}"
@@ -1559,10 +1629,10 @@ fn the_background_proxy_starts_reports_and_stops() {
         "`codex` isn't installed or isn't on PATH. Install Codex, then run `slopmax run codex` again.",
     );
 
-    let out = s.run(&["stop"]).ok();
+    let out = s.run(&["proxy", "stop"]).ok();
     assert!(out.stdout.contains("slopmax stopped"), "{out:?}");
     eventually("the proxy exits", || {
-        s.run(&["stop"]).stdout.contains("not running")
+        s.run(&["proxy", "stop"]).stdout.contains("not running")
     });
     let log = std::fs::read_to_string(s.slopmax.join("slopmax.log")).unwrap();
     assert!(!log.is_empty());
@@ -1573,7 +1643,7 @@ fn the_background_proxy_starts_reports_and_stops() {
 #[test]
 fn a_broken_config_still_lets_the_proxy_be_stopped_and_diagnosed() {
     let s = Sandbox::new("broken-config");
-    s.run(&["start"]).ok();
+    s.run(&["proxy", "start"]).ok();
     let path = s.slopmax.join("config.toml");
     let text = std::fs::read_to_string(&path).unwrap();
     std::fs::write(&path, format!("strategy = \"fill_first\"\n{text}")).unwrap();
@@ -1602,11 +1672,11 @@ fn a_broken_config_still_lets_the_proxy_be_stopped_and_diagnosed() {
             .contains(&format!("running on http://127.0.0.1:{}", s.port)),
         "{out:?}"
     );
-    s.run(&["completions", "bash"]).ok();
-    s.run(&["logs", "-n", "1"]).ok();
+    s.run(&["completion", "bash"]).ok();
+    s.run(&["proxy", "logs", "-n", "1"]).ok();
 
     // And it stops, with the config's own key.
-    let out = s.run(&["stop"]).ok();
+    let out = s.run(&["proxy", "stop"]).ok();
     assert!(out.stdout.contains("slopmax stopped"), "{out:?}");
     assert!(out.stderr.contains("warning: invalid config"), "{out:?}");
 
@@ -1620,24 +1690,27 @@ fn a_proxy_from_another_home_is_named_not_blamed_on_the_key() {
     let ours = Sandbox::new("home-a");
     let mut other = Sandbox::new("home-b");
     other.port = ours.port;
-    ours.run(&["start"]).ok();
+    ours.run(&["proxy", "start"]).ok();
     let said = "doesn't accept this home's key: it was started from another SLOPMAX_HOME, \
                 or before api_key changed. Stop it from there (or end pid ";
     for command in [
         &["status"][..],
-        &["stop"],
-        &["start"],
+        &["proxy", "stop"],
+        &["proxy", "start"],
         &["key", "add", "x"],
-        &["use", "1"],
+        &["account", "use", "1"],
     ] {
         let out = other.run(command);
         assert_eq!(out.code, 1, "{command:?}: {out:?}");
         assert!(out.stderr.contains(said), "{command:?}: {out:?}");
-        assert!(!out.stderr.contains("slopmax env"), "{command:?}: {out:?}");
+        assert!(
+            !out.stderr.contains("slopmax agent env"),
+            "{command:?}: {out:?}"
+        );
     }
     let doctor = other.run(&["doctor"]).stdout;
     assert!(doctor.contains("✗ the slopmax on 127.0.0.1:"), "{doctor}");
-    ours.run(&["stop"]).ok();
+    ours.run(&["proxy", "stop"]).ok();
 }
 
 #[test]
@@ -1646,7 +1719,7 @@ fn start_says_at_once_why_the_proxy_did_not_start() {
     // Holds the port, and never answers what connects.
     let _held = TcpListener::bind(("127.0.0.1", s.port)).unwrap();
     let started = Instant::now();
-    let out = s.run(&["start"]);
+    let out = s.run(&["proxy", "start"]);
     assert_eq!(out.code, 1, "{out:?}");
     assert!(out.stderr.contains("the proxy did not start: "), "{out:?}");
     // Linux names the program holding it; elsewhere it is "another program".
@@ -1671,7 +1744,7 @@ fn run_without_the_agent_installed_starts_no_proxy() {
         1,
         "`claude` isn't installed or isn't on PATH. Install Claude Code, then run `slopmax run claude` again.",
     );
-    let out = s.run(&["stop"]).ok();
+    let out = s.run(&["proxy", "stop"]).ok();
     assert!(out.stdout.contains("slopmax is not running"), "{out:?}");
 }
 
@@ -1689,7 +1762,7 @@ fn serve_runs_in_the_foreground_until_stopped() {
     eventually("the proxy reports itself", || {
         s.run(&["doctor"]).stdout.contains("running on")
     });
-    s.run(&["stop"]).ok();
+    s.run(&["proxy", "stop"]).ok();
     let start = Instant::now();
     loop {
         if let Some(status) = child.try_wait().unwrap() {
@@ -1721,15 +1794,15 @@ fn windows_login_service_runs_and_supervises_the_proxy() {
     };
     let wait_for = |state: &str| {
         for _ in 0..50 {
-            if run(&["service", "status"]).stdout.contains(state) {
+            if run(&["proxy", "status"]).stdout.contains(state) {
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(200));
         }
-        panic!("service never {state}: {:?}", run(&["service", "status"]));
+        panic!("service never {state}: {:?}", run(&["proxy", "status"]));
     };
 
-    let out = run(&["service", "install"]).ok();
+    let out = run(&["proxy", "install"]).ok();
     assert!(
         out.stdout.contains("slopmax now starts at login"),
         "{out:?}"
@@ -1747,15 +1820,15 @@ fn windows_login_service_runs_and_supervises_the_proxy() {
     assert!(answers(), "the proxy does not answer");
 
     // A clean stop ends the launcher too, as `systemctl stop` would.
-    run(&["stop"]).ok();
+    run(&["proxy", "stop"]).ok();
     wait_for("installed, not running");
     assert!(!answers(), "the proxy outlived `stop`");
     // `start` goes through the service again.
-    run(&["start"]).ok();
+    run(&["proxy", "start"]).ok();
     wait_for("installed and running");
     assert!(answers(), "`start` left the proxy stopped");
 
-    let out = run(&["service", "uninstall"]).ok();
+    let out = run(&["proxy", "uninstall"]).ok();
     assert!(out.stdout.contains("Removed the service"), "{out:?}");
     wait_for("not installed");
     assert!(!answers(), "the proxy outlived its service");
@@ -1764,10 +1837,12 @@ fn windows_login_service_runs_and_supervises_the_proxy() {
 #[test]
 fn service_commands_find_no_manager_in_the_sandbox() {
     let s = Sandbox::new("service");
-    for action in ["status", "install", "uninstall"] {
-        s.run(&["service", action])
+    for action in ["install", "uninstall"] {
+        s.run(&["proxy", action])
             .fails(1, "no supported service manager");
     }
+    let status = s.run(&["proxy", "status"]).ok().stdout;
+    assert!(status.contains("no service manager here"), "{status}");
     assert!(!s.home.join("Library/LaunchAgents").exists());
     assert_eq!(s.stub_calls(), "");
 }
@@ -1794,30 +1869,35 @@ fn unattended_setup_with_nothing_to_pool_fails_and_says_what_to_add() {
 #[test]
 fn setup_flags_that_make_no_sense_are_refused() {
     let s = Sandbox::new("init-flags");
-    s.run(&["setup", "--undo"]).fails(
-        1,
-        "--undo restores one agent: `slopmax setup claude --undo`",
-    );
-    s.run(&["setup", "--strategy", "sideways"]).fails(
-        1,
-        "--strategy takes reset-first, fill-first, least-used, or round-robin",
-    );
-    s.run(&["setup", "--affinity", "maybe"])
-        .fails(1, "--affinity takes on or off, got \"maybe\"");
-    s.run(&["setup", "--login", "xai"])
-        .fails(1, "--login signs in to subscriptions (claude, codex, grok)");
-    s.run(&["setup", "--login", "bogus"]).fails(
-        1,
-        "--login takes claude, codex, grok, or none (comma-separated), got \"bogus\"",
-    );
-    s.run(&["setup", "--agents", "gemini"]).fails(
-        1,
-        "--agents takes claude, codex, grok, or none (comma-separated), got \"gemini\"",
-    );
-    s.run(&["setup", "--import", "dropbox"]).fails(
-        1,
-        "--import takes claude-code, codex, cliproxyapi, all, or none (comma-separated), got \"dropbox\"",
-    );
+    // The parser refuses what isn't one of the choices, and names them.
+    for (args, said) in [
+        (&["setup", "--undo"][..], "unexpected argument '--undo'"),
+        (
+            &["setup", "--strategy", "sideways"][..],
+            "reset-first, fill-first",
+        ),
+        (
+            &["setup", "--affinity", "maybe"][..],
+            "[possible values: on, off]",
+        ),
+        (
+            &["setup", "--login", "xai"][..],
+            "claude, codex, grok, none",
+        ),
+        (
+            &["setup", "--agents", "gemini"][..],
+            "claude, codex, grok, none",
+        ),
+        (
+            &["setup", "--import", "dropbox"][..],
+            "all, claude-code, codex",
+        ),
+    ] {
+        s.run(args).fails(2, said);
+    }
+    // `setup <agent>` moved to `agent connect`, and says so.
+    s.run(&["setup", "claude", "--undo"])
+        .fails(2, "is now `slopmax agent disconnect claude`");
     assert!(s.store().list().unwrap().is_empty());
     assert_eq!(s.stub_calls(), "");
 }
@@ -1906,7 +1986,7 @@ fn unattended_setup_imports_routes_wires_and_starts_the_proxy() {
         "{doctor:?}"
     );
 
-    let out = s.run(&["stop"]).ok();
+    let out = s.run(&["proxy", "stop"]).ok();
     assert!(out.stdout.contains("slopmax stopped"), "{out:?}");
 }
 
@@ -1942,7 +2022,7 @@ fn unattended_setup_leaves_alone_an_agent_it_has_no_account_for() {
     assert!(!s.claude.join("settings.json").exists());
     let toml = std::fs::read_to_string(s.codex.join("config.toml")).unwrap();
     assert!(toml.contains(&format!("127.0.0.1:{}", s.port)), "{toml}");
-    s.run(&["stop"]).ok();
+    s.run(&["proxy", "stop"]).ok();
 }
 
 #[test]
@@ -1957,13 +2037,14 @@ fn setup_follows_cliproxyapi_or_takes_over_with_own() {
         );
         let mut args = vec!["setup", "--yes", "--import", "cliproxyapi"];
         if own {
-            args.push("--own");
+            args.push("--adopt");
         }
         args.extend(["--agents", "none", "--no-service"]);
         s.run(&args).ok();
-        s.run(&["stop"]);
+        s.run(&["proxy", "stop"]);
         let status = s.run(&["status"]).ok().stdout;
-        let hint = "1 account follows cliproxyapi, which renews its sign-in: `slopmax own all`";
+        let hint =
+            "1 account follows cliproxyapi, which renews its sign-in: `slopmax account adopt all`";
         assert_eq!(status.contains(hint), !own, "{status}");
     }
 }
@@ -1997,7 +2078,7 @@ fn unattended_setup_that_misses_part_of_what_was_asked_says_so() {
         "{out:?}"
     );
     assert_eq!(s.store().list().unwrap().len(), 1);
-    s.run(&["stop"]).ok();
+    s.run(&["proxy", "stop"]).ok();
 }
 
 /// A chat endpoint whose answers stream slowly: `/v1/models` lists one
@@ -2210,7 +2291,7 @@ async fn handing_the_proxy_to_another_binary_refuses_and_cuts_off_nothing() {
         first.try_wait().unwrap().is_none(),
         "the first process left"
     );
-    s.run(&["stop"]).ok();
+    s.run(&["proxy", "stop"]).ok();
     let start = Instant::now();
     loop {
         if let Some(status) = first.try_wait().unwrap() {
@@ -2417,7 +2498,7 @@ async fn a_proxy_started_on_the_kept_socket_takes_over_without_refusing_a_connec
     let holder = std::fs::read_to_string(s.slopmax.join(".serve.pid")).unwrap();
     assert_eq!(holder.trim(), second.id().to_string());
     assert!(second.try_wait().unwrap().is_none());
-    s.run(&["stop"]).ok();
+    s.run(&["proxy", "stop"]).ok();
     let start = Instant::now();
     while second.try_wait().unwrap().is_none() {
         assert!(
@@ -2673,7 +2754,7 @@ fn tailscale_on_publishes_the_socket_and_off_takes_it_down() {
     assert_eq!(users, ["me@github", "you@github"], "{config}");
 
     // The dashboard says where the other machines find it.
-    let out = s.ts(&["dashboard", "--print"]).ok();
+    let out = s.ts(&["dashboard", "--no-browser"]).ok();
     assert!(
         out.stdout.contains(&format!(
             "From your other machines and phone: {url}/slopmax/ (no key needed)"
@@ -2681,7 +2762,7 @@ fn tailscale_on_publishes_the_socket_and_off_takes_it_down() {
         "{out:?}"
     );
     let out = s
-        .command(&["dashboard", "--print"])
+        .command(&["dashboard", "--no-browser"])
         .env("SLOPMAX_TAILSCALE", "")
         .output()
         .unwrap();
@@ -2690,7 +2771,7 @@ fn tailscale_on_publishes_the_socket_and_off_takes_it_down() {
     let out = s.ts(&["key", "add", "ci"]).ok();
     assert!(
         out.stderr.contains(&format!(
-            "On that machine: slopmax setup --hub {url} --key sm-"
+            "On that machine: slopmax setup --hub {url} --hub-key sm-"
         )),
         "{out:?}"
     );
@@ -2742,7 +2823,7 @@ fn tailscale_on_publishes_the_socket_and_off_takes_it_down() {
             .contains("slopmax isn't published to your tailnet."),
         "{out:?}"
     );
-    let out = s.ts(&["dashboard", "--print"]).ok();
+    let out = s.ts(&["dashboard", "--no-browser"]).ok();
     assert!(
         out.stdout
             .contains("To open it from your other machines, run slopmax tailscale on"),
@@ -2760,7 +2841,7 @@ fn tailscale_on_publishes_the_socket_and_off_takes_it_down() {
     );
     assert!(out.stdout.contains("every machine needs a key"), "{out:?}");
     s.ts(&["tailscale", "off"]).ok();
-    s.run(&["stop"]).ok();
+    s.run(&["proxy", "stop"]).ok();
     s.assert_no_mutating_tailscale();
 }
 
@@ -2832,9 +2913,14 @@ fn tailscale_on_says_what_stops_it() {
         "{out:?}"
     );
     s.run(&["tailscale", "on", "--loopback", "--socket"])
-        .fails(1, "give one");
+        .fails(2, "'--loopback' cannot be used with '--socket'");
     // Nothing started a proxy for it.
-    assert!(s.run(&["stop"]).ok().stdout.contains("not running"));
+    assert!(
+        s.run(&["proxy", "stop"])
+            .ok()
+            .stdout
+            .contains("not running")
+    );
     s.assert_no_mutating_tailscale();
 }
 
@@ -2883,7 +2969,12 @@ fn tailscale_on_without_operator_rights_says_how_to_get_them() {
         "{out:?}"
     );
     assert!(s.serve_changes().is_empty(), "{}", s.stub_calls());
-    assert!(s.run(&["stop"]).ok().stdout.contains("not running"));
+    assert!(
+        s.run(&["proxy", "stop"])
+            .ok()
+            .stdout
+            .contains("not running")
+    );
     s.assert_no_mutating_tailscale();
 }
 
@@ -2892,23 +2983,23 @@ fn tailscale_on_without_operator_rights_says_how_to_get_them() {
 fn tailscale_users_and_admins_edit_the_config() {
     let s = Sandbox::short("ts-users");
     s.fake_tailscale();
-    let out = s.ts(&["tailscale", "users"]).ok();
+    let out = s.ts(&["tailscale", "user"]).ok();
     assert!(out.stdout.contains("No login is let in"), "{out:?}");
-    s.ts(&["tailscale", "users", "add", "me@github,you@github"])
+    s.ts(&["tailscale", "user", "add", "me@github,you@github"])
         .ok();
-    s.ts(&["tailscale", "users", "add", "nobody"])
+    s.ts(&["tailscale", "user", "add", "nobody"])
         .fails(1, "is not a tailnet login");
-    s.ts(&["tailscale", "admins", "add", "ci-runner"])
+    s.ts(&["tailscale", "admin", "add", "ci-runner"])
         .fails(1, "ci-runner is tagged (tag:ci)");
-    s.ts(&["tailscale", "admins", "add", "phone"])
+    s.ts(&["tailscale", "admin", "add", "phone"])
         .fails(1, "no machine on your tailnet is called phone");
-    let out = s.ts(&["tailscale", "admins", "add", "me-macbook-pro"]).ok();
+    let out = s.ts(&["tailscale", "admin", "add", "me-macbook-pro"]).ok();
     assert!(
         out.stdout.contains("me-macbook-pro may now manage"),
         "{out:?}"
     );
-    s.ts(&["tailscale", "users", "remove", "you@github"]).ok();
-    s.ts(&["tailscale", "users", "remove", "you@github"])
+    s.ts(&["tailscale", "user", "remove", "you@github"]).ok();
+    s.ts(&["tailscale", "user", "remove", "you@github"])
         .fails(1, "isn't among the logins");
 
     let doc: toml_edit::DocumentMut = std::fs::read_to_string(s.config())
@@ -2932,12 +3023,12 @@ fn tailscale_users_and_admins_edit_the_config() {
         Some("me-macbook-pro")
     );
     assert_eq!(admin.get("id").and_then(|v| v.as_str()), Some("nMAC1CNTRL"));
-    let list = s.ts(&["tailscale", "admins"]).ok().stdout;
+    let list = s.ts(&["tailscale", "admin"]).ok().stdout;
     assert!(
         list.contains("me-macbook-pro") && list.contains("nMAC1CNTRL"),
         "{list}"
     );
-    s.ts(&["tailscale", "admins", "remove", "me-macbook-pro"])
+    s.ts(&["tailscale", "admin", "remove", "me-macbook-pro"])
         .ok();
     assert!(
         !std::fs::read_to_string(s.config())
@@ -3003,7 +3094,7 @@ fn owner_key(s: &Sandbox) -> String {
 fn a_machine_uses_another_as_its_hub() {
     let hub = Sandbox::new("hub");
     hub.add(&key(ProviderId::Anthropic, "sk-ant-hub"));
-    hub.run(&["start"]).ok();
+    hub.run(&["proxy", "start"]).ok();
     let owner = owner_key(&hub);
     let at = format!("http://127.0.0.1:{}", hub.port);
 
@@ -3012,7 +3103,14 @@ fn a_machine_uses_another_as_its_hub() {
     let accounts_before = client.store().list().unwrap().len();
     let out = client
         .run(&[
-            "setup", "--hub", &at, "--key", &owner, "--name", "laptop", "--yes",
+            "setup",
+            "--hub",
+            &at,
+            "--hub-key",
+            &owner,
+            "--key-name",
+            "laptop",
+            "--yes",
         ])
         .ok();
     assert!(
@@ -3054,7 +3152,7 @@ fn a_machine_uses_another_as_its_hub() {
     assert_eq!(settings["env"]["ANTHROPIC_AUTH_TOKEN"], kept.as_str());
     let codex = std::fs::read_to_string(client.codex.join("config.toml")).unwrap();
     assert!(codex.contains(&format!("{at}/codex")), "{codex}");
-    let env = client.run(&["env", "claude"]).ok().stdout;
+    let env = client.run(&["agent", "env", "claude"]).ok().stdout;
     assert!(env.contains(&at), "{env}");
 
     assert!(
@@ -3072,11 +3170,11 @@ fn a_machine_uses_another_as_its_hub() {
 
     // Nothing runs a proxy here.
     let refusal = format!("This machine uses the hub at {at} and runs no proxy of its own.");
-    client.run(&["start"]).fails(1, &refusal);
+    client.run(&["proxy", "start"]).fails(1, &refusal);
     client.run(&["serve"]).fails(1, &refusal);
-    client.run(&["import"]).fails(1, &refusal);
+    client.run(&["account", "import"]).fails(1, &refusal);
     client
-        .run(&["logs"])
+        .run(&["proxy", "logs"])
         .fails(1, "The hub's log is on 127.0.0.1");
     client.run(&["tailscale", "on"]).fails(1, &refusal);
     let out = client.run(&["tailscale"]).ok();
@@ -3096,14 +3194,16 @@ fn a_machine_uses_another_as_its_hub() {
 
     // With the hub gone, commands fail, and never fall back to the
     // accounts here.
-    hub.run(&["stop"]).ok();
+    hub.run(&["proxy", "stop"]).ok();
     eventually("the hub stops", || {
-        hub.run(&["stop"]).stdout.contains("not running")
+        hub.run(&["proxy", "stop"]).stdout.contains("not running")
     });
     client
         .run(&["status"])
         .fails(1, &format!("the hub at {at} isn't answering"));
-    client.run(&["use", "1"]).fails(1, "isn't answering");
+    client
+        .run(&["account", "use", "1"])
+        .fails(1, "isn't answering");
     assert_eq!(client.store().list().unwrap().len(), accounts_before);
 
     // And back to its own proxy.

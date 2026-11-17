@@ -330,11 +330,11 @@ fn unconnected(
     // Subscriptions come first in `ALL`: name the one most people connect.
     match owners.first() {
         Some(owner) => Some(format!(
-            "slopmax has no {} account connected yet; run `slopmax login {owner}` (or `slopmax import`)",
+            "slopmax has no {} account connected yet; run `slopmax login {owner}` (or `slopmax account import`)",
             owner.spec().title
         )),
         None if accounts.is_empty() => Some(
-            "slopmax has no account connected yet; run `slopmax login <provider>` (or `slopmax import`)"
+            "slopmax has no account connected yet; run `slopmax login <provider>` (or `slopmax account import`)"
                 .to_owned(),
         ),
         None => None,
@@ -1204,7 +1204,7 @@ fn give_up(
                 .as_ref()
                 .map_or("no account could take the request", |u| u.reason.as_str());
             let message = if unreachable {
-                format!("{reason}. Check your network, or run `slopmax logs`.")
+                format!("{reason}. Check your network, or run `slopmax proxy logs`.")
             } else {
                 reason.to_owned()
             };

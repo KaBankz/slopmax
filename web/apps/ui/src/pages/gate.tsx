@@ -46,7 +46,7 @@ export function Gate() {
               <h1>Open the slopmax dashboard</h1>
             </CardTitle>
             <CardDescription>
-              Run {command} to open it with its key, or paste the owner key from config.json.
+              Run {command} to open it with its key, or paste the owner key from config.toml.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -71,7 +71,7 @@ export function Gate() {
                 />
                 {refused ? (
                   <FieldError id={errorId}>
-                    slopmax refused that key. Run {command} again, or paste the owner key from config.json.
+                    slopmax refused that key. Run {command} again, or paste the owner key from config.toml.
                   </FieldError>
                 ) : (
                   failed !== undefined && <FieldError id={errorId}>{sentenceCase(failed)}</FieldError>

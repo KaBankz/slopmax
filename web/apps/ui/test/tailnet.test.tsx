@@ -65,7 +65,7 @@ describe("opened over the tailnet without a key", () => {
     // The token is never kept in the tab's storage: closing the tab forgets it.
     expect(Option.isNone(Effect.runSync(page.host.host.key))).toBe(true)
     await showsSoon("5 of 7 accounts are ready")
-    expect(shows("Read-only from this machine. On the hub: slopmax tailscale admins add laptop")).toBe(true)
+    expect(shows("Read-only from this machine. On the hub: slopmax tailscale admin add laptop")).toBe(true)
     expect(control("Refresh usage").hasAttribute("disabled")).toBe(true)
     expect(page.stub.calls.some((call) => adminCalls.includes(call.endpoint))).toBe(false)
   })

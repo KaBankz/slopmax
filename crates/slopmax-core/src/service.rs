@@ -145,7 +145,7 @@ impl Manager {
         if let Some(other) = self.served(home).filter(|dir| !same_dir(dir, home.dir())) {
             bail!(
                 "the login service runs slopmax for {}, not this home; remove it from there: \
-                 SLOPMAX_HOME=\"{}\" slopmax service uninstall",
+                 SLOPMAX_HOME=\"{}\" slopmax proxy uninstall",
                 home.show(&other),
                 other.display()
             );

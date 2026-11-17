@@ -696,7 +696,7 @@ export const makeStub = (options: StubOptions = {}): Stub => {
         calls.push({ endpoint: "refused", payload: path })
         return Promise.resolve(
           Response.json(
-            { _tag: "Unauthorized", message: "missing or invalid slopmax key; see `slopmax env`" },
+            { _tag: "Unauthorized", message: "missing or invalid slopmax key; see `slopmax agent env`" },
             { status: 401 },
           ),
         )

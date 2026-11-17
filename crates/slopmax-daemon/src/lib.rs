@@ -182,7 +182,7 @@ pub async fn serve_with(
     };
     if listener.local_addr().ok() != Some(config.listen) {
         let next = if launchd {
-            "once `slopmax service install` writes it into the login service"
+            "once `slopmax proxy install` writes it into the login service"
         } else {
             "at the next restart"
         };
@@ -216,7 +216,7 @@ pub async fn serve_with(
     let _ = app.handles.set(handoff::Handles {});
     *app.serving.lock().unwrap_or_else(|p| p.into_inner()) = Some(serving);
 
-    // Logins, removals and `slopmax use` from the CLI are told to the
+    // Logins, removals and `slopmax account use` from the CLI are told to the
     // daemon at once (`/slopmax/api/sync`); the rescan catches the rest.
     // Each job asks the config as it runs, so a changed config.toml turns it
     // on or off without a restart. Every period is a multiple of 30 s, so the

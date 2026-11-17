@@ -33,7 +33,7 @@ const roundTrip = <S extends Schema.Codec<unknown, unknown>>(schema: S, value: S
 
 describe("errors", () => {
   it("are worded for people and carry the status slopmax's API answers them with", () => {
-    expect(new Unauthorized().message).toBe("missing or invalid slopmax key; see `slopmax env`")
+    expect(new Unauthorized().message).toBe("missing or invalid slopmax key; see `slopmax agent env`")
     expect(NotFound.of({ what: "account" }).message).toBe("no such account")
     expect(NotFound.of({ what: "slopmax endpoint" }).message).toBe("no such slopmax endpoint")
     expect(AccountNotFound.of({ query: "bob" }).message).toBe('no account matches "bob"')

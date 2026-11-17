@@ -120,7 +120,7 @@ pub fn foreign(listen: SocketAddr, pid: Option<u32>) -> String {
         .unwrap_or_default();
     format!(
         "a slopmax proxy on {listen} doesn't accept this home's key: it was started from another \
-         SLOPMAX_HOME, or before api_key changed. Stop it from there{end}, then run `slopmax start`."
+         SLOPMAX_HOME, or before api_key changed. Stop it from there{end}, then run `slopmax proxy start`."
     )
 }
 
@@ -416,7 +416,7 @@ mod tests {
             format!(
                 "a slopmax proxy on {} doesn't accept this home's key: it was started from \
                  another SLOPMAX_HOME, or before api_key changed. Stop it from there (or end \
-                 pid 4242), then run `slopmax start`.",
+                 pid 4242), then run `slopmax proxy start`.",
                 other.listen
             )
         );

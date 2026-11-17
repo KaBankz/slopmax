@@ -109,7 +109,7 @@ pub async fn check(
     if tailnet.as_ref().is_some_and(is_published) {
         // The Tailscale section says these louder: other machines lose
         // their hub when the proxy stops.
-        let louder = ["slopmax service install", "loginctl enable-linger $USER"];
+        let louder = ["slopmax proxy install", "loginctl enable-linger $USER"];
         proxy.findings.retain(|f| {
             f.level != Level::Note || !louder.contains(&f.fix.as_deref().unwrap_or(""))
         });
@@ -338,7 +338,7 @@ pub fn tailnet(config: &Config, home: &Home, facts: &TailnetFacts<'_>) -> Option
                 "the proxy doesn't answer on {}, where Tailscale sends your machines' requests",
                 home.show(&socket)
             ),
-            Some("slopmax stop && slopmax start"),
+            Some("slopmax proxy restart"),
         );
     }
     if over(Transport::Socket) && socket.as_os_str().len() > 100 {
@@ -365,7 +365,7 @@ pub fn tailnet(config: &Config, home: &Home, facts: &TailnetFacts<'_>) -> Option
         s.add(
             Level::Note,
             "no tailnet login uses slopmax without a key ([tailscale] users is empty)",
-            Some("slopmax tailscale users add <login>"),
+            Some("slopmax tailscale user add <login>"),
         );
     }
     if let Some(peers) = facts.peers {
@@ -379,7 +379,7 @@ pub fn tailnet(config: &Config, home: &Home, facts: &TailnetFacts<'_>) -> Option
             s.add(
                 Level::Note,
                 format!("no machine on your tailnet is signed in as {user} (a typo?)"),
-                Some(&format!("slopmax tailscale users remove {user}")),
+                Some(&format!("slopmax tailscale user remove {user}")),
             );
         }
         for admin in config.tailscale.iter().flat_map(|t| &t.admins) {
@@ -390,10 +390,7 @@ pub fn tailnet(config: &Config, home: &Home, facts: &TailnetFacts<'_>) -> Option
                         "the admin machine {} ({}) isn't on your tailnet any more",
                         admin.machine, admin.id
                     ),
-                    Some(&format!(
-                        "slopmax tailscale admins remove {}",
-                        admin.machine
-                    )),
+                    Some(&format!("slopmax tailscale admin remove {}", admin.machine)),
                 );
             }
         }
@@ -422,7 +419,7 @@ pub fn tailnet(config: &Config, home: &Home, facts: &TailnetFacts<'_>) -> Option
         s.add(
             Level::Warn,
             "slopmax doesn't start at login, so your machines lose their hub when this one restarts",
-            Some("slopmax service install"),
+            Some("slopmax proxy install"),
         );
     }
     if cfg!(target_os = "linux") && !facts.root && inspection.operator.as_deref() != facts.user {
@@ -516,7 +513,7 @@ pub fn hub(
             s.add(
                 Level::Warn,
                 format!("{} doesn't use the hub", agent.title()),
-                Some(&format!("slopmax setup {}", agent.id())),
+                Some(&format!("slopmax agent connect {}", agent.id())),
             );
         }
     }
@@ -524,7 +521,7 @@ pub fn hub(
         s.add(
             Level::Warn,
             "a proxy of this machine's own still runs, though its agents use the hub",
-            Some("slopmax stop, then slopmax service uninstall"),
+            Some("slopmax proxy stop, then slopmax proxy uninstall"),
         );
     }
     s
@@ -554,7 +551,7 @@ fn unserved(
         if !servable {
             steps.push(format!("slopmax login {provider}"));
         }
-        let setup = format!("slopmax setup {}", agent.id());
+        let setup = format!("slopmax agent connect {}", agent.id());
         if !steps.is_empty() {
             steps.push(setup.clone());
             let first = steps.join(", then ");
@@ -575,7 +572,7 @@ fn unserved(
                 provider.spec().title
             ),
             Some(&format!(
-                "slopmax login {provider}, or `slopmax setup {} --undo`",
+                "slopmax login {provider}, or `slopmax agent disconnect {}`",
                 agent.id()
             )),
         );
@@ -593,7 +590,7 @@ fn proxy(config: &Config, probe: Probe, service: Option<Status>) -> Section {
         Probe::Ours { version } => s.add(
             Level::Warn,
             format!("running version {version}, but this binary is {ours}"),
-            Some("slopmax stop && slopmax start"),
+            Some("slopmax proxy restart"),
         ),
         Probe::Foreign { pid, .. } => {
             let end = pid
@@ -606,7 +603,9 @@ fn proxy(config: &Config, probe: Probe, service: Option<Status>) -> Section {
                      another SLOPMAX_HOME, or before api_key changed",
                     config.listen
                 ),
-                Some(&format!("stop it from there{end}, then slopmax start")),
+                Some(&format!(
+                    "stop it from there{end}, then slopmax proxy start"
+                )),
             );
         }
         Probe::Absent => match unlistenable(config.listen) {
@@ -635,7 +634,7 @@ fn proxy(config: &Config, probe: Probe, service: Option<Status>) -> Section {
             None => s.add(
                 Level::Warn,
                 "not running",
-                Some("slopmax start (or `slopmax service install` to start at login)"),
+                Some("slopmax proxy start (or `slopmax proxy install` to start at login)"),
             ),
         },
     }
@@ -663,13 +662,13 @@ fn proxy(config: &Config, probe: Probe, service: Option<Status>) -> Section {
             (false, _) => s.add(
                 Level::Note,
                 "not installed as a service",
-                Some("slopmax service install"),
+                Some("slopmax proxy install"),
             ),
             (true, true) => s.add(Level::Ok, "runs as a login service", None),
             (true, false) => s.add(
                 Level::Warn,
                 "the service is installed but not running",
-                Some("slopmax start"),
+                Some("slopmax proxy start"),
             ),
         }
         if status.installed && status.lingering == Some(false) {
@@ -704,7 +703,7 @@ fn accounts_section(accounts: &[Account], failing: &[(String, String)]) -> Secti
         s.add(
             Level::Fail,
             "no accounts connected",
-            Some("slopmax login claude, slopmax login codex, or slopmax import"),
+            Some("slopmax login claude, slopmax login codex, or slopmax account import"),
         );
         return s;
     }
@@ -728,7 +727,7 @@ fn accounts_section(accounts: &[Account], failing: &[(String, String)]) -> Secti
                 Some(&fix),
             );
         } else if let Some(link) = &account.link {
-            let fix = format!("slopmax own {}", account.id);
+            let fix = format!("slopmax account adopt {}", account.id);
             if !link.path.exists() {
                 s.add(
                     Level::Warn,
@@ -758,7 +757,7 @@ fn accounts_section(accounts: &[Account], failing: &[(String, String)]) -> Secti
             s.add(
                 Level::Warn,
                 format!("{name}'s last request failed: {error}"),
-                Some("slopmax logs"),
+                Some("slopmax proxy logs"),
             );
         }
     }
@@ -791,17 +790,17 @@ fn claude_code(config: &Config, dir: &Path) -> Section {
         (Some(base), _) if base == ours => s.add(
             Level::Warn,
             "settings.json points at slopmax with a different key",
-            Some("slopmax setup claude"),
+            Some("slopmax agent connect claude"),
         ),
         (Some(base), _) => s.add(
             Level::Warn,
             format!("settings.json sends Claude Code to {base}"),
-            Some("slopmax setup claude"),
+            Some("slopmax agent connect claude"),
         ),
         (None, _) => s.add(
             Level::Note,
             "not wired in settings.json (`slopmax run claude` still works)",
-            Some("slopmax setup claude"),
+            Some("slopmax agent connect claude"),
         ),
     }
     if std::env::var_os("ANTHROPIC_API_KEY").is_some() {
@@ -854,22 +853,22 @@ fn codex(config: &Config, dir: &Path) -> Section {
             Level::Warn,
             "config.toml selects slopmax, but its provider table is gone \
              (the Codex desktop app can rewrite the file)",
-            Some("slopmax setup codex"),
+            Some("slopmax agent connect codex"),
         ),
         Some("slopmax") => s.add(
             Level::Warn,
             "config.toml's slopmax provider has an old address or key",
-            Some("slopmax setup codex"),
+            Some("slopmax agent connect codex"),
         ),
         Some(other) => s.add(
             Level::Warn,
             format!("config.toml sends Codex to the `{other}` provider"),
-            Some("slopmax setup codex"),
+            Some("slopmax agent connect codex"),
         ),
         None => s.add(
             Level::Note,
             "not wired in config.toml (`slopmax run codex` still works)",
-            Some("slopmax setup codex"),
+            Some("slopmax agent connect codex"),
         ),
     }
     s
@@ -905,19 +904,19 @@ fn grok_build(config: &Config, dir: &Path, accounts: &[Account]) -> Section {
                 s.add(
                     Level::Warn,
                     "config.toml points at slopmax with a different key",
-                    Some("slopmax setup grok"),
+                    Some("slopmax agent connect grok"),
                 );
             }
         }
         Some(base) => s.add(
             Level::Warn,
             format!("config.toml sends Grok Build to {base}"),
-            Some("slopmax setup grok"),
+            Some("slopmax agent connect grok"),
         ),
         None => s.add(
             Level::Note,
             "not wired in config.toml (`slopmax run grok` still works)",
-            Some("slopmax setup grok"),
+            Some("slopmax agent connect grok"),
         ),
     }
     // Its own sign-in comes before the auth provider, for plain `grok`.
@@ -949,13 +948,13 @@ fn cliproxyapi(accounts: &[Account], port: u16) -> Section {
                 "still running and refreshing {linked} account{} slopmax follows",
                 if linked == 1 { "" } else { "s" }
             ),
-            Some("once you stop CLIProxyAPI: slopmax own all"),
+            Some("once you stop CLIProxyAPI: slopmax account adopt all"),
         );
     } else {
         s.add(
             Level::Warn,
             format!("not running, so nothing refreshes the {linked} accounts slopmax follows"),
-            Some("slopmax own all"),
+            Some("slopmax account adopt all"),
         );
     }
     s
@@ -1129,7 +1128,7 @@ mod tests {
         let s = proxy(&config_on(port_of(&mock)), None).await;
         let f = finding(&s, "running version 0.0.1");
         assert_eq!(f.level, Level::Warn);
-        assert_eq!(f.fix.as_deref(), Some("slopmax stop && slopmax start"));
+        assert_eq!(f.fix.as_deref(), Some("slopmax proxy restart"));
     }
 
     #[tokio::test]
@@ -1159,7 +1158,7 @@ mod tests {
         assert_eq!(f.level, Level::Fail);
         assert_eq!(
             f.fix.as_deref(),
-            Some("stop it from there (or end pid 31337), then slopmax start")
+            Some("stop it from there (or end pid 31337), then slopmax proxy start")
         );
     }
 
@@ -1194,8 +1193,8 @@ mod tests {
         };
         let fixes = |accounts: &[Account], installed: bool| {
             let mut sections = [
-                section("Claude Code", "slopmax setup claude"),
-                section("Codex", "slopmax setup codex"),
+                section("Claude Code", "slopmax agent connect claude"),
+                section("Codex", "slopmax agent connect codex"),
             ];
             unserved(&mut sections, &config, accounts, &home, &|_| installed);
             sections.map(|s| s.findings[0].fix.clone().unwrap())
@@ -1206,20 +1205,23 @@ mod tests {
         ];
         assert_eq!(
             fixes(&both, true),
-            ["slopmax setup claude", "slopmax setup codex"]
+            [
+                "slopmax agent connect claude",
+                "slopmax agent connect codex"
+            ]
         );
         assert_eq!(
             fixes(&both, false),
             [
-                "install Claude Code, then slopmax setup claude",
-                "install Codex, then slopmax setup codex"
+                "install Claude Code, then slopmax agent connect claude",
+                "install Codex, then slopmax agent connect codex"
             ]
         );
         assert_eq!(
             fixes(&[], false),
             [
-                "install Claude Code, then slopmax login claude, then slopmax setup claude",
-                "install Codex, then slopmax login codex, then slopmax setup codex"
+                "install Claude Code, then slopmax login claude, then slopmax agent connect claude",
+                "install Codex, then slopmax login codex, then slopmax agent connect codex"
             ]
         );
     }
@@ -1229,7 +1231,7 @@ mod tests {
         let s = proxy(&config_on(free_port()), None).await;
         let f = finding(&s, "not running");
         assert_eq!(f.level, Level::Warn);
-        assert!(f.fix.as_deref().unwrap().starts_with("slopmax start"));
+        assert!(f.fix.as_deref().unwrap().starts_with("slopmax proxy start"));
     }
 
     #[tokio::test]
@@ -1264,7 +1266,7 @@ mod tests {
         let f = finding(&s, "not installed as a service");
         assert_eq!(
             (f.level, f.fix.as_deref()),
-            (Level::Note, Some("slopmax service install"))
+            (Level::Note, Some("slopmax proxy install"))
         );
         let s = proxy(&config, status(true, true, Some(true))).await;
         assert_eq!(finding(&s, "runs as a login service").level, Level::Ok);
@@ -1352,12 +1354,12 @@ mod tests {
         let f = finding(&s, "follows cliproxyapi, but");
         assert_eq!(f.level, Level::Warn);
         assert!(f.text.contains("gone.json is gone"));
-        assert_eq!(f.fix, Some(format!("slopmax own {}", orphan.id)));
+        assert_eq!(f.fix, Some(format!("slopmax account adopt {}", orphan.id)));
         let f = finding(&s, "token expired and cliproxyapi has not refreshed it");
         assert_eq!(
             f.fix,
             Some(format!(
-                "start cliproxyapi again, or slopmax own {}",
+                "start cliproxyapi again, or slopmax account adopt {}",
                 stale.id
             ))
         );
@@ -1368,7 +1370,7 @@ mod tests {
             f.text,
             "fine@x.com's last request failed: couldn't connect to api.anthropic.com (connection refused)"
         );
-        assert_eq!(f.fix.as_deref(), Some("slopmax logs"));
+        assert_eq!(f.fix.as_deref(), Some("slopmax proxy logs"));
         // One count line, five problems: the fresh linked account is fine.
         assert_eq!(s.findings.len(), 6);
 
@@ -1513,7 +1515,7 @@ mod tests {
         let f = finding(&s, "not running, so nothing refreshes the 1 accounts");
         assert_eq!(
             (f.level, f.fix.as_deref()),
-            (Level::Warn, Some("slopmax own all"))
+            (Level::Warn, Some("slopmax account adopt all"))
         );
 
         let running = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1924,7 +1926,7 @@ mod tests {
             let f = finding(&s, &format!("the proxy doesn't answer on {socket}"));
             assert_eq!(
                 (f.level, f.fix.as_deref()),
-                (Level::Fail, Some("slopmax stop && slopmax start"))
+                (Level::Fail, Some("slopmax proxy restart"))
             );
         }
 
@@ -1950,7 +1952,7 @@ mod tests {
             let f = finding(&s, "[tailscale] users is empty");
             assert_eq!(
                 (f.level, f.fix.as_deref()),
-                (Level::Note, Some("slopmax tailscale users add <login>"))
+                (Level::Note, Some("slopmax tailscale user add <login>"))
             );
             assert!(
                 finding(&s, "served to your tailnet")
@@ -1984,7 +1986,7 @@ mod tests {
             let f = finding(&s, "the admin machine old (nOLD1CNTRL)");
             assert_eq!(
                 (f.level, f.fix.as_deref()),
-                (Level::Warn, Some("slopmax tailscale admins remove old"))
+                (Level::Warn, Some("slopmax tailscale admin remove old"))
             );
             assert!(!s.findings.iter().any(|f| f.text.contains("machine mac")));
             // Peers that couldn't be read prove nothing.
@@ -2019,7 +2021,7 @@ mod tests {
             let f = finding(&s, "doesn't start at login");
             assert_eq!(
                 (f.level, f.fix.as_deref()),
-                (Level::Warn, Some("slopmax service install"))
+                (Level::Warn, Some("slopmax proxy install"))
             );
         }
 
@@ -2124,14 +2126,14 @@ mod tests {
             let f = finding(&s, "Claude Code doesn't use the hub");
             assert_eq!(
                 (f.level, f.fix.as_deref()),
-                (Level::Warn, Some("slopmax setup claude"))
+                (Level::Warn, Some("slopmax agent connect claude"))
             );
             let f = finding(&s, "a proxy of this machine's own still runs");
             assert_eq!(
                 (f.level, f.fix.as_deref()),
                 (
                     Level::Warn,
-                    Some("slopmax stop, then slopmax service uninstall")
+                    Some("slopmax proxy stop, then slopmax proxy uninstall")
                 )
             );
         }

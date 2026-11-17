@@ -145,5 +145,5 @@ when a dependency moves it.
 The UI's sentences come from pure functions in `src/view/` (`words.ts` for
 most), so tests read them as people will. Say what happened and what to do,
 in plain words: "slopmax is not answering. Is it running? Start it with
-slopmax start." Never show a request's method and address. Times give both
+slopmax proxy start." Never show a request's method and address. Times give both
 the countdown and the clock time: "Resets in 51m46s · 02:18".

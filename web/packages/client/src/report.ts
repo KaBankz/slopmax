@@ -24,7 +24,7 @@ export type Condition = typeof Condition.Type
 
 /** A note beside an account's condition. */
 export const Note = Schema.TaggedUnion({
-  /** Chosen with `slopmax use` for new sessions. */
+  /** Chosen with `slopmax account use` for new sessions. */
   Pinned: {},
   Priority: { value: Schema.Int },
   /** The tool whose copy of the tokens slopmax follows. */
@@ -70,7 +70,7 @@ export class AccountView extends Schema.Class<AccountView>("AccountView")({
 
 /** Why a new session would get an account. */
 export const NextReason = Schema.Literals([
-  /** Chosen with `slopmax use`. */
+  /** Chosen with `slopmax account use`. */
   "pinned",
   /** No other account of the provider can serve. */
   "only-one",

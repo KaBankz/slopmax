@@ -143,7 +143,7 @@ impl Condition {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "_tag")]
 pub enum Note {
-    /// Chosen with `slopmax use` for new sessions.
+    /// Chosen with `slopmax account use` for new sessions.
     Pinned,
     Priority {
         value: i32,
@@ -342,7 +342,7 @@ impl Usage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum NextReason {
-    /// Chosen with `slopmax use`.
+    /// Chosen with `slopmax account use`.
     Pinned,
     /// No other account of the provider can serve.
     OnlyOne,

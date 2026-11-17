@@ -372,7 +372,7 @@ async fn follow(store: &Store, account: &Account, force: bool) -> Result<Account
             .as_ref()
             .map_or("its source", |l| l.tool.as_str());
         return Err(RefreshError::Transient(anyhow!(
-            "{tool} has not refreshed this login yet (`slopmax own` lets slopmax refresh it)"
+            "{tool} has not refreshed this login yet (`slopmax account adopt` lets slopmax refresh it)"
         )));
     }
     Ok(current)

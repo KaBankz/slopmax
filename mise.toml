@@ -37,18 +37,18 @@ run = ["bun install --frozen-lockfile", "bun apps/ui/build.ts --rust"]
 
 [tasks.msrv]
 description = "Check that the minimum supported Rust version still builds"
-tools = { rust = "1.89" }
+tools = { rust = "1.91" }
 run = "cargo check --all-targets --all-features --locked"
 
 [tasks.budget]
-description = "Hold the binary's dependencies to 71 crates and the binary to 10 MiB"
+description = "Hold the binary's dependencies to 74 crates and the binary to 10 MiB"
 run = '''
 host=$(rustc -vV | sed -n 's/host: //p')
 # Third-party crates only: slopmax's own (path) crates are left out.
 crates=$(cargo tree --locked --color never -e normal --target "$host" --prefix none -p slopmax | sed 's/ (\*)//' | grep -v ' (/' | sort -u)
 count=$(printf '%s\n' "$crates" | wc -l | tr -d ' ')
-echo "$count crates for $host (budget 71)"
-[ "$count" -le 71 ] || { printf '%s\n' "$crates"; exit 1; }
+echo "$count crates for $host (budget 74)"
+[ "$count" -le 74 ] || { printf '%s\n' "$crates"; exit 1; }
 cargo build --release --locked -p slopmax
 bytes=$(wc -c < target/release/slopmax | tr -d ' ')
 # 10 MiB. v0.3.0 measured 6.52 MB and the typed API added 0.39 MB (the 7 MiB
@@ -59,11 +59,22 @@ bytes=$(wc -c < target/release/slopmax | tr -d ' ')
 # own copies of the generic code it uses (serde, tokio, hyper), which LTO
 # cannot merge on stable Rust: 8.48 MB. The tailnet hub brought it to
 # 9.39 MB, and the pool forecast, the request history and their API types
-# to 9.62 MB, past 9 MiB: raised to 10 MiB. Raising it needs the reason in
-# the commit.
+# to 9.62 MB, past 9 MiB: raised to 10 MiB. The command line on usage-rs
+# (its parser, help, completions and spec, 3 crates) and its new commands
+# took it to 10.27 MB. Raising it needs the reason in the commit.
 echo "$bytes bytes (budget 10485760)"
 [ "$bytes" -le 10485760 ]
 '''
+
+[tasks.cli-docs]
+description = "Lint the command line's usage spec and write the CLI reference from it"
+# The spec is docs/cli/slopmax.usage.kdl, which a test keeps in step with
+# the binary (`SLOPMAX_BLESS=1 cargo test -p slopmax` writes it).
+tools = { usage = "7.3.0" }
+run = [
+  "usage lint docs/cli/slopmax.usage.kdl",
+  "usage generate markdown --file docs/cli/slopmax.usage.kdl --indented-blocks-to-code-fences --out-file docs/cli/README.md",
+]
 
 [tasks.launchd]
 description = "On a macOS CI runner: the login agent under launchd, through a crash, a handoff, stop and start"

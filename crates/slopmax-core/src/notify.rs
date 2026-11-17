@@ -301,7 +301,7 @@ pub fn nudges(
                 };
                 let key = format!("reset:{}:{}", account.id, credit.id);
                 let message = format!(
-                    "A limit reset on {} expires {}; redeem it with `slopmax redeem {}` before it is lost.",
+                    "A limit reset on {} expires {}; redeem it with `slopmax account redeem {}` before it is lost.",
                     account.name,
                     when(expires, now),
                     account.name,
@@ -779,7 +779,7 @@ mod tests {
         assert_eq!(kinds, [Kind::ResetExpiring, Kind::QuotaUnused]);
         let reset = &found[0].1;
         assert!(
-            reset.message.contains("slopmax redeem work@x.dev"),
+            reset.message.contains("slopmax account redeem work@x.dev"),
             "{}",
             reset.message
         );

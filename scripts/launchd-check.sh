@@ -2,7 +2,7 @@
 # The login agent under this Mac's launchd, end to end: launchd holds the
 # proxy's socket, and nothing is refused through a crash, or through a
 # handoff and launchd's next process taking over from the process the proxy
-# moved to; `slopmax stop` unloads the agent and `slopmax start` loads it.
+# moved to; `slopmax proxy stop` unloads the agent and `slopmax proxy start` loads it.
 #
 # It installs and removes the user's own login agent (dev.slopmax), so it
 # runs only on a CI runner: `mise run launchd`.

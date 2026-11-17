@@ -1,0 +1,618 @@
+name slopmax
+bin slopmax
+about "Pool your Claude, ChatGPT, and SuperGrok subscriptions behind one local proxy, so Claude Code, Codex, and Grok Build keep working when an account runs out."
+long_about #"""
+Pool your Claude, ChatGPT, and SuperGrok subscriptions behind one local proxy, so Claude Code, Codex, and Grok Build keep working when an account runs out.
+
+Run without a command to see your accounts, or to set slopmax up the first time.
+"""#
+after_long_help #"""
+Environment:
+    SLOPMAX_HOME             Where slopmax keeps its config, accounts, and logs
+                             (default: ~/.slopmax)
+    SLOPMAX_LISTEN           The address the proxy listens on, over config.toml's listen
+    SLOPMAX_HUB_KEY          A hub's key for `setup --hub`, when --hub-key isn't given
+    SLOPMAX_LOG              The log level: error, warn, info, debug, or off
+    SLOPMAX_NO_UPDATE_CHECK  1 never looks for a newer release
+    NO_COLOR                 Print without color
+
+Docs: https://github.com/KaBankz/slopmax#readme
+"""#
+flagset json {
+    flag --json help="Print JSON instead of text, for scripts and agents"
+}
+flagset yes {
+    flag "-y --yes" help="Don't ask for confirmation"
+}
+flag "-h --help" help="Print help" action=help builtin=#true
+flag "-V --version" help="Print version" action=version builtin=#true
+example "slopmax setup" header="Set everything up, step by step"
+example "slopmax login claude" header="Add another Claude account"
+example "slopmax run codex" header="Run Codex through the proxy"
+example "slopmax status --json" header="Read the accounts' standing as JSON"
+exit_code 0 "it worked"
+exit_code 1 "it failed; the error says why"
+exit_code 2 "the command line was wrong"
+cmd setup help_heading="Start here" help="Set slopmax up step by step, or unattended with flags" effect=write display_order=1 {
+    alias init
+    long_help #"""
+Set slopmax up step by step, or unattended with flags.
+
+It finds the logins Claude Code, Codex, and CLIProxyAPI hold and offers to bring them over, signs in to more accounts, picks how accounts are shared, points your agents at the proxy, and starts it at login. Every question has a flag; with --yes, or without a terminal, it asks nothing and takes the flags, else the recommended answers.
+
+With --hub, this machine uses the slopmax on another of your machines instead, and runs no proxy of its own.
+"""#
+    flag "-y --yes" help="Ask nothing: take the flags, else the recommended answers"
+    flag --import help="Take logins from these tools" var=#true delimiter=, {
+        arg <SOURCES> {
+            choices all claude-code codex cliproxyapi none
+        }
+    }
+    flag --adopt help="With --import cliproxyapi: refresh its logins here instead of following its files"
+    flag --login help="Sign in to these subscriptions" var=#true delimiter=, {
+        arg <PROVIDERS> {
+            choices claude codex grok none
+        }
+    }
+    flag --keys-from-env help="Add the keys set in ANTHROPIC_API_KEY, OPENAI_API_KEY, and XAI_API_KEY"
+    flag --strategy help="How new sessions pick an account" {
+        arg <STRATEGY> {
+            choices {
+                choice reset-first help="The quota that resets soonest, so less of it goes unused"
+                choice fill-first help="Accounts in a fixed order, the next only when one is limited"
+                choice least-used help="The account with the most quota left"
+                choice round-robin help="Each account in turn"
+            }
+        }
+    }
+    flag --affinity help="Keep each session on its account (on), or place every request afresh (off)" {
+        arg <AFFINITY> {
+            choices {
+                choice on
+                choice off
+            }
+        }
+    }
+    flag --agents help="Point these agents at the proxy" var=#true delimiter=, {
+        arg <AGENTS> {
+            choices claude codex grok none
+        }
+    }
+    flag --no-service help="Don't start slopmax at login"
+    flag --hub help="Use the slopmax on another of your machines: its name, host[:port], or URL; `off` goes back" help_heading="Using a hub" {
+        arg <HUB>
+    }
+    flag --find-hub help="Look for slopmax on your tailnet, and use it" help_heading="Using a hub" conflicts=--hub
+    flag --hub-key help="A key the hub made for this machine (else $SLOPMAX_HUB_KEY)" help_heading="Using a hub" {
+        arg <KEY>
+    }
+    flag --key-name help="With the hub's owner key: the name of the key made for this machine" help_heading="Using a hub" {
+        arg <NAME>
+    }
+    flag "-h --help" help="Print help" action=help builtin=#true
+    example "slopmax setup --yes --import claude-code,codex --agents claude,codex" header="Unattended, for a script or an agent"
+    example "slopmax setup --hub workstation" header="Use the slopmax on another of your machines"
+    example "slopmax setup --hub off" header="Go back to this machine's own proxy"
+}
+cmd status help_heading="Start here" help="Show the accounts, their usage windows, and when limits reset" effect=read display_order=2 {
+    long_help #"""
+Show the accounts, their usage windows, and when limits reset.
+
+Reads the running proxy, else the files on disk. Accounts are numbered; commands that take <ACCOUNT> take those numbers.
+"""#
+    flag "-r --refresh" help="Fetch fresh usage from the providers first"
+    flag "-w --watch" help="Keep the display up to date until interrupted" conflicts=--json
+    use json
+    flag "-h --help" help="Print help" action=help builtin=#true
+    output human default=#true
+    output json media_type="application/json" select=--json
+}
+cmd dashboard help_heading="Start here" help="Open the dashboard in a browser, starting the proxy if needed" effect=read display_order=3 {
+    flag --no-browser help="Print the dashboard's address instead of opening a browser"
+    flag "-h --help" help="Print help" action=help builtin=#true
+}
+cmd login help_heading=Accounts help="Connect an account: sign in, or enter an API key (`account add`)" effect=write display_order=4 {
+    long_help #"""
+Connect an account: sign in, or enter an API key.
+
+Subscriptions (claude, codex, grok) sign in through the provider's own page. API keys are asked for at a hidden prompt, or read from stdin (`slopmax login xai < key.txt`). A compatible endpoint needs --url.
+"""#
+    flag --label help="Display name for the account (else its email)" {
+        arg <LABEL>
+    }
+    flag --device help="Sign in with a code to enter on any device, instead of a browser redirect"
+    flag --no-browser help="Print the sign-in address instead of opening a browser"
+    flag --url help="The endpoint's base URL" help_heading="Compatible endpoints" {
+        arg <URL>
+    }
+    flag --dialect help="The API it speaks" help_heading="Compatible endpoints" requires=--url {
+        arg <DIALECT> {
+            choices {
+                choice chat help="OpenAI Chat Completions (the default)"
+                choice responses help="OpenAI Responses"
+                choice messages help="Anthropic Messages"
+            }
+        }
+    }
+    flag --models help="Models it serves, comma-separated patterns (else what it lists)" help_heading="Compatible endpoints" requires=--url {
+        arg <MODELS>
+    }
+    flag "-h --help" help="Print help" action=help builtin=#true
+    arg <PROVIDER> help="Which kind of account" {
+        choices {
+            choice claude help="Claude Pro or Max, used by Claude Code"
+            choice codex help="ChatGPT Plus, Pro, or Team, used by Codex"
+            choice grok help="SuperGrok, used by Grok Build"
+            choice anthropic help="An Anthropic API key"
+            choice openai help="An OpenAI API key"
+            choice xai help="An xAI API key"
+            choice compat help="Any OpenAI- or Anthropic-compatible endpoint (needs --url)"
+        }
+    }
+    complete url type=url
+    example "slopmax login claude" header="Sign in to a Claude Pro or Max account"
+    example "slopmax login codex --device" header="Sign in with a code, from a machine with no browser"
+    example "slopmax login compat --url http://localhost:11434/v1" header="Add a local OpenAI-compatible endpoint"
+}
+cmd account help_heading=Accounts help="List, add, and manage the accounts slopmax pools" display_order=5 {
+    alias accounts hide=#true
+    long_help #"""
+List, add, and manage the accounts slopmax pools.
+
+Without a subcommand, lists the accounts.
+"""#
+    flag "-h --help" help="Print help" action=help builtin=#true
+    cmd list help="List the accounts, numbered" effect=read display_order=1 {
+        alias ls
+        use json
+        flag "-h --help" help="Print help" action=help builtin=#true
+    }
+    cmd add help="Connect an account: sign in, or enter an API key" effect=write display_order=2 {
+        long_help #"""
+Connect an account: sign in, or enter an API key.
+
+Subscriptions (claude, codex, grok) sign in through the provider's own page. API keys are asked for at a hidden prompt, or read from stdin (`slopmax login xai < key.txt`). A compatible endpoint needs --url.
+"""#
+        flag --label help="Display name for the account (else its email)" {
+            arg <LABEL>
+        }
+        flag --device help="Sign in with a code to enter on any device, instead of a browser redirect"
+        flag --no-browser help="Print the sign-in address instead of opening a browser"
+        flag --url help="The endpoint's base URL" help_heading="Compatible endpoints" {
+            arg <URL>
+        }
+        flag --dialect help="The API it speaks" help_heading="Compatible endpoints" requires=--url {
+            arg <DIALECT> {
+                choices {
+                    choice chat help="OpenAI Chat Completions (the default)"
+                    choice responses help="OpenAI Responses"
+                    choice messages help="Anthropic Messages"
+                }
+            }
+        }
+        flag --models help="Models it serves, comma-separated patterns (else what it lists)" help_heading="Compatible endpoints" requires=--url {
+            arg <MODELS>
+        }
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <PROVIDER> help="Which kind of account" {
+            choices {
+                choice claude help="Claude Pro or Max, used by Claude Code"
+                choice codex help="ChatGPT Plus, Pro, or Team, used by Codex"
+                choice grok help="SuperGrok, used by Grok Build"
+                choice anthropic help="An Anthropic API key"
+                choice openai help="An OpenAI API key"
+                choice xai help="An xAI API key"
+                choice compat help="Any OpenAI- or Anthropic-compatible endpoint (needs --url)"
+            }
+        }
+        complete url type=url
+        example "slopmax login claude" header="Sign in to a Claude Pro or Max account"
+        example "slopmax login codex --device" header="Sign in with a code, from a machine with no browser"
+        example "slopmax login compat --url http://localhost:11434/v1" header="Add a local OpenAI-compatible endpoint"
+    }
+    cmd import help="Copy the logins Claude Code, Codex, or CLIProxyAPI hold" effect=write display_order=3 {
+        long_help #"""
+Copy the logins Claude Code, Codex, or CLIProxyAPI hold.
+
+An imported login shares its refresh token with the tool it came from. CLIProxyAPI's are followed: slopmax reads the files CLIProxyAPI keeps fresh and never refreshes them itself, until `slopmax account adopt`.
+"""#
+        flag --adopt help="Refresh CLIProxyAPI's logins here instead of following its files"
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg "[SOURCE]" help="Where to import from" default=all {
+            choices {
+                choice all help="Every source below"
+                choice claude-code help="Claude Code's login (~/.claude/.credentials.json, or the macOS keychain)"
+                choice codex help="The Codex CLI's login (~/.codex/auth.json)"
+                choice cliproxyapi help="CLIProxyAPI's credential files (~/.cli-proxy-api/*.json)"
+            }
+        }
+    }
+    cmd use help="Prefer an account for new sessions, or let slopmax choose again" effect=write display_order=4 {
+        long_help #"""
+Prefer an account for new sessions, or let slopmax choose again.
+
+New sessions of that provider go to the account while it has quota.
+"""#
+        flag --auto help="Let slopmax choose accounts again"
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg "[ACCOUNT]" help="The account to prefer" conflicts=--auto required_unless=--auto
+        complete account run="slopmax __complete_word__ --candidates account --line={{ words | shell_join | shell_quote }}"
+    }
+    cmd rename help="Set an account's display name" effect=write display_order=5 {
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <ACCOUNT> help="A number from `slopmax status`, or the account's id, email, or label"
+        arg <LABEL> help="The new name; \"\" goes back to the email"
+        complete account run="slopmax __complete_word__ --candidates account --line={{ words | shell_join | shell_quote }}"
+    }
+    cmd priority help="Set an account's priority tier; higher tiers are used first" effect=write display_order=6 {
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <ACCOUNT> help="A number from `slopmax status`, or the account's id, email, or label"
+        arg <TIER> help="The tier: 0 by default; negative holds the account in reserve" allow_negative_numbers=#true
+        complete account run="slopmax __complete_word__ --candidates account --line={{ words | shell_join | shell_quote }}"
+    }
+    cmd order help="Show or set the order new sessions use accounts in" effect=write display_order=7 {
+        long_help #"""
+Show or set the order new sessions use accounts in.
+
+With accounts, puts them first, in the order given; the rest follow as they were.
+"""#
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg "[ACCOUNTS]..." help="Accounts to use first, in order"
+        complete accounts run="slopmax __complete_word__ --candidates accounts --line={{ words | shell_join | shell_quote }}"
+        example "slopmax account order 3 1" header="Use account 3 first, then 1"
+    }
+    cmd enable help="Route to an account again" effect=write display_order=8 {
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <ACCOUNT> help="A number from `slopmax status`, or the account's id, email, or label"
+        complete account run="slopmax __complete_word__ --candidates account --line={{ words | shell_join | shell_quote }}"
+    }
+    cmd disable help="Stop routing to an account; its sign-in is still kept fresh" effect=write display_order=9 {
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <ACCOUNT> help="A number from `slopmax status`, or the account's id, email, or label"
+        complete account run="slopmax __complete_word__ --candidates account --line={{ words | shell_join | shell_quote }}"
+    }
+    cmd check help="Lift slopmax's hold on an account and read its usage again" effect=write display_order=10 {
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <ACCOUNT> help="A number from `slopmax status`, or the account's id, email, or label"
+        complete account run="slopmax __complete_word__ --candidates account --line={{ words | shell_join | shell_quote }}"
+    }
+    cmd redeem help="Spend a banked limit reset, resetting the account's usage windows" effect=destructive display_order=11 {
+        long_help #"""
+Spend a banked limit reset, resetting the account's usage windows.
+
+Claude and ChatGPT accounts can hold limit resets; this spends the one that expires soonest.
+"""#
+        use yes
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <ACCOUNT> help="A number from `slopmax status`, or the account's id, email, or label"
+        complete account run="slopmax __complete_word__ --candidates account --line={{ words | shell_join | shell_quote }}"
+    }
+    cmd adopt help="Take over refreshing a login slopmax follows from another tool" effect=write display_order=12 {
+        long_help #"""
+Take over refreshing a login slopmax follows from another tool.
+
+The first refresh signs the other tool's copy out, so stop that tool first.
+"""#
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <ACCOUNT> help="A number from `slopmax status`, the account's id, email, or label, or `all`"
+        complete account run="slopmax __complete_word__ --candidates account --line={{ words | shell_join | shell_quote }}"
+    }
+    cmd remove help="Forget an account" effect=destructive display_order=13 {
+        alias rm
+        use yes
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <ACCOUNT> help="A number from `slopmax status`, or the account's id, email, or label"
+        complete account run="slopmax __complete_word__ --candidates account --line={{ words | shell_join | shell_quote }}"
+    }
+}
+cmd usage help_heading=Accounts help="Show token usage and what it would have cost on the API" effect=read display_order=6 {
+    flag "-b --by" help="What to group by" default=day {
+        arg <BY> {
+            choices {
+                choice day
+                choice model
+                choice account
+                choice machine help="The machine that sent the requests"
+            }
+        }
+    }
+    use json
+    flag "-h --help" help="Print help" action=help builtin=#true
+    arg "[RANGE]" help="Which period" default="7d" {
+        choices {
+            choice today help="Since midnight"
+            choice "7d" help="Today and the 6 days before"
+            choice "30d" help="Today and the 29 days before"
+            choice all help="Everything recorded"
+        }
+    }
+    example "slopmax usage 30d --by model" header="The last 30 days, by model"
+}
+cmd requests help_heading=Accounts help="Show the requests the proxy answered" effect=read display_order=7 {
+    flag --account help="Only those served by this account" {
+        arg <ACCOUNT>
+    }
+    flag --model help="Only this model" {
+        arg <MODEL>
+    }
+    flag --failed help="Only those that failed"
+    flag "-n --limit" help="How many to show" default="20" {
+        arg <LIMIT>
+    }
+    use json
+    flag "-h --help" help="Print help" action=help builtin=#true
+    arg "[RANGE]" help="Which period" default=today {
+        choices {
+            choice today help="Since midnight"
+            choice "7d" help="Today and the 6 days before"
+            choice "30d" help="Today and the 29 days before"
+        }
+    }
+    complete account run="slopmax __complete_word__ --candidates account --line={{ words | shell_join | shell_quote }}"
+    example "slopmax requests --failed --limit 5" header="The last five requests that failed"
+}
+cmd run help_heading=Agents help="Launch an agent through the proxy (`agent run`)" effect=write display_order=8 {
+    long_help #"""
+Launch an agent through the proxy, starting the proxy if needed.
+
+Everything after the agent goes to it unchanged.
+"""#
+    flag "-h --help" help="Print help" action=help builtin=#true
+    arg <AGENT> help="Which agent" {
+        choices {
+            choice claude help="Claude Code"
+            choice codex help=Codex
+            choice grok help="Grok Build"
+        }
+    }
+    arg "[ARGS]..." help="Arguments for the agent" double_dash=automatic
+    example "slopmax run claude --continue" header="Continue the last Claude Code session"
+}
+cmd agent help_heading=Agents help="Point Claude Code, Codex, and Grok Build at slopmax" display_order=9 {
+    alias agents hide=#true
+    long_help #"""
+Point Claude Code, Codex, and Grok Build at slopmax.
+
+Without a subcommand, lists the agents and whether each is connected.
+"""#
+    flag "-h --help" help="Print help" action=help builtin=#true
+    cmd list help="List the agents and whether each is connected" effect=read display_order=1 {
+        alias ls
+        use json
+        flag "-h --help" help="Print help" action=help builtin=#true
+    }
+    cmd connect help="Point an agent at slopmax for good, in its own config file" effect=write display_order=2 {
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <AGENT> help="Which agent" {
+            choices {
+                choice claude help="Claude Code"
+                choice codex help=Codex
+                choice grok help="Grok Build"
+            }
+        }
+    }
+    cmd disconnect help="Restore what `agent connect` replaced" effect=write display_order=3 {
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <AGENT> help="Which agent" {
+            choices {
+                choice claude help="Claude Code"
+                choice codex help=Codex
+                choice grok help="Grok Build"
+            }
+        }
+    }
+    cmd run help="Launch an agent through the proxy, starting the proxy if needed" effect=write display_order=4 {
+        long_help #"""
+Launch an agent through the proxy, starting the proxy if needed.
+
+Everything after the agent goes to it unchanged.
+"""#
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <AGENT> help="Which agent" {
+            choices {
+                choice claude help="Claude Code"
+                choice codex help=Codex
+                choice grok help="Grok Build"
+            }
+        }
+        arg "[ARGS]..." help="Arguments for the agent" double_dash=automatic
+        example "slopmax run claude --continue" header="Continue the last Claude Code session"
+    }
+    cmd env help="Print shell setup that points an agent at the proxy, for `eval`" effect=read display_order=5 {
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <AGENT> help="Which agent" {
+            choices {
+                choice claude help="Claude Code"
+                choice codex help=Codex
+                choice grok help="Grok Build"
+            }
+        }
+        example "eval \"$(slopmax agent env claude)\"" header="Point this shell's Claude Code at slopmax"
+    }
+}
+cmd proxy help_heading=Proxy help="Start, stop, and inspect the proxy, and run it at login" display_order=10 {
+    long_help #"""
+Start, stop, and inspect the proxy, and run it at login.
+
+Without a subcommand, shows whether the proxy runs.
+"""#
+    flag "-h --help" help="Print help" action=help builtin=#true
+    cmd status help="Show whether the proxy runs, where, and whether it starts at login" effect=read display_order=1 {
+        use json
+        flag "-h --help" help="Print help" action=help builtin=#true
+    }
+    cmd start help="Start the proxy in the background" effect=write display_order=2 {
+        flag "-h --help" help="Print help" action=help builtin=#true
+    }
+    cmd stop help="Stop the background proxy" effect=write display_order=3 {
+        flag "-h --help" help="Print help" action=help builtin=#true
+    }
+    cmd restart help="Stop the proxy and start it again" effect=write display_order=4 {
+        flag "-h --help" help="Print help" action=help builtin=#true
+    }
+    cmd logs help="Show the proxy's log" effect=read display_order=5 {
+        flag "-f --follow" help="Keep printing new lines until interrupted"
+        flag "-n --lines" help="How many lines to show first" default="40" {
+            arg <LINES>
+        }
+        flag "-h --help" help="Print help" action=help builtin=#true
+    }
+    cmd install help="Start the proxy at login (a systemd user unit, launchd agent, or Windows login item)" effect=write display_order=6 {
+        flag "-h --help" help="Print help" action=help builtin=#true
+    }
+    cmd uninstall help="Stop starting the proxy at login" effect=write display_order=7 {
+        flag "-h --help" help="Print help" action=help builtin=#true
+    }
+    cmd serve help="Run the proxy in the foreground" effect=write display_order=8 {
+        flag "-h --help" help="Print help" action=help builtin=#true
+    }
+}
+cmd config help_heading=Proxy help="Show the routing settings, or change one while the proxy runs" effect=write display_order=11 {
+    long_help #"""
+Show the routing settings, or change one while the proxy runs.
+
+A change applies at once to a running proxy, and is saved to config.toml. The other settings live in config.toml itself.
+"""#
+    use json
+    flag "-h --help" help="Print help" action=help builtin=#true
+    arg "[NAME]" help="The setting, e.g. strategy"
+    arg "[VALUE]" help="Its new value, e.g. round-robin"
+    complete name run="slopmax __complete_word__ --candidates name --line={{ words | shell_join | shell_quote }}"
+    example "slopmax config strategy round-robin" header="Take turns between accounts"
+}
+cmd key help_heading=Proxy help="Manage keys that let other machines and tools use the proxy" display_order=12 {
+    alias keys hide=#true
+    long_help #"""
+Manage keys that let other machines and tools use the proxy.
+
+Without a subcommand, lists the keys.
+"""#
+    flag "-h --help" help="Print help" action=help builtin=#true
+    cmd list help="List the keys" effect=read display_order=1 {
+        alias ls
+        use json
+        flag "-h --help" help="Print help" action=help builtin=#true
+    }
+    cmd add help="Make a key, and print it once" effect=write display_order=2 {
+        flag --models help="Models it may use, comma-separated patterns (else any)" {
+            arg <MODELS>
+        }
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <NAME> help="What to call it"
+        example "slopmax key add laptop" header="A key for your laptop"
+    }
+    cmd remove help="Revoke a key" effect=destructive display_order=3 {
+        alias rm
+        flag "-h --help" help="Print help" action=help builtin=#true
+        arg <NAME> help="The key's name"
+        complete name run="slopmax __complete_word__ --candidates name --line={{ words | shell_join | shell_quote }}"
+    }
+}
+cmd tailscale help_heading=Proxy help="Share slopmax with your own machines over Tailscale" display_order=13 {
+    long_help #"""
+Share slopmax with your own machines over Tailscale.
+
+Without a subcommand, shows whether slopmax is published to your tailnet, and who uses it.
+"""#
+    flag "-h --help" help="Print help" action=help builtin=#true
+    cmd status help="Show whether slopmax is published to your tailnet, and who uses it" effect=read display_order=1 {
+        use json
+        flag "-h --help" help="Print help" action=help builtin=#true
+    }
+    cmd on help="Publish slopmax to your own machines with `tailscale serve`" effect=write display_order=2 {
+        flag --port help="The port to serve on (else the proxy's)" {
+            arg <PORT>
+        }
+        flag --user help="A tailnet login to let in without a key" var=#true delimiter=, {
+            arg <LOGIN>
+        }
+        flag --admin help="A machine that may also manage slopmax" var=#true delimiter=, {
+            arg <MACHINE>
+        }
+        flag --loopback help="Serve the proxy's bare port, where every machine needs a key" conflicts=--socket
+        flag --socket help="Serve the proxy's socket, which Tailscale lets only root publish"
+        flag "-h --help" help="Print help" action=help builtin=#true
+        example "slopmax tailscale on --user you@github" header="Let your own machines in without a key"
+    }
+    cmd off help="Stop publishing it" effect=write display_order=3 {
+        flag "-h --help" help="Print help" action=help builtin=#true
+    }
+    cmd user help="Tailnet logins whose machines use slopmax without a key" display_order=4 {
+        alias users hide=#true
+        flag "-h --help" help="Print help" action=help builtin=#true
+        cmd list help="List them" effect=read display_order=1 {
+            alias ls
+            flag "-h --help" help="Print help" action=help builtin=#true
+        }
+        cmd add help="Add some" effect=write display_order=2 {
+            flag "-h --help" help="Print help" action=help builtin=#true
+            arg <NAMES>... help="Logins (you@github) or machine names" delimiter=,
+        }
+        cmd remove help="Remove some" effect=write display_order=3 {
+            alias rm
+            flag "-h --help" help="Print help" action=help builtin=#true
+            arg <NAMES>... help="Logins (you@github) or machine names" delimiter=,
+        }
+    }
+    cmd admin help="Machines that may also manage slopmax" display_order=5 {
+        alias admins hide=#true
+        flag "-h --help" help="Print help" action=help builtin=#true
+        cmd list help="List them" effect=read display_order=1 {
+            alias ls
+            flag "-h --help" help="Print help" action=help builtin=#true
+        }
+        cmd add help="Add some" effect=write display_order=2 {
+            flag "-h --help" help="Print help" action=help builtin=#true
+            arg <NAMES>... help="Logins (you@github) or machine names" delimiter=,
+        }
+        cmd remove help="Remove some" effect=write display_order=3 {
+            alias rm
+            flag "-h --help" help="Print help" action=help builtin=#true
+            arg <NAMES>... help="Logins (you@github) or machine names" delimiter=,
+        }
+    }
+}
+cmd doctor help_heading=Maintenance help="Check the setup and say how to fix what's wrong" effect=read display_order=14 {
+    use json
+    flag "-h --help" help="Print help" action=help builtin=#true
+    exit_code 0 "nothing is broken"
+    exit_code 1 "something is broken"
+}
+cmd notify help_heading=Maintenance help="Show how slopmax notifies you, or send a test notification" display_order=15 {
+    long_help #"""
+Show how slopmax notifies you, or send a test notification.
+
+Notifications are set under [notify] in config.toml.
+"""#
+    flag "-h --help" help="Print help" action=help builtin=#true
+    cmd test help="Send a test notification" effect=write display_order=1 {
+        flag "-h --help" help="Print help" action=help builtin=#true
+    }
+}
+cmd update help_heading=Maintenance help="Install the newest slopmax and move the running proxy to it" effect=write display_order=16 {
+    long_help #"""
+Install the newest slopmax and move the running proxy to it.
+
+It updates the way slopmax was installed, and the proxy changes over without dropping a connection.
+"""#
+    flag --check help="Only say whether a newer release is out"
+    flag "-h --help" help="Print help" action=help builtin=#true
+}
+cmd completion help_heading=Maintenance help="Print or install a shell completion script" display_order=17 {
+    alias completions hide=#true
+    flag --install help="Write the script where the shell looks for it instead of printing it" effect=write
+    flag --force help="With --install, replace a file that was not generated by usage" effect=destructive requires=--install {
+        long_help #"""
+With --install, replace a file that was not generated by usage
+
+The file is overwritten without a backup, which is why this is labeled destructive.
+"""#
+    }
+    flag "-h --help" help="Print help" action=help builtin=#true
+    arg <SHELL> help="Shell to generate completions for" {
+        choices bash elvish fish nu nushell powershell pwsh zsh
+    }
+}
+cmd serve help="Run the proxy in the foreground (`proxy serve`); what login services run" hide=#true effect=write display_order=18 {
+    flag "-h --help" help="Print help" action=help builtin=#true
+}

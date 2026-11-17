@@ -62,10 +62,13 @@ The engine's errors at these boundaries are typed (`error.rs`: `StoreError`, `Co
 
 ```
 slopmax/src/
-  main.rs       entry point; commands.rs (the command table and dispatch) and commands/,
-                among them tailscale.rs (`slopmax tailscale`: publishing, users, admins)
-                and remote.rs (`setup --hub`: finding a hub, its key, wiring the agents)
-  args.rs       the table-driven parser; term.rs reads input; ui.rs styles output
+  main.rs       entry point: moved commands, then parsing and running
+  cli.rs        every command, argument, and flag, as usage-rs types: the parser, help,
+                completions, and the usage spec (docs/cli) all come from them
+  commands.rs   running what cli.rs parsed, and commands/, among them
+                tailscale.rs (`slopmax tailscale`: publishing, users, admins) and
+                remote.rs (`setup --hub`: finding a hub, its key, wiring the agents)
+  term.rs       reads input; ui.rs styles output
 
 slopmax-core/src/
   config.rs     ~/.slopmax/config.toml, with a commented template; [tailscale] and [hub]
@@ -109,7 +112,7 @@ slopmax-common/src/ time.rs, log.rs, ids.rs, human.rs: small in-house replacemen
 2. **`proxy::route`** reads the path into a `Target`: the client's format, the provider the path belongs to (`/claude/*`, `/codex/*`, or `/v1/*` by shape), and whether the body's model picks the provider.
 3. **`forward::Inbound`** buffers the body (so it can be replayed on another account) and reads the agent, the session, and the model from it.
 4. **`route::plan`** turns the model into `Step`s: each provider with an account that serves the model, subscriptions first, then paid overflow, selectors, aliases, and fallbacks. It drops accounts that may not serve this client (`agent_only`) or that speak a format it cannot be translated into.
-5. **`Pool::pick`** chooses an account for each step: the session's own account if it can still serve (unless affinity is off for the proxy or, by `x-slopmax-affinity`, the request), else the `slopmax use` pin, else the strategy within the top priority tier. The session's last account is remembered either way, so a move is known and account-bound state dropped.
+5. **`Pool::pick`** chooses an account for each step: the session's own account if it can still serve (unless affinity is off for the proxy or, by `x-slopmax-affinity`, the request), else the `slopmax account use` pin, else the strategy within the top priority tier. The session's last account is remembered either way, so a move is known and account-bound state dropped.
 6. **`forward::attempt`** refreshes the token if due, then builds the outbound request. If the account speaks the client's format it is the client's own request with the credential swapped (`Provider::headers`, `Provider::rebind` when the session moved). If not, `wire::translate` decodes it into the common form and encodes it for the account's API (`Provider::shape` adds last touches).
 7. **The answer.** Rate-limit headers update the account's windows (`Provider::limits`). A refusal is classified by `Provider::verdict` into a `Verdict` (exhausted, throttled, unauthorized, stale state, or final), which decides whether to block the account and try the next. For Codex the first moments of the stream are held (`proxy/start.rs`) to catch refusals inside a 200.
 8. **Streaming back.** `proxy/sse.rs`'s `Tapped` watches the stream for token usage and records the request in the ledger when it ends. A translated answer also passes through `proxy/transcode.rs`, which reads the upstream's events and writes the client's.
@@ -193,7 +196,7 @@ pub trait Agent: Send + Sync {
     fn detect(&self, headers: &HeaderMap) -> bool;   // from headers it always sends, such as its user agent
     fn session(&self, headers: &HeaderMap, body: &[u8]) -> Option<String>;
     fn command(&self, config: &Config, home: &Home, args: &[String]) -> Command; // `slopmax run`
-    fn env(&self, config: &Config, home: &Home, exe: &Path) -> String;          // `slopmax env`
+    fn env(&self, config: &Config, home: &Home, exe: &Path) -> String;          // `slopmax agent env`
     fn config_file(&self) -> PathBuf;
     fn setup(&self, config: &Config, file: &Path, saved: &mut Option<Value>) -> Result<()>;
     fn undo(&self, file: &Path, saved: Value) -> Result<()>;
@@ -255,7 +258,7 @@ The supervisor keeps seeing a running proxy. Under systemd the unit is `Type=not
 
 Between one process and the next, the service manager holds the listening socket, so connections wait in its queue rather than being refused (`supervisor.rs`). systemd keeps it in the unit's file-descriptor store: a daemon that listens sends it (`FDSTORE=1`, `FDNAME=listener`), and systemd passes it to each process it starts after that (`LISTEN_FDS`), through a crash or `systemctl restart`, until the service stops. The unit allows two descriptors, since systemd counts before it sees that a daemon offering the socket again offers the one it holds. A daemon given a socket for a listen address since changed takes it out of the store (`FDSTOREREMOVE=1`) and stores a fresh one. On start under systemd, a daemon also writes the unit anew when it predates this, and has systemd reload it.
 
-launchd owns the socket outright: the plist names it (`Sockets`, `Listener`, on the listen address), launchd binds it when the agent loads, and each process it starts takes it with `launch_activate_socket`. When the process it started exits, launchd makes the socket blocking, and that flag belongs to the socket, so it holds for every process with a copy: a daemon serving launchd's socket that launchd did not start (told by `SLOPMAX_HANDOFF_LAUNCHD`) keeps making it non-blocking from a thread of its own, or its accept would wait for the next connection with its requests unanswered. Because launchd would also start the agent for a connection to that socket, `slopmax stop` unloads the agent (`launchctl bootout`), and `slopmax start` loads it again. Changing `listen` takes `slopmax service install`, which writes the plist anew.
+launchd owns the socket outright: the plist names it (`Sockets`, `Listener`, on the listen address), launchd binds it when the agent loads, and each process it starts takes it with `launch_activate_socket`. When the process it started exits, launchd makes the socket blocking, and that flag belongs to the socket, so it holds for every process with a copy: a daemon serving launchd's socket that launchd did not start (told by `SLOPMAX_HANDOFF_LAUNCHD`) keeps making it non-blocking from a thread of its own, or its accept would wait for the next connection with its requests unanswered. Because launchd would also start the agent for a connection to that socket, `slopmax proxy stop` unloads the agent (`launchctl bootout`), and `slopmax proxy start` loads it again. Changing `listen` takes `slopmax proxy install`, which writes the plist anew.
 
 A daemon given the service manager's socket can find the home still served: under launchd, by the process the proxy was handed to before launchd's started. It asks that one to make way through the socket they share (`POST /slopmax/api/shutdown {"makeWay": true}`, `handoff::make_way`): the other daemon lets refreshes in flight finish, saves its state, lets go of the serve lock, and then drains as after a handoff. The new daemon takes the lock and serves; connections that come in between wait in the queue. `a_proxy_started_on_the_kept_socket_takes_over_without_refusing_a_connection` checks this, and on a macOS runner `mise run launchd` runs the login agent itself through a crash, a handoff and launchd's process taking over, stop and start.
 
@@ -268,7 +271,7 @@ The login service runs `~/.slopmax/bin/slopmax`, a link the handoff and `slopmax
   config.toml, .config.lock (held while the first run writes the proxy's key)
   .serve.lock               held by the running daemon, naming its pid
   accounts/<provider>-<hash>.toml, .<id>.lock
-  state.toml                windows, blocks, sessions, limit resets, the pins `slopmax use`
+  state.toml                windows, blocks, sessions, limit resets, the pins `slopmax account use`
                             sets, the nudges already sent, what was last seen of Claude
                             Code and Codex (state.rs)
   usage/<year>-<month>.jsonl  each request answered, each window that reset with how
@@ -307,7 +310,7 @@ slopmax talks to Tailscale only through its CLI (`slopmax-core/src/tailscale.rs`
 
 ## Dependencies
 
-The binary is about 9.6 MB, from 71 crates besides slopmax's own. The async stack is tokio, hyper, and rustls (with ring). serde_json, toml_edit, memchr, base64, thiserror and anyhow round it out. Time, logging, the CLI parser, form encoding, and the HTTP client conveniences are small in-house modules, because the crates for them each pull in far more than slopmax uses. A crate earns its place by doing its job measurably better than a small module would: faster, leaner, or more correct. The CI holds the tree to 71 crates and the binary to 10 MiB; raising either needs that reason in the commit. miniz_oxide (with adler2) is the newest: Anthropic gzips Claude's answers, and its streaming inflate lets slopmax read a copy of them for token usage; slopmax reads the gzip header itself. Before it, tokio-util's `CancellationToken` and `TaskTracker` let the daemon stop in order, for 30 KB.
+The binary is about 10.3 MB, from 74 crates besides slopmax's own. The async stack is tokio, hyper, and rustls (with ring). serde_json, toml_edit, memchr, base64, thiserror and anyhow round it out. Time, logging, form encoding, and the HTTP client conveniences are small in-house modules, because the crates for them each pull in far more than slopmax uses. A crate earns its place by doing its job measurably better than a small module would: faster, leaner, or more correct. The CI holds the tree to 74 crates and the binary to 10 MiB; raising either needs that reason in the commit. usage-rs (with usage-argv and usage-derive) is the newest: it replaced an in-house parser so that one set of types gives the parser, help with examples, completions that know the accounts in six shells, and a usage spec that agents and the generated docs read, for 0.64 MB. Before it, miniz_oxide (with adler2): Anthropic gzips Claude's answers, and its streaming inflate lets slopmax read a copy of them for token usage; slopmax reads the gzip header itself. Before it, tokio-util's `CancellationToken` and `TaskTracker` let the daemon stop in order, for 30 KB.
 
 ## Performance
 

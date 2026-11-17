@@ -31,4 +31,4 @@ ENV SLOPMAX_WORKERS=auto \
 VOLUME /data
 EXPOSE 7567
 ENTRYPOINT ["slopmax"]
-CMD ["serve"]
+CMD ["proxy", "serve"]

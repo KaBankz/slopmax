@@ -18,7 +18,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use slopmax_api::events::{Event, LoginEvent};
 use slopmax_api::ledger::{HistoryRange, RequestOutcome, Sender, SummaryBy, SummaryRange};
-use slopmax_api::report::{AgentWiring, Finding, Level, RedeemOutcome, RedeemResult, Section};
+use slopmax_api::report::{RedeemOutcome, RedeemResult};
 use slopmax_api::requests::{
     AccountAdded, AccountPatch, AddAccount, AgentConnected, AgentDisconnected, ImportOutcome,
     ImportRequest, ImportResult, ImportSource, LoginStarted, MakeKey, PasteAddress, RedeemRequest,
@@ -377,7 +377,7 @@ async fn answer(
             Ok(false) => Err(ApiError::not_found("key")),
             Err(e) => Err(e.into()),
         },
-        Route::Agents => ok(&agents(&app.config(), &app.home)),
+        Route::Agents => ok(&crate::api::agents(&app.config(), &app.home)),
         Route::Connect(id) => connect_agent(app, id).await,
         Route::Disconnect(id) => disconnect_agent(app, id).await,
         Route::Usage => usage(app, query, asker.here).await,
@@ -475,26 +475,7 @@ async fn doctor(app: &App) -> Answer {
     let sections = doctor::check(&app.config(), &app.store, &app.home, app.tailscale_cli())
         .await
         .map_err(|e| ApiError::internal(format!("{e:#}")))?;
-    let sections: Vec<Section> = sections
-        .into_iter()
-        .map(|s| Section {
-            title: s.title.into(),
-            findings: s
-                .findings
-                .into_iter()
-                .map(|f| Finding {
-                    level: match f.level {
-                        doctor::Level::Ok => Level::Ok,
-                        doctor::Level::Note => Level::Info,
-                        doctor::Level::Warn => Level::Warn,
-                        doctor::Level::Fail => Level::Fail,
-                    },
-                    text: f.text,
-                    fix: f.fix,
-                })
-                .collect(),
-        })
-        .collect();
+    let sections = api::doctor(sections);
     ok(&sections)
 }
 
@@ -854,29 +835,6 @@ fn make_key(app: &App, asked: MakeKey) -> Answer {
 
 fn agent_of(id: AgentId) -> &'static dyn crate::agent::Agent {
     crate::agent::of_api(id)
-}
-
-fn agents(config: &Config, home: &crate::paths::Home) -> Vec<AgentWiring> {
-    crate::agent::AGENTS
-        .into_iter()
-        .map(|agent| {
-            let id = agent.api();
-            let file = agent.config_file(home);
-            let wiring = crate::agent::wiring(agent, config, home);
-            AgentWiring {
-                id,
-                title: agent.title().into(),
-                installed: file.parent().is_some_and(std::path::Path::exists),
-                config_path: file.display().to_string(),
-                wired_to: match &wiring {
-                    crate::agent::Wiring::Elsewhere(target) => Some(target.clone()),
-                    _ => None,
-                },
-                wired: wiring == crate::agent::Wiring::Slopmax,
-                backed_up: crate::agent::backed_up(agent, home),
-            }
-        })
-        .collect()
 }
 
 async fn connect_agent(app: &App, id: AgentId) -> Answer {

@@ -13,7 +13,7 @@ export class Unauthorized extends Schema.TaggedError<Unauthorized>()(
   "Unauthorized",
   {
     message: Schema.String.pipe(
-      Schema.withConstructorDefault(Effect.succeed("missing or invalid slopmax key; see `slopmax env`")),
+      Schema.withConstructorDefault(Effect.succeed("missing or invalid slopmax key; see `slopmax agent env`")),
     ),
   },
   { httpApiStatus: 401 },

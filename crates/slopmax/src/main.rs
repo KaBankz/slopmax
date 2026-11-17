@@ -3,7 +3,7 @@
 
 use std::process::ExitCode;
 
-mod args;
+mod cli;
 mod commands;
 mod term;
 mod ui;
@@ -19,8 +19,20 @@ static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 fn main() -> ExitCode {
     #[cfg(windows)]
     keep_standard_handles();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(now) = commands::moved(&args) {
+        eprintln!(
+            "{} `slopmax {}` is now `slopmax {now}`; see `slopmax {now} --help`.",
+            ui::red("error:"),
+            args.first().map(String::as_str).unwrap_or_default(),
+        );
+        return ExitCode::from(2);
+    }
+    // Answers --help, --version, a shell's completion request, and
+    // `__usage_spec__`, and exits 2 on a command line that doesn't parse.
+    let cli = cli::Slopmax::parse();
     // The proxy reports each request; other commands only warn.
-    log::init(if std::env::args().nth(1).as_deref() == Some("serve") {
+    log::init(if cli.serves() {
         Level::Info
     } else {
         Level::Warn
@@ -32,7 +44,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match runtime.block_on(commands::run(std::env::args().skip(1))) {
+    match runtime.block_on(commands::run(cli)) {
         Ok(code) => ExitCode::from(code.clamp(0, 255) as u8),
         Err(e) => {
             eprintln!("{} {e:#}", ui::red("error:"));

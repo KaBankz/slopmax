@@ -57,7 +57,7 @@ pub struct AccountPatch {
     /// Higher goes first; 0 is the default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<i32>,
-    /// Its place within its priority tier, lower first (`slopmax order`).
+    /// Its place within its priority tier, lower first (`slopmax account order`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

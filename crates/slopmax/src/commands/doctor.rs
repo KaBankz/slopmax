@@ -13,7 +13,12 @@ use slopmax_core::error::ConfigError;
 ///
 /// `broken` is why config.toml did not read, when it did not: the other
 /// checks run on what of it could be read.
-pub async fn run(config: &Config, store: &Store, broken: Option<&ConfigError>) -> Result<i32> {
+pub async fn run(
+    config: &Config,
+    store: &Store,
+    broken: Option<&ConfigError>,
+    json: bool,
+) -> Result<i32> {
     let mut worst = Level::Ok;
     let (mut problems, mut warnings) = (0, 0);
     let ts = slopmax_core::tailscale::Tailscale::find().ok();
@@ -41,6 +46,15 @@ pub async fn run(config: &Config, store: &Store, broken: Option<&ConfigError>) -
                 findings: vec![finding],
             },
         );
+    }
+    if json {
+        let failed = sections
+            .iter()
+            .flat_map(|s| &s.findings)
+            .any(|f| f.level == Level::Fail);
+        let shown = slopmax_core::api::doctor(sections);
+        println!("{}", serde_json::to_string_pretty(&shown)?);
+        return Ok(i32::from(failed));
     }
     for section in sections {
         println!("\n{}", ui::bold(section.title));

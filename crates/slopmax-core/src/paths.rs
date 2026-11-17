@@ -102,7 +102,7 @@ impl Home {
         self.dir.join("grok").join(format!("auth-{hex}.json"))
     }
 
-    /// CLIProxyAPI's credential files, which `slopmax import` reads.
+    /// CLIProxyAPI's credential files, which `slopmax account import` reads.
     pub fn cliproxyapi(&self) -> PathBuf {
         self.user.join(".cli-proxy-api")
     }

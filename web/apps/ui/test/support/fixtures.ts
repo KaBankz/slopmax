@@ -522,7 +522,7 @@ export const fixtureDoctor = (): ReadonlyArray<Section> => [
     title: "Agents",
     findings: [
       new Finding({ level: "ok", text: "Claude Code goes through slopmax" }),
-      new Finding({ level: "info", text: "Codex goes straight to ChatGPT", fix: "slopmax setup codex" }),
+      new Finding({ level: "info", text: "Codex goes straight to ChatGPT", fix: "slopmax agent connect codex" }),
     ],
   }),
   new Section({

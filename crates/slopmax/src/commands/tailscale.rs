@@ -13,46 +13,49 @@ use slopmax_client::api::ApiError;
 use slopmax_client::api::tailnet::{self as api, TailnetPatch};
 
 use super::home;
+use crate::cli::TailscaleOn;
 use crate::ui;
 use slopmax_core::config::{AdminMachine, Config, TAILNET_TOKEN, Tailnet};
 use slopmax_core::tailscale::{self, BackendState, Node, Peer, Port, Tailscale, Target, TsError};
 
-/// What `slopmax tailscale` was given.
-pub struct Args<'a> {
-    /// `status`, `on`, `off`, `users`, or `admins`.
-    pub action: &'a str,
-    /// With `users` or `admins`: `list`, `add`, or `remove`.
-    pub op: &'a str,
-    /// With `users` or `admins`: the logins or machines, comma-separated.
-    pub name: &'a str,
-    pub port: Option<u16>,
-    pub users: Vec<&'a str>,
-    pub admins: Vec<&'a str>,
-    pub loopback: bool,
-    pub socket: bool,
-    pub json: bool,
+/// What `slopmax tailscale` was asked to do.
+pub enum Args {
+    Status { json: bool },
+    On(TailscaleOn),
+    Off,
+    Users(ListOp),
+    Admins(ListOp),
 }
 
-pub async fn run(config: &Config, args: Args<'_>) -> Result<()> {
+/// `tailscale user|admin`'s verbs.
+pub enum ListOp {
+    List,
+    Add(Vec<String>),
+    Remove(Vec<String>),
+}
+
+pub async fn run(config: &Config, args: Args) -> Result<()> {
     if let Some(url) = config.hub_url() {
         let url = url.trim_end_matches('/');
-        if args.action == "status" && args.json {
-            let hub = serde_json::json!({ "hub": url });
-            println!("{}", serde_json::to_string_pretty(&hub)?);
-            return Ok(());
-        }
-        if args.action == "status" {
-            println!("This machine uses the hub at {url}.");
-            return Ok(());
-        }
-        bail!(config.hub_refusal().unwrap_or_default());
+        return match args {
+            Args::Status { json: true } => {
+                let hub = serde_json::json!({ "hub": url });
+                println!("{}", serde_json::to_string_pretty(&hub)?);
+                Ok(())
+            }
+            Args::Status { json: false } => {
+                println!("This machine uses the hub at {url}.");
+                Ok(())
+            }
+            _ => bail!(config.hub_refusal().unwrap_or_default()),
+        };
     }
-    match args.action {
-        "on" => on(config, &args).await,
-        "off" => off(config).await,
-        "users" => users(config, args.op, args.name).await,
-        "admins" => admins(config, args.op, args.name).await,
-        _ => status(config, args.json).await,
+    match args {
+        Args::On(on_args) => on(config, &on_args).await,
+        Args::Off => off(config).await,
+        Args::Users(op) => users(config, op).await,
+        Args::Admins(op) => admins(config, op).await,
+        Args::Status { json } => status(config, json).await,
     }
 }
 
@@ -99,7 +102,7 @@ const SOCKET_PATH_MAX: usize = 100;
 /// proxy's port, which Tailscale's operator may publish and which tells
 /// slopmax who is asking; the socket, which only root may publish; or the
 /// bare port, where every machine needs a key.
-fn transport(config: &Config, args: &Args<'_>) -> Result<Target> {
+fn transport(config: &Config, args: &TailscaleOn) -> Result<Target> {
     let [socket, private, loopback] = targets(config);
     if args.loopback {
         return Ok(loopback);
@@ -121,7 +124,7 @@ fn transport(config: &Config, args: &Args<'_>) -> Result<Target> {
 }
 
 /// `slopmax tailscale on`.
-async fn on(config: &Config, args: &Args<'_>) -> Result<()> {
+async fn on(config: &Config, args: &TailscaleOn) -> Result<()> {
     if args.loopback && args.socket {
         bail!("--loopback and --socket are opposite ways to publish slopmax; give one");
     }
@@ -215,12 +218,12 @@ async fn on(config: &Config, args: &Args<'_>) -> Result<()> {
     {
         tailnet.users.push(login.clone());
     }
-    for user in &args.users {
+    for user in &args.user {
         add_user(&mut tailnet.users, user)?;
     }
-    if !args.admins.is_empty() {
+    if !args.admin.is_empty() {
         let (here, peers) = ts.peers().await.map_err(fail)?;
-        for machine in &args.admins {
+        for machine in &args.admin {
             add_admin(
                 &mut tailnet.admins,
                 admin_of(&here, &peers, machine, &tailnet.users)?,
@@ -236,7 +239,7 @@ async fn on(config: &Config, args: &Args<'_>) -> Result<()> {
         && !slopmax_core::doctor::socket_answers(path, Duration::from_secs(3)).await
     {
         bail!(
-            "the proxy isn't listening on {}; restart it: slopmax stop && slopmax start",
+            "the proxy isn't listening on {}; restart it: slopmax proxy restart",
             path.display()
         );
     }
@@ -287,7 +290,7 @@ async fn on(config: &Config, args: &Args<'_>) -> Result<()> {
                 "  Machines signed in as {} use it without a key and see its status read-only.",
                 users.join(" or ")
             );
-            println!("  To let a machine manage it too: slopmax tailscale admins add <machine>");
+            println!("  To let a machine manage it too: slopmax tailscale admin add <machine>");
             println!("  Tagged machines need a key: slopmax key add <name>");
         }
         (Target::Socket(_) | Target::Private { .. }, true) => {
@@ -296,7 +299,7 @@ async fn on(config: &Config, args: &Args<'_>) -> Result<()> {
                  needs one (slopmax key add <name>)."
             );
             println!(
-                "  `slopmax tailscale users add <login>` lets your own machines in without one."
+                "  `slopmax tailscale user add <login>` lets your own machines in without one."
             );
         }
         (Target::Loopback(_), _) => {
@@ -551,7 +554,7 @@ async fn status(config: &Config, json: bool) -> Result<()> {
     let no_key = if loopback_only {
         "nobody: Tailscale here can't tell slopmax who is asking".to_owned()
     } else if users.is_empty() {
-        "nobody yet: slopmax tailscale users add <login>".to_owned()
+        "nobody yet: slopmax tailscale user add <login>".to_owned()
     } else {
         format!("{} (use and view)", users.join(", "))
     };
@@ -564,7 +567,7 @@ async fn status(config: &Config, json: bool) -> Result<()> {
     row(
         "Admins",
         if admins.is_empty() {
-            "none (slopmax tailscale admins add <machine>)".to_owned()
+            "none (slopmax tailscale admin add <machine>)".to_owned()
         } else {
             admins.join(", ")
         },
@@ -633,7 +636,7 @@ fn admin_of(here: &Node, peers: &[Peer], query: &str, users: &[String]) -> Resul
     if !users.iter().any(|u| u.eq_ignore_ascii_case(login)) {
         bail!(
             "{} is signed in as {login}, which isn't let in without a key; add it first: \
-             slopmax tailscale users add {login}",
+             slopmax tailscale user add {login}",
             peer.name
         );
     }
@@ -677,31 +680,11 @@ async fn save(config: &Config, tailnet: &Tailnet) -> Result<()> {
     Ok(())
 }
 
-/// The logins or machines `names` gives, comma-separated.
-fn names<'a>(names: &'a str, what: &str, op: &str) -> Result<Vec<&'a str>> {
-    let list: Vec<&str> = names
-        .split(',')
-        .map(str::trim)
-        .filter(|n| !n.is_empty())
-        .collect();
-    if list.is_empty() {
-        bail!(
-            "`slopmax tailscale {what} {op}` needs the {}",
-            match what {
-                "users" => "login, such as you@github",
-                _ => "machine's name",
-            }
-        );
-    }
-    Ok(list)
-}
-
-/// `slopmax tailscale users list|add|remove`.
-async fn users(config: &Config, op: &str, given: &str) -> Result<()> {
+/// `slopmax tailscale user list|add|remove`.
+async fn users(config: &Config, op: ListOp) -> Result<()> {
     let mut tailnet = config.tailscale.clone().unwrap_or_default();
     match op {
-        "add" => {
-            let logins = names(given, "users", op)?;
+        ListOp::Add(logins) => {
             for login in &logins {
                 add_user(&mut tailnet.users, login)?;
             }
@@ -711,8 +694,7 @@ async fn users(config: &Config, op: &str, given: &str) -> Result<()> {
                 logins.join(" or ")
             );
         }
-        "remove" => {
-            let logins = names(given, "users", op)?;
+        ListOp::Remove(logins) => {
             for login in &logins {
                 let Some(at) = tailnet
                     .users
@@ -729,10 +711,10 @@ async fn users(config: &Config, op: &str, given: &str) -> Result<()> {
                 logins.join(" or ")
             );
         }
-        _ => {
+        ListOp::List => {
             if tailnet.users.is_empty() {
                 println!(
-                    "No login is let in without a key. `slopmax tailscale users add <login>` \
+                    "No login is let in without a key. `slopmax tailscale user add <login>` \
                      lets one in."
                 );
             }
@@ -744,17 +726,16 @@ async fn users(config: &Config, op: &str, given: &str) -> Result<()> {
     Ok(())
 }
 
-/// `slopmax tailscale admins list|add|remove`.
-async fn admins(config: &Config, op: &str, given: &str) -> Result<()> {
+/// `slopmax tailscale admin list|add|remove`.
+async fn admins(config: &Config, op: ListOp) -> Result<()> {
     let mut tailnet = config.tailscale.clone().unwrap_or_default();
     match op {
-        "add" => {
-            let machines = names(given, "admins", op)?;
+        ListOp::Add(machines) => {
             let ts = Tailscale::find().map_err(fail)?;
             let (here, peers) = ts.peers().await.map_err(fail)?;
             let mut added = Vec::new();
             for machine in machines {
-                let admin = admin_of(&here, &peers, machine, &tailnet.users)?;
+                let admin = admin_of(&here, &peers, &machine, &tailnet.users)?;
                 added.push(admin.machine.clone());
                 add_admin(&mut tailnet.admins, admin);
             }
@@ -764,8 +745,7 @@ async fn admins(config: &Config, op: &str, given: &str) -> Result<()> {
                 added.join(" and ")
             );
         }
-        "remove" => {
-            let machines = names(given, "admins", op)?;
+        ListOp::Remove(machines) => {
             for machine in &machines {
                 let Some(at) = tailnet
                     .admins
@@ -779,10 +759,10 @@ async fn admins(config: &Config, op: &str, given: &str) -> Result<()> {
             save(config, &tailnet).await?;
             println!("{} may no longer manage slopmax.", machines.join(" and "));
         }
-        _ => {
+        ListOp::List => {
             if tailnet.admins.is_empty() {
                 println!(
-                    "No machine manages slopmax but this one. `slopmax tailscale admins add \
+                    "No machine manages slopmax but this one. `slopmax tailscale admin add \
                      <machine>` lets one."
                 );
             }
@@ -807,7 +787,7 @@ pub async fn published_url(config: &Config) -> Option<(String, bool)> {
     Some((first.url, keyless))
 }
 
-/// What `slopmax dashboard --print` says about opening the dashboard from
+/// What `slopmax dashboard --no-browser` says about opening the dashboard from
 /// other machines: its tailnet address when published; how to publish it
 /// when Tailscale runs here; else to forward the port over ssh.
 pub async fn dashboard_hint(config: &Config) -> String {
@@ -899,7 +879,7 @@ mod tests {
         assert!(tagged.contains("tagged (tag:ci)"), "{tagged}");
         let other = admin_of(&peers, "work", &users).unwrap_err().to_string();
         assert!(
-            other.contains("slopmax tailscale users add work@corp.com"),
+            other.contains("slopmax tailscale user add work@corp.com"),
             "{other}"
         );
         let missing = admin_of(&peers, "phone", &users).unwrap_err().to_string();

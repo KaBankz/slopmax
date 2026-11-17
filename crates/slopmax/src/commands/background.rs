@@ -1,5 +1,5 @@
-//! `start`, `stop`, `service`, and `logs`: the background proxy from the
-//! terminal. The work itself is in [`slopmax_core::background`].
+//! `slopmax proxy`: the background proxy from the terminal. The work
+//! itself is in [`slopmax_core::background`].
 
 use std::time::Duration;
 
@@ -55,76 +55,154 @@ pub(super) async fn ensure_running(config: &Config) -> Result<()> {
     Ok(())
 }
 
-pub(super) async fn service(config: &Config, action: &str) -> Result<()> {
-    let manager = Manager::detect().context(
+/// The service manager here, or why there is none.
+fn manager() -> Result<Manager> {
+    Manager::detect().context(
         "no supported service manager here (systemd user services, launchd, or Windows); \
-         run `slopmax start` from a login script instead",
-    )?;
-    match action {
-        "install" => {
-            let exe = background::current_exe()?;
-            let before = manager
-                .status(super::home())
-                .elsewhere
-                .then(|| manager.served(super::home()))
-                .flatten();
-            let file = background::install_service(config, super::home(), manager, &exe).await?;
-            println!(
-                "slopmax now starts at login {}",
-                ui::dim(format!("({})", file.display()))
-            );
-            if let Some(before) = before {
-                println!(
-                    "{}",
-                    ui::dim(format!(
-                        "It ran slopmax for {} before; that home's proxy now runs only when \
-                         started there.",
-                        super::home().show(&before)
-                    ))
-                );
-            }
-            if manager.status(super::home()).lingering == Some(false) {
-                println!(
-                    "{}",
-                    ui::dim(
-                        "To keep it running after you log out (on a server), run \
-                         `loginctl enable-linger $USER`."
-                    )
-                );
-            }
+         run `slopmax proxy start` from a login script instead",
+    )
+}
+
+/// `slopmax proxy install`: starts the proxy at login, and now.
+pub(super) async fn install(config: &Config) -> Result<()> {
+    let manager = manager()?;
+    let exe = background::current_exe()?;
+    let before = manager
+        .status(super::home())
+        .elsewhere
+        .then(|| manager.served(super::home()))
+        .flatten();
+    let file = background::install_service(config, super::home(), manager, &exe).await?;
+    println!(
+        "slopmax now starts at login {}",
+        ui::dim(format!("({})", file.display()))
+    );
+    if let Some(before) = before {
+        println!(
+            "{}",
+            ui::dim(format!(
+                "It ran slopmax for {} before; that home's proxy now runs only when \
+                 started there.",
+                super::home().show(&before)
+            ))
+        );
+    }
+    if manager.status(super::home()).lingering == Some(false) {
+        println!(
+            "{}",
+            ui::dim(
+                "To keep it running after you log out (on a server), run \
+                 `loginctl enable-linger $USER`."
+            )
+        );
+    }
+    Ok(())
+}
+
+/// `slopmax proxy uninstall`.
+pub(super) fn uninstall() -> Result<()> {
+    let file = manager()?.uninstall(super::home())?;
+    println!(
+        "slopmax no longer starts at login {}",
+        ui::dim(format!("({})", file.display()))
+    );
+    Ok(())
+}
+
+/// `slopmax proxy restart`.
+pub(super) async fn restart(config: &Config) -> Result<()> {
+    if background::stop(config).await? {
+        println!("slopmax stopped");
+    }
+    start(config).await
+}
+
+/// `slopmax proxy status`: whether the proxy runs, where, and whether it
+/// starts at login.
+pub(super) async fn status(config: &Config, json: bool) -> Result<()> {
+    if let Some(url) = config.hub_url() {
+        let url = url.trim_end_matches('/');
+        let health = super::daemon(config).await.ok().flatten();
+        let reached = health.is_some();
+        if json {
+            let view = serde_json::json!({ "hub": url, "reachable": reached });
+            println!("{}", serde_json::to_string_pretty(&view)?);
+        } else if reached {
+            println!("This machine uses the hub at {url}, which answers.");
+        } else {
+            println!("This machine uses the hub at {url}, which doesn't answer.");
         }
-        "uninstall" => {
-            let file = manager.uninstall(super::home())?;
-            println!(
-                "Removed the service {}",
-                ui::dim(format!("({})", file.display()))
-            );
-        }
-        _ => {
-            let status = manager.status(super::home());
-            let state = match (status.installed, status.running) {
-                (false, _) if status.elsewhere => format!(
-                    "not installed for this home {}",
-                    ui::dim(format!(
-                        "(it runs slopmax for {})",
-                        manager
-                            .served(super::home())
-                            .map(|dir| super::home().show(&dir))
-                            .unwrap_or_default()
-                    ))
-                ),
-                (false, _) => "not installed".to_owned(),
-                (true, true) => ui::green("installed and running"),
-                (true, false) => ui::yellow("installed, not running"),
-            };
-            println!("service: {state}");
-            if status.lingering == Some(false) && status.installed {
-                println!(
-                    "{}",
-                    ui::dim("It stops when you log out; `loginctl enable-linger $USER` keeps it.")
-                );
-            }
-        }
+        return Ok(());
+    }
+    let client = slopmax_client::Client::new(config.base_url(), &config.api_key);
+    let health = client.health_within(Duration::from_secs(1)).await;
+    let service = Manager::detect().map(|m| (m, m.status(super::home())));
+    if json {
+        let view = serde_json::json!({
+            "running": health.is_some(),
+            "address": config.base_url(),
+            "version": health.as_ref().map(|h| h.version.clone()),
+            "pid": health.as_ref().and_then(|h| h.pid),
+            "log": super::home().log().display().to_string(),
+            "service": service.as_ref().map(|(_, s)| serde_json::json!({
+                "installed": s.installed,
+                "running": s.running,
+            })),
+        });
+        println!("{}", serde_json::to_string_pretty(&view)?);
+        return Ok(());
+    }
+    match &health {
+        Some(health) => println!(
+            "proxy    {} on {} {}",
+            ui::green("running"),
+            config.base_url(),
+            ui::dim(format!(
+                "(slopmax {}{})",
+                health.version,
+                health.pid.map(|p| format!(", pid {p}")).unwrap_or_default()
+            ))
+        ),
+        None => println!(
+            "proxy    {} {}",
+            ui::yellow("stopped"),
+            ui::dim("(`slopmax proxy start` starts it)")
+        ),
+    }
+    let state = match &service {
+        None => ui::dim("no service manager here"),
+        Some((manager, status)) => match (status.installed, status.running) {
+            (false, _) if status.elsewhere => format!(
+                "not installed for this home {}",
+                ui::dim(format!(
+                    "(it runs slopmax for {})",
+                    manager
+                        .served(super::home())
+                        .map(|dir| super::home().show(&dir))
+                        .unwrap_or_default()
+                ))
+            ),
+            (false, _) => format!(
+                "not installed {}",
+                ui::dim("(`slopmax proxy install` starts it at login)")
+            ),
+            (true, true) => ui::green("installed and running"),
+            (true, false) => ui::yellow("installed, not running"),
+        },
+    };
+    println!("service  {state}");
+    println!(
+        "log      {}",
+        ui::dim(super::home().log().display().to_string())
+    );
+    if let Some((_, status)) = &service
+        && status.lingering == Some(false)
+        && status.installed
+    {
+        println!(
+            "{}",
+            ui::dim("It stops when you log out; `loginctl enable-linger $USER` keeps it.")
+        );
     }
     Ok(())
 }

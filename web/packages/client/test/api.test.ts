@@ -243,7 +243,7 @@ describe("SlopmaxApi", () => {
       expect(none.status).toBe(401)
       expect(JSON.parse(none.body)).toEqual({
         _tag: "Unauthorized",
-        message: "missing or invalid slopmax key; see `slopmax env`",
+        message: "missing or invalid slopmax key; see `slopmax agent env`",
       })
       expect((yield* call("/slopmax/api/status", { headers: { authorization: "Bearer sm-client-key" } })).status).toBe(
         401,

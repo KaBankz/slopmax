@@ -517,7 +517,7 @@ async fn when_every_account_is_unreachable_the_agent_hears_why() {
         reply["error"]["message"],
         format!(
             "every Compatible API account failed: couldn't connect to 127.0.0.1:{port} \
-             (connection refused). Check your network, or run `slopmax logs`."
+             (connection refused). Check your network, or run `slopmax proxy logs`."
         )
     );
 }
@@ -532,7 +532,7 @@ async fn with_no_account_connected_claude_code_hears_how_to_add_one() {
     assert_eq!(reply["type"], "error", "Anthropic's error shape: {body}");
     assert_eq!(
         reply["error"]["message"],
-        "slopmax has no Claude account connected yet; run `slopmax login claude` (or `slopmax import`)"
+        "slopmax has no Claude account connected yet; run `slopmax login claude` (or `slopmax account import`)"
     );
     // Codex hears it in its own shape, of its own provider.
     let (status, body) = post(
@@ -546,7 +546,7 @@ async fn with_no_account_connected_claude_code_hears_how_to_add_one() {
     assert!(reply.get("type").is_none(), "{body}");
     assert_eq!(
         reply["error"]["message"],
-        "slopmax has no ChatGPT account connected yet; run `slopmax login codex` (or `slopmax import`)"
+        "slopmax has no ChatGPT account connected yet; run `slopmax login codex` (or `slopmax account import`)"
     );
     // A chat client naming no known model hears there is no account at all.
     let (status, body) = post(

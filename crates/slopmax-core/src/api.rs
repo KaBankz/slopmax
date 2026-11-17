@@ -516,6 +516,57 @@ impl From<crate::error::ProviderError> for api::ApiError {
     }
 }
 
+/// Each agent, and whether its own config points it at this slopmax: what
+/// `slopmax agent list` prints and `GET agents` answers.
+pub fn agents(config: &Config, home: &crate::paths::Home) -> Vec<api::report::AgentWiring> {
+    crate::agent::AGENTS
+        .into_iter()
+        .map(|agent| {
+            let file = agent.config_file(home);
+            let wiring = crate::agent::wiring(agent, config, home);
+            api::report::AgentWiring {
+                id: agent.api(),
+                title: agent.title().into(),
+                installed: file.parent().is_some_and(std::path::Path::exists),
+                config_path: file.display().to_string(),
+                wired_to: match &wiring {
+                    crate::agent::Wiring::Elsewhere(target) => Some(target.clone()),
+                    _ => None,
+                },
+                wired: wiring == crate::agent::Wiring::Slopmax,
+                backed_up: crate::agent::backed_up(agent, home),
+            }
+        })
+        .collect()
+}
+
+/// `slopmax doctor`'s findings, as `GET doctor` and `doctor --json` give
+/// them.
+pub fn doctor(sections: Vec<crate::doctor::Section>) -> Vec<api::report::Section> {
+    use crate::doctor::Level;
+    use api::report::Level as Shown;
+    sections
+        .into_iter()
+        .map(|s| api::report::Section {
+            title: s.title.into(),
+            findings: s
+                .findings
+                .into_iter()
+                .map(|f| api::report::Finding {
+                    level: match f.level {
+                        Level::Ok => Shown::Ok,
+                        Level::Note => Shown::Info,
+                        Level::Warn => Shown::Warn,
+                        Level::Fail => Shown::Fail,
+                    },
+                    text: f.text,
+                    fix: f.fix,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -555,7 +606,7 @@ mod tests {
         };
         assert_eq!(
             ambiguous.to_string(),
-            "\"a\" matches 2 accounts: #1 a (a1), #2 a (a2). Use the number from `slopmax status`, e.g. `slopmax use 1`."
+            "\"a\" matches 2 accounts: #1 a (a1), #2 a (a2). Use the number from `slopmax status`, e.g. `slopmax account use 1`."
         );
         assert_eq!(status(ambiguous.into()), 400);
         assert_eq!(status(ConfigError::KeyExists("laptop".into()).into()), 409);

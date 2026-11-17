@@ -218,7 +218,7 @@ pub async fn run(config: &Config, store: &Store, answers: Answers, plan: Plan) -
             }
             if named.is_none() {
                 println!(
-                    "  {} left as it is: no {title} account to serve it. `slopmax setup {}` wires it once there is one.",
+                    "  {} left as it is: no {title} account to serve it. `slopmax agent connect {}` wires it once there is one.",
                     agent.title(),
                     agent.id()
                 );
@@ -436,7 +436,7 @@ async fn offer_imports(
         if choice == 0 {
             println!(
                 "    {}",
-                ui::dim("`slopmax own all` takes them over once CLIProxyAPI is stopped")
+                ui::dim("`slopmax account adopt all` takes them over once CLIProxyAPI is stopped")
             );
         }
     }
@@ -587,7 +587,7 @@ fn wire(config: &Config, agent: &dyn Agent, answers: Answers) -> Result<()> {
             return Ok(());
         }
         Wiring::Elsewhere(target) => format!(
-            " (it uses {target} now; `slopmax setup {} --undo` restores that)",
+            " (it uses {target} now; `slopmax agent disconnect {}` restores that)",
             agent.id()
         ),
         Wiring::Direct => String::new(),
@@ -621,7 +621,7 @@ async fn background(config: &Config, answers: Answers, plan: &Plan) -> Result<()
         None => println!(
             "  {}",
             ui::dim(
-                "No login service here: the proxy runs until it is stopped; `slopmax start` brings it back."
+                "No login service here: the proxy runs until it is stopped; `slopmax proxy start` brings it back."
             )
         ),
     }

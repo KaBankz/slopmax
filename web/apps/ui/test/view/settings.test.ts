@@ -55,6 +55,6 @@ describe("the settings page's live settings", () => {
       defaultSettings("sm-test"),
       new Settings({ ...defaultSettings("sm-test"), listen: "0.0.0.0:7567" }),
     )
-    expect(restartLine(waiting)).toBe("listen changed in config.json; restart slopmax to use it.")
+    expect(restartLine(waiting)).toBe("listen changed in config.toml; restart slopmax to use it.")
   })
 })
