@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-11-17
+
 ### Fixed
 
 - A ChatGPT account that said it was overloaded inside Codex's WebSocket is set aside for as long as ChatGPT asked. ChatGPT puts that delay (often five minutes) inside the error rather than beside it, so slopmax missed it and tried the account again after 30 seconds, sending Codex back to reconnect to a server still refusing it.
