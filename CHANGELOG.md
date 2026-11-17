@@ -28,9 +28,11 @@ The command line is rebuilt on [usage](https://usage.jdx.dev) and regrouped: thi
 - A command line that doesn't parse says so as before, with the possible values and a suggestion, and exits 2; a value outside a flag's choices (`--by week`, `--strategy sideways`) is now such an error.
 - Shell completion completes every subcommand, flag, and value, the accounts and key names included, for bash, zsh, fish, nushell, PowerShell, and elvish; `slopmax completion <shell> --install` puts the script where the shell looks.
 - `--help` shows examples, the environment variables slopmax reads, and what each exit code means.
+- `slopmax` alone at a terminal opens the terminal UI instead of printing the accounts' standing; piped or redirected, it prints the standing as before, and `slopmax status` always does.
 
 ### Added
 
+- A terminal UI: `slopmax tui`, and `slopmax` alone at a terminal. It has the dashboard's pages (the overview, each provider's pool and forecast, usage, performance, the live request feed, agents, access, diagnostics, and settings), follows the proxy's event stream, and turns accounts on and off, prefers, checks and redeems them, connects agents, makes and revokes client keys, and changes the live settings, asking first where a change can't be taken back. It draws in the terminal's own colors, takes the mouse, and works against this machine's proxy or a hub.
 - `slopmax account list`: the accounts, numbered as every `<account>` takes them. `slopmax account` alone lists them too.
 - `slopmax account check <account>`: lifts slopmax's hold on an account and reads its usage again, as the dashboard's Check does.
 - `slopmax requests`: the requests the proxy answered, newest first, as the dashboard's Requests page lists them (`--failed`, `--account`, `--model`, `-n`, `--json`).

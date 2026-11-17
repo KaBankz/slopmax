@@ -221,6 +221,16 @@ Left on the table: $39.74, 20% unused on average, across 16 weekly windows
 
 `slopmax usage` and the dashboard show it; the `reset-first` strategy and the `quota-unused` notification below are there to keep it small.
 
+## Terminal UI
+
+`slopmax` at a terminal (or `slopmax tui`) opens the dashboard's pages in the terminal: the overview, each provider's pool with its forecast and every account's windows, usage and performance over a day, a week or a month, the requests as they are answered, and the agents, keys, diagnostics and settings. It keeps itself up to date from the proxy's event stream, like the dashboard, and works against this machine's proxy (starting it if needed) or the hub this machine uses.
+
+![The terminal UI's overview, dark](docs/tui/overview-dark.png)
+
+More pages, in a light theme and at 80×24 too, are in [docs/tui](docs/tui/).
+
+Move between pages with Tab, the arrow keys, the number keys, or the mouse; `?` lists the keys. On a provider's page, Space turns the selected account on or off, `p` prefers it for new sessions, `c` checks it, and `R` redeems one of its limit resets; Agents connects and disconnects them, Access makes and revokes client keys, and Settings changes the live settings. Whatever can't be taken back asks first. It draws in your terminal's own colors and honors `NO_COLOR`; piped, `slopmax` prints the accounts' standing as before.
+
 ## Dashboard
 
 `slopmax dashboard` opens a page that shows every account's windows and reset countdowns, usage and cost by day, model, account, or machine, and a live feed of answered requests. It can enable, disable, pin, reprioritize, and redeem. The page is built into the binary and loads nothing from elsewhere. It takes the slopmax key from its address's `#fragment`, which browsers never send to a server.
@@ -396,9 +406,10 @@ Things are nouns with verbs under them, and a noun alone shows its things: `slop
 
 | Command | What it does |
 | --- | --- |
-| `slopmax` | The accounts' standing, or the guided setup the first time |
+| `slopmax` | The terminal UI at a terminal, the accounts' standing when piped, or the guided setup the first time |
 | `slopmax setup` | Set everything up step by step, or unattended with flags (alias `init`) |
 | `slopmax status` | Accounts, usage windows, and resets (`--watch`, `--refresh`, `--json`) |
+| `slopmax tui` | Open the terminal UI: the dashboard's pages in this terminal |
 | `slopmax dashboard` | Open the dashboard in a browser (`--no-browser` prints its address) |
 | `slopmax login <provider>` | Connect an account: sign in, or enter an API key (shortcut for `account add`) |
 | `slopmax account [list]` | The accounts, numbered |

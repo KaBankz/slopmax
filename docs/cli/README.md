@@ -3,7 +3,7 @@
 
 Pool your Claude, ChatGPT, and SuperGrok subscriptions behind one local proxy, so Claude Code, Codex, and Grok Build keep working when an account runs out.
 
-Run without a command to see your accounts, or to set slopmax up the first time.
+Run without a command to open the terminal UI (piped, it prints the accounts' standing instead), or to set slopmax up the first time.
 
 
 ## Examples
@@ -147,6 +147,40 @@ Reads the running proxy, else the files on disk. Accounts are numbered; commands
 | `0` | it worked |
 | `1` | it failed; the error says why |
 | `2` | the command line was wrong |
+
+## `slopmax tui`
+
+- **Usage:** `slopmax tui`
+- **Effect:** modifies state
+
+Open the terminal UI: the dashboard's pages in this terminal.
+
+The overview, each provider's pool and forecast, usage and performance over a day, a week or a month, the requests as they are answered, and the agents, keys, diagnostics and settings, kept up to date as the proxy answers. Accounts can be turned on and off, preferred, checked and their limit resets redeemed; agents connected; settings changed. It starts the proxy if it isn't running, or shows the hub this machine uses. `slopmax` alone opens it at a terminal.
+
+### Flags
+- **`-h --help`** — Print help
+
+### Exit Status
+
+| Code | Meaning |
+| ---- | ------- |
+| `0` | it worked |
+| `1` | it failed; the error says why |
+| `2` | the command line was wrong |
+
+### Examples
+
+**Open the terminal UI**
+
+```
+slopmax tui
+```
+
+**Without color, in bold and dim alone**
+
+```
+NO_COLOR=1 slopmax tui
+```
 
 ## `slopmax dashboard`
 
