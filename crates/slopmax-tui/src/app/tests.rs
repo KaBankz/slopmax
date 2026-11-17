@@ -6,7 +6,7 @@ use slopmax_client::api::events::Event;
 use slopmax_client::api::ledger::{
     HistoryRange, LedgerRecord, RequestOutcome, RequestPage, RequestRecord, Summary,
 };
-use slopmax_client::api::settings::LivePatch;
+use slopmax_client::api::settings::{LivePatch, NewKey};
 use slopmax_client::api::{AgentId, Provider};
 
 use super::*;
@@ -241,7 +241,7 @@ fn the_feed_s_range_and_outcome_ask_the_daemon_again() {
 fn a_request_from_the_stream_tops_the_feed_and_makes_the_ledger_stale() {
     let mut app = app(Page::Requests);
     let before = app.feed().len();
-    let page: slopmax_client::api::ledger::RequestPage = fixture("usage.requests.ok");
+    let page: RequestPage = fixture("usage.requests.ok");
     let LedgerRecord::Request(mut record) = page.rows[0].record.clone();
     record.model = Some("claude-sonnet-5-5".into());
     app.apply(Msg::Event(Box::new(Event::Request {
@@ -272,7 +272,7 @@ fn settings_switch_at_once_and_ask_for_minutes_and_strategy() {
     assert_eq!(
         cmds,
         [Cmd::Act(Action::Settings(LivePatch {
-            strategy: Some(slopmax_client::api::Strategy::FillFirst),
+            strategy: Some(Strategy::FillFirst),
             ..Default::default()
         }))]
     );
@@ -341,7 +341,7 @@ fn typing_a_name_takes_no_control_keys() {
 #[test]
 fn a_new_key_stays_up_until_esc_or_enter_and_c_copies_it() {
     let mut app = app(Page::Access);
-    let key = slopmax_client::api::settings::NewKey {
+    let key = NewKey {
         name: "ci".into(),
         key: "sk-slopmax-secret".into(),
         models: Vec::new(),
