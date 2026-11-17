@@ -46,10 +46,13 @@ jobs:
       - uses: jdx/mise-action@v5
       # The web UI the binary serves; the build fails without it.
       - run: mise run ui
-      # Rust brings musl itself; only ring's C needs a compiler, and the
-      # runner's gcc does.
+      # Rust brings musl itself; ring's C is compiled against musl's headers
+      # too, as cross's containers did.
       - if: contains(matrix.target, '-musl')
-        run: echo "CC_${TARGET//-/_}=gcc" >> "$GITHUB_ENV"
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends musl-tools
+          echo "CC_${TARGET//-/_}=musl-gcc" >> "$GITHUB_ENV"
         env:
           TARGET: ${{ matrix.target }}
       - if: matrix.windows

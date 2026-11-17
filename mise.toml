@@ -97,10 +97,15 @@ tools = { "github:rust-cross/cargo-xwin" = "0.23.1" }
 # seconds where the clang-cl backend's took over 8 minutes.
 env = { XWIN_CROSS_COMPILER = "clang" }
 run = '''
-# The runner's newest LLVM: clang, lld-link, llvm-lib, and the llvm-rc that
-# gives slopmax.exe its icon (build.rs).
-llvm=$(ls -d /usr/lib/llvm-* 2>/dev/null | sort -V | tail -1)/bin
-[ -x "$llvm/lld-link" ] || { echo "no LLVM in /usr/lib/llvm-*" >&2; exit 1; }
+# The runner's newest whole LLVM: clang, lld-link, llvm-lib, and the
+# llvm-rc that gives slopmax.exe its icon (build.rs).
+llvm=
+for bin in $(ls -d /usr/lib/llvm-*/bin 2>/dev/null | sort -V); do
+  if [ -x "$bin/clang" ] && [ -x "$bin/lld-link" ] && [ -x "$bin/llvm-lib" ] && [ -x "$bin/llvm-rc" ]; then
+    llvm=$bin
+  fi
+done
+[ -n "$llvm" ] || { echo "no LLVM in /usr/lib/llvm-* has clang, lld-link, llvm-lib and llvm-rc" >&2; exit 1; }
 echo "$llvm" >> "$GITHUB_PATH"
 exports=$(PATH="$llvm:$PATH" cargo xwin env --target "$usage_target")
 # The compiler, linker, and SDK settings, without the Wine test runner or
