@@ -3,7 +3,7 @@
 //! synchronized update, so a terminal that supports one never shows half a
 //! frame.
 
-use std::io::{self, Stdout};
+use std::io::{self, Stdout, Write};
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -24,9 +24,19 @@ static TAKEN: AtomicBool = AtomicBool::new(false);
 /// Whether keys are reported with the Kitty protocol's flags, which are
 /// popped on the way out.
 static KEYBOARD: AtomicBool = AtomicBool::new(false);
+/// Whether something panicked, on any thread: the terminal is given back
+/// then, and nothing more is drawn.
+static PANICKED: AtomicBool = AtomicBool::new(false);
+
+/// Whether a panic has given the terminal back.
+pub fn panicked() -> bool {
+    PANICKED.load(Ordering::SeqCst)
+}
 
 pub struct Screen {
     terminal: Terminal<CrosstermBackend<Stdout>>,
+    /// Whether the mouse is reported to slopmax rather than the terminal.
+    mouse: bool,
 }
 
 impl Screen {
@@ -35,13 +45,17 @@ impl Screen {
         HOOK.call_once(|| {
             let previous = std::panic::take_hook();
             std::panic::set_hook(Box::new(move |info| {
+                PANICKED.store(true, Ordering::SeqCst);
                 give_back();
                 previous(info);
             }));
         });
         enter()?;
         match Terminal::new(CrosstermBackend::new(io::stdout())) {
-            Ok(terminal) => Ok(Self { terminal }),
+            Ok(terminal) => Ok(Self {
+                terminal,
+                mouse: true,
+            }),
             Err(e) => {
                 give_back();
                 Err(e)
@@ -52,10 +66,38 @@ impl Screen {
     /// Draws a frame between the markers of a synchronized update; the
     /// closing one is sent even when drawing fails.
     pub fn draw(&mut self, render: impl FnOnce(&mut Frame<'_>)) -> io::Result<()> {
+        if panicked() {
+            return Err(io::Error::other(
+                "the terminal was given back after a panic",
+            ));
+        }
         queue!(self.terminal.backend_mut(), BeginSynchronizedUpdate)?;
         let drawn = self.terminal.draw(render).map(drop);
         let ended = execute!(self.terminal.backend_mut(), EndSynchronizedUpdate);
         drawn.and(ended)
+    }
+
+    /// Reports the mouse to slopmax, or leaves it to the terminal, where
+    /// text can be selected.
+    pub fn mouse(&mut self, on: bool) -> io::Result<()> {
+        if on == self.mouse {
+            return Ok(());
+        }
+        self.mouse = on;
+        let out = self.terminal.backend_mut();
+        if on {
+            execute!(out, EnableMouseCapture)
+        } else {
+            execute!(out, DisableMouseCapture)
+        }
+    }
+
+    /// Asks the terminal to put `text` on the clipboard (OSC 52). A
+    /// terminal that doesn't take it ignores it.
+    pub fn copy(&mut self, text: &str) {
+        let out = self.terminal.backend_mut();
+        let _ = write!(out, "\x1b]52;c;{}\x07", base64(text.as_bytes()));
+        let _ = out.flush();
     }
 
     /// Gives the terminal back and stops, as Ctrl-Z does in a shell; takes
@@ -64,10 +106,11 @@ impl Screen {
     pub fn suspend(&mut self) -> io::Result<()> {
         give_back();
         // The shell's job control stops slopmax here, and `fg` continues it.
-        let _ = std::process::Command::new("kill")
-            .args(["-TSTP", &std::process::id().to_string()])
-            .status();
+        let _ = signal_hook::low_level::raise(signal_hook::consts::SIGTSTP);
         enter()?;
+        if !self.mouse {
+            execute!(self.terminal.backend_mut(), DisableMouseCapture)?;
+        }
         self.terminal.clear()
     }
 
@@ -129,4 +172,38 @@ pub fn give_back() {
         cursor::Show
     );
     let _ = terminal::disable_raw_mode();
+}
+
+/// `bytes` in standard base64, as OSC 52 takes them.
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, b)| n | (u32::from(*b) << (16 - 8 * i)));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(char::from(ALPHABET[((n >> (18 - 6 * i)) & 63) as usize]));
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::base64;
+
+    #[test]
+    fn base64_pads_to_whole_quads() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"sk-slopmax"), "c2stc2xvcG1heA==");
+    }
 }

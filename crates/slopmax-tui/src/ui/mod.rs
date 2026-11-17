@@ -16,18 +16,23 @@ use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Widget};
-use slopmax_client::api::Tone;
 use slopmax_client::api::ledger::LedgerRecord;
+use slopmax_client::api::report::{Condition, Level};
+use slopmax_client::api::{Strategy, Tone};
 
 use self::widgets::{Flow, dot, panel, wrap};
-use crate::app::{App, Hit, Modal, Page};
+use crate::app::{App, Hit, Modal, Page, held_resets, range_title};
+use crate::attention::{Remedy, attention};
 use crate::data::Link;
 use crate::format::{self, Now};
 use crate::fx::Effects;
 use crate::theme::Theme;
 
-/// How tall a page may be: the canvas it is laid out on.
+/// How tall a page is laid out at first; a taller page is laid out again
+/// on a canvas as tall as it is, up to `TALLEST`.
 const CANVAS: u16 = 480;
+/// The tallest a page is laid out: past it, a page says it was cut.
+const TALLEST: u16 = 4096;
 const SIDEBAR: u16 = 24;
 
 /// Draws the screen. Effects are left out where `fx` is `None`, as in
@@ -45,6 +50,9 @@ pub fn draw(
     let buf = frame.buffer_mut();
     if area.width < 48 || area.height < 12 {
         too_small(buf, area, theme);
+        // What would have come in did so unseen.
+        app.entered = false;
+        app.arrived = 0;
         return;
     }
     let sidebar = app.sidebar_shown(area.width);
@@ -75,7 +83,7 @@ pub fn draw(
         if app.entered {
             fx.enter_page(body);
         }
-        fx.arrive(&arrived);
+        fx.arrive(&arrived, app.scroll);
         fx.process_page(buf, body);
     }
     app.entered = false;
@@ -123,7 +131,7 @@ fn provider_tone(app: &App, page: Page, now: &Now) -> Option<Tone> {
         return None;
     };
     let report = app.data.report.as_ref()?;
-    let tones: Vec<Tone> = overview::attention(report, now)
+    let tones: Vec<Tone> = attention(report, now)
         .into_iter()
         .filter(|item| item.provider == provider)
         .map(|item| item.tone)
@@ -280,8 +288,7 @@ fn subtitle(app: &App, now: &Now) -> Option<String> {
                     !a.disabled
                         && matches!(
                             a.condition.at(now.at),
-                            slopmax_client::api::report::Condition::Ready
-                                | slopmax_client::api::report::Condition::Active { .. }
+                            Condition::Ready | Condition::Active { .. }
                         )
                 })
                 .count();
@@ -292,7 +299,7 @@ fn subtitle(app: &App, now: &Now) -> Option<String> {
             };
             Some(words)
         }
-        Page::Usage | Page::Performance => Some(crate::app::range_title(app.range).into()),
+        Page::Usage | Page::Performance => Some(range_title(app.range).into()),
         Page::Requests => app
             .data
             .requests
@@ -311,10 +318,7 @@ fn subtitle(app: &App, now: &Now) -> Option<String> {
             .map(|keys| format::count(keys.len() as u64, "client key")),
         Page::Diagnostics => app.data.doctor.value.as_ref().map(|sections| {
             let findings = sections.iter().flat_map(|s| &s.findings);
-            let worst = findings
-                .clone()
-                .filter(|f| f.level >= slopmax_client::api::report::Level::Warn)
-                .count();
+            let worst = findings.clone().filter(|f| f.level >= Level::Warn).count();
             match worst {
                 0 => "nothing wrong".into(),
                 1 => "1 thing to look at".into(),
@@ -331,40 +335,26 @@ fn draw_body(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme, now: &N
     if area.width == 0 || area.height == 0 {
         return Vec::new();
     }
-    let mut canvas = Buffer::empty(Rect::new(0, 0, area.width, CANVAS));
-    let mut hits = Vec::new();
-    let used = {
-        let mut flow = Flow {
-            buf: &mut canvas,
-            theme,
-            hits: &mut hits,
-            x: 0,
-            width: area.width.saturating_sub(1),
-            y: 0,
-        };
-        match app.page {
-            Page::Overview => overview::draw(app, &mut flow, now),
-            Page::Provider(p) => provider::draw(app, p, &mut flow, now),
-            Page::Usage => usage::draw_usage(app, &mut flow, now),
-            Page::Performance => usage::draw_performance(app, &mut flow, now),
-            Page::Requests => requests::draw(app, &mut flow, now),
-            Page::Agents => system::draw_agents(app, &mut flow, now),
-            Page::Access => system::draw_access(app, &mut flow, now),
-            Page::Diagnostics => system::draw_diagnostics(app, &mut flow, now),
-            Page::Settings => system::draw_settings(app, &mut flow, now),
+    let (canvas, hits, used) = {
+        let (canvas, hits, height) = lay_out(app, area.width, CANVAS, theme, now);
+        if height > CANVAS {
+            lay_out(app, area.width, height.min(TALLEST), theme, now)
+        } else {
+            (canvas, hits, height)
         }
-        flow.y.min(CANVAS)
     };
-    // The selected row stays in view; the first shows the page's top.
-    if app.rows() > 0 {
-        if app.cursor == 0 {
+    let used = used.min(canvas.area.height);
+    // A selection that just moved is scrolled into view, the first row
+    // with the page's top; otherwise the view stays where it was put.
+    if std::mem::take(&mut app.follow)
+        && let Some((rect, _)) = hits.iter().find(|(_, h)| *h == Hit::Row(app.cursor))
+    {
+        if app.cursor == 0 && rect.bottom() <= area.height {
             app.scroll = 0;
-        } else if let Some((rect, _)) = hits.iter().find(|(_, h)| *h == Hit::Row(app.cursor)) {
-            if rect.y < app.scroll {
-                app.scroll = rect.y.saturating_sub(1);
-            } else if rect.bottom() > app.scroll + area.height {
-                app.scroll = rect.bottom() - area.height;
-            }
+        } else if rect.y < app.scroll || rect.height >= area.height {
+            app.scroll = rect.y.saturating_sub(1);
+        } else if rect.bottom() > app.scroll + area.height {
+            app.scroll = rect.bottom() - area.height;
         }
     }
     app.scroll = app.scroll.min(used.saturating_sub(area.height));
@@ -404,6 +394,53 @@ fn draw_body(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme, now: &N
     arrived
 }
 
+/// Lays the open page out on a canvas `height` rows tall; gives back the
+/// canvas, where its rows can be clicked, and how tall the page is, which
+/// may be taller than the canvas.
+fn lay_out(
+    app: &App,
+    width: u16,
+    height: u16,
+    theme: &Theme,
+    now: &Now,
+) -> (Buffer, Vec<(Rect, Hit)>, u16) {
+    let mut canvas = Buffer::empty(Rect::new(0, 0, width, height));
+    let mut hits = Vec::new();
+    let mut flow = Flow {
+        buf: &mut canvas,
+        theme,
+        hits: &mut hits,
+        x: 0,
+        width: width.saturating_sub(1),
+        y: 0,
+    };
+    match app.page {
+        Page::Overview => overview::draw(app, &mut flow, now),
+        Page::Provider(p) => provider::draw(app, p, &mut flow, now),
+        Page::Usage => usage::draw_usage(app, &mut flow, now),
+        Page::Performance => usage::draw_performance(app, &mut flow, now),
+        Page::Requests => requests::draw(app, &mut flow, now),
+        Page::Agents => system::draw_agents(app, &mut flow, now),
+        Page::Access => system::draw_access(app, &mut flow, now),
+        Page::Diagnostics => system::draw_diagnostics(app, &mut flow, now),
+        Page::Settings => system::draw_settings(app, &mut flow, now),
+    }
+    let used = flow.y;
+    if used > height && height >= TALLEST {
+        // Too tall to lay out whole: its last line says so.
+        let y = height - 1;
+        let line = Line::from(Span::styled(
+            " … the rest of this page is cut off here",
+            theme.muted(),
+        ));
+        for x in 0..width {
+            canvas[(x, y)].reset();
+        }
+        canvas.set_line(0, y, &line, width);
+    }
+    (canvas, hits, used)
+}
+
 fn scrollbar(buf: &mut Buffer, area: Rect, scroll: u16, used: u16, theme: &Theme) {
     let x = area.right() - 1;
     let h = f64::from(area.height);
@@ -420,60 +457,109 @@ fn scrollbar(buf: &mut Buffer, area: Rect, scroll: u16, used: u16, theme: &Theme
     }
 }
 
-/// The keys the page takes, then the ones every page takes.
-fn hints(app: &App) -> Vec<(&'static str, &'static str)> {
-    let mut keys: Vec<(&str, &str)> = match app.page {
-        Page::Overview => vec![("↑↓", "select"), ("⏎", "open")],
-        Page::Provider(_) => {
-            let mut keys = vec![
-                ("↑↓", "select"),
-                ("␣", "on/off"),
-                ("p", "prefer"),
-                ("c", "check"),
-            ];
-            if app.accounts().iter().any(|a| a.pinned) {
-                keys.push(("a", "auto"));
-            }
+/// The keys the page takes, as they apply to what is selected.
+fn page_hints(app: &App) -> Vec<(&'static str, &'static str)> {
+    match app.page {
+        Page::Overview => {
+            let mut keys = vec![("↑↓", "select"), ("⏎", "open")];
             if app
-                .accounts()
-                .iter()
-                .any(|a| crate::app::held_resets(a, app.now()) > 0)
+                .selected_attention()
+                .is_some_and(|item| item.remedy == Remedy::Redeem)
             {
                 keys.push(("R", "redeem"));
             }
             keys
         }
+        Page::Provider(_) => {
+            let mut keys = vec![("↑↓", "select")];
+            if let Some(account) = app.selected_account() {
+                keys.extend([("␣", "on/off"), ("p", "prefer"), ("c", "check")]);
+                if held_resets(account, app.now()) > 0 {
+                    keys.push(("R", "redeem"));
+                }
+            }
+            if app.accounts().iter().any(|a| a.pinned) {
+                keys.push(("a", "auto"));
+            }
+            keys
+        }
         Page::Usage | Page::Performance => vec![("r", "range"), ("↑↓", "scroll")],
         Page::Requests if app.filtering => vec![("⏎", "done"), ("esc", "clear")],
-        Page::Requests => vec![
-            ("/", "filter"),
-            ("o", "outcome"),
-            ("r", "range"),
-            ("⏎", "details"),
-        ],
-        Page::Agents => vec![("↑↓", "select"), ("c", "connect"), ("x", "disconnect")],
-        Page::Access => vec![("↑↓", "select"), ("a", "add key"), ("x", "revoke")],
+        Page::Requests => {
+            let mut keys = vec![("/", "filter"), ("o", "outcome"), ("r", "range")];
+            if !app.feed().is_empty() {
+                keys.push(("⏎", "details"));
+            }
+            keys
+        }
+        Page::Agents => {
+            let mut keys = vec![("↑↓", "select")];
+            let agent = app
+                .data
+                .agents
+                .value
+                .as_ref()
+                .and_then(|agents| agents.get(app.cursor));
+            match agent {
+                Some(agent) if agent.wired => keys.push(("x", "disconnect")),
+                Some(_) => keys.push(("c", "connect")),
+                None => {}
+            }
+            keys
+        }
+        Page::Access => {
+            let any = app.data.keys.value.as_ref().is_some_and(|k| !k.is_empty());
+            let mut keys = Vec::new();
+            if any {
+                keys.push(("↑↓", "select"));
+            }
+            keys.push(("a", "add key"));
+            if any {
+                keys.push(("x", "revoke"));
+            }
+            keys
+        }
         Page::Diagnostics => vec![("↑↓", "scroll"), ("F5", "check again")],
         Page::Settings => vec![("↑↓", "select"), ("⏎", "change")],
+    }
+}
+
+/// The keys every page takes, as the footer lists them.
+const GLOBAL_HINTS: [(&str, &str); 3] = [("⇥", "pages"), ("?", "help"), ("q", "quit")];
+
+/// The hints that fit in `width` columns, whole: the page's last ones are
+/// left out first, then the ones every page takes, from the right.
+fn hints(app: &App, width: u16) -> Vec<(&'static str, &'static str)> {
+    let wide = |keys: &[(&str, &str)]| -> usize {
+        keys.iter()
+            .map(|(key, what)| Line::from(format!("{key} {what}")).width() + 3)
+            .sum::<usize>()
+            .saturating_sub(3)
     };
-    keys.extend([("⇥", "pages"), ("?", "help"), ("q", "quit")]);
-    keys
+    let mut page = page_hints(app);
+    let mut global = GLOBAL_HINTS.to_vec();
+    let fits = |page: &[(&str, &str)], global: &[(&str, &str)]| {
+        let all: Vec<_> = page.iter().chain(global).copied().collect();
+        wide(&all) <= width as usize
+    };
+    while !fits(&page, &global) && page.pop().is_some() {}
+    while !fits(&page, &global) && global.pop().is_some() {}
+    page.extend(global);
+    page
 }
 
 fn draw_footer(buf: &mut Buffer, area: Rect, app: &App, theme: &Theme) {
+    let width = area.width.saturating_sub(3);
     let mut spans = Vec::new();
-    for (key, what) in hints(app) {
+    for (i, (key, what)) in hints(app, width).into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("   "));
+        }
         spans.push(Span::styled(key, theme.strong()));
         spans.push(Span::raw(" "));
         spans.push(Span::styled(what, theme.muted()));
-        spans.push(Span::raw("   "));
     }
-    buf.set_line(
-        area.x + 2,
-        area.y,
-        &Line::from(spans),
-        area.width.saturating_sub(3),
-    );
+    buf.set_line(area.x + 2, area.y, &Line::from(spans), width);
 }
 
 fn draw_toasts(buf: &mut Buffer, area: Rect, app: &App, theme: &Theme) {
@@ -505,7 +591,8 @@ fn draw_toasts(buf: &mut Buffer, area: Rect, app: &App, theme: &Theme) {
     }
 }
 
-/// A box centered over `area`, cleared and on the raised surface.
+/// A box centered over `area`, cleared and on the raised surface; gives
+/// back the box and the room inside it.
 fn dialog(
     buf: &mut Buffer,
     area: Rect,
@@ -513,8 +600,8 @@ fn dialog(
     height: u16,
     theme: &Theme,
     title: &str,
-) -> Rect {
-    let width = width.min(area.width.saturating_sub(4));
+) -> (Rect, Rect) {
+    let width = dialog_width(area, width);
     let height = height.min(area.height.saturating_sub(2));
     let rect = Rect::new(
         area.x + (area.width - width) / 2,
@@ -530,52 +617,93 @@ fn dialog(
         Span::raw(" "),
     ]);
     let inner = panel(buf, theme, rect, Some(title));
-    inner.inner(Margin::new(1, 0))
+    (rect, inner.inner(Margin::new(1, 0)))
+}
+
+/// How wide a dialog asked to be `width` columns is over `area`.
+fn dialog_width(area: Rect, width: u16) -> u16 {
+    width.min(area.width.saturating_sub(4))
+}
+
+/// How wide the text in a dialog `width` columns wide may run.
+fn text_width(area: Rect, width: u16) -> u16 {
+    dialog_width(area, width).saturating_sub(4).max(1)
+}
+
+/// The keys a dialog takes, along its bottom.
+fn dialog_keys(buf: &mut Buffer, inner: Rect, keys: Vec<Span<'_>>) {
+    if inner.height > 0 {
+        buf.set_line(inner.x, inner.bottom() - 1, &Line::from(keys), inner.width);
+    }
+}
+
+/// Lines of a dialog's text from row `top` of `inner`, as many as fit
+/// above its keys.
+fn dialog_lines(buf: &mut Buffer, inner: Rect, top: u16, lines: &[String], style: Style) -> u16 {
+    let last = inner.bottom().saturating_sub(2);
+    let mut y = inner.y + top;
+    for line in lines {
+        if y >= last {
+            break;
+        }
+        buf.set_stringn(inner.x, y, line, inner.width as usize, style);
+        y += 1;
+    }
+    y - inner.y
 }
 
 fn draw_help(buf: &mut Buffer, area: Rect, app: &App, theme: &Theme) -> Rect {
-    let global: [(&str, &str); 12] = [
+    let global: [(&str, &str); 13] = [
         ("⇥ / →", "next page"),
         ("⇧⇥ / ←", "previous page"),
         ("1–9", "go to a page"),
         ("↑ ↓ / j k", "select or scroll"),
-        ("PgUp PgDn", "a screen at a time"),
+        ("PgUp PgDn", "ten rows at a time"),
         ("g / G", "top / bottom"),
         ("b", "show or hide the sidebar"),
         ("F5", "fetch the page again"),
         ("ctrl-r", "read every account's usage"),
+        ("esc", "back to the overview"),
         ("?", "this help"),
-        ("q / esc", "quit"),
+        ("q / ctrl-c", "quit"),
         ("ctrl-z", "suspend"),
     ];
-    let page: Vec<(&str, &str)> = hints(app)
-        .into_iter()
-        .filter(|(k, _)| !matches!(*k, "⇥" | "?" | "q"))
-        .collect();
+    let page = page_hints(app);
     let height = (global.len().max(page.len()) as u16) + 6;
-    let inner = dialog(buf, area, 76, height, theme, "Keys");
+    let (outer, inner) = dialog(buf, area, 76, height, theme, "Keys");
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(inner);
     let mut write = |column: Rect, heading: &str, rows: &[(&str, &str)]| {
-        buf.set_string(column.x, column.y + 1, heading, theme.muted());
+        if column.height < 2 {
+            return;
+        }
+        buf.set_stringn(
+            column.x,
+            column.y + 1,
+            heading,
+            column.width as usize,
+            theme.muted(),
+        );
         for (i, (key, what)) in rows.iter().enumerate() {
             let y = column.y + 3 + i as u16;
             if y >= column.bottom() {
                 break;
             }
-            buf.set_string(column.x, y, *key, theme.accent());
-            buf.set_stringn(
-                column.x + 12,
-                y,
-                *what,
-                column.width.saturating_sub(12) as usize,
-                Style::new(),
-            );
+            buf.set_stringn(column.x, y, *key, column.width as usize, theme.accent());
+            if column.width > 12 {
+                buf.set_stringn(
+                    column.x + 12,
+                    y,
+                    *what,
+                    (column.width - 12) as usize,
+                    Style::new(),
+                );
+            }
         }
     };
     write(left, "Everywhere", &global);
     write(right, app.page.title(), &page);
-    Rect::new(inner.x, inner.y, inner.width, inner.height)
+    outer
 }
 
 fn draw_modal(
@@ -590,69 +718,76 @@ fn draw_modal(
         Modal::Confirm {
             title, body, yes, ..
         } => {
-            let lines = wrap(body, 52);
-            let inner = dialog(buf, area, 60, lines.len() as u16 + 6, theme, title);
-            for (i, line) in lines.iter().enumerate() {
-                buf.set_string(inner.x, inner.y + 1 + i as u16, line, Style::new());
-            }
-            let keys = Line::from(vec![
-                Span::styled("y", theme.tone(Tone::Bad).add_modifier(Modifier::BOLD)),
-                Span::styled(format!(" {yes}   "), Style::new()),
-                Span::styled("n", theme.strong()),
-                Span::styled(" cancel", theme.muted()),
-            ]);
-            buf.set_line(
-                inner.x,
-                inner.bottom().saturating_sub(1),
-                &keys,
-                inner.width,
+            let lines = wrap(body, text_width(area, 60) as usize);
+            let (outer, inner) = dialog(buf, area, 60, lines.len() as u16 + 6, theme, title);
+            dialog_lines(buf, inner, 1, &lines, Style::new());
+            dialog_keys(
+                buf,
+                inner,
+                vec![
+                    Span::styled("y", theme.tone(Tone::Bad).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" {yes}   "), Style::new()),
+                    Span::styled("n", theme.strong()),
+                    Span::styled(" / ", theme.muted()),
+                    Span::styled("esc", theme.strong()),
+                    Span::styled(" cancel", theme.muted()),
+                ],
             );
-            inner
+            outer
         }
         Modal::Input {
             title, hint, value, ..
         } => {
-            let inner = dialog(buf, area, 60, 8, theme, title);
+            let (outer, inner) = dialog(buf, area, 60, 8, theme, title);
+            let hint = wrap(hint, inner.width as usize);
             buf.set_stringn(
                 inner.x,
                 inner.y + 1,
-                hint,
+                hint.first().map_or("", String::as_str),
                 inner.width as usize,
                 theme.muted(),
             );
+            // The end of a long value shows, where the cursor is.
+            let room = inner.width.saturating_sub(3) as usize;
             let field = Line::from(vec![
                 Span::styled("› ", theme.accent()),
-                Span::raw(value.clone()),
+                Span::raw(format::tail(value, room)),
                 Span::styled("▏", theme.accent()),
             ]);
-            buf.set_line(inner.x, inner.y + 3, &field, inner.width);
-            let keys = Line::from(vec![
-                Span::styled("⏎", theme.strong()),
-                Span::styled(" save   ", theme.muted()),
-                Span::styled("esc", theme.strong()),
-                Span::styled(" cancel", theme.muted()),
-            ]);
-            buf.set_line(
-                inner.x,
-                inner.bottom().saturating_sub(1),
-                &keys,
-                inner.width,
+            if inner.height > 4 {
+                buf.set_line(inner.x, inner.y + 3, &field, inner.width);
+            }
+            dialog_keys(
+                buf,
+                inner,
+                vec![
+                    Span::styled("⏎", theme.strong()),
+                    Span::styled(" save   ", theme.muted()),
+                    Span::styled("esc", theme.strong()),
+                    Span::styled(" cancel", theme.muted()),
+                ],
             );
-            inner
+            outer
         }
         Modal::Strategy { selected } => {
-            let strategies = slopmax_client::api::Strategy::ALL;
-            let inner = dialog(
+            let strategies = Strategy::ALL;
+            let n = strategies.len() as u16;
+            let (outer, inner) = dialog(
                 buf,
                 area,
                 64,
-                strategies.len() as u16 * 2 + 5,
+                n * 2 + 5,
                 theme,
                 "How new sessions pick an account",
             );
+            // Each with its summary beneath where there is room, else alone.
+            let step = if inner.height > n * 2 { 2 } else { 1 };
             let current = app.data.report.as_ref().map(|r| r.strategy);
             for (i, strategy) in strategies.iter().enumerate() {
-                let y = inner.y + 1 + i as u16 * 2;
+                let y = inner.y + 1 + i as u16 * step;
+                if y >= inner.bottom() {
+                    break;
+                }
                 let chosen = i == *selected;
                 let mark = if chosen { "› " } else { "  " };
                 let mut line = vec![
@@ -666,36 +801,43 @@ fn draw_modal(
                     line.push(Span::styled("  current", theme.tone(Tone::Accent)));
                 }
                 buf.set_line(inner.x, y, &Line::from(line), inner.width);
-                buf.set_stringn(
-                    inner.x + 2,
-                    y + 1,
-                    strategy.summary(),
-                    inner.width.saturating_sub(2) as usize,
-                    theme.muted(),
-                );
+                if step == 2 && y + 1 < inner.bottom() {
+                    buf.set_stringn(
+                        inner.x + 2,
+                        y + 1,
+                        strategy.summary(),
+                        inner.width.saturating_sub(2) as usize,
+                        theme.muted(),
+                    );
+                }
             }
-            inner
+            outer
         }
         Modal::Secret { title, text, note } => {
-            let lines = wrap(note, 60);
-            let inner = dialog(buf, area, 70, lines.len() as u16 + 7, theme, title);
-            buf.set_stringn(
-                inner.x,
-                inner.y + 1,
-                text,
-                inner.width as usize,
-                theme.accent().add_modifier(Modifier::BOLD),
+            // The key in full, broken anywhere, so none of it is ever cut.
+            let width = text_width(area, 70) as usize;
+            let chars: Vec<char> = text.chars().collect();
+            let key: Vec<String> = chars
+                .chunks(width)
+                .map(|chunk| chunk.iter().collect())
+                .collect();
+            let note = wrap(note, width);
+            let height = (key.len() + note.len()) as u16 + 7;
+            let (outer, inner) = dialog(buf, area, 70, height, theme, title);
+            let strong = theme.accent().add_modifier(Modifier::BOLD);
+            let below = dialog_lines(buf, inner, 1, &key, strong);
+            dialog_lines(buf, inner, below + 1, &note, theme.muted());
+            dialog_keys(
+                buf,
+                inner,
+                vec![
+                    Span::styled("c", theme.strong()),
+                    Span::styled(" copy   ", theme.muted()),
+                    Span::styled("esc", theme.strong()),
+                    Span::styled(" close", theme.muted()),
+                ],
             );
-            for (i, line) in lines.iter().enumerate() {
-                buf.set_string(inner.x, inner.y + 3 + i as u16, line, theme.muted());
-            }
-            buf.set_string(
-                inner.x,
-                inner.bottom().saturating_sub(1),
-                "esc close",
-                theme.muted(),
-            );
-            inner
+            outer
         }
         Modal::Request(row) => {
             let LedgerRecord::Request(r) = &row.record;
@@ -724,7 +866,7 @@ fn draw_modal(
                 ("API value", row.cost.map_or("—".into(), format::dollars)),
             ]);
             if let Some(agent) = r.agent {
-                fields.push(("Agent", requests::agent_title(agent).into()));
+                fields.push(("Agent", format::agent_title(agent).into()));
             }
             if let Some(machine) = &r.machine {
                 fields.push(("Machine", machine.clone()));
@@ -735,7 +877,7 @@ fn draw_modal(
             if let Some(end) = row.end {
                 fields.push(("Ended", requests::end_words(end).into()));
             }
-            let inner = dialog(buf, area, 64, fields.len() as u16 + 4, theme, "Request");
+            let (outer, inner) = dialog(buf, area, 64, fields.len() as u16 + 4, theme, "Request");
             for (i, (name, value)) in fields.iter().enumerate() {
                 let y = inner.y + 1 + i as u16;
                 if y >= inner.bottom() {
@@ -750,7 +892,7 @@ fn draw_modal(
                     Style::new(),
                 );
             }
-            inner
+            outer
         }
     }
 }

@@ -21,6 +21,10 @@ tachyonfx = { version = "=0.25.2", default-features = false, features = ["std"] 
 terminal-colorsaurus = "=1.0.3"
 tokio.workspace = true
 
+# Already in the tree through crossterm; raises SIGTSTP for Ctrl-Z.
+[target.'cfg(unix)'.dependencies]
+signal-hook = { version = "0.3.18", default-features = false }
+
 [dev-dependencies]
 insta = "=1.49.0"
 serde.workspace = true

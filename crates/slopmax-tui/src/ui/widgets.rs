@@ -249,7 +249,7 @@ pub fn segmented_bar(theme: &Theme, segments: &[Segment], width: u16) -> Vec<Spa
 const EIGHTHS: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
 /// Columns, one per value, scaled to the largest and as tall as `area`,
-/// in eighths of a row; `marks` picks a style per column.
+/// in eighths of a row; `style` picks a style per column.
 pub fn column_chart(
     buf: &mut Buffer,
     area: Rect,
@@ -257,10 +257,23 @@ pub fn column_chart(
     style: impl Fn(usize) -> Style,
     gap: bool,
 ) {
+    let most = values.iter().copied().fold(0.0, f64::max);
+    scaled_columns(buf, area, values, most, style, gap);
+}
+
+/// Columns as [`column_chart`] draws them, with `most` filling `area`, so
+/// charts side by side can share a scale.
+pub fn scaled_columns(
+    buf: &mut Buffer,
+    area: Rect,
+    values: &[f64],
+    most: f64,
+    style: impl Fn(usize) -> Style,
+    gap: bool,
+) {
     if values.is_empty() || area.width == 0 || area.height == 0 {
         return;
     }
-    let most = values.iter().copied().fold(0.0, f64::max);
     let n = values.len() as u16;
     let step = (area.width / n).max(1);
     let bar_w = if gap && step >= 3 { step - 1 } else { step };
@@ -271,7 +284,7 @@ pub fn column_chart(
             break;
         }
         let eighths = if most > 0.0 {
-            ((value / most) * f64::from(area.height) * 8.0).round() as u16
+            ((value / most).min(1.0) * f64::from(area.height) * 8.0).round() as u16
         } else {
             0
         };
@@ -426,15 +439,21 @@ pub struct Stat {
     pub change: Option<(String, Tone)>,
 }
 
-/// Figures side by side in panels, four rows tall with their borders.
+/// The narrowest a figure's panel is drawn; narrower, they go two across.
+const CARD: u16 = 22;
+
+/// Figures side by side in panels, four rows tall with their borders: all
+/// in a row where each gets `CARD` columns, else two across. What doesn't
+/// fit a panel is cut with an ellipsis, never past its border.
 pub fn stats(flow: &mut Flow<'_>, stats: &[Stat]) {
     if stats.is_empty() {
         return;
     }
-    let across = if flow.width >= 60 {
-        stats.len() as u16
+    let n = stats.len() as u16;
+    let across = if flow.width + 1 >= n * (CARD + 1) {
+        n
     } else {
-        2
+        n.min(2)
     };
     for chunk in stats.chunks(across as usize) {
         let widths = flow.even(across, 1);
@@ -450,17 +469,23 @@ pub fn stats(flow: &mut Flow<'_>, stats: &[Stat]) {
                 width: inner.width.saturating_sub(2),
                 ..inner
             };
-            let rows = [
-                Line::from(Span::styled(stat.title.clone(), theme.muted())),
+            let room = inner.width as usize;
+            let fit = |text: &str| crate::format::fit(text, room);
+            let value = {
+                let mut spans = vec![Span::styled(fit(&stat.value), theme.strong())];
+                // The change goes where it fits beside the figure.
+                if let Some((change, tone)) = &stat.change
+                    && Line::from(format!("{}  {change}", stat.value)).width() <= room
                 {
-                    let mut spans = vec![Span::styled(stat.value.clone(), theme.strong())];
-                    if let Some((change, tone)) = &stat.change {
-                        spans.push(Span::raw("  "));
-                        spans.push(Span::styled(change.clone(), theme.tone(*tone)));
-                    }
-                    Line::from(spans)
-                },
-                Line::from(Span::styled(stat.note.clone(), theme.muted())),
+                    spans.push(Span::raw("  "));
+                    spans.push(Span::styled(change.clone(), theme.tone(*tone)));
+                }
+                Line::from(spans)
+            };
+            let rows = [
+                Line::from(Span::styled(fit(&stat.title), theme.muted())),
+                value,
+                Line::from(Span::styled(fit(&stat.note), theme.muted())),
             ];
             for (dy, line) in rows.iter().enumerate() {
                 if (dy as u16) < inner.height {

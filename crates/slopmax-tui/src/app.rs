@@ -9,12 +9,15 @@ use crossterm::event::{
 };
 use ratatui::layout::{Position, Rect};
 use slopmax_client::api::events::Event;
-use slopmax_client::api::ledger::{HistoryRange, RequestOutcome, RequestRow};
-use slopmax_client::api::report::{AccountView, Condition};
-use slopmax_client::api::settings::{LIVE, LiveKind, LivePatch};
-use slopmax_client::api::{Provider, Strategy, Tone};
+use slopmax_client::api::ledger::{HistoryRange, LedgerRecord, RequestOutcome, RequestRow};
+use slopmax_client::api::report::{AccountView, Condition, Note};
+use slopmax_client::api::settings::{LIVE, LiveKind, LivePatch, LiveValue};
+use slopmax_client::api::{Instant, NoticeKind, Provider, Strategy, Tone};
+use slopmax_common::time::SignedDuration;
 
+use crate::attention::{Attention, Remedy, attention};
 use crate::data::{Action, Data, Fetched, Link, Msg, Outcome, What, range_index};
+use crate::format::{Now, agent_title};
 
 /// A page of the sidebar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +54,8 @@ impl Page {
 pub enum Cmd {
     Fetch(What),
     Act(Action),
+    /// Text for the terminal to put on the clipboard (OSC 52).
+    Copy(String),
 }
 
 /// A dialog over the page.
@@ -72,7 +77,9 @@ pub enum Modal {
     },
     /// How new sessions pick an account.
     Strategy { selected: usize },
-    /// Something shown once: a new key's secret.
+    /// Something shown once: a new key's secret. Only Esc or Enter close
+    /// it, and the mouse is the terminal's while it shows, so the text can
+    /// be selected.
     Secret {
         title: String,
         text: String,
@@ -139,8 +146,11 @@ pub struct App {
     pub page: Page,
     /// The selected row of the page, where it has rows.
     pub cursor: usize,
-    /// How far the page is scrolled, in rows.
+    /// How far the page is scrolled, in rows: the view, which the
+    /// selection doesn't hold, so what lies past the last row can be read.
     pub scroll: u16,
+    /// The selection just moved: the next frame scrolls it into view.
+    pub follow: bool,
     /// The span Usage and Performance show.
     pub range: HistoryRange,
     /// Text the request feed is filtered by, and whether it is being typed.
@@ -164,7 +174,7 @@ pub struct App {
     /// The last frame's width, for the sidebar and the page order.
     pub width: u16,
     /// The time keys act at, fixed in tests; the system's otherwise.
-    pub frozen: Option<slopmax_client::api::Instant>,
+    pub frozen: Option<Instant>,
 }
 
 impl App {
@@ -174,6 +184,7 @@ impl App {
             page: Page::Overview,
             cursor: 0,
             scroll: 0,
+            follow: true,
             range: HistoryRange::Week,
             filter: String::new(),
             filtering: false,
@@ -192,9 +203,8 @@ impl App {
         }
     }
 
-    pub fn now(&self) -> slopmax_client::api::Instant {
-        self.frozen
-            .unwrap_or_else(slopmax_client::api::Instant::now)
+    pub fn now(&self) -> Instant {
+        self.frozen.unwrap_or_else(Instant::now)
     }
 
     /// Every page, in the sidebar's order.
@@ -223,18 +233,19 @@ impl App {
             self.page = page;
             self.cursor = 0;
             self.scroll = 0;
+            self.follow = true;
             self.filtering = false;
             self.entered = true;
         }
         self.load()
     }
 
-    /// Fetches what the open page shows.
-    pub fn load(&mut self) -> Vec<Cmd> {
-        let mut wanted = match self.page {
+    /// What the open page shows.
+    fn wanted(&self) -> Vec<What> {
+        match self.page {
             Page::Overview => vec![
                 What::History(HistoryRange::Today),
-                What::Requests(self.data.query.clone()),
+                What::Latest,
                 What::Settings,
             ],
             Page::Provider(p) if p.is_subscription() => vec![What::Pool(p)],
@@ -246,7 +257,12 @@ impl App {
             Page::Access => vec![What::Keys, What::Tailnet],
             Page::Diagnostics => vec![What::Doctor],
             Page::Settings => vec![What::Settings],
-        };
+        }
+    }
+
+    /// Fetches what the open page shows.
+    pub fn load(&mut self) -> Vec<Cmd> {
+        let mut wanted = self.wanted();
         wanted.retain(|what| self.begin(what));
         wanted.into_iter().map(Cmd::Fetch).collect()
     }
@@ -274,7 +290,8 @@ impl App {
                 data.requests.begin();
                 true
             }
-            What::Machines(_) => start!(&mut data.machines),
+            What::Latest => start!(&mut data.latest),
+            What::Machines(range) => start!(&mut data.machines[range_index(*range)]),
             What::Agents => start!(&mut data.agents),
             What::Doctor => start!(&mut data.doctor),
             What::Settings => start!(&mut data.settings),
@@ -284,37 +301,15 @@ impl App {
     }
 
     /// Once a second: toasts expire, and what the open page shows that
-    /// changed since it was fetched is fetched again.
+    /// changed since it was fetched, or failed, is fetched again while
+    /// slopmax is reached.
     pub fn tick(&mut self, at: Clock) -> Vec<Cmd> {
         self.toasts.retain(|t| t.until > at);
-        let mut wanted = Vec::new();
-        match self.page {
-            Page::Overview => {
-                if self.data.history(HistoryRange::Today).due(at) {
-                    wanted.push(What::History(HistoryRange::Today));
-                }
-                if self.data.requests.due(at) {
-                    wanted.push(What::Requests(self.data.query.clone()));
-                }
-            }
-            Page::Provider(p) => {
-                if self.data.pool(p).is_some_and(|s| s.due(at)) {
-                    wanted.push(What::Pool(p));
-                }
-            }
-            Page::Usage | Page::Performance => {
-                if self.data.history(self.range).due(at) {
-                    wanted.push(What::History(self.range));
-                }
-                if self.page == Page::Usage && self.data.machines.due(at) {
-                    wanted.push(What::Machines(self.range));
-                }
-            }
-            Page::Requests if self.data.requests.due(at) => {
-                wanted.push(What::Requests(self.data.query.clone()));
-            }
-            _ => {}
+        if !matches!(self.data.link, Link::Live(_)) {
+            return Vec::new();
         }
+        let mut wanted = self.wanted();
+        wanted.retain(|what| self.data.due(what, at));
         wanted.retain(|what| self.begin(what));
         wanted.into_iter().map(Cmd::Fetch).collect()
     }
@@ -336,23 +331,34 @@ impl App {
         let at = Clock::now();
         match msg {
             Msg::Link(link) => {
-                if let Link::Lost(_) = &link
-                    && matches!(self.data.link, Link::Live(_))
-                {
-                    self.toast("Lost slopmax; trying again", Tone::Warn);
+                let was = std::mem::replace(&mut self.data.link, link);
+                match (&was, &self.data.link) {
+                    (Link::Live(_), Link::Lost(_)) => {
+                        self.toast("Lost slopmax; trying again", Tone::Warn);
+                    }
+                    // Back after a break, or up after a start whose first
+                    // fetches failed: whatever was fetched may be out of
+                    // date, so the page is fetched again and the rest as
+                    // each opens.
+                    (Link::Lost(_), Link::Live(_)) => {
+                        self.toast("Reached slopmax again", Tone::Good);
+                        self.data.all_stale();
+                        return self.load();
+                    }
+                    (Link::Connecting, Link::Live(_)) if self.data.any_error() => {
+                        self.data.all_stale();
+                        return self.load();
+                    }
+                    _ => {}
                 }
-                self.data.link = link;
             }
             Msg::Event(event) => match *event {
                 Event::Status { report } => {
-                    let before = self.pages();
                     self.data.report = Some(*report);
                     if self.page != Page::Overview && !self.pages().contains(&self.page) {
                         return self.go(Page::Overview);
                     }
-                    if before != self.pages() {
-                        self.clamp();
-                    }
+                    self.clamp();
                     if let Page::Provider(p) = self.page
                         && let Some(slot) = self.data.pools.get_mut(&p)
                     {
@@ -366,11 +372,10 @@ impl App {
                 }
                 Event::Notice { notice } => {
                     let tone = match notice.kind {
-                        slopmax_client::api::NoticeKind::Limited
-                        | slopmax_client::api::NoticeKind::Exhausted
-                        | slopmax_client::api::NoticeKind::SignedOut => Tone::Bad,
-                        slopmax_client::api::NoticeKind::Available
-                        | slopmax_client::api::NoticeKind::Recovered => Tone::Good,
+                        NoticeKind::Limited | NoticeKind::Exhausted | NoticeKind::SignedOut => {
+                            Tone::Bad
+                        }
+                        NoticeKind::Available | NoticeKind::Recovered => Tone::Good,
                         _ => Tone::Warn,
                     };
                     self.toast(notice.message, tone);
@@ -390,14 +395,13 @@ impl App {
             Fetched::Pool(p, r) => data.pools.entry(p).or_default().finish(r, at),
             Fetched::Requests(query, r) => {
                 // An answer to a query since changed is dropped; the new
-                // one is on its way.
+                // one is on its way, and still loading.
                 if query == data.query {
                     data.requests.finish(r, at);
-                } else {
-                    data.requests.loading = false;
                 }
             }
-            Fetched::Machines(r) => data.machines.finish(r, at),
+            Fetched::Latest(r) => data.latest.finish(r, at),
+            Fetched::Machines(range, r) => data.machines[range_index(range)].finish(r, at),
             Fetched::Agents(r) => data.agents.finish(r, at),
             Fetched::Doctor(r) => data.doctor.finish(r, at),
             Fetched::Settings(r) => data.settings.finish(r, at),
@@ -418,6 +422,7 @@ impl App {
         match outcome {
             Outcome::Report(report, said) => {
                 self.data.report = Some(*report);
+                self.clamp();
                 self.toast(said, Tone::Good);
             }
             Outcome::Settings(view, said) => {
@@ -468,11 +473,12 @@ impl App {
     }
 
     fn matches(&self, row: &RequestRow, needle: &str) -> bool {
-        let slopmax_client::api::ledger::LedgerRecord::Request(r) = &row.record;
+        let LedgerRecord::Request(r) = &row.record;
         let account = r.account.as_deref().map(|id| self.data.account_name(id));
         [
             r.model.as_deref(),
             account,
+            r.agent.map(agent_title),
             r.machine.as_deref(),
             r.session.as_deref(),
         ]
@@ -482,10 +488,36 @@ impl App {
         .any(|text| text.to_lowercase().contains(needle))
     }
 
+    /// What wants a look, as the overview lists it: its first rows.
+    pub fn attention(&self) -> Vec<Attention> {
+        let Some(report) = &self.data.report else {
+            return Vec::new();
+        };
+        // Only which items there are is read here, not their clock times.
+        let now = Now {
+            at: self.now(),
+            offset: SignedDuration::ZERO,
+        };
+        attention(report, &now)
+    }
+
+    /// The overview's selected item of what wants a look, if one is.
+    pub fn selected_attention(&self) -> Option<Attention> {
+        if self.page != Page::Overview {
+            return None;
+        }
+        self.attention().into_iter().nth(self.cursor)
+    }
+
+    /// The selected account of a provider page.
+    pub fn selected_account(&self) -> Option<&AccountView> {
+        self.accounts().get(self.cursor).copied()
+    }
+
     /// How many rows the open page has to select.
     pub fn rows(&self) -> usize {
         match self.page {
-            Page::Overview => self.data.providers().len(),
+            Page::Overview => self.attention().len() + self.data.providers().len(),
             Page::Provider(_) => self.accounts().len(),
             Page::Requests => self.feed().len(),
             Page::Agents => self.data.agents.value.as_ref().map_or(0, Vec::len),
@@ -514,13 +546,26 @@ impl App {
         self.go(pages[at])
     }
 
+    /// Moves the selection by `by` rows; past the first or last row, or on
+    /// a page without rows, the view scrolls instead.
     fn step(&mut self, by: isize) {
         let rows = self.rows();
-        if rows == 0 {
-            self.scroll = self.scroll.saturating_add_signed(by as i16);
-            return;
+        if rows > 0 {
+            let to = (self.cursor as isize + by).clamp(0, rows as isize - 1) as usize;
+            if to != self.cursor {
+                self.cursor = to;
+                self.follow = true;
+                return;
+            }
         }
-        self.cursor = (self.cursor as isize + by).clamp(0, rows as isize - 1) as usize;
+        self.scroll_by(by);
+    }
+
+    /// Scrolls the view, leaving the selection where it is.
+    fn scroll_by(&mut self, by: isize) {
+        let by = by.clamp(i16::MIN.into(), i16::MAX.into()) as i16;
+        self.scroll = self.scroll.saturating_add_signed(by);
+        self.follow = false;
     }
 
     /// What a key does.
@@ -565,11 +610,13 @@ impl App {
         }
         match key.code {
             KeyCode::Char('q') => self.quit = true,
+            // Esc backs out, and never quits: a filter first, then the page.
             KeyCode::Esc if self.page == Page::Requests && !self.filter.is_empty() => {
                 self.filter.clear();
                 self.clamp();
             }
-            KeyCode::Esc => self.quit = true,
+            KeyCode::Esc if self.page != Page::Overview => return self.go(Page::Overview),
+            KeyCode::Esc => {}
             KeyCode::Char('?') => self.help = true,
             KeyCode::Char('r') if ctrl => {
                 let mut cmds = self.load();
@@ -592,12 +639,13 @@ impl App {
             KeyCode::Home | KeyCode::Char('g') => {
                 self.cursor = 0;
                 self.scroll = 0;
+                self.follow = false;
             }
+            // The last row, and the page's bottom, which may lie below it.
             KeyCode::End | KeyCode::Char('G') => {
                 self.cursor = self.rows().saturating_sub(1);
-                if self.rows() == 0 {
-                    self.scroll = u16::MAX;
-                }
+                self.scroll = u16::MAX;
+                self.follow = false;
             }
             KeyCode::Char('b') => {
                 let shown = self.sidebar_shown(self.width);
@@ -610,9 +658,13 @@ impl App {
 
     fn page_key(&mut self, key: KeyEvent) -> Vec<Cmd> {
         match (self.page, key.code) {
-            (Page::Overview, KeyCode::Enter) => {
-                if let Some(p) = self.data.providers().get(self.cursor) {
-                    return self.go(Page::Provider(*p));
+            (Page::Overview, KeyCode::Enter) => return self.open_overview_row(),
+            (Page::Overview, KeyCode::Char('R')) => {
+                if let Some(item) = self.selected_attention()
+                    && item.remedy == Remedy::Redeem
+                    && let Some(account) = self.data.account(&item.account).cloned()
+                {
+                    self.ask_redeem(&account);
                 }
             }
             (Page::Provider(_), _) => return self.account_key(key.code),
@@ -665,6 +717,44 @@ impl App {
         Vec::new()
     }
 
+    /// Opens what the overview's selected row is about: an item that wants
+    /// a look opens its provider's page with its account selected; a pool
+    /// opens its page.
+    fn open_overview_row(&mut self) -> Vec<Cmd> {
+        let items = self.attention();
+        if let Some(item) = items.get(self.cursor) {
+            let cmds = self.go(Page::Provider(item.provider));
+            if let Some(i) = self.accounts().iter().position(|a| a.id == item.account) {
+                self.cursor = i;
+                self.follow = true;
+            }
+            return cmds;
+        }
+        match self.data.providers().get(self.cursor - items.len()) {
+            Some(p) => self.go(Page::Provider(*p)),
+            None => Vec::new(),
+        }
+    }
+
+    /// Asks before redeeming one of `account`'s limit resets; says so when
+    /// it holds none.
+    fn ask_redeem(&mut self, account: &AccountView) {
+        let held = held_resets(account, self.now());
+        if held == 0 {
+            self.toast(format!("{} holds no limit reset", account.name), Tone::Warn);
+            return;
+        }
+        self.modal = Some(Modal::Confirm {
+            title: format!("Redeem a limit reset on {}?", account.name),
+            body: format!(
+                "It resets the account's usage windows at once and spends one of the {held} it holds; \
+                 the one closest to expiring goes first."
+            ),
+            yes: "Redeem".into(),
+            action: Action::Redeem(account.id.clone()),
+        });
+    }
+
     fn account_key(&mut self, code: KeyCode) -> Vec<Cmd> {
         let accounts = self.accounts();
         let Some(account) = accounts.get(self.cursor).map(|a| (*a).clone()) else {
@@ -688,20 +778,7 @@ impl App {
             KeyCode::Char('a') if pinned => Action::UnpinAll,
             KeyCode::Char('c') => Action::Check(account.id.clone()),
             KeyCode::Char('R') => {
-                let held = held_resets(&account, self.now());
-                if held == 0 {
-                    self.toast(format!("{} holds no limit reset", account.name), Tone::Warn);
-                    return Vec::new();
-                }
-                self.modal = Some(Modal::Confirm {
-                    title: format!("Redeem a limit reset on {}?", account.name),
-                    body: format!(
-                        "It resets the account's usage windows at once and spends one of the {held} it holds; \
-                         the one closest to expiring goes first."
-                    ),
-                    yes: "Redeem".into(),
-                    action: Action::Redeem(account.id.clone()),
-                });
+                self.ask_redeem(&account);
                 return Vec::new();
             }
             _ => return Vec::new(),
@@ -749,7 +826,7 @@ impl App {
         };
         let current = view.settings.live.get(live.name);
         match (live.kind, current) {
-            (LiveKind::Switch, Some(slopmax_client::api::settings::LiveValue::Switch(on))) => {
+            (LiveKind::Switch, Some(LiveValue::Switch(on))) => {
                 let patch = LivePatch::parse(live.name, if on { "off" } else { "on" });
                 match patch {
                     Ok(patch) => vec![Cmd::Act(Action::Settings(patch))],
@@ -785,10 +862,11 @@ impl App {
         let Some(modal) = self.modal.take() else {
             return Vec::new();
         };
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match modal {
-            Modal::Confirm { action, .. }
-                if matches!(key.code, KeyCode::Char('y') | KeyCode::Enter) =>
-            {
+            // Every change asked first can't be taken back, so only `y`
+            // makes it: Enter, pressed out of habit, doesn't.
+            Modal::Confirm { action, .. } if key.code == KeyCode::Char('y') => {
                 vec![Cmd::Act(action)]
             }
             Modal::Confirm { .. } if matches!(key.code, KeyCode::Char('n') | KeyCode::Esc) => {
@@ -832,7 +910,7 @@ impl App {
                     KeyCode::Backspace => {
                         value.pop();
                     }
-                    KeyCode::Char(c) => value.push(c),
+                    KeyCode::Char(c) if !ctrl => value.push(c),
                     _ => {}
                 }
                 self.modal = Some(Modal::Input {
@@ -843,7 +921,14 @@ impl App {
                 });
                 Vec::new()
             }
-            Modal::Secret { .. } | Modal::Request(_) => Vec::new(),
+            Modal::Secret { title, text, note } if key.code == KeyCode::Char('c') => {
+                let cmds = vec![Cmd::Copy(text.clone())];
+                self.toast("Sent the key to the terminal's clipboard", Tone::Good);
+                self.modal = Some(Modal::Secret { title, text, note });
+                cmds
+            }
+            Modal::Secret { .. } if matches!(key.code, KeyCode::Esc | KeyCode::Enter) => Vec::new(),
+            Modal::Request(_) => Vec::new(),
             other => {
                 self.modal = Some(other);
                 Vec::new()
@@ -891,12 +976,22 @@ impl App {
     }
 
     /// What the mouse does: a click opens a page or selects a row, and the
-    /// wheel moves the selection or scrolls.
+    /// wheel scrolls. With help up a click closes it, and with a dialog up
+    /// the page underneath takes nothing.
     pub fn mouse(&mut self, event: MouseEvent) -> Vec<Cmd> {
+        if self.help {
+            if matches!(event.kind, MouseEventKind::Down(_)) {
+                self.help = false;
+            }
+            return Vec::new();
+        }
+        if self.modal.is_some() {
+            return Vec::new();
+        }
         match event.kind {
-            MouseEventKind::ScrollDown => self.step(if self.rows() == 0 { 3 } else { 1 }),
-            MouseEventKind::ScrollUp => self.step(if self.rows() == 0 { -3 } else { -1 }),
-            MouseEventKind::Down(MouseButton::Left) if self.modal.is_none() => {
+            MouseEventKind::ScrollDown => self.scroll_by(3),
+            MouseEventKind::ScrollUp => self.scroll_by(-3),
+            MouseEventKind::Down(MouseButton::Left) => {
                 let at = Position::new(event.column, event.row);
                 let hit = self
                     .hits
@@ -916,6 +1011,7 @@ impl App {
                             return self.page_key(KeyEvent::from(KeyCode::Enter));
                         }
                         self.cursor = i.min(self.rows().saturating_sub(1));
+                        self.follow = true;
                     }
                     Some(Hit::Range(range)) => {
                         if self.page == Page::Requests {
@@ -946,7 +1042,7 @@ fn next<T: Copy + PartialEq>(items: &[T], current: T) -> T {
 
 /// How many limit resets an account can still redeem: those listed, else
 /// the count its usage reports.
-pub fn held_resets(account: &AccountView, now: slopmax_client::api::Instant) -> u64 {
+pub fn held_resets(account: &AccountView, now: Instant) -> u64 {
     if !account.resets.is_empty() {
         return account.unexpired_resets(now).count() as u64;
     }
@@ -954,7 +1050,7 @@ pub fn held_resets(account: &AccountView, now: slopmax_client::api::Instant) -> 
         .notes
         .iter()
         .find_map(|n| match n {
-            slopmax_client::api::report::Note::Resets { count } => Some(*count),
+            Note::Resets { count } => Some(*count),
             _ => None,
         })
         .unwrap_or(0)

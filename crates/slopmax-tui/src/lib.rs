@@ -10,6 +10,7 @@
 //! timer is the clock's, once a second, for countdowns.
 
 mod app;
+mod attention;
 mod data;
 mod format;
 mod fx;
@@ -21,12 +22,12 @@ use std::future::poll_fn;
 use std::pin::Pin;
 use std::time::{Duration, Instant as Clock};
 
-use crossterm::event::{Event as Input, EventStream};
+use crossterm::event::{Event as Input, EventStream, MouseEventKind};
 use futures_core::Stream;
 use slopmax_client::Client;
 use tokio::sync::mpsc;
 
-use crate::app::{App, Cmd};
+use crate::app::{App, Cmd, Modal};
 use crate::data::{Msg, act, fetch, follow};
 use crate::format::Now;
 use crate::fx::Effects;
@@ -65,22 +66,39 @@ async fn event_loop(
     clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut app = App::new(options.hub);
     let mut fx = Effects::default();
-    let run = |cmds: Vec<Cmd>| {
+    let run = |cmds: Vec<Cmd>, screen: &mut Screen| {
         for cmd in cmds {
             match cmd {
                 Cmd::Fetch(what) => fetch(&client, what, &tx),
                 Cmd::Act(action) => act(&client, action, &tx),
+                Cmd::Copy(text) => screen.copy(&text),
             }
         }
     };
-    run(app.load());
+    run(app.load(), &mut *screen);
     let mut terminated = terminated();
+    // Whether anything may have changed on screen since the last frame.
+    let mut changed = true;
     let result = loop {
-        fx.frame();
-        let now = Now::local();
-        if let Err(e) = screen.draw(|frame| ui::draw(frame, &mut app, theme, &now, Some(&mut fx))) {
+        // A panic in a fetch has given the terminal back already.
+        if terminal::panicked() {
+            break Err(anyhow::anyhow!("slopmax tui stopped: a task panicked"));
+        }
+        // The mouse is the terminal's while a secret shows, so it can be
+        // selected and copied.
+        let secret = matches!(app.modal, Some(Modal::Secret { .. }));
+        if let Err(e) = screen.mouse(!secret) {
             break Err(e.into());
         }
+        if changed {
+            fx.frame();
+            let now = Now::local();
+            let drawn = screen.draw(|frame| ui::draw(frame, &mut app, theme, &now, Some(&mut fx)));
+            if let Err(e) = drawn {
+                break Err(e.into());
+            }
+        }
+        changed = true;
         let frame = async {
             if fx.running() {
                 tokio::time::sleep(Duration::from_millis(16)).await;
@@ -91,6 +109,11 @@ async fn event_loop(
         let cmds = tokio::select! {
             event = poll_fn(|cx| Pin::new(&mut input).poll_next(cx)) => match event {
                 Some(Ok(Input::Key(key))) => app.key(key),
+                // Moving the mouse changes nothing on screen.
+                Some(Ok(Input::Mouse(mouse))) if mouse.kind == MouseEventKind::Moved => {
+                    changed = false;
+                    Vec::new()
+                }
                 Some(Ok(Input::Mouse(mouse))) => app.mouse(mouse),
                 Some(Ok(Input::Paste(text))) => {
                     app.paste(&text);
@@ -112,7 +135,7 @@ async fn event_loop(
             () = frame => Vec::new(),
             () = &mut terminated => break Ok(()),
         };
-        run(cmds);
+        run(cmds, &mut *screen);
         if app.quit {
             break Ok(());
         }

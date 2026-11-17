@@ -5,9 +5,8 @@
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use slopmax_client::api::pools::{AccountDetail, PoolDetail, Trend};
-use slopmax_client::api::report::tone_of_use;
-use slopmax_client::api::report::{AccountView, Condition, Note, Report, Window};
+use slopmax_client::api::pools::{AccountDetail, Point, PoolDetail, Trend, WindowSpend};
+use slopmax_client::api::report::{AccountView, Condition, Note, Report, Window, tone_of_use};
 use slopmax_client::api::{Instant, Provider, Span as WindowSpan, Tone};
 
 use super::widgets::{Flow, Segment, braille_lines, dot, segmented_bar, usage_bar};
@@ -163,10 +162,11 @@ pub fn next_line(report: &Report, provider: Provider, now: &Now) -> (String, Ton
             Tone::Muted,
         );
     }
+    // A limit that has passed holds nothing back.
     let back = accounts
         .iter()
         .filter(|a| !a.disabled)
-        .filter_map(|a| match a.condition {
+        .filter_map(|a| match a.condition.at(now.at) {
             Condition::Limited { until } => Some((until, a.name.as_str())),
             _ => None,
         })
@@ -331,12 +331,15 @@ fn forecast(flow: &mut Flow<'_>, trend: &Trend, report: &Report, now: &Now) {
         width: chart_w.min(area.width.saturating_sub(6)),
         ..area
     };
-    if area.height > 0 {
-        flow.buf
-            .set_string(area.x - 6, area.y, "100%", theme.muted());
-        flow.buf
-            .set_string(area.x - 6, area.bottom() - 1, "  0%", theme.muted());
+    // Past the canvas's end there is nothing to draw on.
+    if area.height == 0 || area.width == 0 {
+        flow.gap();
+        return;
     }
+    flow.buf
+        .set_string(area.x - 6, area.y, "100%", theme.muted());
+    flow.buf
+        .set_string(area.x - 6, area.bottom() - 1, "  0%", theme.muted());
     let (from, to) = {
         let first = trend
             .recorded
@@ -350,10 +353,7 @@ fn forecast(flow: &mut Flow<'_>, trend: &Trend, report: &Report, now: &Now) {
             .map(|p| p.at);
         (first, last)
     };
-    let points = |list: &[slopmax_client::api::pools::Point],
-                  offset: usize,
-                  all: usize|
-     -> Vec<(f64, f64)> {
+    let points = |list: &[Point], offset: usize, all: usize| -> Vec<(f64, f64)> {
         list.iter()
             .enumerate()
             .map(|(i, p)| {
@@ -566,7 +566,7 @@ fn window_row(
     flow: &mut Flow<'_>,
     account: &AccountView,
     window: &Window,
-    spend: Option<&slopmax_client::api::pools::WindowSpend>,
+    spend: Option<&WindowSpend>,
     now: &Now,
 ) {
     let theme = flow.theme;

@@ -28,7 +28,7 @@ The command line is rebuilt on [usage](https://usage.jdx.dev) and regrouped: thi
 - A command line that doesn't parse says so as before, with the possible values and a suggestion, and exits 2; a value outside a flag's choices (`--by week`, `--strategy sideways`) is now such an error.
 - Shell completion completes every subcommand, flag, and value, the accounts and key names included, for bash, zsh, fish, nushell, PowerShell, and elvish; `slopmax completion <shell> --install` puts the script where the shell looks.
 - `--help` shows examples, the environment variables slopmax reads, and what each exit code means.
-- `slopmax` alone at a terminal opens the terminal UI instead of printing the accounts' standing; piped or redirected, it prints the standing as before, and `slopmax status` always does.
+- `slopmax` alone at a terminal starts the proxy if it isn't running (as `slopmax dashboard` does) and opens the terminal UI, instead of printing the accounts' standing; piped or redirected, it prints the standing as before, and `slopmax status` always does.
 
 ### Added
 

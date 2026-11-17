@@ -1908,6 +1908,7 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
+ "signal-hook",
  "slopmax-client",
  "slopmax-common",
  "tachyonfx",

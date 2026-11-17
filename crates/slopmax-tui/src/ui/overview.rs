@@ -2,37 +2,37 @@
 //! subscription's pool at a glance, keys and endpoints, today so far, and
 //! the latest requests.
 
+use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use slopmax_client::api::ledger::History;
+use slopmax_client::api::ledger::{History, HistoryRange, Totals};
 use slopmax_client::api::report::{Condition, Report};
-use slopmax_client::api::{NoticeKind, Provider, Tone};
+use slopmax_client::api::{Provider, Tone};
 
 use super::provider::{next_line, pool_lines, pool_row};
 use super::requests::feed_row;
 use super::usage::{cache_note, hourly};
-use super::widgets::{Flow, Stat, axis_labels, change, column_chart, dot, stats};
+use super::widgets::{Flow, Stat, axis_labels, change, column_chart, dot, stats, wrap};
 use crate::app::{App, Hit, held_resets};
+use crate::attention::{Remedy, attention};
+use crate::data::Link;
 use crate::format::{self, Now};
 
-/// How the accounts stand: the headline, what keeps the rest, and its tone.
-pub fn standing(report: &Report) -> (String, Option<String>, Tone) {
+/// How the accounts stand: the headline, what keeps the rest, and its
+/// tone. A limit that has passed counts as ready, as everywhere else.
+pub fn standing(report: &Report, now: &Now) -> (String, Option<String>, Tone) {
     let enabled: Vec<_> = report.accounts.iter().filter(|a| !a.disabled).collect();
-    let ready = enabled
+    let conditions: Vec<Condition> = enabled.iter().map(|a| a.condition.at(now.at)).collect();
+    let ready = conditions
         .iter()
-        .filter(|a| matches!(a.condition, Condition::Ready | Condition::Active { .. }))
+        .filter(|c| matches!(c, Condition::Ready | Condition::Active { .. }))
         .count();
-    let limited = enabled
+    let limited = conditions
         .iter()
-        .filter(|a| {
-            matches!(
-                a.condition,
-                Condition::Limited { .. } | Condition::Throttled { .. }
-            )
-        })
+        .filter(|c| matches!(c, Condition::Limited { .. } | Condition::Throttled { .. }))
         .count();
-    let signed_out = enabled
+    let signed_out = conditions
         .iter()
-        .filter(|a| matches!(a.condition, Condition::SignInNeeded { .. }))
+        .filter(|c| matches!(c, Condition::SignInNeeded { .. }))
         .count();
     let off = report.accounts.len() - enabled.len();
     let headline = match (enabled.len(), ready) {
@@ -65,150 +65,6 @@ pub fn standing(report: &Report) -> (String, Option<String>, Tone) {
     (headline, detail, tone)
 }
 
-/// Something about an account that wants a look, and what to do about it.
-pub struct Attention {
-    pub provider: Provider,
-    pub text: String,
-    pub tone: Tone,
-    /// The key that does something about it, and what.
-    pub remedy: (&'static str, &'static str),
-}
-
-/// What wants a look, most pressing first: an account signed out, one
-/// limited that holds a limit reset, a window running out before it
-/// resets, a limit reset soon to expire, then the report's nudges. An
-/// account merely limited is slopmax's to work around.
-pub fn attention(report: &Report, now: &Now) -> Vec<Attention> {
-    let mut found = Vec::new();
-    let three_days = slopmax_common::time::SignedDuration::from_hours(72);
-    for account in report.accounts.iter().filter(|a| !a.disabled) {
-        let held = held_resets(account, now.at);
-        let item = |text: String, tone: Tone, remedy| Attention {
-            provider: account.provider,
-            text,
-            tone,
-            remedy,
-        };
-        match account.condition.at(now.at) {
-            Condition::SignInNeeded { .. } => {
-                found.push(item(
-                    format!("{} needs signing in again", account.name),
-                    Tone::Bad,
-                    ("slopmax login", account.provider.as_str()),
-                ));
-                continue;
-            }
-            Condition::Limited { until } if held > 0 => found.push(item(
-                format!(
-                    "{} is limited until {}, and holds {}",
-                    account.name,
-                    now.clock(until),
-                    format::count(held, "limit reset")
-                ),
-                Tone::Warn,
-                ("R", "redeem"),
-            )),
-            _ => {}
-        }
-        for window in account.windows.iter().filter(|w| w.model.is_none()) {
-            if let Some((text, Tone::Warn)) = format::pace(window, now) {
-                let title = format::span_title(window.span).to_lowercase();
-                found.push(item(
-                    format!(
-                        "{}'s {title} window {}",
-                        account.name,
-                        lowercase_first(&text)
-                    ),
-                    Tone::Warn,
-                    ("⏎", "show"),
-                ));
-            }
-        }
-        let expiring = account
-            .unexpired_resets(now.at)
-            .filter_map(|r| r.expires_at)
-            .find(|at| at.duration_since(now.at) < three_days);
-        if let Some(at) = expiring {
-            found.push(item(
-                format!(
-                    "A limit reset on {} expires in {} · {}",
-                    account.name,
-                    now.until(at),
-                    now.clock(at)
-                ),
-                Tone::Warn,
-                ("R", "redeem"),
-            ));
-        }
-    }
-    for nudge in &report.nudges {
-        let Some(account) = report.accounts.iter().find(|a| {
-            nudge.account.as_deref() == Some(a.name.as_str())
-                && nudge.provider.is_none_or(|p| p == a.provider)
-        }) else {
-            continue;
-        };
-        let already = found.iter().any(|f| {
-            f.provider == account.provider && f.text.contains(&account.name) && f.remedy.0 == "R"
-        });
-        match nudge.kind {
-            NoticeKind::ResetExpiring if !already => found.push(Attention {
-                provider: account.provider,
-                text: first_sentence(&nudge.message),
-                tone: Tone::Warn,
-                remedy: ("R", "redeem"),
-            }),
-            NoticeKind::QuotaUnused => {
-                let at = nudge.until.unwrap_or(now.at);
-                let (period, unused) = match account.long_window() {
-                    Some(w) => (
-                        if w.span == slopmax_client::api::Span::Month {
-                            "month"
-                        } else {
-                            "week"
-                        },
-                        100.0 - w.used_at(now.at).clamp(0.0, 100.0),
-                    ),
-                    None => ("week", 0.0),
-                };
-                let worth = match nudge.worth {
-                    Some(worth) if worth >= 0.5 => format!(", about ${worth:.0} of its plan"),
-                    _ => String::new(),
-                };
-                found.push(Attention {
-                    provider: account.provider,
-                    text: format!(
-                        "{}'s {period} resets in {} · {} with {unused:.0}% of it unused{worth}",
-                        account.name,
-                        now.until(at),
-                        now.clock(at)
-                    ),
-                    tone: Tone::Warn,
-                    remedy: ("⏎", "show"),
-                });
-            }
-            _ => {}
-        }
-    }
-    found.sort_by_key(|f| f.tone != Tone::Bad);
-    found
-}
-
-fn lowercase_first(text: &str) -> String {
-    let mut chars = text.chars();
-    match chars.next() {
-        Some(first) => first.to_lowercase().chain(chars).collect(),
-        None => String::new(),
-    }
-}
-
-/// A notice's first sentence, without its full stop or the marks around a
-/// command.
-fn first_sentence(message: &str) -> String {
-    let first = message.split(". ").next().unwrap_or(message);
-    first.trim_end_matches('.').replace('`', "")
-}
-
 pub fn draw(app: &App, flow: &mut Flow<'_>, now: &Now) {
     let theme = flow.theme;
     let Some(report) = &app.data.report else {
@@ -217,7 +73,7 @@ pub fn draw(app: &App, flow: &mut Flow<'_>, now: &Now) {
             theme.strong(),
         )));
         let detail = match &app.data.link {
-            crate::data::Link::Lost(why) => format!("It didn't answer: {why}"),
+            Link::Lost(why) => format!("It didn't answer: {why}"),
             _ => "The accounts show as soon as it answers.".into(),
         };
         flow.wrapped(&detail, theme.muted(), 0);
@@ -250,7 +106,7 @@ pub fn draw(app: &App, flow: &mut Flow<'_>, now: &Now) {
         ]));
         flow.gap();
     }
-    let (headline, detail, tone) = standing(report);
+    let (headline, detail, tone) = standing(report, now);
     let banked: u64 = report.accounts.iter().map(|a| held_resets(a, now.at)).sum();
     let mut detail: Vec<String> = detail.into_iter().collect();
     if banked > 0 {
@@ -288,36 +144,62 @@ pub fn draw(app: &App, flow: &mut Flow<'_>, now: &Now) {
     flow.split_line(Line::from(left), routing);
     flow.gap();
 
+    // What wants a look comes first, a row each, then the providers.
     let items = attention(report, now);
+    let first = items.len();
     if !items.is_empty() {
         let count = Line::from(Span::styled(
             items.len().to_string(),
             theme.tone(Tone::Warn),
         ));
         flow.section("Needs attention", Some(count));
-        for item in &items {
-            let remedy = Line::from(vec![
-                Span::styled(item.remedy.0, theme.strong()),
-                Span::styled(format!(" {}", item.remedy.1), theme.muted()),
-            ]);
+        for (row, item) in items.iter().enumerate() {
+            let top = flow.y;
+            let selected = app.cursor == row;
+            // The key that does something about it; opening it is ⏎.
+            let remedy = match item.remedy {
+                Remedy::Redeem => Line::from(vec![
+                    Span::styled("R", theme.strong()),
+                    Span::styled(" redeem", theme.muted()),
+                ]),
+                Remedy::Show => Line::from(vec![
+                    Span::styled("⏎", theme.strong()),
+                    Span::styled(" show", theme.muted()),
+                ]),
+                Remedy::SignIn => Line::from(Span::styled(
+                    format!("slopmax login {}", item.provider.as_str()),
+                    theme.accent(),
+                )),
+            };
             // Long items wrap beneath themselves, the remedy on the first line.
             let room = flow.width.saturating_sub(remedy.width() as u16 + 5) as usize;
-            for (i, text) in super::widgets::wrap(&item.text, room)
-                .into_iter()
-                .enumerate()
-            {
+            for (i, text) in wrap(&item.text, room).into_iter().enumerate() {
+                let marker = if selected && i == 0 {
+                    Span::styled("▌", theme.accent())
+                } else {
+                    Span::raw(" ")
+                };
                 let lead = if i == 0 {
                     dot(theme, item.tone)
                 } else {
                     Span::raw(" ")
                 };
-                let line = Line::from(vec![Span::raw(" "), lead, Span::raw(" "), Span::raw(text)]);
+                let text = if selected {
+                    Span::styled(text, theme.strong())
+                } else {
+                    Span::raw(text)
+                };
+                let line = Line::from(vec![marker, lead, Span::raw(" "), text]);
                 if i == 0 {
                     flow.split_line(line, remedy.clone());
                 } else {
                     flow.line(line);
                 }
             }
+            flow.hit(
+                Rect::new(flow.x, top, flow.width, flow.y - top),
+                Hit::Row(row),
+            );
         }
         flow.gap();
     }
@@ -349,7 +231,7 @@ pub fn draw(app: &App, flow: &mut Flow<'_>, now: &Now) {
                         )
                 })
                 .count();
-            let selected = app.cursor == i;
+            let selected = app.cursor == first + i;
             let marker = if selected {
                 Span::styled("▌", theme.accent())
             } else {
@@ -380,8 +262,8 @@ pub fn draw(app: &App, flow: &mut Flow<'_>, now: &Now) {
             let (text, tone) = next_line(report, provider, now);
             flow.wrapped(&text, theme.tone(tone), 3);
             flow.gap();
-            let rect = ratatui::layout::Rect::new(flow.x, top, flow.width, flow.y - top);
-            flow.hit(rect, Hit::Row(i));
+            let rect = Rect::new(flow.x, top, flow.width, flow.y - top);
+            flow.hit(rect, Hit::Row(first + i));
         }
     }
 
@@ -395,7 +277,7 @@ pub fn draw(app: &App, flow: &mut Flow<'_>, now: &Now) {
         flow.section("Keys and endpoints", None);
         for (i, provider) in metered {
             let top = flow.y;
-            let selected = app.cursor == i;
+            let selected = app.cursor == first + i;
             let mut spans = vec![
                 if selected {
                     Span::styled("▌", theme.accent())
@@ -410,18 +292,13 @@ pub fn draw(app: &App, flow: &mut Flow<'_>, now: &Now) {
                 spans.push(Span::raw(format!(" {}   ", account.name)));
             }
             flow.line(Line::from(spans));
-            flow.hit(
-                ratatui::layout::Rect::new(flow.x, top, flow.width, 1),
-                Hit::Row(i),
-            );
+            flow.hit(Rect::new(flow.x, top, flow.width, 1), Hit::Row(first + i));
         }
         flow.gap();
     }
 
     flow.section("Today", None);
-    let today = app
-        .data
-        .history(slopmax_client::api::ledger::HistoryRange::Today);
+    let today = app.data.history(HistoryRange::Today);
     match &today.value {
         None if today.error.is_some() => {
             flow.wrapped(
@@ -467,9 +344,7 @@ pub fn draw(app: &App, flow: &mut Flow<'_>, now: &Now) {
 
 fn today_stats(history: &History) -> Vec<Stat> {
     let total = &history.total;
-    let tokens = |t: &slopmax_client::api::ledger::Totals| {
-        (t.input + t.output + t.cache_read + t.cache_write) as f64
-    };
+    let tokens = |t: &Totals| (t.input + t.output + t.cache_read + t.cache_write) as f64;
     let previous = history.previous.as_ref().map(|p| &p.total);
     vec![
         Stat {
@@ -525,16 +400,16 @@ fn hours_chart(flow: &mut Flow<'_>, history: &History) {
     flow.line(Line::from(Span::styled(axis, theme.muted())));
 }
 
-/// The latest requests, from the feed.
+/// Today's latest requests, whatever the Requests page is filtered to.
 fn recent(app: &App, flow: &mut Flow<'_>, now: &Now) {
     let theme = flow.theme;
     flow.line(Line::from(Span::styled("Latest requests", theme.strong())));
     let rows = app
         .data
-        .requests
+        .latest
         .value
         .as_ref()
-        .map(|p| p.rows.iter().take(6).collect::<Vec<_>>())
+        .map(|p| p.rows.iter().collect::<Vec<_>>())
         .unwrap_or_default();
     if rows.is_empty() {
         flow.line(Line::from(Span::styled("None yet", theme.muted())));

@@ -1,16 +1,17 @@
 //! Every page drawn from the contract's fixtures (the daemon's real
 //! answers) at a roomy 120×36 and a classic 80×24, held as snapshots.
 
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use slopmax_client::api::AgentId;
-use slopmax_client::api::ledger::HistoryRange;
+use slopmax_client::api::ledger::{History, HistoryRange, RequestPage};
 use slopmax_client::api::report::{AgentWiring, Finding, Level, Section};
+use slopmax_client::api::{AgentId, Provider};
 use slopmax_common::time::SignedDuration;
 
 use super::draw;
-use crate::app::{App, Modal, Page};
-use crate::data::{Action, Link, range_index};
+use crate::app::{App, Hit, Input, Modal, Page};
+use crate::data::{LATEST, Link, range_index};
 use crate::format::Now;
 use crate::theme::Theme;
 
@@ -41,17 +42,19 @@ pub fn app(page: Page) -> App {
     data.report = Some(fixture("system.status.ok"));
     let at = std::time::Instant::now();
     for range in [HistoryRange::Today, HistoryRange::Week, HistoryRange::Month] {
-        let mut history: slopmax_client::api::ledger::History = fixture("usage.history.ok");
+        let mut history: History = fixture("usage.history.ok");
         history.range = range;
         data.history[range_index(range)].finish(Ok(history), at);
+        data.machines[range_index(range)].finish(Ok(fixture("usage.summary.machine.ok")), at);
     }
     data.pools
-        .entry(slopmax_client::api::Provider::Claude)
+        .entry(Provider::Claude)
         .or_default()
         .finish(Ok(fixture("usage.pool.ok")), at);
     data.requests.finish(Ok(fixture("usage.requests.ok")), at);
-    data.machines
-        .finish(Ok(fixture("usage.summary.machine.ok")), at);
+    let mut latest: RequestPage = fixture("usage.requests.ok");
+    latest.rows.truncate(LATEST as usize);
+    data.latest.finish(Ok(latest), at);
     data.settings.finish(Ok(fixture("config.settings.ok")), at);
     data.keys.finish(Ok(fixture("config.keys.ok")), at);
     data.tailnet.finish(Ok(fixture("tailnet.view.ok")), at);
@@ -145,7 +148,6 @@ pub fn render(app: &mut App, width: u16, height: u16) -> String {
 }
 
 fn pages() -> Vec<(&'static str, Page)> {
-    use slopmax_client::api::Provider;
     vec![
         ("overview", Page::Overview),
         ("claude", Page::Provider(Provider::Claude)),
@@ -161,39 +163,116 @@ fn pages() -> Vec<(&'static str, Page)> {
     ]
 }
 
+/// Checks every snapshot before failing, so one run shows every change.
+fn snapshots(shots: Vec<(String, String)>) {
+    let failed: Vec<String> = shots
+        .into_iter()
+        .filter_map(|(name, screen)| {
+            let checked =
+                std::panic::catch_unwind(|| insta::assert_snapshot!(name.clone(), screen));
+            checked.is_err().then_some(name)
+        })
+        .collect();
+    assert!(failed.is_empty(), "snapshots that changed: {failed:?}");
+}
+
 #[test]
 fn every_page_at_120_by_36() {
-    for (name, page) in pages() {
-        let mut app = app(page);
-        insta::assert_snapshot!(format!("{name}_120x36"), render(&mut app, 120, 36));
-    }
+    let shots = pages()
+        .into_iter()
+        .map(|(name, page)| (format!("{name}_120x36"), render(&mut app(page), 120, 36)))
+        .collect();
+    snapshots(shots);
 }
 
 #[test]
 fn every_page_at_80_by_24() {
-    for (name, page) in pages() {
-        let mut app = app(page);
-        insta::assert_snapshot!(format!("{name}_80x24"), render(&mut app, 80, 24));
-    }
+    let shots = pages()
+        .into_iter()
+        .map(|(name, page)| (format!("{name}_80x24"), render(&mut app(page), 80, 24)))
+        .collect();
+    snapshots(shots);
+}
+
+fn press(app: &mut App, code: KeyCode) {
+    app.key(KeyEvent::from(code));
 }
 
 #[test]
 fn help_and_dialogs_sit_over_the_page() {
+    let mut shots = Vec::new();
     let mut app = app(Page::Overview);
-    app.help = true;
-    insta::assert_snapshot!("help_80x24", render(&mut app, 80, 24));
-    let mut app = self::app(Page::Provider(slopmax_client::api::Provider::Codex));
-    app.modal = Some(Modal::Confirm {
-        title: "Redeem a limit reset on codex@example.com?".into(),
-        body: "It resets the account's usage windows at once and spends one of the 1 it holds."
-            .into(),
-        yes: "Redeem".into(),
-        action: Action::Redeem("codex-fbfb76d8".into()),
-    });
-    insta::assert_snapshot!("confirm_80x24", render(&mut app, 80, 24));
+    press(&mut app, KeyCode::Char('?'));
+    shots.push(("help_80x24".into(), render(&mut app, 80, 24)));
+    // The redeem dialog as `R` brings it up.
+    let mut app = self::app(Page::Provider(Provider::Codex));
+    press(&mut app, KeyCode::Char('R'));
+    assert!(matches!(app.modal, Some(Modal::Confirm { .. })));
+    shots.push(("confirm_80x24".into(), render(&mut app, 80, 24)));
     let mut app = self::app(Page::Settings);
-    app.modal = Some(Modal::Strategy { selected: 1 });
-    insta::assert_snapshot!("strategy_120x36", render(&mut app, 120, 36));
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Down);
+    shots.push(("strategy_120x36".into(), render(&mut app, 120, 36)));
+    // Too short for each strategy's summary: they go one a line, inside
+    // the border.
+    shots.push(("strategy_80x13".into(), render(&mut app, 80, 13)));
+    // A new key: shown whole, however long.
+    let mut app = self::app(Page::Access);
+    app.modal = Some(Modal::Secret {
+        title: "The key \"ci\"".into(),
+        text: format!("sk-slopmax-{}", "0123456789abcdef".repeat(6)),
+        note: "Shown this once. Clients present it as a bearer token or x-api-key.".into(),
+    });
+    shots.push(("secret_80x24".into(), render(&mut app, 80, 24)));
+    // A long name keeps its end, where the cursor is, in view.
+    let mut app = self::app(Page::Access);
+    press(&mut app, KeyCode::Char('a'));
+    for c in "a-key-name-long-enough-to-run-past-the-edge-of-the-dialog-box".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    shots.push(("input_80x24".into(), render(&mut app, 80, 24)));
+    snapshots(shots);
+}
+
+#[test]
+fn a_long_confirmation_stays_inside_its_dialog() {
+    let mut app = app(Page::Overview);
+    app.modal = Some(Modal::Confirm {
+        title: "Turn it off?".into(),
+        body: "word ".repeat(400),
+        yes: "Turn off".into(),
+        action: crate::data::Action::Refresh,
+    });
+    // Drawing past the screen would panic; the keys stay on the last line.
+    let screen = render(&mut app, 60, 14);
+    assert!(screen.contains("y Turn off"), "{screen}");
+}
+
+#[test]
+fn a_long_value_keeps_the_cursor_in_view() {
+    let mut app = app(Page::Access);
+    app.modal = Some(Modal::Input {
+        title: "New client key".into(),
+        hint: "A name".into(),
+        value: "x".repeat(200) + "END",
+        input: Input::KeyName,
+    });
+    let screen = render(&mut app, 80, 24);
+    assert!(screen.contains("END▏"), "{screen}");
+}
+
+#[test]
+fn stat_cards_keep_their_words_inside_at_80_and_120() {
+    for (page, width, height) in [(Page::Usage, 80, 24), (Page::Usage, 120, 36)] {
+        let mut app = app(page);
+        let screen = render(&mut app, width, height);
+        // Each card's right border follows its text.
+        assert!(screen.contains("1 conversation"), "{screen}");
+        assert!(!screen.contains("in 1 conversation"), "{screen}");
+    }
+    let mut app = app(Page::Performance);
+    let screen = render(&mut app, 80, 24);
+    assert!(screen.contains("Saved by failover"), "{screen}");
 }
 
 #[test]
@@ -214,9 +293,68 @@ fn before_the_daemon_answers_the_overview_says_it_is_looking() {
 #[test]
 fn the_selected_row_scrolls_into_view() {
     let mut app = app(Page::Settings);
-    app.cursor = 9;
+    render(&mut app, 80, 24);
+    for _ in 0..9 {
+        press(&mut app, KeyCode::Down);
+    }
     let screen = render(&mut app, 80, 24);
     assert!(screen.contains("Codex WebSockets"), "{screen}");
+}
+
+#[test]
+fn what_lies_below_the_last_row_can_be_scrolled_to() {
+    // Settings' proxy details sit under its last setting.
+    let mut app = app(Page::Settings);
+    render(&mut app, 80, 24);
+    press(&mut app, KeyCode::End);
+    let screen = render(&mut app, 80, 24);
+    assert!(screen.contains("Listens on"), "{screen}");
+    assert_eq!(app.cursor, app.rows() - 1);
+    // Back up a row keeps the view where it is until the row leaves it.
+    let scroll = app.scroll;
+    assert!(scroll > 0);
+    // The overview's latest requests are under its last row.
+    let mut app = self::app(Page::Overview);
+    render(&mut app, 80, 24);
+    press(&mut app, KeyCode::Char('G'));
+    let screen = render(&mut app, 80, 24);
+    assert!(screen.contains("Latest requests"), "{screen}");
+    // Down past the last row scrolls on, and the wheel scrolls without
+    // moving the selection.
+    let mut app = self::app(Page::Access);
+    render(&mut app, 80, 24);
+    let rows = app.rows();
+    for _ in 0..rows + 30 {
+        press(&mut app, KeyCode::Down);
+    }
+    let screen = render(&mut app, 80, 24);
+    assert!(screen.contains("Tailscale"), "{screen}");
+    let mut app = self::app(Page::Overview);
+    render(&mut app, 80, 24);
+    let wheel = MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: 40,
+        row: 10,
+        modifiers: crossterm::event::KeyModifiers::NONE,
+    };
+    app.mouse(wheel);
+    render(&mut app, 80, 24);
+    assert_eq!((app.cursor, app.scroll), (0, 3));
+}
+
+#[test]
+fn a_page_taller_than_the_first_canvas_is_drawn_whole() {
+    let mut app = app(Page::Requests);
+    if let Some(page) = &mut app.data.requests.value {
+        let row = page.rows[0].clone();
+        page.rows = vec![row; 600];
+        page.matched = 600;
+    }
+    render(&mut app, 80, 24);
+    press(&mut app, KeyCode::End);
+    let screen = render(&mut app, 80, 24);
+    assert_eq!(app.cursor, 599);
+    assert!(screen.contains('▌'), "the last row is drawn: {screen}");
 }
 
 #[test]
@@ -226,15 +364,70 @@ fn clicks_land_on_what_was_drawn() {
     let usage = app
         .hits
         .iter()
-        .find(|(_, hit)| *hit == crate::app::Hit::Page(5))
+        .find(|(_, hit)| *hit == Hit::Page(5))
         .map(|(rect, _)| *rect)
         .expect("the sidebar's sixth row");
-    let click = crossterm::event::MouseEvent {
-        kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+    let click = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
         column: usage.x + 3,
         row: usage.y,
         modifiers: crossterm::event::KeyModifiers::NONE,
     };
+    // With help up, a click closes it and nothing underneath.
+    app.help = true;
+    app.mouse(click);
+    assert!(!app.help);
+    assert_eq!(app.page, Page::Overview);
     app.mouse(click);
     assert_eq!(app.page, Page::Usage);
+}
+
+/// The footer: the screen's last line.
+fn footer(screen: &str) -> &str {
+    screen.lines().last().unwrap_or_default()
+}
+
+#[test]
+fn hints_show_only_keys_that_work_on_the_selection() {
+    let mut app = app(Page::Overview);
+    // The first item that wants a look is only to look at.
+    let screen = render(&mut app, 120, 36);
+    assert!(!footer(&screen).contains("redeem"), "{screen}");
+    press(&mut app, KeyCode::Down);
+    let screen = render(&mut app, 120, 36);
+    assert!(footer(&screen).contains("R redeem"), "{screen}");
+    // Spare holds no limit reset; claude@example.com doesn't either.
+    let mut app = self::app(Page::Provider(Provider::Claude));
+    let screen = render(&mut app, 120, 36);
+    assert!(!footer(&screen).contains("redeem"), "{screen}");
+    // Hints that don't fit are left out whole.
+    let mut app = self::app(Page::Provider(Provider::Codex));
+    let screen = render(&mut app, 80, 24);
+    let last = footer(&screen).trim_end();
+    assert!(last.ends_with("q quit"), "{last:?}");
+}
+
+#[test]
+fn a_limit_that_has_passed_is_not_read_as_limited() {
+    let report = app(Page::Overview).data.report.unwrap();
+    let before = now();
+    let after = Now {
+        at: "2026-11-01T13:00:00Z".parse().unwrap(),
+        ..before
+    };
+    // codex@example.com is limited until 12:00.
+    let (headline, detail, _) = super::overview::standing(&report, &before);
+    assert_eq!(headline, "4 of 5 accounts are ready");
+    assert!(detail.is_some_and(|d| d.contains("1 limited")));
+    let (headline, detail, _) = super::overview::standing(&report, &after);
+    assert_eq!(headline, "All 5 accounts are ready");
+    assert!(detail.is_none());
+    let mut report = report;
+    for pool in &mut report.pools {
+        pool.next = None;
+    }
+    let (text, _) = super::provider::next_line(&report, Provider::Codex, &before);
+    assert!(text.contains("until 12:00"), "{text}");
+    let (text, _) = super::provider::next_line(&report, Provider::Codex, &after);
+    assert!(!text.contains("until"), "{text}");
 }

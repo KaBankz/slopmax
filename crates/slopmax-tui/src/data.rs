@@ -8,9 +8,11 @@ use std::time::{Duration, Instant as Clock};
 use slopmax_client::api::events::Event;
 use slopmax_client::api::ledger::{
     History, HistoryRange, LedgerRecord, RequestOutcome, RequestPage, RequestRow, Summary,
+    SummaryBy, SummaryRange,
 };
 use slopmax_client::api::pools::PoolDetail;
-use slopmax_client::api::report::{AccountView, AgentWiring, Report, Section};
+use slopmax_client::api::report::{AccountView, AgentWiring, RedeemOutcome, Report, Section};
+use slopmax_client::api::requests::{AccountPatch, MakeKey, RedeemRequest};
 use slopmax_client::api::settings::{KeyInfo, LivePatch, NewKey, SettingsView};
 use slopmax_client::api::tailnet::TailnetView;
 use slopmax_client::api::{AgentId, Provider};
@@ -52,6 +54,8 @@ impl<T> Slot<T> {
         self.stale = false;
     }
 
+    /// Takes an answer in. A refusal or a failure is asked again once it
+    /// settles, while its page is open.
     pub fn finish(&mut self, result: Result<T, String>, at: Clock) {
         self.loading = false;
         self.fetched = Some(at);
@@ -60,7 +64,10 @@ impl<T> Slot<T> {
                 self.value = Some(value);
                 self.error = None;
             }
-            Err(error) => self.error = Some(error),
+            Err(error) => {
+                self.error = Some(error);
+                self.stale = true;
+            }
         }
     }
 
@@ -91,10 +98,14 @@ pub struct Data {
     /// By range: today, 7 days, 30 days.
     pub history: [Slot<History>; 3],
     pub pools: BTreeMap<Provider, Slot<PoolDetail>>,
+    /// The request feed, as Requests asks for it.
     pub requests: Slot<RequestPage>,
     /// The query `requests` answers.
     pub query: RequestQuery,
-    pub machines: Slot<Summary>,
+    /// The overview's latest requests: today's, whatever their outcome.
+    pub latest: Slot<RequestPage>,
+    /// The machines' share of each range, by range as `history` is.
+    pub machines: [Slot<Summary>; 3],
     pub agents: Slot<Vec<AgentWiring>>,
     pub doctor: Slot<Vec<Section>>,
     pub settings: Slot<SettingsView>,
@@ -111,13 +122,27 @@ impl Default for Data {
             pools: BTreeMap::new(),
             requests: Slot::default(),
             query: RequestQuery::default(),
-            machines: Slot::default(),
+            latest: Slot::default(),
+            machines: Default::default(),
             agents: Slot::default(),
             doctor: Slot::default(),
             settings: Slot::default(),
             keys: Slot::default(),
             tailnet: Slot::default(),
         }
+    }
+}
+
+/// How many requests the overview lists.
+pub const LATEST: u64 = 6;
+
+/// The query of the overview's latest requests.
+pub fn latest_query() -> RequestQuery {
+    RequestQuery {
+        range: HistoryRange::Today,
+        outcome: RequestOutcome::All,
+        limit: LATEST,
+        ..RequestQuery::default()
     }
 }
 
@@ -132,6 +157,10 @@ pub fn range_index(range: HistoryRange) -> usize {
 impl Data {
     pub fn history(&self, range: HistoryRange) -> &Slot<History> {
         &self.history[range_index(range)]
+    }
+
+    pub fn machines(&self, range: HistoryRange) -> &Slot<Summary> {
+        &self.machines[range_index(range)]
     }
 
     pub fn pool(&self, provider: Provider) -> Option<&Slot<PoolDetail>> {
@@ -159,56 +188,142 @@ impl Data {
             .collect()
     }
 
-    /// Takes a request the daemon just answered into the feed, at the top,
-    /// when the feed's query would list it; its cost comes with the next
-    /// fetch. Everything drawn from the ledger is stale from now.
+    /// Marks every answer stale, as after the stream was lost: each is
+    /// fetched again once its page is open.
+    pub fn all_stale(&mut self) {
+        let Self {
+            link: _,
+            report: _,
+            history,
+            pools,
+            requests,
+            query: _,
+            latest,
+            machines,
+            agents,
+            doctor,
+            settings,
+            keys,
+            tailnet,
+        } = self;
+        for slot in history.iter_mut() {
+            slot.stale = true;
+        }
+        for slot in machines.iter_mut() {
+            slot.stale = true;
+        }
+        for slot in pools.values_mut() {
+            slot.stale = true;
+        }
+        requests.stale = true;
+        latest.stale = true;
+        agents.stale = true;
+        doctor.stale = true;
+        settings.stale = true;
+        keys.stale = true;
+        tailnet.stale = true;
+    }
+
+    /// Whether any answer came back as an error.
+    pub fn any_error(&self) -> bool {
+        self.history.iter().any(|s| s.error.is_some())
+            || self.machines.iter().any(|s| s.error.is_some())
+            || self.pools.values().any(|s| s.error.is_some())
+            || [&self.requests, &self.latest]
+                .iter()
+                .any(|s| s.error.is_some())
+            || self.agents.error.is_some()
+            || self.doctor.error.is_some()
+            || self.settings.error.is_some()
+            || self.keys.error.is_some()
+            || self.tailnet.error.is_some()
+    }
+
+    /// Whether `what` is stale and settled long enough to fetch again.
+    pub fn due(&self, what: &What, at: Clock) -> bool {
+        match what {
+            What::History(range) => self.history(*range).due(at),
+            What::Pool(p) => self.pool(*p).is_some_and(|s| s.due(at)),
+            What::Requests(_) => self.requests.due(at),
+            What::Latest => self.latest.due(at),
+            What::Machines(range) => self.machines(*range).due(at),
+            What::Agents => self.agents.due(at),
+            What::Doctor => self.doctor.due(at),
+            What::Settings => self.settings.due(at),
+            What::Keys => self.keys.due(at),
+            What::Tailnet => self.tailnet.due(at),
+        }
+    }
+
+    /// Takes a request the daemon just answered into the feed and the
+    /// overview's latest, at the top, where their queries would list it;
+    /// its cost comes with the next fetch. Everything drawn from the ledger
+    /// is stale from now. True when the feed took it.
     pub fn record(&mut self, record: &LedgerRecord) -> bool {
-        let LedgerRecord::Request(request) = record;
         for slot in &mut self.history {
+            slot.stale = true;
+        }
+        for slot in &mut self.machines {
             slot.stale = true;
         }
         for slot in self.pools.values_mut() {
             slot.stale = true;
         }
-        self.machines.stale = true;
         self.requests.stale = true;
-        let failed = request.status >= 400;
-        let shown = match self.query.outcome {
-            RequestOutcome::All => true,
-            RequestOutcome::Answered => !failed,
-            RequestOutcome::Failed => failed,
-            RequestOutcome::Rescued => !failed && request.attempts > 1,
-        } && self
-            .query
-            .account
-            .as_deref()
-            .is_none_or(|a| request.account.as_deref() == Some(a))
-            && self
-                .query
-                .model
-                .as_deref()
-                .is_none_or(|m| request.model.as_deref() == Some(m));
+        self.latest.stale = true;
+        if let Some(page) = &mut self.latest.value {
+            take(page, record, LATEST);
+        }
+        if !lists(&self.query, record) {
+            return false;
+        }
         let Some(page) = &mut self.requests.value else {
             return false;
         };
-        if !shown {
-            return false;
-        }
-        page.rows.insert(
-            0,
-            RequestRow {
-                record: record.clone(),
-                cost: None,
-                end: None,
-            },
-        );
-        page.rows.truncate(self.query.limit.max(1) as usize);
-        page.matched += 1;
-        page.tokens += request.usage.tokens();
-        if failed {
-            page.failed += 1;
-        }
+        take(page, record, self.query.limit);
         true
+    }
+}
+
+/// Whether a page of `query` lists a request just answered.
+fn lists(query: &RequestQuery, record: &LedgerRecord) -> bool {
+    let LedgerRecord::Request(request) = record;
+    let failed = request.status >= 400;
+    let outcome = match query.outcome {
+        RequestOutcome::All => true,
+        RequestOutcome::Answered => !failed,
+        RequestOutcome::Failed => failed,
+        RequestOutcome::Rescued => !failed && request.attempts > 1,
+    };
+    outcome
+        && query
+            .account
+            .as_deref()
+            .is_none_or(|a| request.account.as_deref() == Some(a))
+        && query
+            .model
+            .as_deref()
+            .is_none_or(|m| request.model.as_deref() == Some(m))
+}
+
+/// Puts a request just answered at the top of a page and counts it.
+fn take(page: &mut RequestPage, record: &LedgerRecord, limit: u64) {
+    let LedgerRecord::Request(request) = record;
+    page.rows.insert(
+        0,
+        RequestRow {
+            record: record.clone(),
+            cost: None,
+            end: None,
+        },
+    );
+    page.rows.truncate(limit.max(1) as usize);
+    page.matched += 1;
+    page.tokens += request.usage.tokens();
+    if request.status >= 400 {
+        page.failed += 1;
+    } else if request.attempts > 1 {
+        page.rescued += 1;
     }
 }
 
@@ -218,6 +333,8 @@ pub enum What {
     History(HistoryRange),
     Pool(Provider),
     Requests(RequestQuery),
+    /// The overview's latest requests, by [`latest_query`].
+    Latest,
     Machines(HistoryRange),
     Agents,
     Doctor,
@@ -232,7 +349,8 @@ pub enum Fetched {
     History(HistoryRange, Result<History, String>),
     Pool(Provider, Result<PoolDetail, String>),
     Requests(RequestQuery, Result<RequestPage, String>),
-    Machines(Result<Summary, String>),
+    Latest(Result<RequestPage, String>),
+    Machines(HistoryRange, Result<Summary, String>),
     Agents(Result<Vec<AgentWiring>, String>),
     Doctor(Result<Vec<Section>, String>),
     Settings(Result<SettingsView, String>),
@@ -291,14 +409,15 @@ pub fn fetch(client: &Client, what: What, tx: &UnboundedSender<Msg>) {
                 let answer = client.requests(&query).await.map_err(err);
                 Fetched::Requests(query, answer)
             }
+            What::Latest => Fetched::Latest(client.requests(&latest_query()).await.map_err(err)),
             What::Machines(range) => {
-                use slopmax_client::api::ledger::{SummaryBy, SummaryRange};
-                let range = match range {
+                let span = match range {
                     HistoryRange::Today => SummaryRange::Today,
                     HistoryRange::Week => SummaryRange::Week,
                     HistoryRange::Month => SummaryRange::Month,
                 };
-                Fetched::Machines(client.usage(range, SummaryBy::Machine).await.map_err(err))
+                let answer = client.usage(span, SummaryBy::Machine).await.map_err(err);
+                Fetched::Machines(range, answer)
             }
             What::Agents => Fetched::Agents(client.agents().await.map_err(err)),
             What::Doctor => Fetched::Doctor(client.doctor().await.map_err(err)),
@@ -312,7 +431,6 @@ pub fn fetch(client: &Client, what: What, tx: &UnboundedSender<Msg>) {
 
 /// Asks the daemon for `action` and sends back how it went.
 pub fn act(client: &Client, action: Action, tx: &UnboundedSender<Msg>) {
-    use slopmax_client::api::requests::{AccountPatch, MakeKey, RedeemRequest};
     let (client, tx) = (client.clone(), tx.clone());
     tokio::spawn(async move {
         let report = |r: Report, said: &str| Outcome::Report(Box::new(r), said.to_owned());
@@ -355,7 +473,6 @@ pub fn act(client: &Client, action: Action, tx: &UnboundedSender<Msg>) {
                     .redeem(id, &RedeemRequest::default())
                     .await
                     .map(|answer| {
-                        use slopmax_client::api::report::RedeemOutcome;
                         let who = name(id, &answer.report);
                         let said = match answer.outcome {
                             RedeemOutcome::Reset => format!("Reset {who}'s usage windows"),

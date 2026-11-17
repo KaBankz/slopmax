@@ -3,11 +3,15 @@
 //! nothing new.
 
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use slopmax_client::api::Tone;
-use slopmax_client::api::ledger::{History, NamedTotals, Totals};
+use slopmax_client::api::ledger::{History, HistoryRange, NamedTotals, Totals};
 
-use super::widgets::{Flow, Stat, axis_labels, bar_row, change, column_chart, shade, stats, tabs};
+use super::widgets::{
+    Flow, Stat, axis_labels, bar_row, braille_lines, change, column_chart, scaled_columns, shade,
+    stats, tabs,
+};
 use crate::app::{App, Hit, RANGES, range_title};
 use crate::format::{self, Now};
 
@@ -116,7 +120,7 @@ pub fn draw_usage(app: &App, flow: &mut Flow<'_>, _now: &Now) {
                 title: "Requests".into(),
                 value: format::grouped(total.requests),
                 note: if history.sessions > 0 {
-                    format!("in {}", format::count(history.sessions, "conversation"))
+                    format::count(history.sessions, "conversation")
                 } else {
                     "answered".into()
                 },
@@ -139,7 +143,7 @@ pub fn draw_usage(app: &App, flow: &mut Flow<'_>, _now: &Now) {
     );
     flow.gap();
 
-    let by = if app.range == slopmax_client::api::ledger::HistoryRange::Today {
+    let by = if app.range == HistoryRange::Today {
         "by hour"
     } else {
         "by day"
@@ -218,7 +222,7 @@ pub fn draw_usage(app: &App, flow: &mut Flow<'_>, _now: &Now) {
         flow.gap();
     }
 
-    if let Some(summary) = &app.data.machines.value {
+    if let Some(summary) = &app.data.machines(app.range).value {
         let rows: Vec<NamedTotals> = summary
             .rows
             .iter()
@@ -235,10 +239,12 @@ pub fn draw_usage(app: &App, flow: &mut Flow<'_>, _now: &Now) {
         }
     }
 
-    if history
-        .activity
-        .iter()
-        .any(|day| day.iter().any(|n| *n > 0))
+    // A day has no weekdays to compare.
+    if app.range != HistoryRange::Today
+        && history
+            .activity
+            .iter()
+            .any(|day| day.iter().any(|n| *n > 0))
     {
         flow.section(
             "When you work",
@@ -486,18 +492,29 @@ pub fn draw_performance(app: &App, flow: &mut Flow<'_>, _now: &Now) {
             Span::styled(" rescued", theme.muted()),
         ])),
     );
+    // The three on one scale, so a failure or two stays a sliver.
     let answered: Vec<f64> = history.buckets.iter().map(|b| b.requests as f64).collect();
-    let area = inset(flow.take(5));
-    let style = theme.ink();
-    column_chart(flow.buf, area, &answered, |_| style, true);
     let failed: Vec<f64> = history.buckets.iter().map(|b| b.failed as f64).collect();
+    let rescued: Vec<f64> = history.buckets.iter().map(|b| b.rescued as f64).collect();
+    let most = answered
+        .iter()
+        .chain(&failed)
+        .chain(&rescued)
+        .copied()
+        .fold(0.0, f64::max);
+    flow.line(Line::from(Span::styled(
+        format!(" {} at the most", format::count(most as u64, "request")),
+        theme.muted(),
+    )));
+    let area = inset(flow.take(5));
+    let ink = theme.ink();
+    scaled_columns(flow.buf, area, &answered, most, |_| ink, true);
     let row = inset(flow.take(1));
     let bad = theme.tone(Tone::Bad);
-    column_chart(flow.buf, row, &failed, |_| bad, true);
-    let rescued: Vec<f64> = history.buckets.iter().map(|b| b.rescued as f64).collect();
+    scaled_columns(flow.buf, row, &failed, most, |_| bad, true);
     let row = inset(flow.take(1));
     let warn = theme.tone(Tone::Warn);
-    column_chart(flow.buf, row, &rescued, |_| warn, true);
+    scaled_columns(flow.buf, row, &rescued, most, |_| warn, true);
     flow.line(Line::from(Span::styled(
         format!(" {}", axis_labels(&labels, area.width)),
         theme.muted(),
@@ -513,44 +530,22 @@ pub fn draw_performance(app: &App, flow: &mut Flow<'_>, _now: &Now) {
     flow.columns(&widths, 4, |i, column| {
         if i == 0 {
             column.section("Input from cache", None);
-            let cached: Vec<f64> = history
-                .buckets
-                .iter()
-                .map(|b| b.cached.unwrap_or(0.0))
-                .collect();
-            let area = inset(column.take(4));
-            column_chart(column.buf, area, &cached, |_| style, true);
-            column.line(Line::from(Span::styled(
-                format!(" {}", cache_note(history.cached)),
-                theme.muted(),
-            )));
+            cache_chart(column, history, &labels);
         }
         if i == 1 || !wide {
             if !wide {
                 column.gap();
             }
-            column.section("Time to first byte", None);
-            let median: Vec<f64> = history
-                .buckets
-                .iter()
-                .map(|b| b.first_byte.map_or(0.0, |(p50, _)| p50))
-                .collect();
-            let area = inset(column.take(4));
-            column_chart(column.buf, area, &median, |_| style, true);
-            let p90 = history
-                .buckets
-                .iter()
-                .filter_map(|b| b.first_byte.map(|(_, p90)| p90))
-                .fold(0.0, f64::max);
-            let words = match history.first_byte {
-                Some(ms) => format!(
-                    " median {} · slowest p90 {}",
-                    format::millis(ms),
-                    format::millis(p90)
-                ),
-                None => " no streamed answers".into(),
-            };
-            column.line(Line::from(Span::styled(words, theme.muted())));
+            column.section(
+                "Time to first byte",
+                Some(Line::from(vec![
+                    Span::styled("━", ink),
+                    Span::styled(" p50  ", theme.muted()),
+                    Span::styled("━", theme.muted()),
+                    Span::styled(" p90", theme.muted()),
+                ])),
+            );
+            first_byte_chart(column, history, &labels);
         }
     });
     flow.gap();
@@ -580,4 +575,166 @@ pub fn draw_performance(app: &App, flow: &mut Flow<'_>, _now: &Now) {
             );
         }
     }
+}
+
+/// How much input came from the cache, bucket by bucket, as a line zoomed
+/// to where it moves.
+fn cache_chart(flow: &mut Flow<'_>, history: &History, labels: &[String]) {
+    let theme = flow.theme;
+    let cached: Vec<Option<f64>> = history.buckets.iter().map(|b| b.cached).collect();
+    let (lo, hi) = cached
+        .iter()
+        .flatten()
+        .copied()
+        .fold(None, |span: Option<(f64, f64)>, v| match span {
+            Some((lo, hi)) => Some((lo.min(v), hi.max(v))),
+            None => Some((v, v)),
+        })
+        .unwrap_or((0.0, 1.0));
+    // A rate that never moves sits mid-chart.
+    let (lo, hi) = if hi - lo < 0.002 {
+        ((lo - 0.01).max(0.0), (hi + 0.01).min(1.0))
+    } else {
+        (lo, hi)
+    };
+    let mark = |v: f64| {
+        if hi - lo < 0.05 {
+            format!("{:.1}%", v * 100.0)
+        } else {
+            format!("{:.0}%", v * 100.0)
+        }
+    };
+    line_chart(
+        flow,
+        4,
+        &[(cached, theme.ink())],
+        (lo, hi),
+        (mark(hi), mark(lo)),
+        labels,
+    );
+    flow.line(Line::from(Span::styled(
+        format!(" {}", cache_note(history.cached)),
+        theme.muted(),
+    )));
+}
+
+/// The wait for the first byte, bucket by bucket: the median, and the
+/// slowest tenth's.
+fn first_byte_chart(flow: &mut Flow<'_>, history: &History, labels: &[String]) {
+    let theme = flow.theme;
+    let p50: Vec<Option<f64>> = history
+        .buckets
+        .iter()
+        .map(|b| b.first_byte.map(|(p50, _)| p50))
+        .collect();
+    let p90: Vec<Option<f64>> = history
+        .buckets
+        .iter()
+        .map(|b| b.first_byte.map(|(_, p90)| p90))
+        .collect();
+    let slowest = p90
+        .iter()
+        .chain(&p50)
+        .flatten()
+        .copied()
+        .fold(0.0, f64::max);
+    let words = match history.first_byte {
+        Some(ms) => {
+            line_chart(
+                flow,
+                4,
+                &[(p90, theme.muted()), (p50, theme.ink())],
+                (0.0, slowest.max(1.0)),
+                (format::millis(slowest), "0".into()),
+                labels,
+            );
+            format!(
+                " median {} · slowest p90 {}",
+                format::millis(ms),
+                format::millis(slowest)
+            )
+        }
+        None => " no streamed answers".into(),
+    };
+    flow.line(Line::from(Span::styled(words, theme.muted())));
+}
+
+/// Lines through a value (or none) per bucket, over `lo..hi`, `height`
+/// rows tall: the top and bottom marked on the left, the buckets'
+/// labels beneath.
+fn line_chart(
+    flow: &mut Flow<'_>,
+    height: u16,
+    series: &[(Vec<Option<f64>>, Style)],
+    (lo, hi): (f64, f64),
+    (top, bottom): (String, String),
+    labels: &[String],
+) {
+    let theme = flow.theme;
+    let area = flow.take(height);
+    let gutter = top.chars().count().max(bottom.chars().count()) as u16 + 2;
+    let plot = Rect {
+        x: area.x + gutter,
+        width: area.width.saturating_sub(gutter + 1),
+        ..area
+    };
+    if plot.height == 0 || plot.width == 0 {
+        return;
+    }
+    let muted = theme.muted();
+    let at = |mark: &str, y: u16| {
+        let w = mark.chars().count() as u16;
+        (area.x + gutter.saturating_sub(w + 1), y)
+    };
+    let (x, y) = at(&top, plot.y);
+    flow.buf.set_string(x, y, &top, muted);
+    let (x, y) = at(&bottom, plot.bottom() - 1);
+    flow.buf.set_string(x, y, &bottom, muted);
+    let n = labels.len().max(1);
+    let x_of = |i: usize| {
+        if n > 1 {
+            i as f64 / (n - 1) as f64
+        } else {
+            0.5
+        }
+    };
+    let span = (hi - lo).max(f64::EPSILON);
+    let points: Vec<Vec<(f64, f64)>> = series
+        .iter()
+        .map(|(values, _)| {
+            values
+                .iter()
+                .enumerate()
+                .filter_map(|(i, v)| v.map(|v| (x_of(i), (v - lo) / span)))
+                .collect()
+        })
+        .collect();
+    let lines: Vec<(&[(f64, f64)], Style)> = points
+        .iter()
+        .zip(series)
+        .map(|(points, (_, style))| (points.as_slice(), *style))
+        .collect();
+    braille_lines(flow.buf, plot, &lines);
+    // Each label under its point, as many as fit apart.
+    let mut axis = vec![' '; plot.width as usize];
+    let mut free = 0;
+    for (i, label) in labels.iter().enumerate() {
+        let w = label.chars().count();
+        let centre = (x_of(i) * f64::from(plot.width - 1)).round() as usize;
+        let from = centre
+            .saturating_sub(w / 2)
+            .min(axis.len().saturating_sub(w));
+        if from < free || from + w > axis.len() {
+            continue;
+        }
+        for (j, c) in label.chars().enumerate() {
+            axis[from + j] = c;
+        }
+        free = from + w + 1;
+    }
+    let axis: String = axis.into_iter().collect();
+    flow.line(Line::from(vec![
+        Span::raw(" ".repeat(gutter as usize)),
+        Span::styled(axis.trim_end().to_owned(), muted),
+    ]));
 }

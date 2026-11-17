@@ -473,6 +473,9 @@ async fn logs(config: &Config, lines: usize, follow: bool) -> Result<()> {
 /// this machine's proxy (started first if it isn't running) or the hub
 /// this machine uses.
 async fn tui(config: &Config) -> Result<()> {
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        bail!("slopmax tui needs a terminal");
+    }
     if config.hub.is_none() {
         ensure_running(config).await?;
     }

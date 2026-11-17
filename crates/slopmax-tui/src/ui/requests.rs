@@ -4,20 +4,12 @@
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use slopmax_client::api::Tone;
-use slopmax_client::api::ledger::{LedgerRecord, RequestEnd, RequestRow, Sender};
+use slopmax_client::api::ledger::{LedgerRecord, RequestEnd, RequestRow};
 
 use super::widgets::{Flow, tabs};
 use crate::app::{App, Hit, OUTCOMES, RANGES, outcome_title, range_title};
-use crate::format::{self, Now};
+use crate::format::{self, Now, agent_title};
 use crate::theme::Theme;
-
-pub fn agent_title(agent: Sender) -> &'static str {
-    match agent {
-        Sender::ClaudeCode => "Claude Code",
-        Sender::Codex => "Codex",
-        Sender::Slopmax => "slopmax",
-    }
-}
 
 pub fn end_words(end: RequestEnd) -> &'static str {
     match end {

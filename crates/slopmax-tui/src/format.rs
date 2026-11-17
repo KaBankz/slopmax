@@ -2,6 +2,7 @@
 //! counts, and the titles of usage windows, worded as the dashboard words
 //! them.
 
+use slopmax_client::api::ledger::Sender;
 use slopmax_client::api::report::Window;
 use slopmax_client::api::{Instant, Span, Tone};
 use slopmax_common::human;
@@ -230,6 +231,15 @@ pub fn pace(window: &Window, now: &Now) -> Option<(String, Tone)> {
     Some((format!("{:.0}% in reserve", -ahead), Tone::Muted))
 }
 
+/// The agent that sent a request, by name.
+pub fn agent_title(agent: Sender) -> &'static str {
+    match agent {
+        Sender::ClaudeCode => "Claude Code",
+        Sender::Codex => "Codex",
+        Sender::Slopmax => "slopmax",
+    }
+}
+
 /// Text cut to `width` columns, with an ellipsis when cut.
 pub fn fit(text: &str, width: usize) -> String {
     use ratatui::text::Line;
@@ -251,6 +261,29 @@ pub fn fit(text: &str, width: usize) -> String {
     }
     out.push('…');
     out
+}
+
+/// The end of `text` that fits in `width` columns, after an ellipsis when
+/// the start is cut: where a cursor typing at the end stays in view.
+pub fn tail(text: &str, width: usize) -> String {
+    use ratatui::text::Line;
+    if Line::from(text).width() <= width {
+        return text.to_owned();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut kept = Vec::new();
+    let mut used = 0;
+    for c in text.chars().rev() {
+        let w = Line::from(c.to_string()).width();
+        if used + w + 1 > width {
+            break;
+        }
+        kept.push(c);
+        used += w;
+    }
+    std::iter::once('…').chain(kept.into_iter().rev()).collect()
 }
 
 #[cfg(test)]
@@ -303,6 +336,8 @@ mod tests {
         assert_eq!(listed(&["a".into(), "b".into(), "c".into()]), "a, b, and c");
         assert_eq!(fit("claude@example.com", 8), "claude@…");
         assert_eq!(fit("short", 8), "short");
+        assert_eq!(tail("claude@example.com", 8), "…ple.com");
+        assert_eq!(tail("short", 8), "short");
     }
 
     #[test]

@@ -10,11 +10,22 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use tachyonfx::{Effect, EffectManager, EffectTimer, Interpolation, fx};
 
+/// How long a page takes to sweep in; a page opened sooner after the one
+/// before simply shows, so paging quickly through them stays still.
+const SWEEP: std::time::Duration = std::time::Duration::from_millis(150);
+
 pub struct Effects {
     page: EffectManager<u8>,
+    /// Requests typing themselves in, on the rows they were drawn on.
+    rows: EffectManager<u8>,
     overlay: EffectManager<u8>,
     /// The dialog last brought in, so it comes in once.
     shown: Option<Rect>,
+    /// When a page last opened.
+    entered: Option<Clock>,
+    /// How far the page was scrolled last frame, so rows that move drop
+    /// their effects.
+    scroll: u16,
     last: Clock,
     elapsed: tachyonfx::Duration,
 }
@@ -23,8 +34,11 @@ impl Default for Effects {
     fn default() -> Self {
         Self {
             page: EffectManager::default(),
+            rows: EffectManager::default(),
             overlay: EffectManager::default(),
             shown: None,
+            entered: None,
+            scroll: 0,
             last: Clock::now(),
             elapsed: tachyonfx::Duration::from_millis(0),
         }
@@ -34,7 +48,7 @@ impl Default for Effects {
 impl Effects {
     /// Whether anything is moving, so frames come faster than the clock's.
     pub fn running(&self) -> bool {
-        self.page.is_running() || self.overlay.is_running()
+        self.page.is_running() || self.rows.is_running() || self.overlay.is_running()
     }
 
     /// Marks the start of a frame. A frame after a quiet spell counts as
@@ -48,20 +62,38 @@ impl Effects {
         self.last = now;
     }
 
-    /// The page sweeps in from the left, its leading edge dim.
+    /// The page sweeps in from the left, its leading edge dim; unless the
+    /// page before opened a moment ago, when the new one just shows.
     pub fn enter_page(&mut self, area: Rect) {
-        self.page.add_unique_effect(0, reveal(320).with_area(area));
+        let now = Clock::now();
+        let quick = self
+            .entered
+            .is_some_and(|then| now.saturating_duration_since(then) < SWEEP);
+        self.entered = Some(now);
+        self.rows = EffectManager::default();
+        if quick {
+            self.page.cancel_unique_effect(0);
+        } else {
+            let ms = SWEEP.as_millis() as u32;
+            self.page.add_unique_effect(0, reveal(ms).with_area(area));
+        }
     }
 
-    /// Requests that just arrived type themselves in.
-    pub fn arrive(&mut self, rows: &[Rect]) {
+    /// Requests that just arrived type themselves in. Rows typing in when
+    /// the page scrolled stop, as they no longer sit where they were.
+    pub fn arrive(&mut self, rows: &[Rect], scroll: u16) {
+        if scroll != self.scroll {
+            self.scroll = scroll;
+            self.rows = EffectManager::default();
+        }
         for row in rows {
-            self.page.add_effect(reveal(450).with_area(*row));
+            self.rows.add_effect(reveal(450).with_area(*row));
         }
     }
 
     pub fn process_page(&mut self, buf: &mut Buffer, area: Rect) {
         self.page.process_effects(self.elapsed, buf, area);
+        self.rows.process_effects(self.elapsed, buf, area);
     }
 
     /// A dialog that just opened resolves out of the page.

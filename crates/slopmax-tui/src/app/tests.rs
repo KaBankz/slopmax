@@ -1,11 +1,16 @@
+use std::time::{Duration, Instant as Clock};
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use slopmax_client::api::Provider;
+use slopmax_client::RequestQuery;
 use slopmax_client::api::events::Event;
-use slopmax_client::api::ledger::{HistoryRange, LedgerRecord, RequestOutcome};
+use slopmax_client::api::ledger::{
+    HistoryRange, LedgerRecord, RequestOutcome, RequestPage, RequestRecord, Summary,
+};
 use slopmax_client::api::settings::LivePatch;
+use slopmax_client::api::{AgentId, Provider};
 
 use super::*;
-use crate::data::{Action, Link, Msg, What};
+use crate::data::{Action, Fetched, Link, Msg, Outcome, What};
 use crate::ui::tests::{app, fixture};
 
 fn press(app: &mut App, code: KeyCode) -> Vec<Cmd> {
@@ -153,8 +158,63 @@ fn the_feed_filters_as_you_type_and_esc_clears_it() {
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.feed().len(), all);
     assert!(!app.quit);
+    // With nothing left to clear, Esc goes back to the overview.
     press(&mut app, KeyCode::Esc);
+    assert_eq!(app.page, Page::Overview);
+    assert!(!app.quit);
+}
+
+#[test]
+fn the_filter_matches_the_agent_too() {
+    let mut app = app(Page::Requests);
+    // Both of the fixture's requests came from Claude Code; one now didn't
+    // say.
+    if let Some(page) = &mut app.data.requests.value {
+        let LedgerRecord::Request(r) = &mut page.rows[1].record;
+        r.agent = None;
+    }
+    press(&mut app, KeyCode::Char('/'));
+    typed(&mut app, "claude code");
+    assert_eq!(app.feed().len(), 1);
+    let LedgerRecord::Request(r) = &app.feed()[0].record;
+    assert_eq!(r.agent.map(agent_title), Some("Claude Code"));
+}
+
+#[test]
+fn esc_never_quits_and_q_and_ctrl_c_do() {
+    let mut app = app(Page::Overview);
+    press(&mut app, KeyCode::Esc);
+    assert!(!app.quit);
+    press(&mut app, KeyCode::Char('6'));
+    assert_eq!(app.page, Page::Usage);
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.page, Page::Overview);
+    // A dialog or help closes on Esc, and the page stays.
+    let mut usage = self::app(Page::Provider(Provider::Claude));
+    press(&mut usage, KeyCode::Char(' '));
+    press(&mut usage, KeyCode::Esc);
+    assert!(usage.modal.is_none());
+    assert_eq!(usage.page, Page::Provider(Provider::Claude));
+    press(&mut usage, KeyCode::Char('?'));
+    press(&mut usage, KeyCode::Esc);
+    assert!(!usage.help);
+    assert_eq!(usage.page, Page::Provider(Provider::Claude));
+    assert!(!usage.quit);
+    press(&mut app, KeyCode::Char('q'));
     assert!(app.quit);
+}
+
+#[test]
+fn only_y_confirms_a_change_that_cannot_be_taken_back() {
+    let mut app = app(Page::Provider(Provider::Codex));
+    press(&mut app, KeyCode::Char('R'));
+    assert_eq!(press(&mut app, KeyCode::Enter), []);
+    assert!(app.modal.is_some(), "Enter leaves it up");
+    assert_eq!(
+        press(&mut app, KeyCode::Char('y')),
+        [Cmd::Act(Action::Redeem("codex-fbfb76d8".into()))]
+    );
+    assert!(app.modal.is_none());
 }
 
 #[test]
@@ -258,10 +318,49 @@ fn keys_are_made_by_name_and_revoked_after_asking() {
         [Cmd::Act(Action::MakeKey("ci".into()))]
     );
     press(&mut app, KeyCode::Char('x'));
+    assert_eq!(press(&mut app, KeyCode::Enter), []);
     assert_eq!(
-        press(&mut app, KeyCode::Enter),
+        press(&mut app, KeyCode::Char('y')),
         [Cmd::Act(Action::RemoveKey("laptop".into()))]
     );
+}
+
+#[test]
+fn typing_a_name_takes_no_control_keys() {
+    let mut app = app(Page::Access);
+    press(&mut app, KeyCode::Char('a'));
+    typed(&mut app, "ci");
+    app.key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+    let Some(Modal::Input { value, .. }) = &app.modal else {
+        panic!("still typing: {:?}", app.modal);
+    };
+    assert_eq!(value, "ci");
+}
+
+#[test]
+fn a_new_key_stays_up_until_esc_or_enter_and_c_copies_it() {
+    let mut app = app(Page::Access);
+    let key = slopmax_client::api::settings::NewKey {
+        name: "ci".into(),
+        key: "sk-slopmax-secret".into(),
+        models: Vec::new(),
+    };
+    app.apply(Msg::Done(
+        Action::MakeKey("ci".into()),
+        Ok(Outcome::NewKey(key)),
+    ));
+    assert!(matches!(app.modal, Some(Modal::Secret { .. })));
+    press(&mut app, KeyCode::Char('x'));
+    press(&mut app, KeyCode::Down);
+    assert!(app.modal.is_some(), "other keys leave it up");
+    assert_eq!(
+        press(&mut app, KeyCode::Char('c')),
+        [Cmd::Copy("sk-slopmax-secret".into())]
+    );
+    assert!(app.modal.is_some(), "copying leaves it up");
+    press(&mut app, KeyCode::Enter);
+    assert!(app.modal.is_none());
 }
 
 #[test]
@@ -270,18 +369,15 @@ fn agents_connect_at_once_and_disconnect_after_asking() {
     // Claude Code is connected: `c` does nothing, `x` asks.
     assert_eq!(press(&mut app, KeyCode::Char('c')), []);
     press(&mut app, KeyCode::Char('x'));
+    assert_eq!(press(&mut app, KeyCode::Enter), []);
     assert_eq!(
         press(&mut app, KeyCode::Char('y')),
-        [Cmd::Act(Action::Disconnect(
-            slopmax_client::api::AgentId::ClaudeCode
-        ))]
+        [Cmd::Act(Action::Disconnect(AgentId::ClaudeCode))]
     );
     press(&mut app, KeyCode::Down);
     assert_eq!(
         press(&mut app, KeyCode::Enter),
-        [Cmd::Act(Action::Connect(
-            slopmax_client::api::AgentId::Codex
-        ))]
+        [Cmd::Act(Action::Connect(AgentId::Codex))]
     );
 }
 
@@ -296,7 +392,7 @@ fn refusals_and_results_come_back_as_toasts() {
     let report = fixture("accounts.pin.ok");
     app.apply(Msg::Done(
         Action::Pin("claude-7cad1d23".into()),
-        Ok(crate::data::Outcome::Report(
+        Ok(Outcome::Report(
             Box::new(report),
             "New sessions go to Spare first".into(),
         )),
@@ -326,9 +422,171 @@ fn ctrl_c_quits_from_anywhere_and_q_closes_help_first() {
 }
 
 #[test]
-fn the_overview_opens_the_selected_pool() {
+fn the_overview_lists_what_wants_a_look_before_the_pools() {
+    let app = app(Page::Overview);
+    let items = app.attention();
+    assert_eq!(items.len(), 3);
+    assert_eq!(app.rows(), items.len() + app.data.providers().len());
+}
+
+#[test]
+fn enter_on_what_wants_a_look_opens_its_account() {
     let mut app = app(Page::Overview);
+    // claude@example.com's 5-hour window runs out first.
+    let cmds = press(&mut app, KeyCode::Enter);
+    assert_eq!(app.page, Page::Provider(Provider::Claude));
+    assert_eq!(cmds, [Cmd::Fetch(What::Pool(Provider::Claude))]);
+    assert_eq!(
+        app.selected_account().map(|a| a.name.as_str()),
+        Some("claude@example.com")
+    );
+}
+
+#[test]
+fn r_on_what_wants_a_look_redeems_only_where_it_says_so() {
+    let mut app = app(Page::Overview);
+    // The first item is only to look at: R does nothing.
+    assert_eq!(press(&mut app, KeyCode::Char('R')), []);
+    assert!(app.modal.is_none());
+    // The second is codex@example.com, limited and holding a reset.
     press(&mut app, KeyCode::Down);
+    assert_eq!(
+        app.selected_attention().map(|a| a.remedy),
+        Some(crate::attention::Remedy::Redeem)
+    );
+    press(&mut app, KeyCode::Char('R'));
+    let Some(Modal::Confirm { action, .. }) = &app.modal else {
+        panic!("asks first: {:?}", app.modal);
+    };
+    assert_eq!(*action, Action::Redeem("codex-fbfb76d8".into()));
+}
+
+#[test]
+fn the_overview_opens_the_selected_pool_after_what_wants_a_look() {
+    let mut app = app(Page::Overview);
+    let first = app.attention().len();
+    for _ in 0..first + 1 {
+        press(&mut app, KeyCode::Down);
+    }
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.page, Page::Provider(Provider::Codex));
+}
+
+#[test]
+fn a_range_change_while_machines_load_fetches_the_new_range_and_keeps_each_apart() {
+    let mut app = app(Page::Usage);
+    app.data.machines = Default::default();
+    let cmds = press(&mut app, KeyCode::Char('r'));
+    assert_eq!(app.range, HistoryRange::Month);
+    assert!(cmds.contains(&Cmd::Fetch(What::Machines(HistoryRange::Month))));
+    // Month is still on its way; Today is asked all the same.
+    let cmds = press(&mut app, KeyCode::Char('r'));
+    assert_eq!(app.range, HistoryRange::Today);
+    assert!(cmds.contains(&Cmd::Fetch(What::Machines(HistoryRange::Today))));
+    let summary: Summary = fixture("usage.summary.machine.ok");
+    app.apply(Msg::Fetched(Box::new(Fetched::Machines(
+        HistoryRange::Month,
+        Ok(summary),
+    ))));
+    assert!(app.data.machines(HistoryRange::Month).value.is_some());
+    assert!(app.data.machines(HistoryRange::Today).value.is_none());
+    assert!(app.data.machines(HistoryRange::Today).loading);
+}
+
+#[test]
+fn reaching_slopmax_again_fetches_the_page_and_marks_the_rest_stale() {
+    let mut app = app(Page::Overview);
+    app.apply(Msg::Link(Link::Lost("refused".into())));
+    let cmds = app.apply(Msg::Link(Link::Live("0.14.0".into())));
+    assert_eq!(
+        cmds,
+        [
+            Cmd::Fetch(What::History(HistoryRange::Today)),
+            Cmd::Fetch(What::Latest),
+            Cmd::Fetch(What::Settings),
+        ]
+    );
+    assert!(app.data.agents.stale && app.data.keys.stale);
+    assert!(app.data.history(HistoryRange::Week).stale);
+}
+
+#[test]
+fn a_fetch_that_failed_before_the_stream_came_up_is_asked_again() {
+    let mut app = App::new(None);
+    let first = app.load();
+    assert_eq!(first.len(), 3);
+    app.apply(Msg::Fetched(Box::new(Fetched::Settings(Err(
+        "refused".into()
+    )))));
+    // While slopmax isn't reached, nothing is asked again.
+    let later = Clock::now() + Duration::from_secs(4);
+    assert_eq!(app.tick(later), []);
+    let cmds = app.apply(Msg::Link(Link::Live("0.14.0".into())));
+    assert!(cmds.contains(&Cmd::Fetch(What::Settings)), "{cmds:?}");
+    // And a failure once it is reached is tried again after a pause.
+    app.apply(Msg::Fetched(Box::new(Fetched::Settings(
+        Err("busy".into()),
+    ))));
+    assert!(app.tick(later).contains(&Cmd::Fetch(What::Settings)));
+}
+
+#[test]
+fn a_dropped_answer_to_an_old_query_leaves_the_new_one_loading() {
+    let mut app = app(Page::Requests);
+    press(&mut app, KeyCode::Char('o'));
+    assert!(app.data.requests.loading);
+    app.apply(Msg::Fetched(Box::new(Fetched::Requests(
+        RequestQuery::default(),
+        Err("late".into()),
+    ))));
+    assert!(app.data.requests.loading);
+}
+
+fn request(status: u16, attempts: u32) -> LedgerRecord {
+    let page: RequestPage = fixture("usage.requests.ok");
+    let LedgerRecord::Request(record) = page.rows[0].record.clone();
+    LedgerRecord::Request(RequestRecord {
+        status,
+        attempts,
+        ..record
+    })
+}
+
+#[test]
+fn the_overview_s_latest_requests_ignore_the_feed_s_filters() {
+    let mut app = app(Page::Overview);
+    assert_eq!(
+        app.load()
+            .iter()
+            .filter(|c| matches!(c, Cmd::Fetch(What::Requests(_))))
+            .count(),
+        0,
+        "the overview doesn't ask with the feed's query"
+    );
+    app.data.query.outcome = RequestOutcome::Failed;
+    let before = app.data.latest.value.as_ref().map_or(0, |p| p.matched);
+    let feed = app.data.requests.value.as_ref().map_or(0, |p| p.matched);
+    app.apply(Msg::Event(Box::new(Event::Request {
+        record: request(200, 1),
+    })));
+    let latest = app.data.latest.value.as_ref().unwrap();
+    assert_eq!(latest.matched, before + 1);
+    assert!(latest.rows.len() <= crate::data::LATEST as usize);
+    // The feed shows failures only, so it doesn't take it.
+    assert_eq!(app.data.requests.value.as_ref().unwrap().matched, feed);
+}
+
+#[test]
+fn a_request_answered_on_a_second_try_counts_as_rescued() {
+    let mut app = app(Page::Requests);
+    let page = app.data.requests.value.as_ref().unwrap();
+    let (rescued, failed) = (page.rescued, page.failed);
+    app.apply(Msg::Event(Box::new(Event::Request {
+        record: request(200, 2),
+    })));
+    app.apply(Msg::Event(Box::new(Event::Request {
+        record: request(529, 3),
+    })));
+    let page = app.data.requests.value.as_ref().unwrap();
+    assert_eq!((page.rescued, page.failed), (rescued + 1, failed + 1));
 }
