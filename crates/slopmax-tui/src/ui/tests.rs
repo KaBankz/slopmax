@@ -214,7 +214,10 @@ fn help_and_dialogs_sit_over_the_page() {
     let mut shots = Vec::new();
     let mut app = app(Page::Overview);
     press(&mut app, KeyCode::Char('?'));
-    shots.push(("help_80x24".into(), render(&mut app, 80, 24)));
+    // Help lists ctrl-z only where a shell can resume slopmax.
+    if cfg!(unix) {
+        shots.push(("help_80x24".into(), render(&mut app, 80, 24)));
+    }
     // The redeem dialog as `R` brings it up.
     let mut app = self::app(Page::Provider(Provider::Codex));
     press(&mut app, KeyCode::Char('R'));
