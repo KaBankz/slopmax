@@ -1865,7 +1865,10 @@ fn windows_login_service_runs_and_supervises_the_proxy() {
     assert!(answers(), "`start` left the proxy stopped");
 
     let out = run(&["proxy", "uninstall"]).ok();
-    assert!(out.stdout.contains("Removed the service"), "{out:?}");
+    assert!(
+        out.stdout.contains("slopmax no longer starts at login"),
+        "{out:?}"
+    );
     wait_for("not installed");
     assert!(!answers(), "the proxy outlived its service");
 }

@@ -1522,7 +1522,10 @@ mod tests {
             std::fs::create_dir_all(std::path::Path::new(path).parent().unwrap()).unwrap();
             std::fs::write(path, &spec).unwrap();
         }
-        let saved = std::fs::read_to_string(path).unwrap_or_default();
+        // A checkout on Windows may end its lines with CRLF.
+        let saved = std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .replace("\r\n", "\n");
         assert!(
             saved == spec,
             "docs/cli/slopmax.usage.kdl is out of date: run `SLOPMAX_BLESS=1 cargo test -p slopmax`, then `mise run cli-docs`"
