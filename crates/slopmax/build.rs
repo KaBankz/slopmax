@@ -3,20 +3,21 @@
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    #[cfg(windows)]
-    windows();
+    // The target's OS, not this build script's: release builds for Windows
+    // are cross-compiled on Linux.
+    let target = |key| std::env::var(key).unwrap_or_default();
+    if target("CARGO_CFG_TARGET_OS") == "windows" && target("CARGO_CFG_TARGET_ENV") == "msvc" {
+        windows();
+    }
 }
 
-/// The icon and version resource, made with the Windows SDK's resource
-/// compiler, which only an MSVC build on Windows has.
-#[cfg(windows)]
+/// The icon and version resource, made with a resource compiler: the
+/// Windows SDK's `rc.exe` on Windows, LLVM's `llvm-rc` elsewhere (or the one
+/// `RC_PATH` names).
 fn windows() {
-    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("msvc") {
-        return;
-    }
-    let icon = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
-        .join(r"..\..\assets\icon\icon.ico");
+    let icon = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/icon/icon.ico");
     println!("cargo:rerun-if-changed={}", icon.display());
+    println!("cargo:rerun-if-env-changed=RC_PATH");
     winresource::WindowsResource::new()
         .set_icon(&icon.to_string_lossy())
         .set("ProductName", "slopmax")
