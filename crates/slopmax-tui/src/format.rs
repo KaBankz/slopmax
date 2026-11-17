@@ -25,6 +25,11 @@ impl Now {
         }
     }
 
+    /// The local day it is, as days since 1970-01-01.
+    pub fn today(&self) -> i64 {
+        self.day(self.at)
+    }
+
     /// The local day `at` falls on, as days since 1970-01-01.
     fn day(&self, at: Instant) -> i64 {
         (at + self.offset).as_second().div_euclid(86_400)

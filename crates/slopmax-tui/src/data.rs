@@ -224,6 +224,34 @@ impl Data {
         tailnet.stale = true;
     }
 
+    /// Marks stale what is counted by the local day, as when it turns at
+    /// midnight: the history of each range, the machines' shares, and the
+    /// requests listed by range.
+    pub fn new_day(&mut self) {
+        for slot in &mut self.history {
+            slot.stale = true;
+        }
+        for slot in &mut self.machines {
+            slot.stale = true;
+        }
+        self.requests.stale = true;
+        self.latest.stale = true;
+    }
+
+    /// Whether any answer is being fetched.
+    pub fn any_loading(&self) -> bool {
+        self.history.iter().any(|s| s.loading)
+            || self.machines.iter().any(|s| s.loading)
+            || self.pools.values().any(|s| s.loading)
+            || self.requests.loading
+            || self.latest.loading
+            || self.agents.loading
+            || self.doctor.loading
+            || self.settings.loading
+            || self.keys.loading
+            || self.tailnet.loading
+    }
+
     /// Whether any answer came back as an error.
     pub fn any_error(&self) -> bool {
         self.history.iter().any(|s| s.error.is_some())

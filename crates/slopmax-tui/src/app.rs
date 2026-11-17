@@ -9,7 +9,9 @@ use crossterm::event::{
 };
 use ratatui::layout::{Position, Rect};
 use slopmax_client::api::events::Event;
-use slopmax_client::api::ledger::{HistoryRange, LedgerRecord, RequestOutcome, RequestRow};
+use slopmax_client::api::ledger::{
+    HistoryRange, LedgerRecord, RequestOutcome, RequestRecord, RequestRow,
+};
 use slopmax_client::api::report::{AccountView, Condition, Note};
 use slopmax_client::api::settings::{LIVE, LiveKind, LivePatch, LiveValue};
 use slopmax_client::api::{Instant, NoticeKind, Provider, Strategy, Tone};
@@ -85,8 +87,9 @@ pub enum Modal {
         text: String,
         note: String,
     },
-    /// One request of the feed, in full.
-    Request(Box<RequestRow>),
+    /// One request of the feed, in full, scrolled by `scroll` fields
+    /// where the screen is too short for all of them.
+    Request { row: Box<RequestRow>, scroll: u16 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,6 +177,15 @@ pub struct App {
     pub arrived: usize,
     /// The last frame's width, for the sidebar and the page order.
     pub width: u16,
+    /// How tall the page was laid out last frame, so the next is laid out
+    /// on a canvas that tall at once.
+    pub tall: u16,
+    /// A new key was asked for and its answer hasn't come: another isn't
+    /// asked for until it does, so one secret never hides another.
+    pub making_key: bool,
+    /// The local day the clock last ticked on, as days since 1970-01-01:
+    /// what is counted by the day is fetched again once it turns.
+    pub day: Option<i64>,
     /// The time keys act at, fixed in tests; the system's otherwise.
     pub frozen: Option<Instant>,
 }
@@ -200,6 +212,9 @@ impl App {
             entered: true,
             arrived: 0,
             width: 120,
+            tall: 0,
+            making_key: false,
+            day: None,
             frozen: None,
         }
     }
@@ -306,6 +321,14 @@ impl App {
     /// slopmax is reached.
     pub fn tick(&mut self, at: Clock) -> Vec<Cmd> {
         self.toasts.retain(|t| t.until > at);
+        let now = self.now();
+        self.new_day(
+            Now {
+                at: now,
+                offset: now.local_offset(),
+            }
+            .today(),
+        );
         if !matches!(self.data.link, Link::Live(_)) {
             return Vec::new();
         }
@@ -313,6 +336,19 @@ impl App {
         wanted.retain(|what| self.data.due(what, at));
         wanted.retain(|what| self.begin(what));
         wanted.into_iter().map(Cmd::Fetch).collect()
+    }
+
+    /// Notes the local day; past midnight, what is counted by the day
+    /// (today's history and requests, the machines' shares, the ranges'
+    /// days) is stale, and fetched again as its page is open. True when
+    /// the day turned.
+    pub fn new_day(&mut self, today: i64) -> bool {
+        let turned = self.day.is_some_and(|day| day != today);
+        self.day = Some(today);
+        if turned {
+            self.data.new_day();
+        }
+        turned
     }
 
     pub fn toast(&mut self, text: impl Into<String>, tone: Tone) {
@@ -355,22 +391,24 @@ impl App {
             }
             Msg::Event(event) => match *event {
                 Event::Status { report } => {
+                    let picked = self.picked();
                     self.data.report = Some(*report);
                     if self.page != Page::Overview && !self.pages().contains(&self.page) {
                         return self.go(Page::Overview);
                     }
-                    self.clamp();
+                    self.repick(picked);
                     if let Page::Provider(p) = self.page
                         && let Some(slot) = self.data.pools.get_mut(&p)
                     {
                         slot.stale = true;
                     }
-                }
-                Event::Request { record } => {
-                    if self.data.record(&record) {
-                        self.arrived += 1;
+                    // Settings shows the strategy the report just told the
+                    // header; the rest of its view may have moved with it.
+                    if self.page == Page::Settings {
+                        self.data.settings.stale = true;
                     }
                 }
+                Event::Request { record } => self.arrive(&record),
                 Event::Notice { notice } => {
                     let tone = match notice.kind {
                         NoticeKind::Limited | NoticeKind::Exhausted | NoticeKind::SignedOut => {
@@ -398,7 +436,9 @@ impl App {
                 // An answer to a query since changed is dropped; the new
                 // one is on its way, and still loading.
                 if query == data.query {
-                    data.requests.finish(r, at);
+                    let selected = self.selected_request();
+                    self.data.requests.finish(r, at);
+                    self.reselect_request(selected);
                 }
             }
             Fetched::Latest(r) => data.latest.finish(r, at),
@@ -413,6 +453,9 @@ impl App {
     }
 
     fn done(&mut self, action: Action, result: Result<Outcome, String>) -> Vec<Cmd> {
+        if matches!(action, Action::MakeKey(_)) {
+            self.making_key = false;
+        }
         let outcome = match result {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -422,8 +465,9 @@ impl App {
         };
         match outcome {
             Outcome::Report(report, said) => {
+                let picked = self.picked();
                 self.data.report = Some(*report);
-                self.clamp();
+                self.repick(picked);
                 self.toast(said, Tone::Good);
             }
             Outcome::Settings(view, said) => {
@@ -435,6 +479,9 @@ impl App {
                 self.toast(said, Tone::Good);
             }
             Outcome::NewKey(key) => {
+                // The secret shows this once, so it comes before anything
+                // else that was up: help would hide it and take its keys.
+                self.help = false;
                 self.modal = Some(Modal::Secret {
                     title: format!("The key {:?}", key.name),
                     text: key.key,
@@ -451,6 +498,114 @@ impl App {
             }
         }
         Vec::new()
+    }
+
+    /// What the selection is on, where the page's rows come from the
+    /// report: a report that adds, drops or reorders rows above it leaves
+    /// it on the same thing, so a key that acts at once acts on it.
+    fn picked(&self) -> Option<Picked> {
+        match self.page {
+            Page::Overview => {
+                let items = self.attention();
+                match items.get(self.cursor) {
+                    Some(item) => Some(Picked::Item(item.account.clone(), item.remedy)),
+                    None => self
+                        .data
+                        .providers()
+                        .get(self.cursor - items.len())
+                        .copied()
+                        .map(Picked::Pool),
+                }
+            }
+            Page::Provider(_) => self
+                .selected_account()
+                .map(|account| Picked::Account(account.id.clone())),
+            _ => None,
+        }
+    }
+
+    /// Puts the selection back on what [`App::picked`] said it was on,
+    /// where it still is.
+    fn repick(&mut self, picked: Option<Picked>) {
+        let found = match &picked {
+            Some(Picked::Item(account, remedy)) => {
+                let items = self.attention();
+                items
+                    .iter()
+                    .position(|i| i.account == *account && i.remedy == *remedy)
+                    .or_else(|| items.iter().position(|i| i.account == *account))
+            }
+            Some(Picked::Pool(provider)) => {
+                let first = self.attention().len();
+                self.data
+                    .providers()
+                    .iter()
+                    .position(|p| p == provider)
+                    .map(|i| first + i)
+            }
+            Some(Picked::Account(id)) => self.accounts().iter().position(|a| a.id == *id),
+            None => None,
+        };
+        if let Some(at) = found {
+            self.cursor = at;
+        }
+        self.clamp();
+    }
+
+    /// The feed's selected request, while the feed is open.
+    fn selected_request(&self) -> Option<LedgerRecord> {
+        if self.page != Page::Requests {
+            return None;
+        }
+        self.feed().get(self.cursor).map(|row| row.record.clone())
+    }
+
+    /// Finds the request that was selected in a feed fetched again, and
+    /// selects it there, the view moving with it.
+    fn reselect_request(&mut self, selected: Option<LedgerRecord>) {
+        let Some(LedgerRecord::Request(was)) = selected else {
+            return;
+        };
+        let found = self.feed().iter().position(|row| {
+            let LedgerRecord::Request(r) = &row.record;
+            same_request(r, &was)
+        });
+        let Some(at) = found else {
+            return;
+        };
+        if self.scroll > 0 {
+            let moved = (at as isize - self.cursor as isize).clamp(-4096, 4096);
+            self.scroll = self.scroll.saturating_add_signed(moved as i16);
+        }
+        self.cursor = at;
+    }
+
+    /// Takes in a request the daemon just answered. On the feed, a request
+    /// that comes in above the selection leaves it on the row it was on,
+    /// and the view on what it showed, unless the view is at the top,
+    /// where new requests are watched coming in.
+    fn arrive(&mut self, record: &LedgerRecord) {
+        let had = self.page == Page::Requests && !self.feed().is_empty();
+        if !self.data.record(record) {
+            return;
+        }
+        let needle = self.filter.to_lowercase();
+        let row = RequestRow {
+            record: record.clone(),
+            cost: None,
+            end: None,
+        };
+        if !needle.is_empty() && !self.matches(&row, &needle) {
+            return;
+        }
+        self.arrived += 1;
+        if had {
+            self.cursor += 1;
+            if self.scroll > 0 {
+                self.scroll = self.scroll.saturating_add(1);
+            }
+            self.clamp();
+        }
     }
 
     /// The accounts of the provider page that is open.
@@ -684,10 +839,16 @@ impl App {
             (Page::Requests, KeyCode::Char('/')) => self.filtering = true,
             (Page::Requests, KeyCode::Enter) => {
                 if let Some(row) = self.feed().get(self.cursor) {
-                    self.modal = Some(Modal::Request(Box::new((*row).clone())));
+                    self.modal = Some(Modal::Request {
+                        row: Box::new((*row).clone()),
+                        scroll: 0,
+                    });
                 }
             }
             (Page::Agents, code) => return self.agent_key(code),
+            (Page::Access, KeyCode::Char('a')) if self.making_key => {
+                self.toast("Still making the last key", Tone::Warn);
+            }
             (Page::Access, KeyCode::Char('a')) => {
                 self.modal = Some(Modal::Input {
                     title: "New client key".into(),
@@ -929,7 +1090,21 @@ impl App {
                 cmds
             }
             Modal::Secret { .. } if matches!(key.code, KeyCode::Esc | KeyCode::Enter) => Vec::new(),
-            Modal::Request(_) => Vec::new(),
+            // The arrows scroll a request too long for the screen; any
+            // other key closes it.
+            Modal::Request { row, scroll } => {
+                let scroll = match key.code {
+                    KeyCode::Up | KeyCode::Char('k') => scroll.saturating_sub(1),
+                    KeyCode::Down | KeyCode::Char('j') => scroll.saturating_add(1),
+                    KeyCode::PageUp => scroll.saturating_sub(10),
+                    KeyCode::PageDown => scroll.saturating_add(10),
+                    KeyCode::Home | KeyCode::Char('g') => 0,
+                    KeyCode::End | KeyCode::Char('G') => u16::MAX,
+                    _ => return Vec::new(),
+                };
+                self.modal = Some(Modal::Request { row, scroll });
+                Vec::new()
+            }
             other => {
                 self.modal = Some(other);
                 Vec::new()
@@ -972,7 +1147,10 @@ impl App {
                 });
                 Vec::new()
             }
-            Input::KeyName => vec![Cmd::Act(Action::MakeKey(value.to_owned()))],
+            Input::KeyName => {
+                self.making_key = true;
+                vec![Cmd::Act(Action::MakeKey(value.to_owned()))]
+            }
         }
     }
 
@@ -1033,6 +1211,28 @@ impl App {
         }
         Vec::new()
     }
+}
+
+/// What a selection is on, so it can be found again: an item of what
+/// wants a look (its account, and what can be done about it), a pool, or
+/// an account.
+#[derive(Debug, Clone, PartialEq)]
+enum Picked {
+    Item(String, Remedy),
+    Pool(Provider),
+    Account(String),
+}
+
+/// Whether two records are of the same request: the ledger keeps no id, so
+/// when it was answered, by what, for which session, and how.
+fn same_request(a: &RequestRecord, b: &RequestRecord) -> bool {
+    a.at == b.at
+        && a.provider == b.provider
+        && a.account == b.account
+        && a.session == b.session
+        && a.model == b.model
+        && a.status == b.status
+        && a.ms == b.ms
 }
 
 /// The item after `current`, wrapping.

@@ -37,6 +37,11 @@ pub struct Screen {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     /// Whether the mouse is reported to slopmax rather than the terminal.
     mouse: bool,
+    /// Whether the terminal takes the Kitty protocol's flags. Asked once,
+    /// on taking the terminal: asking again after a suspend would race the
+    /// input stream, which reads the same terminal, for the answer.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    keyboard: bool,
 }
 
 impl Screen {
@@ -51,10 +56,17 @@ impl Screen {
             }));
         });
         enter()?;
+        // Nothing reads input yet, so the answer can't be taken by anyone
+        // else.
+        let keyboard = matches!(terminal::supports_keyboard_enhancement(), Ok(true));
+        if keyboard {
+            push_keyboard();
+        }
         match Terminal::new(CrosstermBackend::new(io::stdout())) {
             Ok(terminal) => Ok(Self {
                 terminal,
                 mouse: true,
+                keyboard,
             }),
             Err(e) => {
                 give_back();
@@ -108,6 +120,9 @@ impl Screen {
         // The shell's job control stops slopmax here, and `fg` continues it.
         let _ = signal_hook::low_level::raise(signal_hook::consts::SIGTSTP);
         enter()?;
+        if self.keyboard {
+            push_keyboard();
+        }
         if !self.mouse {
             execute!(self.terminal.backend_mut(), DisableMouseCapture)?;
         }
@@ -141,16 +156,19 @@ fn enter() -> io::Result<()> {
         give_back();
         return Err(e);
     }
-    if matches!(terminal::supports_keyboard_enhancement(), Ok(true))
-        && execute!(
-            out,
-            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
-        )
-        .is_ok()
-    {
+    Ok(())
+}
+
+/// Has keys reported with the Kitty protocol's flags, so Esc comes at once
+/// and keys with modifiers are told apart; they are popped on the way out.
+fn push_keyboard() {
+    let pushed = execute!(
+        io::stdout(),
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+    );
+    if pushed.is_ok() {
         KEYBOARD.store(true, Ordering::SeqCst);
     }
-    Ok(())
 }
 
 /// Puts the terminal back as it was. Safe to call more than once, and from

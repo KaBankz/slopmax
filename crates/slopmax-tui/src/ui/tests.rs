@@ -5,14 +5,15 @@ use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKin
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use slopmax_client::api::ledger::{History, HistoryRange, RequestPage};
-use slopmax_client::api::report::{AgentWiring, Finding, Level, Section};
-use slopmax_client::api::{AgentId, Provider};
+use slopmax_client::api::report::{AgentWiring, Finding, Level, Report, Section};
+use slopmax_client::api::{AgentId, Provider, Tone};
 use slopmax_common::time::SignedDuration;
 
 use super::draw;
 use crate::app::{App, Hit, Input, Modal, Page};
 use crate::data::{LATEST, Link, range_index};
 use crate::format::Now;
+use crate::fx::Effects;
 use crate::theme::Theme;
 
 /// A fixture's body, as the daemon answered.
@@ -143,6 +144,16 @@ pub fn render(app: &mut App, width: u16, height: u16) -> String {
     let now = now();
     terminal
         .draw(|frame| draw(frame, app, &Theme::plain(), &now, None))
+        .unwrap();
+    terminal.backend().to_string()
+}
+
+/// The screen as text, drawn with effects as the terminal draws it.
+fn render_fx(app: &mut App, fx: &mut Effects, width: u16, height: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    let now = now();
+    terminal
+        .draw(|frame| draw(frame, app, &Theme::plain(), &now, Some(fx)))
         .unwrap();
     terminal.backend().to_string()
 }
@@ -430,4 +441,166 @@ fn a_limit_that_has_passed_is_not_read_as_limited() {
     assert!(text.contains("until 12:00"), "{text}");
     let (text, _) = super::provider::next_line(&report, Provider::Codex, &after);
     assert!(!text.contains("until"), "{text}");
+}
+
+#[test]
+fn a_dialog_closed_as_it_comes_in_leaves_nothing_moving() {
+    let mut app = app(Page::Overview);
+    let mut fx = Effects::default();
+    press(&mut app, KeyCode::Char('?'));
+    render_fx(&mut app, &mut fx, 80, 24);
+    assert!(fx.running(), "help resolves out of the page");
+    // Closed before it was all in: no frames keep coming for it.
+    press(&mut app, KeyCode::Esc);
+    render_fx(&mut app, &mut fx, 80, 24);
+    assert!(!fx.running());
+    // Nor when the terminal is made too small to draw it.
+    press(&mut app, KeyCode::Char('?'));
+    render_fx(&mut app, &mut fx, 80, 24);
+    assert!(fx.running());
+    render_fx(&mut app, &mut fx, 40, 10);
+    assert!(!fx.running());
+    // With room again, it comes in anew.
+    render_fx(&mut app, &mut fx, 80, 24);
+    assert!(fx.running());
+}
+
+#[test]
+fn a_request_too_long_for_the_screen_scrolls_and_says_how_to_close_it() {
+    let mut app = app(Page::Requests);
+    press(&mut app, KeyCode::Enter);
+    let screen = render(&mut app, 80, 24);
+    assert!(screen.contains("esc close"), "{screen}");
+    assert!(!screen.contains("scroll   esc"), "{screen}");
+    let screen = render(&mut app, 80, 13);
+    assert!(screen.contains("↑↓ scroll   esc close"), "{screen}");
+    // Scrolled past its end, it stops at its last field.
+    press(&mut app, KeyCode::End);
+    render(&mut app, 80, 13);
+    let Some(Modal::Request { scroll, .. }) = &app.modal else {
+        panic!("still open: {:?}", app.modal);
+    };
+    assert!(*scroll > 0 && *scroll < 20, "{scroll}");
+    let screen = render(&mut app, 80, 13);
+    assert!(screen.contains("Session"), "{screen}");
+}
+
+/// The screen with a report of no accounts, and nothing fetched.
+fn empty(page: Page) -> App {
+    let mut app = App::new(None);
+    app.data.link = Link::Live("0.14.0".into());
+    let mut report: Report = fixture("system.status.ok");
+    report.accounts.clear();
+    report.pools.clear();
+    report.nudges.clear();
+    report.update = None;
+    app.data.report = Some(report);
+    app.page = page;
+    app.frozen = Some(now().at);
+    app
+}
+
+/// The screen before the daemon has said anything.
+fn bare(page: Page) -> App {
+    let mut app = App::new(None);
+    app.page = page;
+    app.frozen = Some(now().at);
+    app
+}
+
+/// Something put over a page, by name.
+type Overlay = (&'static str, fn(&mut App));
+
+fn overlay(name: &'static str, put: fn(&mut App)) -> Overlay {
+    (name, put)
+}
+
+/// What can be over a page: nothing, help, each dialog, toasts too long
+/// for their box, a view scrolled as far as it goes, and a filter.
+fn overlays() -> Vec<Overlay> {
+    vec![
+        overlay("nothing", |_| {}),
+        overlay("help", |app| app.help = true),
+        overlay("confirm", |app| {
+            app.modal = Some(Modal::Confirm {
+                title: "Redeem a limit reset on someone@a-rather-long-domain.example?".into(),
+                body: "word ".repeat(60),
+                yes: "Redeem".into(),
+                action: crate::data::Action::Refresh,
+            });
+        }),
+        overlay("input", |app| {
+            app.modal = Some(Modal::Input {
+                title: "Session memory".into(),
+                hint: "How long a session keeps going to the account it started on, \
+                       in minutes; a session quiet for longer starts over"
+                    .into(),
+                value: "x".repeat(90),
+                input: Input::Minutes("sessionMinutes"),
+            });
+        }),
+        overlay("strategy", |app| {
+            app.modal = Some(Modal::Strategy { selected: 2 });
+        }),
+        overlay("secret", |app| {
+            app.modal = Some(Modal::Secret {
+                title: "The key \"ci\"".into(),
+                text: format!("sk-slopmax-{}", "0123456789abcdef".repeat(6)),
+                note: "Shown this once. Clients present it as a bearer token or x-api-key.".into(),
+            });
+        }),
+        overlay("request", |app| {
+            let page: RequestPage = fixture("usage.requests.ok");
+            app.modal = Some(Modal::Request {
+                row: Box::new(page.rows[0].clone()),
+                scroll: 0,
+            });
+        }),
+        overlay("request scrolled", |app| {
+            let page: RequestPage = fixture("usage.requests.ok");
+            app.modal = Some(Modal::Request {
+                row: Box::new(page.rows[1].clone()),
+                scroll: u16::MAX,
+            });
+        }),
+        overlay("toasts", |app| {
+            app.toast("x".repeat(300), Tone::Bad);
+            app.toast(format!("Wrote {}", "/a/b".repeat(40)), Tone::Good);
+        }),
+        overlay("bottom", |app| {
+            app.key(KeyEvent::from(KeyCode::End));
+            app.key(KeyEvent::from(KeyCode::Up));
+        }),
+        overlay("filtering", |app| {
+            app.filtering = true;
+            app.filter = "nothing matches this".into();
+        }),
+    ]
+}
+
+#[test]
+fn nothing_panics_at_the_smallest_sizes_with_or_without_data() {
+    let makers: [(&str, fn(Page) -> App); 3] = [("full", app), ("empty", empty), ("bare", bare)];
+    for (data, make) in makers {
+        for (name, page) in pages() {
+            for (overlay, put) in overlays() {
+                for (width, height) in [(48, 12), (49, 13), (60, 16)] {
+                    let what = format!("{name} {data} {overlay} {width}x{height}");
+                    let drawn = std::panic::catch_unwind(|| {
+                        let mut app = make(page);
+                        put(&mut app);
+                        render(&mut app, width, height);
+                        // Again with effects, the page coming in.
+                        let mut app = make(page);
+                        app.entered = true;
+                        put(&mut app);
+                        let mut fx = Effects::default();
+                        render_fx(&mut app, &mut fx, width, height);
+                        render_fx(&mut app, &mut fx, width, height);
+                    });
+                    assert!(drawn.is_ok(), "panicked drawing {what}");
+                }
+            }
+        }
+    }
 }

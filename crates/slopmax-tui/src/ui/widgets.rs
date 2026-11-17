@@ -12,6 +12,10 @@ use slopmax_client::api::report::tone_of_use;
 use crate::app::Hit;
 use crate::theme::Theme;
 
+/// The narrowest a page is laid out in two columns: as wide as a page is
+/// beside the sidebar at 120 columns.
+pub const TWO_COLUMNS: u16 = 88;
+
 /// A page laid out from the top down, a line at a time, over a canvas
 /// taller than the screen that is scrolled into view.
 pub struct Flow<'a> {
@@ -166,6 +170,26 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+/// `text` wrapped as [`wrap`] wraps it, with a word wider than `width`
+/// (a path, an address) broken wherever it reaches the edge.
+pub fn wrap_hard(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    for line in wrap(text, width) {
+        let mut current = String::new();
+        for c in line.chars() {
+            let mut next = current.clone();
+            next.push(c);
+            if !current.is_empty() && Line::from(next.as_str()).width() > width {
+                lines.push(std::mem::take(&mut current));
+            }
+            current.push(c);
+        }
+        lines.push(current);
+    }
+    lines
+}
+
 /// A dot in a tone: what a condition or a finding leads with.
 pub fn dot(theme: &Theme, tone: Tone) -> Span<'static> {
     Span::styled("●", theme.tone(tone))
@@ -215,6 +239,21 @@ pub struct Segment {
 pub fn segmented_bar(theme: &Theme, segments: &[Segment], width: u16) -> Vec<Span<'static>> {
     if segments.len() <= 1 {
         let used = segments.first().map_or(0.0, |s| s.used);
+        return usage_bar(theme, used, width, false);
+    }
+    // Too many to give each a column and a gap: one bar, filled as far as
+    // the pool is used.
+    if segments.len() * 2 > usize::from(width) {
+        let weight: f64 = segments.iter().map(|s| s.weight.max(0.0)).sum();
+        let used = if weight > 0.0 {
+            segments
+                .iter()
+                .map(|s| s.weight.max(0.0) * s.used)
+                .sum::<f64>()
+                / weight
+        } else {
+            segments.iter().map(|s| s.used).sum::<f64>() / segments.len() as f64
+        };
         return usage_bar(theme, used, width, false);
     }
     let gaps = segments.len() as u16 - 1;

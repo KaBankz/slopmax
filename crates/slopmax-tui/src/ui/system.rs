@@ -9,7 +9,7 @@ use slopmax_client::api::report::Level;
 use slopmax_client::api::settings::{LIVE, LiveValue};
 use slopmax_client::api::tailnet::{TailscaleState, Transport};
 
-use super::widgets::{Flow, dot};
+use super::widgets::{Flow, dot, wrap};
 use crate::app::{App, Hit, setting_group, setting_title};
 use crate::data::Slot;
 use crate::format::{self, Now};
@@ -390,17 +390,24 @@ pub fn draw_settings(app: &App, flow: &mut Flow<'_>, _now: &Now) {
     }
     flow.gap();
     if !view.restart_needed.is_empty() {
-        flow.line(Line::from(vec![
-            Span::raw(" "),
-            dot(theme, Tone::Warn),
-            Span::styled(
-                format!(
-                    " {} changed in config.toml and apply after a restart: `slopmax proxy restart`",
-                    format::listed(&view.restart_needed)
-                ),
-                theme.tone(Tone::Warn),
-            ),
-        ]));
+        let notice = format!(
+            "{} changed in config.toml and apply after a restart: `slopmax proxy restart`",
+            format::listed(&view.restart_needed)
+        );
+        let width = flow.width.saturating_sub(3).max(8) as usize;
+        for (i, line) in wrap(&notice, width).into_iter().enumerate() {
+            let lead = if i == 0 {
+                dot(theme, Tone::Warn)
+            } else {
+                Span::raw(" ")
+            };
+            flow.line(Line::from(vec![
+                Span::raw(" "),
+                lead,
+                Span::raw(" "),
+                Span::styled(line, theme.tone(Tone::Warn)),
+            ]));
+        }
         flow.gap();
     }
     flow.section(

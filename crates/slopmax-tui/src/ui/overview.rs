@@ -11,7 +11,9 @@ use slopmax_client::api::{Provider, Tone};
 use super::provider::{next_line, pool_lines, pool_row};
 use super::requests::feed_row;
 use super::usage::{cache_note, hourly};
-use super::widgets::{Flow, Stat, axis_labels, change, column_chart, dot, stats, wrap};
+use super::widgets::{
+    Flow, Stat, TWO_COLUMNS, axis_labels, change, column_chart, dot, stats, wrap,
+};
 use crate::app::{App, Hit, held_resets};
 use crate::attention::{Remedy, attention};
 use crate::data::Link;
@@ -320,7 +322,7 @@ pub fn draw(app: &App, flow: &mut Flow<'_>, now: &Now) {
         Some(history) => {
             stats(flow, &today_stats(history));
             flow.gap();
-            let wide = flow.width >= 100;
+            let wide = flow.width >= TWO_COLUMNS;
             let widths = if wide {
                 let left = flow.width * 5 / 11;
                 vec![left, flow.width - left - 3]

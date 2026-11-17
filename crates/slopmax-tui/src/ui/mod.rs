@@ -16,11 +16,11 @@ use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Widget};
-use slopmax_client::api::ledger::LedgerRecord;
+use slopmax_client::api::ledger::{LedgerRecord, RequestRow};
 use slopmax_client::api::report::{Condition, Level};
 use slopmax_client::api::{Strategy, Tone};
 
-use self::widgets::{Flow, dot, panel, wrap};
+use self::widgets::{Flow, dot, panel, wrap, wrap_hard};
 use crate::app::{App, Hit, Modal, Page, held_resets, range_title};
 use crate::attention::{Remedy, attention};
 use crate::data::Link;
@@ -53,6 +53,9 @@ pub fn draw(
         // What would have come in did so unseen.
         app.entered = false;
         app.arrived = 0;
+        if let Some(fx) = fx {
+            fx.still();
+        }
         return;
     }
     let sidebar = app.sidebar_shown(area.width);
@@ -98,6 +101,14 @@ pub fn draw(
         app,
         theme,
     );
+    // The request dialog scrolls no further than its last field.
+    let deepest = match &app.modal {
+        Some(Modal::Request { row, .. }) => Some(request_scroll(app, row, area, now)),
+        _ => None,
+    };
+    if let (Some(deepest), Some(Modal::Request { scroll, .. })) = (deepest, &mut app.modal) {
+        *scroll = (*scroll).min(deepest);
+    }
     let overlay = if app.help {
         Some(draw_help(buf, area, app, theme))
     } else {
@@ -257,10 +268,7 @@ fn draw_header(buf: &mut Buffer, area: Rect, app: &App, theme: &Theme, now: &Now
         }
         right.push(Span::raw(" "));
     }
-    if app.data.history.iter().any(|s| s.loading)
-        || app.data.requests.loading
-        || app.data.pools.values().any(|s| s.loading)
-    {
+    if app.data.any_loading() {
         right.push(Span::styled("↻ ", theme.muted()));
     }
     right.push(Span::styled(now.hm(now.at), theme.muted()));
@@ -335,15 +343,23 @@ fn draw_body(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme, now: &N
     if area.width == 0 || area.height == 0 {
         return Vec::new();
     }
+    // Laid out first as tall as the page was last frame, so a page taller
+    // than the first canvas isn't laid out twice on every frame.
+    let first = app.tall.clamp(CANVAS, TALLEST);
     let (canvas, hits, used) = {
-        let (canvas, hits, height) = lay_out(app, area.width, CANVAS, theme, now);
-        if height > CANVAS {
+        let (canvas, hits, height) = lay_out(app, area.width, first, theme, now);
+        if height > first && first < TALLEST {
             lay_out(app, area.width, height.min(TALLEST), theme, now)
         } else {
             (canvas, hits, height)
         }
     };
+    app.tall = used;
     let used = used.min(canvas.area.height);
+    let deepest = used.saturating_sub(area.height);
+    // The view is kept on the page first: End asks for the very bottom,
+    // and a terminal grown taller has less to scroll.
+    app.scroll = app.scroll.min(deepest);
     // A selection that just moved is scrolled into view, the first row
     // with the page's top; otherwise the view stays where it was put.
     if std::mem::take(&mut app.follow)
@@ -353,12 +369,13 @@ fn draw_body(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme, now: &N
             app.scroll = 0;
         } else if rect.y < app.scroll || rect.height >= area.height {
             app.scroll = rect.y.saturating_sub(1);
-        } else if rect.bottom() > app.scroll + area.height {
-            app.scroll = rect.bottom() - area.height;
+        } else if rect.bottom() > app.scroll.saturating_add(area.height) {
+            app.scroll = rect.bottom().saturating_sub(area.height);
         }
     }
-    app.scroll = app.scroll.min(used.saturating_sub(area.height));
+    app.scroll = app.scroll.min(deepest);
     let scroll = app.scroll;
+    let view_end = scroll.saturating_add(area.height);
     for dy in 0..area.height {
         let cy = scroll + dy;
         if cy >= used {
@@ -369,11 +386,11 @@ fn draw_body(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme, now: &N
         }
     }
     for (rect, hit) in hits {
-        if rect.bottom() <= scroll || rect.y >= scroll + area.height {
+        if rect.bottom() <= scroll || rect.y >= view_end {
             continue;
         }
         let y = rect.y.max(scroll);
-        let bottom = rect.bottom().min(scroll + area.height);
+        let bottom = rect.bottom().min(view_end);
         app.hits.push((
             Rect::new(area.x + rect.x, area.y + y - scroll, rect.width, bottom - y),
             hit,
@@ -566,7 +583,8 @@ fn draw_toasts(buf: &mut Buffer, area: Rect, app: &App, theme: &Theme) {
     let width = 44.min(area.width.saturating_sub(4));
     let mut bottom = area.bottom().saturating_sub(1);
     for toast in app.toasts.iter().rev() {
-        let lines = wrap(&toast.text, width.saturating_sub(4) as usize);
+        let room = width.saturating_sub(4);
+        let lines = wrap_hard(&toast.text, room as usize);
         let height = lines.len() as u16 + 2;
         if bottom < area.y + height {
             break;
@@ -585,7 +603,8 @@ fn draw_toasts(buf: &mut Buffer, area: Rect, app: &App, theme: &Theme) {
                 .set_style(theme.tone(toast.tone));
         }
         for (i, line) in lines.iter().enumerate() {
-            buf.set_string(rect.x + 2, rect.y + 1 + i as u16, line, Style::new());
+            let y = rect.y + 1 + i as u16;
+            buf.set_stringn(rect.x + 2, y, line, room as usize, Style::new());
         }
         bottom = rect.y;
     }
@@ -653,7 +672,7 @@ fn dialog_lines(buf: &mut Buffer, inner: Rect, top: u16, lines: &[String], style
 }
 
 fn draw_help(buf: &mut Buffer, area: Rect, app: &App, theme: &Theme) -> Rect {
-    let global: [(&str, &str); 13] = [
+    let mut global = vec![
         ("⇥ / →", "next page"),
         ("⇧⇥ / ←", "previous page"),
         ("1–9", "go to a page"),
@@ -666,8 +685,11 @@ fn draw_help(buf: &mut Buffer, area: Rect, app: &App, theme: &Theme) -> Rect {
         ("esc", "back to the overview"),
         ("?", "this help"),
         ("q / ctrl-c", "quit"),
-        ("ctrl-z", "suspend"),
     ];
+    // Only a Unix shell's job control takes slopmax back after a suspend.
+    if cfg!(unix) {
+        global.push(("ctrl-z", "suspend"));
+    }
     let page = page_hints(app);
     let height = (global.len().max(page.len()) as u16) + 6;
     let (outer, inner) = dialog(buf, area, 76, height, theme, "Keys");
@@ -738,15 +760,12 @@ fn draw_modal(
         Modal::Input {
             title, hint, value, ..
         } => {
-            let (outer, inner) = dialog(buf, area, 60, 8, theme, title);
-            let hint = wrap(hint, inner.width as usize);
-            buf.set_stringn(
-                inner.x,
-                inner.y + 1,
-                hint.first().map_or("", String::as_str),
-                inner.width as usize,
-                theme.muted(),
-            );
+            let hint = wrap(hint, text_width(area, 60) as usize);
+            let (outer, inner) = dialog(buf, area, 60, hint.len() as u16 + 7, theme, title);
+            // The hint in full where there is room; the field comes first
+            // where there isn't.
+            let shown = hint.len().min(inner.height.saturating_sub(5) as usize);
+            dialog_lines(buf, inner, 1, &hint[..shown], theme.muted());
             // The end of a long value shows, where the cursor is.
             let room = inner.width.saturating_sub(3) as usize;
             let field = Line::from(vec![
@@ -754,8 +773,9 @@ fn draw_modal(
                 Span::raw(format::tail(value, room)),
                 Span::styled("▏", theme.accent()),
             ]);
-            if inner.height > 4 {
-                buf.set_line(inner.x, inner.y + 3, &field, inner.width);
+            let y = inner.y + shown as u16 + 2;
+            if y < inner.bottom().saturating_sub(1) {
+                buf.set_line(inner.x, y, &field, inner.width);
             }
             dialog_keys(
                 buf,
@@ -839,51 +859,14 @@ fn draw_modal(
             );
             outer
         }
-        Modal::Request(row) => {
-            let LedgerRecord::Request(r) = &row.record;
-            let account = r
-                .account
-                .as_deref()
-                .map_or("no account could take it".to_owned(), |id| {
-                    app.data.account_name(id).to_owned()
-                });
-            let mut fields: Vec<(&str, String)> = vec![
-                ("When", format!("{} · {}", now.stamp(r.at), now.ago(r.at))),
-                ("Status", r.status.to_string()),
-                ("Model", r.model.clone().unwrap_or_else(|| "—".into())),
-                ("Account", format!("{account} ({})", r.provider.title())),
-                ("Attempts", r.attempts.to_string()),
-                ("Time", format::millis(r.ms as f64)),
-            ];
-            if let Some(first) = r.first_byte_ms {
-                fields.push(("First byte", format::millis(first as f64)));
-            }
-            fields.extend([
-                ("Input", format::grouped(r.usage.input)),
-                ("Output", format::grouped(r.usage.output)),
-                ("Cache read", format::grouped(r.usage.cache_read)),
-                ("Cache write", format::grouped(r.usage.cache_write)),
-                ("API value", row.cost.map_or("—".into(), format::dollars)),
-            ]);
-            if let Some(agent) = r.agent {
-                fields.push(("Agent", format::agent_title(agent).into()));
-            }
-            if let Some(machine) = &r.machine {
-                fields.push(("Machine", machine.clone()));
-            }
-            if let Some(session) = &r.session {
-                fields.push(("Session", session.clone()));
-            }
-            if let Some(end) = row.end {
-                fields.push(("Ended", requests::end_words(end).into()));
-            }
-            let (outer, inner) = dialog(buf, area, 64, fields.len() as u16 + 4, theme, "Request");
-            for (i, (name, value)) in fields.iter().enumerate() {
+        Modal::Request { row, scroll } => {
+            let fields = request_fields(app, row, now);
+            let (outer, inner) = dialog(buf, area, 64, fields.len() as u16 + 5, theme, "Request");
+            let room = request_rows(inner);
+            let top = usize::from(*scroll).min(fields.len().saturating_sub(room));
+            for (i, (name, value)) in fields.iter().skip(top).take(room).enumerate() {
                 let y = inner.y + 1 + i as u16;
-                if y >= inner.bottom() {
-                    break;
-                }
-                buf.set_string(inner.x, y, *name, theme.muted());
+                buf.set_stringn(inner.x, y, *name, inner.width as usize, theme.muted());
                 buf.set_stringn(
                     inner.x + 14,
                     y,
@@ -892,9 +875,78 @@ fn draw_modal(
                     Style::new(),
                 );
             }
+            let mut keys = Vec::new();
+            if fields.len() > room {
+                keys.extend([
+                    Span::styled("↑↓", theme.strong()),
+                    Span::styled(" scroll   ", theme.muted()),
+                ]);
+            }
+            keys.extend([
+                Span::styled("esc", theme.strong()),
+                Span::styled(" close", theme.muted()),
+            ]);
+            dialog_keys(buf, inner, keys);
             outer
         }
     }
+}
+
+/// How many of a request's fields its dialog shows at once: all but its
+/// first row, and the blank row and keys at its bottom.
+fn request_rows(inner: Rect) -> usize {
+    inner.height.saturating_sub(3) as usize
+}
+
+/// How far the request dialog can scroll over `area`.
+fn request_scroll(app: &App, row: &RequestRow, area: Rect, now: &Now) -> u16 {
+    let n = request_fields(app, row, now).len();
+    let height = (n as u16 + 5).min(area.height.saturating_sub(2));
+    // The dialog's border takes a row above and below.
+    let inner = Rect::new(0, 0, 1, height.saturating_sub(2));
+    n.saturating_sub(request_rows(inner)) as u16
+}
+
+/// A request of the feed, field by field, as its dialog lists it.
+fn request_fields(app: &App, row: &RequestRow, now: &Now) -> Vec<(&'static str, String)> {
+    let LedgerRecord::Request(r) = &row.record;
+    let account = r
+        .account
+        .as_deref()
+        .map_or("no account could take it".to_owned(), |id| {
+            app.data.account_name(id).to_owned()
+        });
+    let mut fields: Vec<(&str, String)> = vec![
+        ("When", format!("{} · {}", now.stamp(r.at), now.ago(r.at))),
+        ("Status", r.status.to_string()),
+        ("Model", r.model.clone().unwrap_or_else(|| "—".into())),
+        ("Account", format!("{account} ({})", r.provider.title())),
+        ("Attempts", r.attempts.to_string()),
+        ("Time", format::millis(r.ms as f64)),
+    ];
+    if let Some(first) = r.first_byte_ms {
+        fields.push(("First byte", format::millis(first as f64)));
+    }
+    fields.extend([
+        ("Input", format::grouped(r.usage.input)),
+        ("Output", format::grouped(r.usage.output)),
+        ("Cache read", format::grouped(r.usage.cache_read)),
+        ("Cache write", format::grouped(r.usage.cache_write)),
+        ("API value", row.cost.map_or("—".into(), format::dollars)),
+    ]);
+    if let Some(agent) = r.agent {
+        fields.push(("Agent", format::agent_title(agent).into()));
+    }
+    if let Some(machine) = &r.machine {
+        fields.push(("Machine", machine.clone()));
+    }
+    if let Some(session) = &r.session {
+        fields.push(("Session", session.clone()));
+    }
+    if let Some(end) = row.end {
+        fields.push(("Ended", requests::end_words(end).into()));
+    }
+    fields
 }
 
 #[cfg(test)]

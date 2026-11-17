@@ -96,9 +96,12 @@ impl Effects {
         self.rows.process_effects(self.elapsed, buf, area);
     }
 
-    /// A dialog that just opened resolves out of the page.
+    /// A dialog that just opened resolves out of the page. One closed
+    /// before it was all in drops what was left of it, as nothing would
+    /// draw it again and it would keep frames coming.
     pub fn overlay(&mut self, area: Option<Rect>, buf: &mut Buffer) {
         if area != self.shown {
+            self.overlay = EffectManager::default();
             if let Some(area) = area {
                 let timer = EffectTimer::from_ms(180, Interpolation::QuadOut);
                 self.overlay
@@ -109,6 +112,16 @@ impl Effects {
         if let Some(area) = area {
             self.overlay.process_effects(self.elapsed, buf, area);
         }
+    }
+
+    /// Drops every effect, as when the terminal is too small to draw the
+    /// page: what would have moved does so unseen, and a dialog still up
+    /// once there is room again comes in anew.
+    pub fn still(&mut self) {
+        self.page = EffectManager::default();
+        self.rows = EffectManager::default();
+        self.overlay = EffectManager::default();
+        self.shown = None;
     }
 }
 

@@ -590,3 +590,176 @@ fn a_request_answered_on_a_second_try_counts_as_rescued() {
     let page = app.data.requests.value.as_ref().unwrap();
     assert_eq!((page.rescued, page.failed), (rescued + 1, failed + 1));
 }
+
+#[test]
+fn a_new_key_comes_before_help_and_one_key_is_made_at_a_time() {
+    let mut app = app(Page::Access);
+    press(&mut app, KeyCode::Char('a'));
+    typed(&mut app, "ci");
+    assert_eq!(
+        press(&mut app, KeyCode::Enter),
+        [Cmd::Act(Action::MakeKey("ci".into()))]
+    );
+    // Another isn't asked for while the first is on its way, so one
+    // secret can't take the place of another.
+    assert_eq!(press(&mut app, KeyCode::Char('a')), []);
+    assert!(app.modal.is_none());
+    // Help is up when the answer comes: the secret takes its place, and
+    // keys reach the secret.
+    press(&mut app, KeyCode::Char('?'));
+    assert!(app.help);
+    let key = NewKey {
+        name: "ci".into(),
+        key: "sk-slopmax-secret".into(),
+        models: Vec::new(),
+    };
+    app.apply(Msg::Done(
+        Action::MakeKey("ci".into()),
+        Ok(Outcome::NewKey(key)),
+    ));
+    assert!(!app.help);
+    assert!(matches!(app.modal, Some(Modal::Secret { .. })));
+    press(&mut app, KeyCode::Char('x'));
+    assert!(matches!(app.modal, Some(Modal::Secret { .. })));
+    press(&mut app, KeyCode::Esc);
+    assert!(app.modal.is_none());
+    // A refusal lets the next be asked for too.
+    press(&mut app, KeyCode::Char('a'));
+    typed(&mut app, "ci");
+    press(&mut app, KeyCode::Enter);
+    assert!(app.making_key);
+    app.apply(Msg::Done(
+        Action::MakeKey("ci".into()),
+        Err("A key named ci already exists".into()),
+    ));
+    assert!(!app.making_key);
+    press(&mut app, KeyCode::Char('a'));
+    assert!(matches!(app.modal, Some(Modal::Input { .. })));
+}
+
+/// A request answered at `at` (minutes past 12:00) with `model`.
+fn answered(minutes: i64, model: &str) -> LedgerRecord {
+    let LedgerRecord::Request(record) = request(200, 1);
+    LedgerRecord::Request(RequestRecord {
+        at: record.at + slopmax_common::time::SignedDuration::from_mins(minutes),
+        model: Some(model.into()),
+        ..record
+    })
+}
+
+fn model_at(app: &App, row: usize) -> Option<String> {
+    let LedgerRecord::Request(r) = &app.feed().get(row)?.record;
+    r.model.clone()
+}
+
+#[test]
+fn the_feed_s_selection_stays_on_its_request_as_others_come_in() {
+    let mut app = app(Page::Requests);
+    press(&mut app, KeyCode::Down);
+    assert_eq!(model_at(&app, app.cursor).as_deref(), Some("gpt-6-sol"));
+    app.scroll = 5;
+    // One comes in above it: the selection and the view move down with
+    // what they were on.
+    app.apply(Msg::Event(Box::new(Event::Request {
+        record: answered(5, "claude-sonnet-5-5"),
+    })));
+    assert_eq!(app.arrived, 1);
+    assert_eq!(app.cursor, 2);
+    assert_eq!(app.scroll, 6);
+    assert_eq!(model_at(&app, app.cursor).as_deref(), Some("gpt-6-sol"));
+    // At the top, the view stays there to watch them come in.
+    app.scroll = 0;
+    app.apply(Msg::Event(Box::new(Event::Request {
+        record: answered(6, "claude-sonnet-5-5"),
+    })));
+    assert_eq!((app.cursor, app.scroll), (3, 0));
+    // One the filter hides neither counts nor moves anything.
+    app.filter = "gpt".into();
+    app.cursor = 0;
+    app.apply(Msg::Event(Box::new(Event::Request {
+        record: answered(7, "claude-opus-5-5"),
+    })));
+    assert_eq!(app.arrived, 2);
+    assert_eq!(app.cursor, 0);
+    assert_eq!(model_at(&app, 0).as_deref(), Some("gpt-6-sol"));
+    // Fetched again, the feed is found the request that was selected.
+    app.filter.clear();
+    app.cursor = app.feed().len() - 1;
+    assert_eq!(model_at(&app, app.cursor).as_deref(), Some("gpt-6-sol"));
+    app.scroll = 9;
+    let query = app.data.query.clone();
+    app.apply(Msg::Fetched(Box::new(Fetched::Requests(
+        query,
+        Ok(fixture("usage.requests.ok")),
+    ))));
+    assert_eq!(app.cursor, 1);
+    assert_eq!(model_at(&app, app.cursor).as_deref(), Some("gpt-6-sol"));
+    assert_eq!(app.scroll, 9 - 4 + 1);
+}
+
+#[test]
+fn past_midnight_what_is_counted_by_the_day_is_fetched_again() {
+    let mut app = app(Page::Usage);
+    assert!(!app.new_day(20_000));
+    assert!(!app.new_day(20_000));
+    assert!(!app.data.history(HistoryRange::Today).stale);
+    assert!(app.new_day(20_001));
+    assert!(app.data.history(HistoryRange::Today).stale);
+    assert!(app.data.machines(HistoryRange::Week).stale);
+    assert!(app.data.latest.stale && app.data.requests.stale);
+    let later = Clock::now() + Duration::from_secs(4);
+    let cmds = app.tick(later);
+    assert!(
+        cmds.contains(&Cmd::Fetch(What::History(HistoryRange::Week))),
+        "{cmds:?}"
+    );
+}
+
+#[test]
+fn a_new_report_leaves_the_selection_on_the_same_account() {
+    let mut app = app(Page::Provider(Provider::Claude));
+    press(&mut app, KeyCode::Down);
+    let id = app.selected_account().map(|a| a.id.clone()).unwrap();
+    // The same accounts in another order.
+    let mut report = app.data.report.clone().unwrap();
+    let claude: Vec<usize> = report
+        .accounts
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| a.provider == Provider::Claude)
+        .map(|(i, _)| i)
+        .collect();
+    report.accounts.swap(claude[0], claude[1]);
+    app.apply(Msg::Event(Box::new(Event::Status {
+        report: Box::new(report),
+    })));
+    assert_eq!(app.cursor, 0);
+    assert_eq!(
+        press(&mut app, KeyCode::Char('p')),
+        [Cmd::Act(Action::Pin(id))]
+    );
+}
+
+#[test]
+fn a_new_report_makes_open_settings_stale() {
+    let mut app = app(Page::Settings);
+    let report = app.data.report.clone().unwrap();
+    app.apply(Msg::Event(Box::new(Event::Status {
+        report: Box::new(report),
+    })));
+    assert!(app.data.settings.stale);
+}
+
+#[test]
+fn a_long_request_scrolls_and_any_other_key_closes_it() {
+    let mut app = app(Page::Requests);
+    press(&mut app, KeyCode::Enter);
+    assert!(matches!(app.modal, Some(Modal::Request { scroll: 0, .. })));
+    press(&mut app, KeyCode::Down);
+    assert!(matches!(app.modal, Some(Modal::Request { scroll: 1, .. })));
+    press(&mut app, KeyCode::Up);
+    press(&mut app, KeyCode::Up);
+    assert!(matches!(app.modal, Some(Modal::Request { scroll: 0, .. })));
+    press(&mut app, KeyCode::Char('x'));
+    assert!(app.modal.is_none());
+}

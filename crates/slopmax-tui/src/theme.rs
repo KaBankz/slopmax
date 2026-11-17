@@ -22,8 +22,6 @@ pub struct Theme {
     pub surface: Option<Color>,
     /// Further off: the selected row, dialogs and toasts.
     pub raised: Option<Color>,
-    /// The terminal's background is light.
-    pub light: bool,
 }
 
 impl Theme {
@@ -36,9 +34,6 @@ impl Theme {
         let mut options = terminal_colorsaurus::QueryOptions::default();
         options.timeout = Duration::from_millis(100);
         let palette = terminal_colorsaurus::color_palette(options).ok();
-        let light = palette
-            .as_ref()
-            .is_some_and(|p| p.theme_mode() == terminal_colorsaurus::ThemeMode::Light);
         let (surface, raised) = match (&palette, truecolor && color) {
             (Some(p), true) => {
                 let bg = p.background.scale_to_8bit();
@@ -51,7 +46,6 @@ impl Theme {
             color,
             surface,
             raised,
-            light,
         }
     }
 
@@ -62,7 +56,6 @@ impl Theme {
             color: true,
             surface: None,
             raised: None,
-            light: false,
         }
     }
 

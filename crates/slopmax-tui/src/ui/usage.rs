@@ -9,8 +9,8 @@ use slopmax_client::api::Tone;
 use slopmax_client::api::ledger::{History, HistoryRange, NamedTotals, Totals};
 
 use super::widgets::{
-    Flow, Stat, axis_labels, bar_row, braille_lines, change, column_chart, scaled_columns, shade,
-    stats, tabs,
+    Flow, Stat, TWO_COLUMNS, axis_labels, bar_row, braille_lines, change, column_chart,
+    scaled_columns, shade, stats, tabs,
 };
 use crate::app::{App, Hit, RANGES, range_title};
 use crate::format::{self, Now};
@@ -169,7 +169,7 @@ pub fn draw_usage(app: &App, flow: &mut Flow<'_>, _now: &Now) {
     )));
     flow.gap();
 
-    let wide = flow.width >= 100;
+    let wide = flow.width >= TWO_COLUMNS;
     let widths = if wide {
         flow.even(2, 4)
     } else {
@@ -521,7 +521,7 @@ pub fn draw_performance(app: &App, flow: &mut Flow<'_>, _now: &Now) {
     )));
     flow.gap();
 
-    let wide = flow.width >= 100;
+    let wide = flow.width >= TWO_COLUMNS;
     let widths = if wide {
         flow.even(2, 4)
     } else {
