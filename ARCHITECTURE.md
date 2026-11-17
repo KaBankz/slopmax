@@ -354,5 +354,5 @@ The allocator is the platform's own. mimalloc and jemalloc were 4 to 30% faster 
 
 - Unit tests sit next to the code: parsers and codecs against recorded shapes, the planner over tables of accounts, the pool's placement and failover.
 - `slopmax-daemon/tests/proxy.rs` runs the real proxy against a mock provider on a local port. `net::Origins` rewrites the providers' base URLs to it, and the mock answers by bearer token, so each account can be made to succeed, hit its limit, or reject its token.
-- `mise run check` runs rustfmt, clippy with warnings denied, and every test, as CI does: every CI job is a mise task, with the toolchain mise.toml pins.
+- `mise run check` runs rustfmt, clippy with warnings denied (`mise run lint`), and every test (`mise run test`), as CI does: every CI job is a mise task, with the toolchain mise.toml pins. CI runs lint and test as separate jobs on Linux, macOS, and Windows, and builds the Windows releases on Linux with cargo-xwin.
 - Unsafe code is denied across the workspace and allowed in exactly two places: reading the local time offset (`slopmax-common`) and turning off terminal echo while a secret is typed (the CLI).

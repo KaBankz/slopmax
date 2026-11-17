@@ -11,19 +11,27 @@ run = "cargo build --release --locked"
 
 [tasks.check]
 description = "Format check, lint, and test"
+run = [{ task = "lint" }, { task = "test" }]
+
+# CI runs these two as separate jobs: each builds the workspace its own way
+# (clippy only checks it; the tests compile it), so side by side they take
+# as long as the slower one rather than both.
+[tasks.lint]
+description = "Format check and lint"
 run = [
   "cargo fmt --all --check",
   "cargo clippy --all-targets --all-features --locked -- -D warnings",
+]
+
+[tasks.test]
+description = "Run the tests"
+run = [
   "cargo test --locked",
   # Day boundaries across a daylight saving change, in a zone that has one.
   "TZ=America/New_York cargo test --locked -p slopmax-common local_midnight",
 ]
 # Windows has no TZ database for the daylight saving check.
-run_windows = [
-  "cargo fmt --all --check",
-  "cargo clippy --all-targets --all-features --locked -- -D warnings",
-  "cargo test --locked --no-fail-fast",
-]
+run_windows = "cargo test --locked --no-fail-fast"
 
 [tasks.web]
 description = "Check the web UI and @slopmax/client: format, types, lint, tests, and the contract fixtures"
@@ -79,6 +87,49 @@ run = [
   "usage lint docs/cli/slopmax.usage.kdl",
   "usage generate markdown --file docs/cli/slopmax.usage.kdl --indented-blocks-to-code-fences --out-file docs/cli/README.md",
 ]
+
+[tasks.windows-env]
+description = "On a Linux CI runner: set up a Windows release build with cargo-xwin, in $GITHUB_ENV and $GITHUB_PATH"
+usage = 'arg "<target>" help="x86_64-pc-windows-msvc or aarch64-pc-windows-msvc"'
+tools = { "github:rust-cross/cargo-xwin" = "0.23.1" }
+# The clang backend: ring builds arm64 Windows with plain clang, which the
+# clang-cl backend's flags break, and its Windows SDK downloads in about 25
+# seconds where the clang-cl backend's took over 8 minutes. Its C runtime and
+# SDK libraries, which go into slopmax.exe, are one release of
+# windows-msvc-sysroot, checked against its SHA-256, never just the latest.
+env = { XWIN_CROSS_COMPILER = "clang", SYSROOT_URL = "https://github.com/trcrsired/windows-msvc-sysroot/releases/download/2026-11-06/windows-msvc-sysroot.tar.xz", SYSROOT_SHA256 = "563baf83e7dd48569b83fa104936d9d8819cc8db905e29c541b951e1eeaf2913" }
+run = '''
+: "${GITHUB_ENV:?is for a CI runner, where GITHUB_ENV is set}"
+# The runner's newest whole LLVM: clang, lld-link, llvm-lib, and the
+# llvm-rc that gives slopmax.exe its icon (build.rs).
+llvm=
+for bin in $(ls -d /usr/lib/llvm-*/bin 2>/dev/null | sort -V); do
+  if [ -x "$bin/clang" ] && [ -x "$bin/lld-link" ] && [ -x "$bin/llvm-lib" ] && [ -x "$bin/llvm-rc" ]; then
+    llvm=$bin
+  fi
+done
+[ -n "$llvm" ] || { echo "no LLVM in /usr/lib/llvm-* has clang, lld-link, llvm-lib and llvm-rc" >&2; exit 1; }
+echo "$llvm" >> "$GITHUB_PATH"
+# The sysroot where cargo-xwin looks first, with the DONE it leaves there.
+export XWIN_CACHE_DIR="$HOME/.cache/cargo-xwin" XWIN_MSVC_SYSROOT_DOWNLOAD_URL="$SYSROOT_URL"
+sysroot="$XWIN_CACHE_DIR/windows-msvc-sysroot"
+if [ ! -f "$sysroot/DONE" ]; then
+  # One command a line: errexit skips a failure before a && or ||.
+  rm -rf "$sysroot"
+  mkdir -p "$sysroot"
+  curl -fsSL --retry 3 -o "$sysroot.tar.xz" "$SYSROOT_URL"
+  echo "$SYSROOT_SHA256  $sysroot.tar.xz" | sha256sum -c -
+  tar -xJf "$sysroot.tar.xz" -C "$sysroot"
+  rm "$sysroot.tar.xz"
+  echo "$SYSROOT_URL" > "$sysroot/DONE"
+fi
+exports=$(PATH="$llvm:$PATH" cargo xwin env --target "$usage_target")
+# The compiler, linker, and SDK settings, without the Wine test runner or
+# the PATH and RUSTFLAGS cargo-xwin would replace.
+printf '%s\n' "$exports" \
+  | sed -nE 's/^export ([A-Za-z0-9_]+)="(.*)";$/\1=\2/p' \
+  | grep -vE '^(PATH|RUSTFLAGS|CARGO_TARGET_[A-Z0-9_]+_RUNNER)=' >> "$GITHUB_ENV"
+'''
 
 [tasks.launchd]
 description = "On a macOS CI runner: the login agent under launchd, through a crash, a handoff, stop and start"

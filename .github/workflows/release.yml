@@ -30,27 +30,47 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Each target on the runner that built it fastest, measured. Windows
+        # builds on Linux with cargo-xwin: in under half the time a Windows
+        # runner takes, with the same icon and version in slopmax.exe.
         include:
           - { target: x86_64-unknown-linux-musl, os: ubuntu-latest }
-          - { target: aarch64-unknown-linux-musl, os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
           - { target: x86_64-apple-darwin, os: macos-latest }
           - { target: aarch64-apple-darwin, os: macos-latest }
-          - { target: x86_64-pc-windows-msvc, os: windows-latest, bin: "slopmax,slopmaxw" }
-          - { target: aarch64-pc-windows-msvc, os: windows-latest, bin: "slopmax,slopmaxw" }
+          - { target: x86_64-pc-windows-msvc, os: ubuntu-latest, windows: true }
+          - { target: aarch64-pc-windows-msvc, os: ubuntu-latest, windows: true }
     steps:
       - uses: actions/checkout@v7
       # The Rust that mise.toml pins, as in development and CI.
       - uses: jdx/mise-action@v5
       # The web UI the binary serves; the build fails without it.
       - run: mise run ui
+      # Rust brings musl itself; ring's C is compiled against musl's headers
+      # too, as cross's containers did.
+      - if: contains(matrix.target, '-musl')
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends musl-tools
+          echo "CC_${TARGET//-/_}=musl-gcc" >> "$GITHUB_ENV"
+        env:
+          TARGET: ${{ matrix.target }}
+      - if: matrix.windows
+        run: mise run windows-env ${{ matrix.target }}
       - uses: taiki-e/upload-rust-binary-action@v1
         env:
           SLOPMAX_UI_REQUIRED: "1"
         with:
           # Windows also ships slopmaxw.exe, which runs the proxy at login.
-          bin: ${{ matrix.bin || 'slopmax' }}
+          bin: ${{ matrix.windows && 'slopmax,slopmaxw' || 'slopmax' }}
           target: ${{ matrix.target }}
+          # Plain cargo everywhere: the runners above build their targets
+          # without cross's containers.
+          build-tool: cargo
           archive: slopmax-$target
+          # Windows archives stay zips, though made on Linux.
+          tar: ${{ matrix.windows && 'none' || 'unix' }}
+          zip: ${{ matrix.windows && 'all' || 'none' }}
           checksum: sha256
           dry-run: ${{ github.event_name != 'push' }}
           dry-run-intended: ${{ github.event_name != 'push' }}
