@@ -1,6 +1,6 @@
 // Settings: how the app looks, the proxy and its address, how new sessions
 // find an account, limit resets, notifications, and the rest of the live
-// settings, each saved to config.json and applied at once.
+// settings, each saved to config.toml and applied at once.
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
 import type { LiveKey } from "@slopmax/client"
 import { Option } from "effect"
@@ -129,7 +129,7 @@ function NotificationsSection() {
             </Button>
           )}
         </SettingRow>
-        <SettingRow title="Webhook and command" detail="Where else notices go, as config.json's notify sets it.">
+        <SettingRow title="Webhook and command" detail="Where else notices go, as config.toml's notify sets it.">
           <Button variant="outline" onClick={() => test()}>
             Send a test notice
           </Button>
@@ -220,7 +220,7 @@ function LiveSections() {
                   ))}
                 </Panel>
                 <p className="text-xs text-muted-foreground">
-                  Each is saved to config.json and applied at once; slopmax config changes them too.
+                  Each is saved to config.toml and applied at once; slopmax config changes them too.
                 </p>
               </div>
             </Section>

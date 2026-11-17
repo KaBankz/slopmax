@@ -124,7 +124,7 @@ export class NotifySettings extends Schema.Class<NotifySettings>("NotifySettings
 
 const strategyHelp = [
   "How a new session picks its account:",
-  "fill-first uses accounts in order, moving on when one is limited (the order `slopmax order` sets);",
+  "fill-first uses accounts in order, moving on when one is limited (the order `slopmax account order` sets);",
   "reset-first spends the quota that resets soonest, so none is lost;",
   "least-used spreads sessions over the least used accounts;",
   "round-robin hands sessions to each account in turn.",
@@ -197,7 +197,7 @@ export class Settings extends Schema.Class<Settings>("Settings")({
   }).pipe(withDefault(true)),
   websockets: Schema.Boolean.annotate({
     description:
-      "Relay Codex's WebSocket connections to ChatGPT, which starts answers sooner than HTTP streaming. `slopmax setup codex` turns them on in Codex.",
+      "Relay Codex's WebSocket connections to ChatGPT, which starts answers sooner than HTTP streaming. `slopmax agent connect codex` turns them on in Codex.",
     default: true,
     live: { summary: "Relay Codex's WebSocket connections" },
   }).pipe(withDefault(true)),
@@ -237,7 +237,7 @@ export class Settings extends Schema.Class<Settings>("Settings")({
     .pipe(withDefault({})),
   notify: NotifySettings.annotate({
     description:
-      "Where notices go: when every account of a provider is limited, recovers, or needs signing in again, when a limit reset would expire unused, and when a week is about to reset with quota unused. Check it with `slopmax notify`.",
+      "Where notices go: when every account of a provider is limited, recovers, or needs signing in again, when a limit reset would expire unused, and when a week is about to reset with quota unused. Check it with `slopmax notify test`.",
   }).pipe(withDefault({})),
   keys: Schema.Array(ClientKey)
     .annotate({

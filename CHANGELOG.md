@@ -4,6 +4,45 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+The command line is rebuilt on [usage](https://usage.jdx.dev) and regrouped: things are nouns with verbs under them (`account`, `agent`, `proxy`, `key`, `tailscale`), the same verbs and flags mean the same thing everywhere, and every command that prints data takes `--json`. Many commands moved; each moved command now fails with its new spelling, so a script learns it once (`completions` and `tailscale users`/`admins` are kept as hidden aliases). Renamed flags (below) fail as unknown flags.
+
+### Changed
+
+- Commands moved under the thing they act on:
+
+  | Before | Now |
+  | --- | --- |
+  | `import`, `own`, `use`, `label`, `priority`, `order`, `enable`, `disable`, `redeem`, `remove` | `account import`, `account adopt`, `account use`, `account rename`, `account priority`, `account order`, `account enable`, `account disable`, `account redeem`, `account remove` |
+  | `ls` | `status` |
+  | `use auto` | `account use --auto` |
+  | `start`, `stop`, `logs`, `serve` | `proxy start`, `proxy stop`, `proxy logs`, `proxy serve` |
+  | `service install`, `service uninstall`, `service status` | `proxy install`, `proxy uninstall`, `proxy status` |
+  | `setup <agent>`, `setup <agent> --undo`, `env <agent>` | `agent connect <agent>`, `agent disconnect <agent>`, `agent env <agent>` |
+  | `tailscale users …`, `tailscale admins …` | `tailscale user …`, `tailscale admin …` (names as separate words, or comma-separated) |
+  | `notify` | `notify test` (`notify` alone shows where notifications go) |
+  | `completions <shell>` | `completion <shell>` |
+
+  `slopmax login` and `slopmax run` stay as shortcuts for `account add` and `agent run`, and `slopmax serve` still runs the proxy, as the login services installed before run it.
+- Flags renamed: `--own` is `--adopt` (`account import`, `setup`), `setup --hub`'s `--key` and `--name` are `--hub-key` and `--key-name`, and `dashboard --print` is `dashboard --no-browser`, as `login` has it.
+- `account remove` and `key remove` ask before forgetting an account or revoking a key, as `account redeem` asks before spending a limit reset. Without a terminal all three fail unless given `--yes`, rather than doing nothing.
+- A command line that doesn't parse says so as before, with the possible values and a suggestion, and exits 2; a value outside a flag's choices (`--by week`, `--strategy sideways`) is now such an error.
+- Shell completion completes every subcommand, flag, and value, the accounts and key names included, for bash, zsh, fish, nushell, PowerShell, and elvish; `slopmax completion <shell> --install` puts the script where the shell looks.
+- `--help` shows examples, the environment variables slopmax reads, and what each exit code means.
+
+### Added
+
+- `slopmax account list`: the accounts, numbered as every `<account>` takes them. `slopmax account` alone lists them too.
+- `slopmax account check <account>`: lifts slopmax's hold on an account and reads its usage again, as the dashboard's Check does.
+- `slopmax requests`: the requests the proxy answered, newest first, as the dashboard's Requests page lists them (`--failed`, `--account`, `--model`, `-n`, `--json`).
+- `slopmax agent list`: the agents, and whether each points at slopmax.
+- `slopmax proxy status`, which also tells a proxy started from another home, and `slopmax proxy restart`, which hands the proxy's connections to a new process as an update does.
+- `--json` on every command that prints data: `account [list]`, `account order`, `account check`, `agent [list]`, `proxy [status]`, `key [list]`, `config` (keyed as `config` takes the settings, with typed values), `tailscale user` and `admin`, `notify`, `doctor`, `requests` (with `--offset` to page back), and `update --check`.
+- `slopmax __usage_spec__` prints the command line as a usage spec, each command marked as reading, changing, or destroying; the spec and a CLI reference made from it are in [docs/cli](docs/cli/README.md).
+
+### Fixed
+
+- The dashboard named the config file `config.json`; it is `config.toml`.
+
 ## [0.14.1] - 2026-11-17
 
 ### Fixed

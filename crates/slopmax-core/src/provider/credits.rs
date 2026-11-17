@@ -1,7 +1,7 @@
 //! Banked rate-limit resets.
 //!
 //! Some providers grant accounts credits that reset their usage windows on
-//! the spot. slopmax redeems them on request (`slopmax redeem`), just before
+//! the spot. slopmax redeems them on request (`slopmax account redeem`), just before
 //! one would expire unused (`redeem_expiring_credits`), and, with
 //! `redeem_when_exhausted`, once every account of the provider is spent, so
 //! the pool keeps serving instead of waiting.

@@ -77,7 +77,7 @@ export const advancedRows = (view: SettingsView): ReadonlyArray<AdvancedRow> =>
 export const restartLine = (view: SettingsView): string | undefined =>
   view.restartNeeded.length === 0
     ? undefined
-    : `${view.restartNeeded.join(" and ")} changed in config.json; restart slopmax to use ${view.restartNeeded.length === 1 ? "it" : "them"}.`
+    : `${view.restartNeeded.join(" and ")} changed in config.toml; restart slopmax to use ${view.restartNeeded.length === 1 ? "it" : "them"}.`
 
 /** A change to one live setting, checked as the API will check it; none when the value is not one it takes. */
 export const livePatch = (name: LiveKey, value: boolean | number | string): Option.Option<LivePatch> =>

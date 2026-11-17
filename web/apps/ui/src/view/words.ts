@@ -16,7 +16,7 @@ const withoutPath = (message: string): string => message.split("\n")[0]?.trim() 
 const shapeWords = /^(Missing key|Unexpected key|Expected )/
 
 /** What the page says when slopmax does not answer at all. */
-export const notAnswering = "slopmax is not answering. Is it running? Start it with slopmax start."
+export const notAnswering = "slopmax is not answering. Is it running? Start it with slopmax proxy start."
 
 /** What the page says when slopmax answers with an error status it does not explain. */
 export const answeredError = (status: number): string => `slopmax answered with an error (${status}).`

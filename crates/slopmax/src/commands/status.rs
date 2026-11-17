@@ -50,7 +50,7 @@ pub(super) async fn run(config: &Config, store: &Store, args: StatusArgs) -> Res
                 "{}",
                 ui::dim(
                     "The login service was written by another slopmax version or for another \
-                     listen address; `slopmax service install` writes it anew."
+                     listen address; `slopmax proxy install` writes it anew."
                 )
             );
         }
@@ -97,6 +97,18 @@ fn hub_footer(url: &str, health: &slopmax_client::Health) -> String {
         super::remote::host_name(url),
         health.version
     )
+}
+
+/// The report: the running proxy's, else read from disk.
+pub(super) async fn report(
+    config: &Config,
+    store: &Store,
+    daemon: Option<&slopmax_client::Client>,
+) -> Result<Report> {
+    match daemon {
+        Some(client) => Ok(client.status().await?),
+        None => offline(config, store, false).await,
+    }
 }
 
 /// The report read from disk, while no daemon runs.
@@ -177,7 +189,7 @@ fn render(report: &Report, now: Timestamp) -> String {
         out.push_str(
             "No accounts yet. Connect one with `slopmax login claude` or `slopmax login codex`,\n",
         );
-        out.push_str("or bring existing logins over with `slopmax import`.\n");
+        out.push_str("or bring existing logins over with `slopmax account import`.\n");
         return out;
     }
     let name_width = report
@@ -269,7 +281,7 @@ fn render(report: &Report, now: Timestamp) -> String {
             out,
             "{}",
             ui::dim(format!(
-                "{n} account{} follow{} {tool}, which renews {}: `slopmax own all` takes {} over once it is stopped",
+                "{n} account{} follow{} {tool}, which renews {}: `slopmax account adopt all` takes {} over once it is stopped",
                 if n == 1 { "" } else { "s" },
                 if n == 1 { "s" } else { "" },
                 if n == 1 {
@@ -298,7 +310,7 @@ fn render(report: &Report, now: Timestamp) -> String {
             out,
             "{}",
             ui::dim(format!(
-                "no usage known yet for {unknown} account{}: `slopmax status --refresh` reads it now, `slopmax start` keeps it current",
+                "no usage known yet for {unknown} account{}: `slopmax status --refresh` reads it now, `slopmax proxy start` keeps it current",
                 if unknown == 1 { "" } else { "s" }
             ))
         );
@@ -409,7 +421,7 @@ fn window_cell(window: Option<&Window>, now: Timestamp) -> String {
     ui::pad(&cell, CELL)
 }
 
-fn status_cell(account: &AccountView, now: Timestamp) -> String {
+pub(super) fn status_cell(account: &AccountView, now: Timestamp) -> String {
     let condition = account.condition.at(now);
     // What went wrong stays in `--json` and `slopmax doctor`; here, the fix.
     let text = match &condition {
@@ -601,7 +613,7 @@ mod tests {
             );
             render(&report, ts(1000))
         };
-        assert!(!render_with(account.clone()).contains("slopmax own all"));
+        assert!(!render_with(account.clone()).contains("slopmax account adopt all"));
         account.link = Some(slopmax_core::account::Link {
             tool: "cliproxyapi".into(),
             path: "/cpa/codex-a.json".into(),
@@ -609,7 +621,7 @@ mod tests {
         let text = render_with(account);
         assert!(
             text.contains(
-                "1 account follows cliproxyapi, which renews its sign-in: `slopmax own all`"
+                "1 account follows cliproxyapi, which renews its sign-in: `slopmax account adopt all`"
             ),
             "{text}"
         );

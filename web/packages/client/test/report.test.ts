@@ -112,7 +112,7 @@ const sampleReport = (): Report => {
         provider: "claude",
         account: "a@x.com",
         until: ts(20_000),
-        message: "A limit reset on a@x.com expires; redeem it with `slopmax redeem a@x.com`.",
+        message: "A limit reset on a@x.com expires; redeem it with `slopmax account redeem a@x.com`.",
         at: ts(1_000),
       }),
     ],

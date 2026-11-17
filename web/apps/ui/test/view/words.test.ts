@@ -183,7 +183,7 @@ describe("the pool's bar and failures", () => {
       reason: new HttpClientError.TransportError({ request, description: "Failed to fetch" }),
     })
     expect(failureText(Cause.fail(transport))).toBe(
-      "slopmax is not answering. Is it running? Start it with slopmax start.",
+      "slopmax is not answering. Is it running? Start it with slopmax proxy start.",
     )
     const response = HttpClientResponse.fromWeb(request, new Response("Bad Gateway", { status: 502 }))
     const status = new HttpClientError.HttpClientError({

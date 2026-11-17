@@ -76,7 +76,7 @@ pub struct Account {
     /// Higher priorities are preferred; ties fall back to the strategy.
     #[serde(default)]
     pub priority: i32,
-    /// Its place within its priority tier, from `slopmax order`: lower goes
+    /// Its place within its priority tier, from `slopmax account order`: lower goes
     /// first, and accounts without one follow, oldest first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order: Option<u32>,
@@ -85,7 +85,7 @@ pub struct Account {
     pub auth_error: Option<String>,
     pub tokens: Tokens,
     /// Another tool still refreshes these tokens; slopmax follows its file
-    /// instead of refreshing (see `slopmax own`).
+    /// instead of refreshing (see `slopmax account adopt`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<Link>,
     /// A compatible endpoint's address and models.
@@ -265,7 +265,7 @@ impl Account {
     }
 
     /// Where it stands among its provider's accounts: priority first, then
-    /// its place from `slopmax order`, then age. Fill-first uses them in
+    /// its place from `slopmax account order`, then age. Fill-first uses them in
     /// this order.
     pub fn rank(&self) -> (std::cmp::Reverse<i32>, u32, Timestamp) {
         (
@@ -276,7 +276,7 @@ impl Account {
     }
 }
 
-/// The places `slopmax order` gives `provider`'s accounts so that `first`
+/// The places `slopmax account order` gives `provider`'s accounts so that `first`
 /// lead, in the order given, and the rest follow in their present order:
 /// each account's id and its new place, for those it changes. Priorities
 /// still come first; `first` must not put an account ahead of one in a
@@ -308,7 +308,7 @@ pub fn reorder<'a>(accounts: &'a [Account], first: &[&str]) -> Result<Vec<(&'a s
         if pair[1].priority > pair[0].priority {
             return Err(format!(
                 "{} has priority {}, above {}'s {}, so it is used first whatever the order; \
-                 change that with `slopmax priority`",
+                 change that with `slopmax account priority`",
                 pair[1].name(),
                 pair[1].priority,
                 pair[0].name(),
@@ -761,7 +761,7 @@ mod tests {
         assert_eq!(
             ambiguous,
             format!(
-                "\"claude-\" matches 2 accounts: #1 {} ({}), #2 {} ({}). Use the number from `slopmax status`, e.g. `slopmax use 1`.",
+                "\"claude-\" matches 2 accounts: #1 {} ({}), #2 {} ({}). Use the number from `slopmax status`, e.g. `slopmax account use 1`.",
                 one.name(),
                 one.id,
                 two.name(),

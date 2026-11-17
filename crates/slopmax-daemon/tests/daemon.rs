@@ -190,7 +190,7 @@ impl Daemon {
         response.text().await.unwrap()
     }
 
-    /// Stops the daemon as `slopmax stop` does, and waits for it to finish.
+    /// Stops the daemon as `slopmax proxy stop` does, and waits for it to finish.
     async fn stop(self) -> (PathBuf, Duration) {
         let asked = Instant::now();
         assert_eq!(self.call("/slopmax/api/shutdown").await, StatusCode::OK);

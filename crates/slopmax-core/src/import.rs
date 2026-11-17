@@ -250,7 +250,7 @@ async fn from_cliproxy_file(
 ) -> Result<Account> {
     let tokens = cliproxy_tokens(&file)?;
     let mut account = Account::new(provider, tokens);
-    // CLIProxyAPI keeps refreshing its copy; follow it until `slopmax own`.
+    // CLIProxyAPI keeps refreshing its copy; follow it until `slopmax account adopt`.
     account.link = Some(Link {
         tool: "cliproxyapi".into(),
         path: path.to_owned(),

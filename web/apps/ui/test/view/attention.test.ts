@@ -92,7 +92,7 @@ describe("what wants a look", () => {
         provider: "codex",
         account: name,
         until: at(600),
-        message: `A limit reset on ${name} expires in 10h00m (22:00). Run \`slopmax redeem ${name}\`.`,
+        message: `A limit reset on ${name} expires in 10h00m (22:00). Run \`slopmax account redeem ${name}\`.`,
         at: now,
       })
     const plain = account({ id: "codex-1", provider: "codex", name: "a@x.dev" })

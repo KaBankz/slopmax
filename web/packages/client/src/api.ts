@@ -187,7 +187,7 @@ export class AccountPatch extends Schema.Class<AccountPatch>("AccountPatch")({
       Schema.isInt({ message: "priority is a whole number" }),
     ),
   ),
-  /** Its place within its priority tier, lower first (`slopmax order`). */
+  /** Its place within its priority tier, lower first (`slopmax account order`). */
   order: Schema.optionalKey(
     Schema.Number.annotate({ message: "order is a whole number from 1" }).check(
       Schema.isInt({ message: "order is a whole number from 1" }),

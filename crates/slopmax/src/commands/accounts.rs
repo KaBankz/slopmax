@@ -14,8 +14,10 @@ use slopmax_client::api::requests::{
 };
 
 use super::daemon;
+use crate::cli::{AccountAdd, DialectArg};
 use crate::term;
 use crate::ui;
+use slopmax_core::account::Endpoint;
 use slopmax_core::account::{self, Store};
 use slopmax_core::auth::{self, LoginOptions, callback};
 use slopmax_core::config::Config;
@@ -26,6 +28,7 @@ use slopmax_core::pool::State;
 use slopmax_core::provider::credits::Outcome;
 use slopmax_core::provider::{Billing, Credential, ProviderId};
 use slopmax_core::time::Timestamp;
+use slopmax_core::wire::Dialect;
 use slopmax_core::{api, fsx, human};
 
 pub(super) async fn login(
@@ -84,7 +87,7 @@ pub(super) async fn login(
         };
         bail!(
             "slopmax login {provider} needs a terminal to paste the code into; run it in an \
-             interactive shell, or bring an existing login over with `slopmax import {source}`"
+             interactive shell, or bring an existing login over with `slopmax account import {source}`"
         );
     }
     if let Credential::Key { optional } = spec.credential {
@@ -350,7 +353,7 @@ pub(super) async fn import(
         println!(
             "\n{} CLIProxyAPI keeps refreshing {linked} of these, and slopmax follows its files,\n        \
              so both can run while you switch over. Once CLIProxyAPI is stopped, run\n        \
-             `slopmax own all` so slopmax refreshes them.",
+             `slopmax account adopt all` so slopmax refreshes them.",
             ui::cyan("linked:")
         );
     }
@@ -358,7 +361,7 @@ pub(super) async fn import(
         println!(
             "\n{} Imported logins share refresh tokens with their source, and whichever\n      \
              refreshes first invalidates the other's copy. Use the agents through slopmax\n      \
-             from now on (`slopmax setup claude`, `slopmax setup codex`).",
+             from now on (`slopmax agent connect claude`, `slopmax agent connect codex`).",
             ui::yellow("note:")
         );
     }
@@ -374,7 +377,7 @@ fn nothing_found(source: Source) {
 }
 
 /// Stops following another tool's copy of an account's tokens.
-pub(super) async fn own(config: &Config, store: &Store, query: &str) -> Result<()> {
+pub(super) async fn adopt(config: &Config, store: &Store, query: &str) -> Result<()> {
     let client = daemon(config).await?;
     let accounts = if query == "all" {
         store
@@ -425,21 +428,23 @@ pub(super) async fn own(config: &Config, store: &Store, query: &str) -> Result<(
     Ok(())
 }
 
-pub(super) async fn use_account(config: &Config, store: &Store, query: &str) -> Result<()> {
+/// Prefers the account `query` names for new sessions; `None` lets
+/// slopmax choose again.
+pub(super) async fn use_account(config: &Config, store: &Store, query: Option<&str>) -> Result<()> {
     let client = daemon(config).await?;
-    if query == "auto" {
+    let Some(query) = query else {
         match &client {
             Some(client) => drop(client.unpin_all().await?),
             None => account::unpin_all(super::home())?,
         }
         println!("slopmax will choose accounts automatically.");
         return Ok(());
-    }
+    };
     let account = find(config, store, client.as_ref(), query).await?;
     let name = account.name();
     if account.disabled {
         bail!(
-            "{name} is disabled, so it won't be used; run `slopmax enable {}` first",
+            "{name} is disabled, so it won't be used; run `slopmax account enable {}` first",
             handle(store, &account)
         );
     }
@@ -477,7 +482,7 @@ fn handle(store: &Store, account: &account::Account) -> String {
 
 /// The account `query` names: among the hub's, on a machine that uses one,
 /// else among this home's.
-async fn find(
+pub(super) async fn find(
     config: &Config,
     store: &Store,
     client: Option<&Client>,
@@ -654,9 +659,18 @@ pub(super) async fn set_priority(
 
 /// Shows the order fill-first uses accounts in, or puts `queries` first in
 /// it, in the order given.
-pub(super) async fn order(config: &Config, store: &Store, queries: &[String]) -> Result<()> {
+pub(super) async fn order(
+    config: &Config,
+    store: &Store,
+    queries: &[String],
+    json: bool,
+) -> Result<()> {
     let client = daemon(config).await?;
     let accounts = listed(config, store, client.as_ref()).await?;
+    if json && queries.is_empty() {
+        println!("{}", serde_json::to_string_pretty(&order_view(&accounts))?);
+        return Ok(());
+    }
     if accounts.is_empty() {
         println!(
             "No accounts yet. Connect one with `slopmax login claude` or `slopmax login codex`."
@@ -680,7 +694,7 @@ pub(super) async fn order(config: &Config, store: &Store, queries: &[String]) ->
         println!(
             "{}",
             ui::dim(
-                "Put accounts first with `slopmax order <account>...`, numbers as listed here."
+                "Put accounts first with `slopmax account order <account>...`, numbers as listed here."
             )
         );
         strategy_note(config);
@@ -705,6 +719,10 @@ pub(super) async fn order(config: &Config, store: &Store, queries: &[String]) ->
         }
     }
     let accounts = listed(config, store, client.as_ref()).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&order_view(&accounts))?);
+        return Ok(());
+    }
     let provider = accounts
         .iter()
         .find(|a| a.id == ids[0])
@@ -716,7 +734,7 @@ pub(super) async fn order(config: &Config, store: &Store, queries: &[String]) ->
 }
 
 /// `provider`'s accounts in the order fill-first uses them, numbered as
-/// `slopmax status` numbers them.
+/// `slopmax account list` numbers them.
 fn show_order(accounts: &[account::Account], provider: ProviderId) {
     println!(
         "{} accounts, in the order new sessions use them:",
@@ -748,6 +766,38 @@ fn show_order(accounts: &[account::Account], provider: ProviderId) {
     }
 }
 
+/// The order as JSON: each provider's accounts in the order new sessions
+/// use them, numbered as every `<ACCOUNT>` takes them.
+fn order_view(accounts: &[account::Account]) -> serde_json::Value {
+    let mut providers: Vec<ProviderId> = Vec::new();
+    for account in accounts {
+        if !providers.contains(&account.provider) {
+            providers.push(account.provider);
+        }
+    }
+    providers
+        .into_iter()
+        .map(|provider| {
+            let listed: Vec<serde_json::Value> = accounts
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| a.provider == provider)
+                .map(|(n, a)| {
+                    serde_json::json!({
+                        "number": n + 1,
+                        "id": a.id,
+                        "name": a.name(),
+                        "priority": a.priority,
+                        "disabled": a.disabled,
+                        "signedOut": a.auth_error.is_some(),
+                    })
+                })
+                .collect();
+            serde_json::json!({ "provider": provider.as_str(), "accounts": listed })
+        })
+        .collect()
+}
+
 /// Says when the order is not what places sessions.
 fn strategy_note(config: &Config) {
     if config.strategy != slopmax_core::config::Strategy::FillFirst {
@@ -762,9 +812,13 @@ fn strategy_note(config: &Config) {
     }
 }
 
-pub(super) async fn remove(config: &Config, store: &Store, query: &str) -> Result<()> {
+pub(super) async fn remove(config: &Config, store: &Store, query: &str, yes: bool) -> Result<()> {
     let client = daemon(config).await?;
     let account = find(config, store, client.as_ref(), query).await?;
+    let question = format!("Forget {}? Its sign-in is deleted.", account.name());
+    if !super::confirmed(yes, &question)? {
+        return Ok(());
+    }
     match client {
         Some(client) => drop(client.remove_account(&account.id).await?),
         None => account::forget(store, super::home(), &account)?,
@@ -812,7 +866,7 @@ pub(super) async fn redeem(config: &Config, store: &Store, query: &str, yes: boo
         ui::bold(account.name()),
         available.len()
     );
-    if !yes && !term::confirm("Reset its usage windows now?", false)? {
+    if !super::confirmed(yes, "Reset its usage windows now?")? {
         return Ok(());
     }
     match credits
@@ -856,7 +910,7 @@ async fn redeem_through(client: &Client, id: &str, yes: bool) -> Result<()> {
         ui::bold(&account.name),
         resets.len()
     );
-    if !yes && !term::confirm("Reset its usage windows now?", false)? {
+    if !super::confirmed(yes, "Reset its usage windows now?")? {
         return Ok(());
     }
     let asked = RedeemRequest {
@@ -874,6 +928,149 @@ async fn redeem_through(client: &Client, id: &str, yes: bool) -> Result<()> {
             "{} would not use one right now, so it was kept.",
             account.provider.title()
         ),
+    }
+    Ok(())
+}
+
+/// `slopmax login` and `slopmax account add`.
+pub(super) async fn add(ctx: &super::Ctx, add: AccountAdd) -> Result<()> {
+    let (config, store) = (&ctx.config, &ctx.store);
+    let provider: ProviderId = add
+        .provider
+        .word()
+        .parse()
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let endpoint = match add.url.as_deref() {
+        Some(url) => Some(endpoint(url, add.dialect, &add.models)?),
+        None if provider == ProviderId::Compat => {
+            bail!("a compatible endpoint needs its address: --url <base url>")
+        }
+        None => None,
+    };
+    if endpoint.is_some() && provider != ProviderId::Compat {
+        bail!("--url, --dialect, and --models are for `slopmax login compat`");
+    }
+    let options = LoginOptions {
+        device: add.device,
+        no_browser: add.no_browser,
+        endpoint,
+        ..LoginOptions::default()
+    };
+    login(config, store, provider, add.label, options).await
+}
+
+/// A compatible endpoint from `login compat`'s flags.
+fn endpoint(url: &str, dialect: Option<DialectArg>, models: &[String]) -> Result<Endpoint> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        bail!("--url takes an http:// or https:// base URL, got {url:?}");
+    }
+    let dialect = match dialect.unwrap_or(DialectArg::Chat) {
+        DialectArg::Chat => Dialect::Chat,
+        DialectArg::Responses => Dialect::Responses,
+        DialectArg::Messages => Dialect::Messages,
+    };
+    let models = models
+        .iter()
+        .map(|m| m.trim())
+        .filter(|m| !m.is_empty())
+        .map(str::to_owned)
+        .collect();
+    Ok(Endpoint {
+        base_url: url.trim_end_matches('/').to_owned(),
+        dialect,
+        models,
+    })
+}
+
+/// `slopmax account list`: the accounts, numbered as every command that
+/// takes `<ACCOUNT>` numbers them.
+pub(super) async fn list(ctx: &super::Ctx, json: bool) -> Result<()> {
+    let client = daemon(&ctx.config).await?;
+    let report = super::status::report(&ctx.config, &ctx.store, client.as_ref()).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report.accounts)?);
+        return Ok(());
+    }
+    if report.accounts.is_empty() {
+        println!(
+            "No accounts yet. Connect one with `slopmax login claude`, `slopmax login codex`, \
+             or `slopmax login grok`."
+        );
+        return Ok(());
+    }
+    let now = Timestamp::now();
+    let name_width = report
+        .accounts
+        .iter()
+        .map(|a| a.name.chars().count())
+        .max()
+        .unwrap_or(0);
+    let kind_width = report
+        .accounts
+        .iter()
+        .map(|a| kind(a).chars().count())
+        .max()
+        .unwrap_or(0);
+    for (n, account) in report.accounts.iter().enumerate() {
+        let mut extra = Vec::new();
+        if account.priority != 0 {
+            extra.push(format!("priority {}", account.priority));
+        }
+        if account.pinned {
+            extra.push("preferred".to_owned());
+        }
+        if let Some(tool) = &account.follows {
+            extra.push(format!("follows {tool}"));
+        }
+        let extra = if extra.is_empty() {
+            String::new()
+        } else {
+            format!("  {}", ui::dim(extra.join(" · ")))
+        };
+        println!(
+            "{:>3}  {}  {}  {}{extra}",
+            n + 1,
+            ui::bold(ui::pad(&account.name, name_width)),
+            ui::dim(ui::pad(&kind(account), kind_width)),
+            super::status::status_cell(account, now),
+        );
+    }
+    Ok(())
+}
+
+/// An account's provider and plan, as `account list` shows them.
+fn kind(account: &AccountView) -> String {
+    let title = api::provider_id(account.provider).spec().title;
+    match &account.plan {
+        Some(plan) => format!("{title} {plan}"),
+        None => title.to_owned(),
+    }
+}
+
+/// `slopmax account check`: lifts slopmax's hold on an account and reads
+/// its usage again, through the running proxy, which holds both.
+pub(super) async fn check(config: &Config, store: &Store, query: &str, json: bool) -> Result<()> {
+    let Some(client) = daemon(config).await? else {
+        bail!(
+            "the proxy isn't running, so nothing holds the account back; \
+             `slopmax status --refresh` reads its usage"
+        );
+    };
+    let account = find(config, store, Some(&client), query).await?;
+    let report = client.check(&account.id).await?;
+    let now = Timestamp::now();
+    let view = report.accounts.iter().find(|a| a.id == account.id);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&view)?);
+        return Ok(());
+    }
+    match view {
+        Some(view) => println!(
+            "{}  {}",
+            ui::bold(&view.name),
+            super::status::status_cell(view, now)
+        ),
+        None => println!("Checked {}.", ui::bold(account.name())),
     }
     Ok(())
 }

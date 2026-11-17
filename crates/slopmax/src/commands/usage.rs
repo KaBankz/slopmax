@@ -101,9 +101,9 @@ fn local(config: &Config, store: &Store, range: &str, by: &str, json: bool) -> R
 fn print(report: &summary::Summary, range: &str, by: &str, from_hub: bool) -> bool {
     let (rows, total) = (&report.rows, &report.total);
     let logs = if from_hub {
-        "`slopmax logs` on the hub"
+        "`slopmax proxy logs` on the hub"
     } else {
-        "`slopmax logs`"
+        "`slopmax proxy logs`"
     };
     let title = match range {
         "today" => "today".to_owned(),

@@ -17,7 +17,7 @@ export const tailnetAccess = (health: Option.Option<Health>): Option.Option<"vie
 
 /** The command that lets a machine manage slopmax, run on the hub. */
 export const adminCommand = (machine: Option.Option<string>): string =>
-  `slopmax tailscale admins add ${Option.getOrElse(machine, () => "<machine>")}`
+  `slopmax tailscale admin add ${Option.getOrElse(machine, () => "<machine>")}`
 
 /**
  * Whether the page is open on the hub itself, at its tailnet address: the

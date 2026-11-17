@@ -18,8 +18,11 @@ use http_body_util::BodyExt;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use slopmax_api::events::Event;
-use slopmax_api::ledger::{History, HistoryRange, Summary, SummaryBy, SummaryRange};
-use slopmax_api::report::{RedeemResult, Report};
+use slopmax_api::ledger::{
+    History, HistoryRange, RequestOutcome, RequestPage, Summary, SummaryBy, SummaryRange,
+};
+use slopmax_api::pools::PoolDetail;
+use slopmax_api::report::{AgentWiring, RedeemResult, Report, Section};
 use slopmax_api::requests::{
     AccountAdded, AccountPatch, AddAccount, ImportRequest, ImportResult, LoginStarted, MakeKey,
     PasteAddress, RedeemRequest, Shutdown, StartLogin, Stopping,
@@ -29,6 +32,30 @@ use slopmax_api::tailnet::{Access, TailnetPatch, TailnetView};
 use slopmax_api::{ApiError, PREFIX};
 
 pub use slopmax_api as api;
+
+/// Which requests [`Client::requests`] asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestQuery {
+    pub range: HistoryRange,
+    pub outcome: RequestOutcome,
+    pub account: Option<String>,
+    pub model: Option<String>,
+    pub offset: u64,
+    pub limit: u64,
+}
+
+impl Default for RequestQuery {
+    fn default() -> Self {
+        Self {
+            range: HistoryRange::Today,
+            outcome: RequestOutcome::All,
+            account: None,
+            model: None,
+            offset: 0,
+            limit: 100,
+        }
+    }
+}
 
 /// Why a call did not get its answer.
 #[derive(Debug, Clone, PartialEq)]
@@ -426,6 +453,45 @@ impl Client {
     pub async fn history(&self, range: HistoryRange) -> Result<History> {
         let query = format!("history?range={}", word(&range));
         self.call(Method::GET, &query, Self::NONE).await
+    }
+
+    /// A page of the requests answered over `range`, newest first.
+    pub async fn requests(&self, query: &RequestQuery) -> Result<RequestPage> {
+        let mut path = format!(
+            "requests?range={}&outcome={}&offset={}&limit={}",
+            word(&query.range),
+            word(&query.outcome),
+            query.offset,
+            query.limit
+        );
+        for (name, value) in [("account", &query.account), ("model", &query.model)] {
+            if let Some(value) = value {
+                path.push_str(&format!("&{name}={}", escape(value)));
+            }
+        }
+        self.call(Method::GET, &path, Self::NONE).await
+    }
+
+    /// Lifts slopmax's hold on an account and reads its usage again.
+    pub async fn check(&self, id: &str) -> Result<Report> {
+        let path = format!("accounts/{}/check", escape(id));
+        self.call(Method::POST, &path, Self::NONE).await
+    }
+
+    /// Each agent, and whether its config points it at slopmax.
+    pub async fn agents(&self) -> Result<Vec<AgentWiring>> {
+        self.call(Method::GET, "agents", Self::NONE).await
+    }
+
+    /// A provider's pool: its trend, forecast, and each account's spend.
+    pub async fn pool(&self, provider: slopmax_api::Provider) -> Result<PoolDetail> {
+        let path = format!("pools/{}", word(&provider));
+        self.call(Method::GET, &path, Self::NONE).await
+    }
+
+    /// What `slopmax doctor` finds, checked by the daemon.
+    pub async fn doctor(&self) -> Result<Vec<Section>> {
+        self.call(Method::GET, "doctor", Self::NONE).await
     }
 
     /// slopmax on the tailnet: whether and where it is published, and who

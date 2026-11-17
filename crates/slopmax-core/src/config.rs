@@ -249,7 +249,7 @@ fn read_tailnet(item: &toml_edit::Item, text: &str) -> Result<Tailnet, String> {
                             id: id.to_owned(),
                         }),
                         _ => Err(format!(
-                            "{}[tailscale] admins: each needs a machine and its id, and nothing else; `slopmax tailscale admins add <machine>` fills them in",
+                            "{}[tailscale] admins: each needs a machine and its id, and nothing else; `slopmax tailscale admin add <machine>` fills them in",
                             line(span)
                         )),
                     }
@@ -424,7 +424,7 @@ pub enum Strategy {
     /// Spend the quota that expires first: prefer the account whose usage
     /// window resets soonest, so no capacity is lost to a reset.
     ResetFirst,
-    /// Drain accounts in order (priority, then `slopmax order`), moving on
+    /// Drain accounts in order (priority, then `slopmax account order`), moving on
     /// only when one is limited.
     #[default]
     FillFirst,
@@ -869,7 +869,7 @@ api_key = "{api_key}"
 
 # How a new session picks its account:
 #   fill-first   use accounts in order, moving on when one is limited
-#                (the order `slopmax order` sets)
+#                (the order `slopmax account order` sets)
 #   reset-first  spend the quota that resets soonest, so none is lost
 #   least-used   spread sessions over the least used accounts
 #   round-robin  hand sessions to each account in turn
@@ -893,7 +893,7 @@ api_key = "{api_key}"
 
 # Redeem a ChatGPT reset credit in its last hours, if the account has usage
 # to reset, rather than let it expire unused. Off, slopmax only says so
-# (the reset-expiring notice); `slopmax redeem` spends one by hand.
+# (the reset-expiring notice); `slopmax account redeem` spends one by hand.
 # redeem_expiring_credits = false
 
 # When every Codex account is spent, redeem a reset credit instead of
@@ -901,7 +901,7 @@ api_key = "{api_key}"
 # redeem_when_exhausted = false
 
 # Relay Codex's WebSocket connections to ChatGPT, which starts answers
-# sooner than HTTP streaming. `slopmax setup codex` turns them on in Codex.
+# sooner than HTTP streaming. `slopmax agent connect codex` turns them on in Codex.
 # websockets = true
 
 # ChatGPT starts a 5-hour window at an account's first request. With this
@@ -938,7 +938,7 @@ api_key = "{api_key}"
 # Discord show it); a command runs in the shell with SLOPMAX_EVENT,
 # SLOPMAX_PROVIDER, SLOPMAX_ACCOUNT, SLOPMAX_UNTIL, and SLOPMAX_MESSAGE set.
 # Add "limited" and "available" to events to hear about each account too.
-# Check the setup with `slopmax notify`.
+# Check the setup with `slopmax notify test`.
 #   [notify]
 #   webhook = "https://hooks.slack.com/services/..."
 #   command = 'notify-send slopmax "$SLOPMAX_MESSAGE"'
@@ -957,7 +957,7 @@ api_key = "{api_key}"
 #   # Tailnet logins whose machines use slopmax without a key and see its
 #   # status. List only your own.
 #   users = ["you@github"]
-#   # Machines that may also manage slopmax. `slopmax tailscale admins add
+#   # Machines that may also manage slopmax. `slopmax tailscale admin add
 #   # <machine>` fills this in.
 #   admins = []
 

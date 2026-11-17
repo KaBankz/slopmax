@@ -102,12 +102,12 @@ impl Home {
         self.dir.join("grok").join(format!("auth-{hex}.json"))
     }
 
-    /// CLIProxyAPI's credential files, which `slopmax import` reads.
+    /// CLIProxyAPI's credential files, which `slopmax account import` reads.
     pub fn cliproxyapi(&self) -> PathBuf {
         self.user.join(".cli-proxy-api")
     }
 
-    /// What `setup` replaced in the agents' configs, for `--undo`.
+    /// What `agent connect` replaced in the agents' configs, for `disconnect`.
     pub fn setup_backup(&self) -> PathBuf {
         self.dir.join("setup-backup.json")
     }

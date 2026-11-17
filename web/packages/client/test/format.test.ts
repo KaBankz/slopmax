@@ -117,11 +117,11 @@ describe("notifications", () => {
       kind: "reset-expiring",
       key: "reset:a:1",
       account: "codex0",
-      message: "A limit reset on codex0 expires; redeem it with `slopmax redeem codex0`.",
+      message: "A limit reset on codex0 expires; redeem it with `slopmax account redeem codex0`.",
       at: ts(1_000_000),
     })
     expect(noticeTitle(notice.kind)).toBe("Limit reset expiring")
-    expect(noticeBody(notice)).toBe("A limit reset on codex0 expires; redeem it with slopmax redeem codex0.")
+    expect(noticeBody(notice)).toBe("A limit reset on codex0 expires; redeem it with slopmax account redeem codex0.")
     const titles = Object.fromEntries(NoticeKind.literals.map((kind) => [kind, noticeTitle(kind)]))
     expect(titles).toEqual({
       "reset-expiring": "Limit reset expiring",

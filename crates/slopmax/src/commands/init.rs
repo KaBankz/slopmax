@@ -52,7 +52,7 @@ impl Answers {
 pub struct Plan {
     /// `--import`: where to take logins from.
     pub import: Option<Vec<Source>>,
-    /// `--own`: refresh CLIProxyAPI's logins here rather than follow them.
+    /// `--adopt`: refresh CLIProxyAPI's logins here rather than follow them.
     pub own: bool,
     /// `--login`: subscriptions to sign in to.
     pub login: Option<Vec<ProviderId>>,
@@ -68,9 +68,9 @@ pub struct Plan {
     /// `--hub`: use the slopmax on another machine instead, and set up
     /// nothing else; empty to look for one (`--find-hub`).
     pub hub: Option<String>,
-    /// `--key`: with `--hub`, the key the hub takes.
+    /// `--hub-key`: with `--hub`, the key the hub takes.
     pub key: Option<String>,
-    /// `--name`: with `--hub`, the name of a key the hub's owner key makes.
+    /// `--key-name`: with `--hub`, the name of a key the hub's owner key makes.
     pub name: Option<String>,
     /// A first run: look for a hub on the tailnet before anything else.
     pub discover: bool,
@@ -218,7 +218,7 @@ pub async fn run(config: &Config, store: &Store, answers: Answers, plan: Plan) -
             }
             if named.is_none() {
                 println!(
-                    "  {} left as it is: no {title} account to serve it. `slopmax setup {}` wires it once there is one.",
+                    "  {} left as it is: no {title} account to serve it. `slopmax agent connect {}` wires it once there is one.",
                     agent.title(),
                     agent.id()
                 );
@@ -436,7 +436,7 @@ async fn offer_imports(
         if choice == 0 {
             println!(
                 "    {}",
-                ui::dim("`slopmax own all` takes them over once CLIProxyAPI is stopped")
+                ui::dim("`slopmax account adopt all` takes them over once CLIProxyAPI is stopped")
             );
         }
     }
@@ -587,7 +587,7 @@ fn wire(config: &Config, agent: &dyn Agent, answers: Answers) -> Result<()> {
             return Ok(());
         }
         Wiring::Elsewhere(target) => format!(
-            " (it uses {target} now; `slopmax setup {} --undo` restores that)",
+            " (it uses {target} now; `slopmax agent disconnect {}` restores that)",
             agent.id()
         ),
         Wiring::Direct => String::new(),
@@ -621,7 +621,7 @@ async fn background(config: &Config, answers: Answers, plan: &Plan) -> Result<()
         None => println!(
             "  {}",
             ui::dim(
-                "No login service here: the proxy runs until it is stopped; `slopmax start` brings it back."
+                "No login service here: the proxy runs until it is stopped; `slopmax proxy start` brings it back."
             )
         ),
     }

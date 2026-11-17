@@ -15,7 +15,7 @@ pub enum StoreError {
     #[error("no account matches {0:?} (see `slopmax status`)")]
     NotFound(String),
     #[error(
-        "{query:?} matches {} accounts: {}. Use the number from `slopmax status`, e.g. `slopmax use {}`.",
+        "{query:?} matches {} accounts: {}. Use the number from `slopmax status`, e.g. `slopmax account use {}`.",
         matches.len(),
         matches.iter().map(|m| format!("#{} {} ({})", m.number, m.name, m.id)).collect::<Vec<_>>().join(", "),
         matches.first().map_or(1, |m| m.number)
@@ -40,7 +40,7 @@ pub enum StoreError {
 /// one account.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error(
-    "{label:?} is already the {by} of #{number} {name} ({id}); choose another label, or rename that one first (`slopmax label {number} <name>`)"
+    "{label:?} is already the {by} of #{number} {name} ({id}); choose another label, or rename that one first (`slopmax account rename {number} <name>`)"
 )]
 pub struct LabelTaken {
     pub label: String,

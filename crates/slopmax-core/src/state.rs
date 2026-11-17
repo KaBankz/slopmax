@@ -1,5 +1,5 @@
 //! `state.toml`: what the daemon keeps between runs. Each account's health
-//! and readings, the sessions bound to them, the pins `slopmax use` sets,
+//! and readings, the sessions bound to them, the pins `slopmax account use` sets,
 //! the nudges already told, and what was last seen of Codex.
 //!
 //! While a daemon serves a home, it is the only writer: the CLI and the

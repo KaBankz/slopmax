@@ -4,7 +4,7 @@
 //! it when it starts at login. This one is a windowed program with no
 //! window: it runs `slopmax.exe serve` without a console, its output going
 //! to the log, and supervises it as systemd and launchd do elsewhere. A
-//! clean exit (`slopmax stop`) ends it; exit code 75, an update's restart,
+//! clean exit (`slopmax proxy stop`) ends it; exit code 75, an update's restart,
 //! starts the proxy again at once; any other failure, after 5 seconds.
 //!
 //! `slopmaxw.exe <slopmax.exe> --log <file> [--home <dir>]`

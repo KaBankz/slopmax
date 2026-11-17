@@ -1016,7 +1016,7 @@ impl Denied {
             Self::NotAllowed(login) => (
                 StatusCode::UNAUTHORIZED,
                 format!(
-                    "{login} isn't allowed on this slopmax; on the hub: slopmax tailscale users add {login}"
+                    "{login} isn't allowed on this slopmax; on the hub: slopmax tailscale user add {login}"
                 ),
             ),
             Self::Tagged => (
@@ -1025,7 +1025,7 @@ impl Denied {
             ),
             Self::NoKey => (
                 StatusCode::UNAUTHORIZED,
-                "missing or invalid slopmax key; see `slopmax env`".to_owned(),
+                "missing or invalid slopmax key; see `slopmax agent env`".to_owned(),
             ),
             Self::Needs { key: Some(key), .. } => (
                 StatusCode::FORBIDDEN,
@@ -1039,7 +1039,7 @@ impl Denied {
                 let machine = machine.as_deref().unwrap_or("<machine>");
                 (
                     StatusCode::FORBIDDEN,
-                    format!("{what}; on the hub: slopmax tailscale admins add {machine}"),
+                    format!("{what}; on the hub: slopmax tailscale admin add {machine}"),
                 )
             }
         }
@@ -1634,7 +1634,7 @@ mod tests {
             text(Denied::NotAllowed("you@test".into())),
             (
                 StatusCode::UNAUTHORIZED,
-                "you@test isn't allowed on this slopmax; on the hub: slopmax tailscale users add you@test"
+                "you@test isn't allowed on this slopmax; on the hub: slopmax tailscale user add you@test"
                     .into()
             )
         );
@@ -1646,7 +1646,7 @@ mod tests {
             }),
             (
                 StatusCode::FORBIDDEN,
-                "this machine may not change slopmax; on the hub: slopmax tailscale admins add phone"
+                "this machine may not change slopmax; on the hub: slopmax tailscale admin add phone"
                     .into()
             )
         );
@@ -1657,7 +1657,7 @@ mod tests {
                 key: None
             })
             .1,
-            "this machine may use slopmax but not see its accounts; on the hub: slopmax tailscale admins add <machine>"
+            "this machine may use slopmax but not see its accounts; on the hub: slopmax tailscale admin add <machine>"
         );
         assert_eq!(text(Denied::Tagged).0, StatusCode::UNAUTHORIZED);
         assert_eq!(text(Denied::NoCredential).0, StatusCode::UNAUTHORIZED);

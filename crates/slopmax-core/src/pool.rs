@@ -154,7 +154,7 @@ pub struct State {
     /// request: Claude answers its limit resets to Claude Code alone.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub agents: BTreeMap<ProviderId, String>,
-    /// Each provider's preferred account, set by `slopmax use`.
+    /// Each provider's preferred account, set by `slopmax account use`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pins: Pins,
     /// The nudges told already, so a restart does not tell them again.
@@ -188,7 +188,7 @@ struct SavedSession {
     last_used: Timestamp,
 }
 
-/// Manual account preference per provider, set by `slopmax use`.
+/// Manual account preference per provider, set by `slopmax account use`.
 pub type Pins = BTreeMap<ProviderId, String>;
 
 #[derive(Debug, Clone)]
@@ -257,7 +257,7 @@ pub struct Next {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Reason {
-    /// Chosen with `slopmax use`.
+    /// Chosen with `slopmax account use`.
     Pinned,
     /// No other account of the provider can serve.
     OnlyReady,
@@ -306,10 +306,10 @@ fn unusable(accounts: &[Arc<Account>], req: &Pick) -> String {
         .collect();
     if mine.is_empty() {
         return format!(
-            "slopmax has no {title} account connected yet; run `slopmax login {id}` (or `slopmax import`)"
+            "slopmax has no {title} account connected yet; run `slopmax login {id}` (or `slopmax account import`)"
         );
     }
-    // What `slopmax enable` and the other commands find an account by.
+    // What `slopmax account enable` and the other commands find an account by.
     let handle = |a: &Account| {
         a.label
             .clone()
@@ -330,7 +330,7 @@ fn unusable(accounts: &[Arc<Account>], req: &Pick) -> String {
     };
     let mut fixes = Vec::new();
     if let Some(a) = mine.iter().find(|a| a.disabled) {
-        fixes.push(format!("`slopmax enable {}`", handle(a)));
+        fixes.push(format!("`slopmax account enable {}`", handle(a)));
     }
     if mine.iter().any(|a| !a.disabled) {
         fixes.push(format!("`slopmax login {id}`"));
@@ -1083,7 +1083,7 @@ fn place<'a>(
     let score = |a: &Account| Score(limits(a).score(now));
 
     match strategy {
-        // The first in the order `slopmax order` set, then the oldest.
+        // The first in the order `slopmax account order` set, then the oldest.
         Strategy::FillFirst => tier.min_by_key(|a| a.rank()),
         // Earliest-deadline-first over spare capacity: an account whose
         // window resets soon loses its unused quota at that reset, while an
@@ -1449,7 +1449,7 @@ mod tests {
             "returns after the reset"
         );
 
-        // `slopmax order` comes before age.
+        // `slopmax account order` comes before age.
         let mut b = b.clone();
         b.order = Some(1);
         let ordered = self::pool(Strategy::FillFirst, &[&a, &b]);
@@ -1679,7 +1679,7 @@ mod tests {
             reason,
             format!(
                 "every Claude account is disabled or signed out ({}: disabled, {}: signed out); \
-                 run `slopmax enable {}` or `slopmax login claude`",
+                 run `slopmax account enable {}` or `slopmax login claude`",
                 a.id, b.id, a.id
             )
         );
@@ -1687,7 +1687,7 @@ mod tests {
         let none = pool_of(&[]);
         assert_eq!(
             pick(&none, None, 1000).unwrap_err().reason,
-            "slopmax has no Claude account connected yet; run `slopmax login claude` (or `slopmax import`)"
+            "slopmax has no Claude account connected yet; run `slopmax login claude` (or `slopmax account import`)"
         );
     }
 

@@ -18,7 +18,7 @@ export const NoticeKind = Schema.Literals([
   "reset-expiring",
   /** A week or month is about to reset with much of its quota unused. */
   "quota-unused",
-  /** `slopmax notify`'s check that notifications arrive. */
+  /** `slopmax notify test`'s check that notifications arrive. */
   "test",
 ])
 export type NoticeKind = typeof NoticeKind.Type
