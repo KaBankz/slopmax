@@ -1,6 +1,6 @@
 ---
 source: crates/slopmax-tui/src/ui/tests.rs
-expression: "render(&mut app, 80, 24)"
+expression: screen
 ---
 "  ◆ 2/12 Claude  2 of 2 ready                                           ● 09:30 "
 " ────────────────────────────────────────────────────────────────────────────── "

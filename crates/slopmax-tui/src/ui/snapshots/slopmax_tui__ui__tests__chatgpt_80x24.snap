@@ -1,6 +1,6 @@
 ---
 source: crates/slopmax-tui/src/ui/tests.rs
-expression: "render(&mut app, 80, 24)"
+expression: screen
 ---
 "  ◆ 3/12 ChatGPT  0 of 1 ready                                          ● 09:30 "
 " ────────────────────────────────────────────────────────────────────────────── "
@@ -25,4 +25,4 @@ expression: "render(&mut app, 80, 24)"
 "                                                                                "
 "                                                                                "
 "                                                                                "
-"  ↑↓ select   ␣ on/off   p prefer   c check   R redeem   ⇥ pages   ? help   q q "
+"  ↑↓ select   ␣ on/off   p prefer   c check   ⇥ pages   ? help   q quit         "

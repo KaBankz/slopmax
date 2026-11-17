@@ -149,7 +149,8 @@ pub struct App {
     /// How far the page is scrolled, in rows: the view, which the
     /// selection doesn't hold, so what lies past the last row can be read.
     pub scroll: u16,
-    /// The selection just moved: the next frame scrolls it into view.
+    /// The selection just moved: the next frame scrolls it into view. A
+    /// page opens at its top.
     pub follow: bool,
     /// The span Usage and Performance show.
     pub range: HistoryRange,
@@ -184,7 +185,7 @@ impl App {
             page: Page::Overview,
             cursor: 0,
             scroll: 0,
-            follow: true,
+            follow: false,
             range: HistoryRange::Week,
             filter: String::new(),
             filtering: false,
@@ -233,7 +234,7 @@ impl App {
             self.page = page;
             self.cursor = 0;
             self.scroll = 0;
-            self.follow = true;
+            self.follow = false;
             self.filtering = false;
             self.entered = true;
         }

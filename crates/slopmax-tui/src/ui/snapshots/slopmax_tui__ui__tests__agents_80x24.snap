@@ -1,6 +1,6 @@
 ---
 source: crates/slopmax-tui/src/ui/tests.rs
-expression: "render(&mut app, 80, 24)"
+expression: screen
 ---
 "  ◆ 9/12 Agents  1 of 3 connected                                       ● 09:30 "
 " ────────────────────────────────────────────────────────────────────────────── "
@@ -25,4 +25,4 @@ expression: "render(&mut app, 80, 24)"
 "                                                                                "
 "                                                                                "
 "                                                                                "
-"  ↑↓ select   c connect   x disconnect   ⇥ pages   ? help   q quit              "
+"  ↑↓ select   x disconnect   ⇥ pages   ? help   q quit                          "

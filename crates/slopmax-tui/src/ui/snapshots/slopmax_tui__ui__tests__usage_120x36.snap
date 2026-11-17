@@ -1,6 +1,6 @@
 ---
 source: crates/slopmax-tui/src/ui/tests.rs
-expression: "render(&mut app, 120, 36)"
+expression: screen
 ---
 "                          Usage  7 days                                                                           09:30 "
 "  ◆ slopmax              ────────────────────────────────────────────────────────────────────────────────────────────── "
@@ -10,7 +10,7 @@ expression: "render(&mut app, 120, 36)"
 "                          ╭────────────────────╮ ╭────────────────────╮ ╭────────────────────╮ ╭────────────────────╮┃  "
 "    Claude        ●  2    │ Tokens             │ │ Requests           │ │ API value          │ │ Month at this pace │┃  "
 "    ChatGPT       ●  3    │ 152.2k             │ │ 3                  │ │ $0.12              │ │ $0.00              │┃  "
-"    Anthropic API    4    │ 96% from cache     │ │ in 1 conversation  │ │ at API prices      │ │ at API prices      │┃  "
+"    Anthropic API    4    │ 96% from cache     │ │ 1 conversation     │ │ at API prices      │ │ at API prices      │┃  "
 "    Compatible API   5    ╰────────────────────╯ ╰────────────────────╯ ╰────────────────────╯ ╰────────────────────╯┃  "
 "▌ Usage              6                                                                                               ┃  "
 "  Performance        7    Tokens ───────────────────────────────────────────────────────────────────────────── by day┃  "

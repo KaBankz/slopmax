@@ -1,0 +1,17 @@
+---
+source: crates/slopmax-tui/src/ui/tests.rs
+expression: screen
+---
+"  ◆ 12/12 Settings  routing reset-first                                 ● 09:30 "
+" ───────╭ How new sessions pick an account ────────────────────────────╮─────── "
+"        │                                                              │        "
+"  Routin│   reset-first  current                                       │─────┃  "
+"        │   Spend the quota that resets soonest, so none is lost       │     ┃  "
+"  ▌Strat│ › fill-first                                                 │ it… ┃  "
+"   Sessi│   Use accounts in order; fail over when one is limited       │cco… │  "
+"   Sessi│   least-used                                                 │ess… │  "
+"        │   Balance load toward the least used account                 │     │  "
+"  Limit │   round-robin                                                │─────│  "
+"        │   Take turns across accounts                                 │     │  "
+"   When ╰──────────────────────────────────────────────────────────────╯for… │  "
+"  ↑↓ select   ⏎ change   ⇥ pages   ? help   q quit                              "

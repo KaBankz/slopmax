@@ -403,7 +403,7 @@ fn hints_show_only_keys_that_work_on_the_selection() {
     // Hints that don't fit are left out whole.
     let mut app = self::app(Page::Provider(Provider::Codex));
     let screen = render(&mut app, 80, 24);
-    let last = footer(&screen).trim_end();
+    let last = footer(&screen).trim_matches('"').trim_end();
     assert!(last.ends_with("q quit"), "{last:?}");
 }
 

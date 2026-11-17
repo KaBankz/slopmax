@@ -1,10 +1,9 @@
 ---
 source: crates/slopmax-tui/src/ui/tests.rs
-expression: "render(&mut app, 80, 24)"
+expression: screen
 ---
 "  ◆ 1/12 Overview                                                       ● 09:30 "
 " ────────────────────────────────────────────────────────────────────────────── "
-"                                                                                "
 "  ╭ Keys ────────────────────────────────────────────────────────────────────╮  "
 "  │                                                                          │  "
 "  │ Everywhere                              Overview                         │  "
@@ -13,13 +12,14 @@ expression: "render(&mut app, 80, 24)"
 "  │ ⇧⇥ / ←      previous page               ⏎           open                 │  "
 "  │ 1–9         go to a page                                                 │  "
 "  │ ↑ ↓ / j k   select or scroll                                             │  "
-"  │ PgUp PgDn   a screen at a time                                           │  "
+"  │ PgUp PgDn   ten rows at a time                                           │  "
 "  │ g / G       top / bottom                                                 │  "
 "  │ b           show or hide the sidebar                                     │  "
 "  │ F5          fetch the page again                                         │  "
 "  │ ctrl-r      read every account's usage                                   │  "
+"  │ esc         back to the overview                                         │  "
 "  │ ?           this help                                                    │  "
-"  │ q / esc     quit                                                         │  "
+"  │ q / ctrl-c  quit                                                         │  "
 "  │ ctrl-z      suspend                                                      │  "
 "  │                                                                          │  "
 "  ╰──────────────────────────────────────────────────────────────────────────╯  "
