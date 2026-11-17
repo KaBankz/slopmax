@@ -746,6 +746,23 @@ async fn grok_build_moves_past_a_spent_supergrok_account() {
 }
 
 #[tokio::test]
+async fn grok_build_driven_by_an_editor_is_still_grok_build() {
+    let h = harness(
+        |_| vec![oauth(ProviderId::Grok, "ok", "grok-ok", "r", 1000)],
+        false,
+    )
+    .await;
+    // How T3 Code's requests through Grok Build's ACP agent name themselves.
+    let acp = "grok-code-extension/1.0.77 grok-shell/1.0.77 (linux; x86_64)";
+    let (status, body) = grok_build(&h, Method::POST, "/responses", acp).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        h.seen("/v1/responses").pop().unwrap().authorization,
+        "Bearer grok-ok"
+    );
+}
+
+#[tokio::test]
 async fn supergrok_accounts_serve_grok_build_alone() {
     let h = harness(
         |_| vec![oauth(ProviderId::Grok, "ok", "grok-ok", "r", 1000)],

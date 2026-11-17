@@ -94,12 +94,18 @@ impl Agent for GrokBuild {
     }
 
     /// Grok Build names itself `grok-shell/1.0.77 (linux; x86_64)`; its pager
-    /// front end, `grok-pager/…`.
+    /// front end, `grok-pager/…`. Driven by an editor over ACP, as T3 Code
+    /// drives it, it puts the client's name first:
+    /// `grok-code-extension/1.0.77 grok-shell/1.0.77 (linux; x86_64)`.
     fn detect(&self, headers: &HeaderMap) -> bool {
         headers
             .get(http::header::USER_AGENT)
             .and_then(|v| v.to_str().ok())
-            .is_some_and(|ua| ua.starts_with("grok-shell/") || ua.starts_with("grok-pager/"))
+            .is_some_and(|ua| {
+                ua.split_whitespace()
+                    .filter_map(|token| token.split_once('/'))
+                    .any(|(product, _)| product == "grok-shell" || product == "grok-pager")
+            })
     }
 
     /// Every model request in a Grok Build session, its title included,
@@ -310,7 +316,14 @@ mod tests {
             GrokBuild.session(&HeaderMap::new(), body).as_deref(),
             Some("pck")
         );
+        // Driven by an editor, Grok Build names the editor's client first.
+        let acp = headers(&[(
+            "user-agent",
+            "grok-code-extension/1.0.77 grok-shell/1.0.77 (linux; x86_64)",
+        )]);
+        assert!(GrokBuild.detect(&acp));
         assert!(!GrokBuild.detect(&headers(&[("user-agent", "codex_exec/0.1")])));
+        assert!(!GrokBuild.detect(&headers(&[("user-agent", "not-grok-shell/1.0")])));
         assert!(!GrokBuild.detect(&HeaderMap::new()));
     }
 

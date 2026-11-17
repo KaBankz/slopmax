@@ -4,6 +4,10 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Fixed
+
+- Grok Build driven by an editor is still Grok Build: run over ACP, as T3 Code runs it, it names the editor's client before itself (`grok-code-extension/1.0.77 grok-shell/1.0.77 …`), and slopmax refused it with "serves SuperGrok accounts to Grok Build only".
+
 ## [0.15.0] - 2026-11-17
 
 The command line is rebuilt on [usage](https://usage.jdx.dev) and regrouped: things are nouns with verbs under them (`account`, `agent`, `proxy`, `key`, `tailscale`), the same verbs and flags mean the same thing everywhere, and every command that prints data takes `--json`. Many commands moved; each moved command now fails with its new spelling, so a script learns it once (`completions` and `tailscale users`/`admins` are kept as hidden aliases). Renamed flags (below) fail as unknown flags.
