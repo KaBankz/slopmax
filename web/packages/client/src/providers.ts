@@ -12,7 +12,7 @@ export interface ProviderFacts {
   readonly billing: "subscription" | "metered"
   /** The subscription whose models a metered provider also serves, as paid overflow. */
   readonly backs?: ProviderId
-  /** The one agent these accounts may serve: Claude subscriptions serve Claude Code alone, SuperGrok Grok Build. */
+  /** The one agent these accounts may serve: Claude subscriptions serve Claude Code alone, Grok ones Grok Build. */
   readonly agentOnly?: AgentId
   /**
    * How an account is added: a browser sign-in, a browser sign-in or a device
@@ -66,7 +66,7 @@ export const providerFacts: {
   },
   grok: {
     id: "grok",
-    title: "SuperGrok",
+    title: "Grok",
     billing: "subscription",
     agentOnly: "grok-build",
     signIn: "device",

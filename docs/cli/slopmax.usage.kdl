@@ -1,8 +1,8 @@
 name slopmax
 bin slopmax
-about "Pool your Claude, ChatGPT, and SuperGrok subscriptions behind one local proxy, so Claude Code, Codex, and Grok Build keep working when an account runs out."
+about "Pool your Claude, ChatGPT, and Grok subscriptions behind one local proxy, so Claude Code, Codex, and Grok Build keep working when an account runs out."
 long_about #"""
-Pool your Claude, ChatGPT, and SuperGrok subscriptions behind one local proxy, so Claude Code, Codex, and Grok Build keep working when an account runs out.
+Pool your Claude, ChatGPT, and Grok subscriptions behind one local proxy, so Claude Code, Codex, and Grok Build keep working when an account runs out.
 
 Run without a command to open the terminal UI (piped, it prints the accounts' standing instead), or to set slopmax up the first time.
 """#
@@ -153,9 +153,9 @@ Subscriptions (claude, codex, grok) sign in through the provider's own page. API
     flag "-h --help" help="Print help" action=help builtin=#true
     arg <PROVIDER> help="Which kind of account" {
         choices {
-            choice claude help="Claude Pro or Max, used by Claude Code"
+            choice claude help="Claude Pro, Max, Ultra, or Team, used by Claude Code"
             choice codex help="ChatGPT Plus, Pro, or Team, used by Codex"
-            choice grok help="SuperGrok, used by Grok Build"
+            choice grok help="SuperGrok, Lite, or Heavy, used by Grok Build"
             choice anthropic help="An Anthropic API key"
             choice openai help="An OpenAI API key"
             choice xai help="An xAI API key"
@@ -163,7 +163,7 @@ Subscriptions (claude, codex, grok) sign in through the provider's own page. API
         }
     }
     complete url type=url
-    example "slopmax login claude" header="Sign in to a Claude Pro or Max account"
+    example "slopmax login claude" header="Sign in to a Claude Pro, Max, Ultra, or Team account"
     example "slopmax login codex --device" header="Sign in with a code, from a machine with no browser"
     example "slopmax login compat --url http://localhost:11434/v1" header="Add a local OpenAI-compatible endpoint"
 }
@@ -212,9 +212,9 @@ Subscriptions (claude, codex, grok) sign in through the provider's own page. API
         flag "-h --help" help="Print help" action=help builtin=#true
         arg <PROVIDER> help="Which kind of account" {
             choices {
-                choice claude help="Claude Pro or Max, used by Claude Code"
+                choice claude help="Claude Pro, Max, Ultra, or Team, used by Claude Code"
                 choice codex help="ChatGPT Plus, Pro, or Team, used by Codex"
-                choice grok help="SuperGrok, used by Grok Build"
+                choice grok help="SuperGrok, Lite, or Heavy, used by Grok Build"
                 choice anthropic help="An Anthropic API key"
                 choice openai help="An OpenAI API key"
                 choice xai help="An xAI API key"
@@ -222,7 +222,7 @@ Subscriptions (claude, codex, grok) sign in through the provider's own page. API
             }
         }
         complete url type=url
-        example "slopmax login claude" header="Sign in to a Claude Pro or Max account"
+        example "slopmax login claude" header="Sign in to a Claude Pro, Max, Ultra, or Team account"
         example "slopmax login codex --device" header="Sign in with a code, from a machine with no browser"
         example "slopmax login compat --url http://localhost:11434/v1" header="Add a local OpenAI-compatible endpoint"
     }

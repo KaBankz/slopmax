@@ -778,7 +778,7 @@ async fn supergrok_accounts_serve_grok_build_alone() {
         let (status, body) = grok_build(&h, method, path, "codex_exec/0.169.0").await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{path}: {body}");
         assert!(
-            body.contains("SuperGrok accounts to Grok Build only"),
+            body.contains("Grok accounts to Grok Build only"),
             "{body}"
         );
     }

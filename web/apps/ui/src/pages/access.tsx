@@ -248,7 +248,7 @@ function AddAccount() {
       <Panel>
         <SettingRow
           title="Sign in"
-          detail="With your browser, as the agent's own sign-in does. SuperGrok signs in with a code."
+          detail="With your browser, as the agent's own sign-in does. Grok signs in with a code."
         >
           <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "claude" })}>
             Claude
@@ -260,12 +260,12 @@ function AddAccount() {
             ChatGPT with a code
           </Button>
           <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "grok", device: true })}>
-            SuperGrok
+            Grok
           </Button>
         </SettingRow>
         <SettingRow
           title="Import"
-          detail="Logins Claude Code, Codex, or CLIProxyAPI (Claude, ChatGPT, and SuperGrok) already have."
+          detail="Logins Claude Code, Codex, or CLIProxyAPI (Claude, ChatGPT, and Grok) already have."
         >
           <Button variant="outline" disabled={!canChange || importing} onClick={runImport}>
             {importing ? "Importing…" : "Import"}

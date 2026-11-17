@@ -396,7 +396,7 @@ fn mistakes_explain_themselves_and_fail() {
     s.run(&["login", "compat", "--url", "ftp://host"])
         .fails(1, "http:// or https://");
     s.run(&["login", "claude", "--device"])
-        .fails(1, "--device works for ChatGPT and SuperGrok accounts");
+        .fails(1, "--device works for ChatGPT and Grok accounts");
     s.run(&["notify", "test"]).fails(1, "notifications are off");
     s.run(&["account", "rename", "1", "work"])
         .fails(1, "no account matches \"1\"");

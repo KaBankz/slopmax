@@ -4,6 +4,14 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Fixed
+
+- The Requests page no longer lists agents' housekeeping as blank rows: Claude Code listing models (`GET /v1/models`), token counts, and Grok Build fetching its settings moved no tokens and showed with no model. Every other count already left them out; the page now does too, and so does `slopmax requests`.
+
+### Changed
+
+- The provider is called Grok, as Claude and ChatGPT are named for the product and not the plan; SuperGrok, Lite, and Heavy are its plans. The sign-in help lists Claude's Ultra and Team plans beside Pro and Max.
+
 ## [0.15.1] - 2026-11-17
 
 ### Fixed

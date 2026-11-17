@@ -46,7 +46,7 @@ impl Provider {
         match self {
             Self::Claude => "Claude",
             Self::Codex => "ChatGPT",
-            Self::Grok => "SuperGrok",
+            Self::Grok => "Grok",
             Self::Anthropic => "Anthropic API",
             Self::OpenAi => "OpenAI API",
             Self::Xai => "xAI API",

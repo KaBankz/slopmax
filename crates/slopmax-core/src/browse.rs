@@ -1,7 +1,8 @@
 //! The ledger's requests one by one, for the dashboard's Requests page and
 //! its export: over a range, filtered by account, model, agent and how they
 //! went, newest first, a page at a time, with the totals of everything that
-//! matched and what the range can be filtered by.
+//! matched and what the range can be filtered by. An agent's housekeeping
+//! (listing models, counting tokens) is no request here, as in every count.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -94,6 +95,9 @@ pub fn page(
         facets: RequestFacets::default(),
     };
     for entry in entries.iter().rev() {
+        if !entry.answered() && !entry.failed() {
+            continue;
+        }
         let record = crate::api::record(entry);
         if !entry.account.is_empty() {
             accounts.insert(entry.account.as_str());
@@ -233,5 +237,27 @@ mod tests {
         assert_eq!(opus.facets.accounts, ["a", "b"]);
         assert_eq!(opus.facets.models, ["claude-opus-5-5", "claude-sonnet-5"]);
         assert_eq!(opus.facets.agents, [Sender::ClaudeCode]);
+    }
+
+    #[test]
+    fn leaves_out_an_agents_housekeeping() {
+        // Claude Code listing models: no model, no tokens.
+        let models = Entry {
+            model: None,
+            input: 0,
+            output: 0,
+            ..entry(1, "a", "", 200, 1)
+        };
+        // Counting tokens names a model but moves none.
+        let count = Entry {
+            input: 0,
+            output: 0,
+            ..entry(2, "a", "claude-haiku-5", 200, 1)
+        };
+        let entries = vec![entry(0, "a", "claude-opus-5-5", 200, 1), models, count];
+        let page = list(&entries, &Query { limit: 50, ..Query::default() });
+        assert_eq!(page.matched, 1);
+        assert_eq!(page.rows.len(), 1);
+        assert_eq!(page.facets.models, ["claude-opus-5-5"]);
     }
 }
