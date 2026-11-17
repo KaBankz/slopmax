@@ -10,7 +10,7 @@ expression: screen
 "  │                                                                          │  "
 "  │ ⇥ / →       next page                   ↑↓          select               │  "
 "  │ ⇧⇥ / ←      previous page               ⏎           open                 │  "
-"  │ 1–9         go to a page                                                 │  "
+"  │ 1–8         go to a numbered page                                        │  "
 "  │ ↑ ↓ / j k   select or scroll                                             │  "
 "  │ PgUp PgDn   ten rows at a time                                           │  "
 "  │ g / G       top / bottom                                                 │  "
