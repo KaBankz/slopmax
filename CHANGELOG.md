@@ -4,6 +4,10 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Fixed
+
+- A ChatGPT account that said it was overloaded inside Codex's WebSocket is set aside for as long as ChatGPT asked. ChatGPT puts that delay (often five minutes) inside the error rather than beside it, so slopmax missed it and tried the account again after 30 seconds, sending Codex back to reconnect to a server still refusing it.
+
 ## [0.14.0] - 2026-11-16
 
 slopmax is its CLI and the dashboard it serves: the desktop apps are gone. `slopmax tailscale on` no longer needs root: Tailscale now reaches the hub at a private path on the proxy's port rather than at its socket, which Tailscale lets only root publish. Your machines still need no key, and a hub on Windows or Tailscale's macOS app now needs none either. Run `slopmax tailscale on` again on a hub published before, to move it.

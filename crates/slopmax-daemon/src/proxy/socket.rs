@@ -630,7 +630,7 @@ fn refusal(event: &Value, now: Timestamp) -> Option<Refusal> {
         .iter()
         .find_map(|k| error.get(*k).and_then(Value::as_str))
         .unwrap_or_default();
-    let headers = event_headers(event);
+    let headers = event_headers(event, error);
     match code {
         "usage_limit_reached"
         | "usage_limit_exceeded"
@@ -651,10 +651,14 @@ fn refusal(event: &Value, now: Timestamp) -> Option<Refusal> {
     }
 }
 
-/// The response headers an `error` event carries, as Codex reads them.
-fn event_headers(event: &Value) -> HeaderMap {
+/// The response headers a failure event carries, as Codex reads them:
+/// beside the event's `error`, or, as ChatGPT sends an overload, inside it.
+/// The event's own win over the error's.
+fn event_headers(event: &Value, error: &Value) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    let fields = event.get("headers").and_then(Value::as_object).into_iter();
+    let fields = [error, event]
+        .into_iter()
+        .filter_map(|v| v.get("headers").and_then(Value::as_object));
     for (name, value) in fields.flatten() {
         let value = match value {
             Value::String(text) => text.clone(),
@@ -754,6 +758,34 @@ mod tests {
             refusal(&capacity, now),
             Some(Refusal::Throttled {
                 until: Timestamp::from_second(1_256)
+            })
+        );
+        // ChatGPT puts an overload's retry delay inside the error.
+        let overloaded = json!({"type": "error", "sequence_number": 3,
+            "error": {"type": "service_unavailable_error", "code": "server_is_overloaded",
+                "message": "Our servers are currently overloaded. Please try again later.",
+                "param": null,
+                "headers": {"retry-after": "326", "retry-after-ms": "326000"}}});
+        assert_eq!(
+            refusal(&overloaded, now),
+            Some(Refusal::Throttled {
+                until: Timestamp::from_second(1_326)
+            })
+        );
+        let failed = json!({"type": "response.failed", "response": {"error": {
+            "code": "server_is_overloaded", "headers": {"retry-after": "90"}}}});
+        assert_eq!(
+            refusal(&failed, now),
+            Some(Refusal::Throttled {
+                until: Timestamp::from_second(1_090)
+            })
+        );
+        let both = json!({"type": "error", "headers": {"retry-after": "20"},
+            "error": {"code": "server_is_overloaded", "headers": {"retry-after": "300"}}});
+        assert_eq!(
+            refusal(&both, now),
+            Some(Refusal::Throttled {
+                until: Timestamp::from_second(1_020)
             })
         );
         let request = json!({"type": "response.failed", "response": {"error": {"code": "context_length_exceeded"}}});
