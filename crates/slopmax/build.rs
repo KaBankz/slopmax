@@ -18,9 +18,18 @@ fn windows() {
     let icon = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/icon/icon.ico");
     println!("cargo:rerun-if-changed={}", icon.display());
     println!("cargo:rerun-if-env-changed=RC_PATH");
-    winresource::WindowsResource::new()
+    println!("cargo:rerun-if-env-changed=SLOPMAX_UI_REQUIRED");
+    let made = winresource::WindowsResource::new()
         .set_icon(&icon.to_string_lossy())
         .set("ProductName", "slopmax")
-        .compile()
-        .expect("embedding the icon in slopmax.exe");
+        .compile();
+    if let Err(err) = made {
+        // Off Windows, a check or lint of the Windows code may have no
+        // llvm-rc; only a release (which sets SLOPMAX_UI_REQUIRED) must
+        // carry the icon.
+        if cfg!(windows) || std::env::var_os("SLOPMAX_UI_REQUIRED").is_some() {
+            panic!("embedding the icon in slopmax.exe: {err}");
+        }
+        println!("cargo:warning=slopmax.exe has no icon: {err}");
+    }
 }
