@@ -8,6 +8,7 @@ use slopmax_client::api::ledger::{LedgerRecord, RequestEnd, RequestRow};
 
 use super::widgets::{Flow, tabs};
 use crate::app::{App, Hit, OUTCOMES, RANGES, outcome_title, range_title};
+use crate::data;
 use crate::format::{self, Now, agent_title};
 use crate::theme::Theme;
 
@@ -69,6 +70,10 @@ fn heading(width: u16, detailed: bool) -> String {
     out
 }
 
+/// Narrower than this, a row of the overview's latest requests leaves out
+/// the status and the account, so its tokens, value and time still show.
+const COMPACT_BELOW: u16 = 60;
+
 /// One request as a row of the feed.
 pub fn feed_row(
     app: &App,
@@ -80,22 +85,56 @@ pub fn feed_row(
     detailed: bool,
 ) -> Line<'static> {
     let LedgerRecord::Request(r) = &row.record;
-    let c = columns(width, detailed);
-    let (mark, tone) = if r.status >= 400 {
+    let failed = data::failed(row);
+    let (mark, tone) = if failed {
         ("✕", Tone::Bad)
-    } else if r.attempts > 1 {
+    } else if data::rescued(row) {
         ("↻", Tone::Warn)
     } else {
         ("●", Tone::Good)
-    };
-    let account = match r.account.as_deref() {
-        Some("") | None => "—".to_owned(),
-        Some(id) => app.data.account_name(id).to_owned(),
     };
     let marker = if selected {
         Span::styled("▌", theme.accent())
     } else {
         Span::raw(" ")
+    };
+    let model_style = if selected {
+        theme.strong()
+    } else {
+        ratatui::style::Style::new()
+    };
+    let model = r.model.as_deref().unwrap_or("—");
+    let tokens = r.usage.tokens();
+    let tokens_text = if tokens == 0 {
+        "—".to_owned()
+    } else {
+        format::compact(tokens)
+    };
+    let cost = |w: usize| match row.cost {
+        Some(cost) => Span::raw(format!("{:>w$}", format::dollars(cost))),
+        None if !failed && tokens > 0 => Span::styled(format!("{:>w$}", "…"), theme.muted()),
+        None => Span::styled(format!("{:>w$}", "—"), theme.muted()),
+    };
+    if !detailed && width < COMPACT_BELOW {
+        // The time, how it went, the model, and the figures.
+        let model_w = (width as usize)
+            .saturating_sub(1 + 6 + 2 + 7 + 8 + 7)
+            .max(8);
+        return Line::from(vec![
+            marker,
+            Span::styled(format!("{:<6}", now.hm(r.at)), theme.muted()),
+            Span::styled(mark, theme.tone(tone)),
+            Span::raw(" "),
+            Span::styled(pad(model, model_w), model_style),
+            Span::raw(format!("{tokens_text:>7}")),
+            cost(8),
+            Span::raw(format!("{:>7}", short_ms(r.ms))),
+        ]);
+    }
+    let c = columns(width, detailed);
+    let account = match r.account.as_deref() {
+        Some("") | None => "—".to_owned(),
+        Some(id) => app.data.account_name(id).to_owned(),
     };
     let mut spans = vec![
         marker,
@@ -103,20 +142,13 @@ pub fn feed_row(
         Span::styled(mark, theme.tone(tone)),
         Span::styled(
             format!(" {:<5}", r.status),
-            if r.status >= 400 {
+            if failed {
                 theme.tone(Tone::Bad)
             } else {
                 theme.muted()
             },
         ),
-        Span::styled(
-            pad(r.model.as_deref().unwrap_or("—"), c.model),
-            if selected {
-                theme.strong()
-            } else {
-                ratatui::style::Style::new()
-            },
-        ),
+        Span::styled(pad(model, c.model), model_style),
         Span::raw(pad(&account, c.account)),
     ];
     if c.agent > 0 {
@@ -125,21 +157,8 @@ pub fn feed_row(
             theme.muted(),
         ));
     }
-    let tokens = r.usage.tokens();
-    spans.push(Span::raw(format!(
-        "{:>8}",
-        if tokens == 0 {
-            "—".to_owned()
-        } else {
-            format::compact(tokens)
-        }
-    )));
-    let cost = match row.cost {
-        Some(cost) => Span::raw(format!("{:>9}", format::dollars(cost))),
-        None if r.status < 400 && tokens > 0 => Span::styled(format!("{:>9}", "…"), theme.muted()),
-        None => Span::styled(format!("{:>9}", "—"), theme.muted()),
-    };
-    spans.push(cost);
+    spans.push(Span::raw(format!("{tokens_text:>8}")));
+    spans.push(cost(9));
     spans.push(Span::raw(format!("{:>8}", short_ms(r.ms))));
     if c.first_byte {
         let first = r.first_byte_ms.map_or("—".into(), short_ms);
@@ -186,7 +205,16 @@ pub fn draw(app: &App, flow: &mut Flow<'_>, now: &Now) {
         Line::default()
     };
     let summary = app.data.requests.value.as_ref().map(|page| {
-        let mut parts = vec![format::count(page.matched, "request")];
+        let mut parts = Vec::new();
+        // The totals are the whole range's; how many of its rows the
+        // filter lets through comes first.
+        if !app.filter.is_empty() {
+            parts.push(format!(
+                "{} shown",
+                format::grouped(app.feed().len() as u64)
+            ));
+        }
+        parts.push(format::count(page.matched, "request"));
         if page.failed > 0 {
             parts.push(format!("{} failed", format::grouped(page.failed)));
         }
@@ -207,6 +235,15 @@ pub fn draw(app: &App, flow: &mut Flow<'_>, now: &Now) {
         };
         flow.line(Line::from(text));
         return;
+    }
+    // A page of rows still shows when asking for it again failed: the
+    // failure is said above it.
+    if let Some(error) = &slot.error {
+        flow.line(Line::from(Span::styled(
+            format!(" Couldn't read the ledger again: {error}"),
+            theme.tone(Tone::Bad),
+        )));
+        flow.gap();
     }
     let rows = app.feed();
     flow.line(Line::from(Span::styled(
@@ -251,6 +288,48 @@ pub fn draw(app: &App, flow: &mut Flow<'_>, now: &Now) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::app::Page;
+    use crate::ui::tests::{app, now};
+
+    /// The mark a row of the feed leads with.
+    fn mark(row: &RequestRow) -> String {
+        let app = app(Page::Requests);
+        let line = feed_row(&app, &Theme::plain(), row, &now(), 120, false, true);
+        line.spans[2].content.to_string()
+    }
+
+    #[test]
+    fn a_stream_the_provider_broke_off_is_a_failure_not_a_rescue() {
+        let app = app(Page::Requests);
+        let mut row = app.feed()[0].clone();
+        let LedgerRecord::Request(r) = &mut row.record;
+        r.status = 200;
+        r.attempts = 2;
+        assert_eq!(mark(&row), "↻");
+        for end in [
+            RequestEnd::UpstreamError,
+            RequestEnd::Stalled,
+            RequestEnd::Cut,
+        ] {
+            row.end = Some(end);
+            assert!(data::failed(&row) && !data::rescued(&row));
+            assert_eq!(mark(&row), "✕", "{end:?}");
+        }
+        // An agent that hung up first didn't make it fail.
+        row.end = Some(RequestEnd::ClientGone);
+        assert_eq!(mark(&row), "↻");
+    }
+
+    #[test]
+    fn a_narrow_row_keeps_its_figures() {
+        let app = app(Page::Overview);
+        let row = app.feed()[0].clone();
+        let line = feed_row(&app, &Theme::plain(), &row, &now(), 47, false, false);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(line.width() <= 47, "{text:?}");
+        assert!(text.trim_end().ends_with("4.2s"), "{text:?}");
+    }
 
     #[test]
     fn durations_are_short() {

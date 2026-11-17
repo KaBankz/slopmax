@@ -257,7 +257,7 @@ pub fn segmented_bar(theme: &Theme, segments: &[Segment], width: u16) -> Vec<Spa
         return usage_bar(theme, used, width, false);
     }
     let gaps = segments.len() as u16 - 1;
-    let room = width.saturating_sub(gaps) as f64;
+    let room = width.saturating_sub(gaps);
     let total: f64 = segments
         .iter()
         .map(|s| s.weight.max(0.0))
@@ -267,10 +267,16 @@ pub fn segmented_bar(theme: &Theme, segments: &[Segment], width: u16) -> Vec<Spa
     let mut given = 0u16;
     for (i, segment) in segments.iter().enumerate() {
         let last = i + 1 == segments.len();
+        // What is left, less a column for each segment still to come:
+        // rounding never takes the bar past its width.
+        let budget = room
+            .saturating_sub(given)
+            .saturating_sub((segments.len() - i - 1) as u16);
         let w = if last {
-            width.saturating_sub(gaps).saturating_sub(given)
+            budget
         } else {
-            ((segment.weight.max(0.0) / total) * room).round().max(1.0) as u16
+            let share = (segment.weight.max(0.0) / total) * f64::from(room);
+            (share.round().max(1.0) as u16).min(budget.max(1))
         };
         given += w;
         if segment.idle {
@@ -610,10 +616,6 @@ pub fn tabs<T: Copy + PartialEq>(
     let theme = flow.theme;
     let mut at = x;
     for (i, (item, title)) in items.iter().enumerate() {
-        if i > 0 {
-            flow.buf.set_string(at, y, " · ", theme.muted());
-            at += 3;
-        }
         let style = if *item == current {
             theme
                 .accent()
@@ -622,8 +624,15 @@ pub fn tabs<T: Copy + PartialEq>(
             theme.muted()
         };
         let w = title.chars().count() as u16;
-        if at + w > flow.x + flow.width {
+        let sep = if i > 0 { 3 } else { 0 };
+        // A title that doesn't fit whole is left out, and so is the dot
+        // before it.
+        if at + sep + w > flow.x + flow.width {
             break;
+        }
+        if i > 0 {
+            flow.buf.set_string(at, y, " · ", theme.muted());
+            at += 3;
         }
         flow.buf.set_string(at, y, *title, style);
         flow.hits.push((Rect::new(at, y, w, 1), hit(*item)));
@@ -681,6 +690,51 @@ mod tests {
             },
         ];
         assert_eq!(text(&segmented_bar(&theme, &off, 9)), "━━── ┄┄┄┄");
+    }
+
+    #[test]
+    fn a_pool_bar_never_runs_past_its_width() {
+        let theme = Theme::plain();
+        let width = |weights: &[f64], w: u16| {
+            let segments: Vec<Segment> = weights
+                .iter()
+                .map(|weight| Segment {
+                    weight: *weight,
+                    used: 50.0,
+                    idle: false,
+                })
+                .collect();
+            Line::from(segmented_bar(&theme, &segments, w)).width()
+        };
+        assert_eq!(width(&[1000.0, 0.0, 0.0, 0.0], 10), 10);
+        assert_eq!(width(&[0.0, 0.0, 0.0, 1000.0], 10), 10);
+        assert_eq!(width(&[0.0, 0.0, 0.0], 9), 9);
+        assert_eq!(width(&[1.0, 1.0, 1.0], 8), 8);
+        assert_eq!(width(&[5.0, 0.0, 5.0, 0.0, 5.0], 13), 13);
+        for w in 8..40 {
+            assert_eq!(width(&[0.6, 0.6, 0.6, 0.1], w), usize::from(w), "{w}");
+        }
+    }
+
+    #[test]
+    fn tabs_leave_out_whole_what_does_not_fit() {
+        let theme = Theme::plain();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 12, 1));
+        let mut hits = Vec::new();
+        let mut flow = Flow {
+            buf: &mut buf,
+            theme: &theme,
+            hits: &mut hits,
+            x: 0,
+            width: 12,
+            y: 0,
+        };
+        let items = [(0u8, "Today"), (1, "7 days")];
+        let end = tabs(&mut flow, 0, 0, &items, 0, |_| Hit::Row(0));
+        assert_eq!(end, 5);
+        let row: String = (0..12).map(|x| buf[(x, 0)].symbol().to_owned()).collect();
+        assert_eq!(row.trim_end(), "Today");
+        assert_eq!(hits.len(), 1);
     }
 
     #[test]

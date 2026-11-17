@@ -8,6 +8,7 @@ use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::layout::{Position, Rect};
+use slopmax_client::RequestQuery;
 use slopmax_client::api::events::Event;
 use slopmax_client::api::ledger::{
     HistoryRange, LedgerRecord, RequestOutcome, RequestRecord, RequestRow,
@@ -155,6 +156,10 @@ pub struct App {
     /// The selection just moved: the next frame scrolls it into view. A
     /// page opens at its top.
     pub follow: bool,
+    /// The rows whose first line the last frame showed; `None` before a
+    /// frame is drawn. A key that acts on the selection while it is out
+    /// of view scrolls it in first.
+    pub visible: Option<std::ops::Range<usize>>,
     /// The span Usage and Performance show.
     pub range: HistoryRange,
     /// Text the request feed is filtered by, and whether it is being typed.
@@ -198,6 +203,7 @@ impl App {
             cursor: 0,
             scroll: 0,
             follow: false,
+            visible: None,
             range: HistoryRange::Week,
             filter: String::new(),
             filtering: false,
@@ -239,6 +245,16 @@ impl App {
         pages
     }
 
+    /// The pages a number key opens, `1` first: every page but the
+    /// providers', whose count changes, so each number always opens the
+    /// same page.
+    pub fn numbered(&self) -> Vec<Page> {
+        self.pages()
+            .into_iter()
+            .filter(|p| !matches!(p, Page::Provider(_)))
+            .collect()
+    }
+
     pub fn sidebar_shown(&self, width: u16) -> bool {
         self.sidebar.unwrap_or(width >= SIDEBAR_FROM)
     }
@@ -250,6 +266,7 @@ impl App {
             self.cursor = 0;
             self.scroll = 0;
             self.follow = false;
+            self.visible = None;
             self.filtering = false;
             self.entered = true;
         }
@@ -403,8 +420,9 @@ impl App {
                         slot.stale = true;
                     }
                     // Settings shows the strategy the report just told the
-                    // header; the rest of its view may have moved with it.
-                    if self.page == Page::Settings {
+                    // header, and the overview session affinity; the rest
+                    // of the view may have moved with it.
+                    if matches!(self.page, Page::Settings | Page::Overview) {
                         self.data.settings.stale = true;
                     }
                 }
@@ -497,6 +515,9 @@ impl App {
                 }
             }
         }
+        // A list that lost its last row leaves the selection on the row
+        // now last.
+        self.clamp();
         Vec::new()
     }
 
@@ -783,7 +804,7 @@ impl App {
             KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => return self.step_page(1),
             KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => return self.step_page(-1),
             KeyCode::Char(c @ '1'..='9') => {
-                let pages = self.pages();
+                let pages = self.numbered();
                 if let Some(page) = pages.get(c as usize - '1' as usize) {
                     return self.go(*page);
                 }
@@ -829,12 +850,12 @@ impl App {
                 return self.load();
             }
             (Page::Requests, KeyCode::Char('r')) => {
-                self.data.query.range = next(&RANGES, self.data.query.range);
-                return self.load();
+                let range = next(&RANGES, self.data.query.range);
+                return self.ask(|q| q.range = range);
             }
             (Page::Requests, KeyCode::Char('o')) => {
-                self.data.query.outcome = next(&OUTCOMES, self.data.query.outcome);
-                return self.load();
+                let outcome = next(&OUTCOMES, self.data.query.outcome);
+                return self.ask(|q| q.outcome = outcome);
             }
             (Page::Requests, KeyCode::Char('/')) => self.filtering = true,
             (Page::Requests, KeyCode::Enter) => {
@@ -864,7 +885,10 @@ impl App {
                     .value
                     .as_ref()
                     .and_then(|keys| keys.get(self.cursor));
-                if let Some(key) = key {
+                if let Some(key) = key.cloned() {
+                    if self.unseen() {
+                        return Vec::new();
+                    }
                     self.modal = Some(Modal::Confirm {
                         title: format!("Revoke the key {:?}?", key.name),
                         body: "Whatever uses it stops reaching the proxy at once.".into(),
@@ -877,6 +901,36 @@ impl App {
             _ => {}
         }
         Vec::new()
+    }
+
+    /// Changes the feed's query and asks for it. The rows of the query
+    /// before answer something else, so they go at once: the feed reads
+    /// as loading, or as the new query's failure, until its answer comes.
+    fn ask(&mut self, change: impl FnOnce(&mut RequestQuery)) -> Vec<Cmd> {
+        let was = self.data.query.clone();
+        change(&mut self.data.query);
+        if self.data.query != was {
+            self.data.requests.value = None;
+            self.data.requests.error = None;
+            self.cursor = 0;
+            self.scroll = 0;
+            self.follow = false;
+        }
+        self.load()
+    }
+
+    /// Whether the selection is out of view, as the last frame drew the
+    /// page: a key that acts on it scrolls it in instead, so nothing is
+    /// changed on a row that can't be seen.
+    fn unseen(&mut self) -> bool {
+        let hidden = self
+            .visible
+            .as_ref()
+            .is_some_and(|rows| !rows.contains(&self.cursor));
+        if hidden {
+            self.follow = true;
+        }
+        hidden
     }
 
     /// Opens what the overview's selected row is about: an item that wants
@@ -906,18 +960,24 @@ impl App {
             self.toast(format!("{} holds no limit reset", account.name), Tone::Warn);
             return;
         }
+        let spends = if held == 1 {
+            "the one it holds".to_owned()
+        } else {
+            format!("one of the {held} it holds; the one closest to expiring goes first")
+        };
         self.modal = Some(Modal::Confirm {
             title: format!("Redeem a limit reset on {}?", account.name),
-            body: format!(
-                "It resets the account's usage windows at once and spends one of the {held} it holds; \
-                 the one closest to expiring goes first."
-            ),
+            body: format!("It resets the account's usage windows at once and spends {spends}."),
             yes: "Redeem".into(),
             action: Action::Redeem(account.id.clone()),
         });
     }
 
     fn account_key(&mut self, code: KeyCode) -> Vec<Cmd> {
+        let acts = matches!(code, KeyCode::Char(' ' | 'e' | 'p' | 'c' | 'R'));
+        if acts && self.selected_account().is_some() && self.unseen() {
+            return Vec::new();
+        }
         let accounts = self.accounts();
         let Some(account) = accounts.get(self.cursor).map(|a| (*a).clone()) else {
             return Vec::new();
@@ -959,6 +1019,9 @@ impl App {
         else {
             return Vec::new();
         };
+        if matches!(code, KeyCode::Enter | KeyCode::Char('c' | 'x')) && self.unseen() {
+            return Vec::new();
+        }
         match code {
             KeyCode::Enter | KeyCode::Char('c') if !agent.wired => {
                 vec![Cmd::Act(Action::Connect(agent.id))]
@@ -983,6 +1046,9 @@ impl App {
         let Some(live) = LIVE.get(self.cursor) else {
             return Vec::new();
         };
+        if self.data.settings.value.is_some() && self.unseen() {
+            return Vec::new();
+        }
         let Some(view) = &self.data.settings.value else {
             return Vec::new();
         };
@@ -1164,6 +1230,16 @@ impl App {
             }
             return Vec::new();
         }
+        if let Some(Modal::Request { scroll, .. }) = &mut self.modal {
+            // The wheel scrolls a request too long for the screen; the
+            // next frame keeps it to its last field.
+            match event.kind {
+                MouseEventKind::ScrollDown => *scroll = scroll.saturating_add(3),
+                MouseEventKind::ScrollUp => *scroll = scroll.saturating_sub(3),
+                _ => {}
+            }
+            return Vec::new();
+        }
         if self.modal.is_some() {
             return Vec::new();
         }
@@ -1194,16 +1270,12 @@ impl App {
                     }
                     Some(Hit::Range(range)) => {
                         if self.page == Page::Requests {
-                            self.data.query.range = range;
-                        } else {
-                            self.range = range;
+                            return self.ask(|q| q.range = range);
                         }
+                        self.range = range;
                         return self.load();
                     }
-                    Some(Hit::Outcome(outcome)) => {
-                        self.data.query.outcome = outcome;
-                        return self.load();
-                    }
+                    Some(Hit::Outcome(outcome)) => return self.ask(|q| q.outcome = outcome),
                     None => {}
                 }
             }

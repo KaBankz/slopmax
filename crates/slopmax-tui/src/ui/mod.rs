@@ -50,6 +50,7 @@ pub fn draw(
     let buf = frame.buffer_mut();
     if area.width < 48 || area.height < 12 {
         too_small(buf, area, theme);
+        app.visible = Some(0..0);
         // What would have come in did so unseen.
         app.entered = false;
         app.arrived = 0;
@@ -180,6 +181,7 @@ fn draw_sidebar(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme, now:
         theme.muted(),
     );
     let mut y = area.y + 4;
+    let numbered = app.numbered();
     for (i, page) in app.pages().into_iter().enumerate() {
         if y + 1 >= area.bottom().saturating_sub(3) {
             break;
@@ -204,11 +206,15 @@ fn draw_sidebar(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme, now:
         if let Some(tone) = provider_tone(app, page, now) {
             buf.set_span(area.right().saturating_sub(6), y, &dot(theme, tone), 1);
         }
-        if i < 9 {
+        // The providers' pages are reached by Tab and the arrows; the
+        // rest each keep their number.
+        if let Some(n) = numbered.iter().position(|p| *p == page)
+            && n < 9
+        {
             buf.set_string(
                 area.right().saturating_sub(3),
                 y,
-                (i + 1).to_string(),
+                (n + 1).to_string(),
                 theme.muted(),
             );
         }
@@ -376,6 +382,15 @@ fn draw_body(buf: &mut Buffer, area: Rect, app: &mut App, theme: &Theme, now: &N
     app.scroll = app.scroll.min(deepest);
     let scroll = app.scroll;
     let view_end = scroll.saturating_add(area.height);
+    // The rows whose first line is in view, for the keys that act on one.
+    let shown = hits.iter().filter_map(|(rect, hit)| match hit {
+        Hit::Row(i) if rect.y >= scroll && rect.y < view_end => Some(*i),
+        _ => None,
+    });
+    app.visible = Some(match (shown.clone().min(), shown.max()) {
+        (Some(first), Some(last)) => first..last + 1,
+        _ => 0..0,
+    });
     for dy in 0..area.height {
         let cy = scroll + dy;
         if cy >= used {
@@ -675,7 +690,7 @@ fn draw_help(buf: &mut Buffer, area: Rect, app: &App, theme: &Theme) -> Rect {
     let mut global = vec![
         ("⇥ / →", "next page"),
         ("⇧⇥ / ←", "previous page"),
-        ("1–9", "go to a page"),
+        ("1–8", "go to a numbered page"),
         ("↑ ↓ / j k", "select or scroll"),
         ("PgUp PgDn", "ten rows at a time"),
         ("g / G", "top / bottom"),
@@ -800,12 +815,15 @@ fn draw_modal(
                 theme,
                 "How new sessions pick an account",
             );
-            // Each with its summary beneath where there is room, else alone.
-            let step = if inner.height > n * 2 { 2 } else { 1 };
+            // Each with its summary beneath where there is room, else
+            // alone; below them a blank row and the keys.
+            let room = inner.height.saturating_sub(3);
+            let step = if room >= n * 2 { 2 } else { 1 };
+            let end = inner.y + 1 + room;
             let current = app.data.report.as_ref().map(|r| r.strategy);
             for (i, strategy) in strategies.iter().enumerate() {
                 let y = inner.y + 1 + i as u16 * step;
-                if y >= inner.bottom() {
+                if y >= end {
                     break;
                 }
                 let chosen = i == *selected;
@@ -821,7 +839,7 @@ fn draw_modal(
                     line.push(Span::styled("  current", theme.tone(Tone::Accent)));
                 }
                 buf.set_line(inner.x, y, &Line::from(line), inner.width);
-                if step == 2 && y + 1 < inner.bottom() {
+                if step == 2 && y + 1 < end {
                     buf.set_stringn(
                         inner.x + 2,
                         y + 1,
@@ -831,6 +849,18 @@ fn draw_modal(
                     );
                 }
             }
+            dialog_keys(
+                buf,
+                inner,
+                vec![
+                    Span::styled("↑↓", theme.strong()),
+                    Span::styled(" choose   ", theme.muted()),
+                    Span::styled("⏎", theme.strong()),
+                    Span::styled(" apply   ", theme.muted()),
+                    Span::styled("esc", theme.strong()),
+                    Span::styled(" cancel", theme.muted()),
+                ],
+            );
             outer
         }
         Modal::Secret { title, text, note } => {

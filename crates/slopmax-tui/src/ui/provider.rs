@@ -1,6 +1,6 @@
-//! A provider's page: its accounts read as one pool, where the pool is
-//! heading at the pace it fills, and each account with its windows, what
-//! they have served, and how its requests went over the last day.
+//! A provider's page: its accounts read as one pool, each account with its
+//! windows, what they have served, and how its requests went over the
+//! last day, and where the pool is heading at the pace it fills.
 
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -234,14 +234,6 @@ pub fn draw(app: &App, provider: Provider, flow: &mut Flow<'_>, now: &Now) {
             ]));
             flow.gap();
         }
-        if let Some(pool) = pool
-            && !pool.trends.is_empty()
-        {
-            flow.section("Forecast", None);
-            for trend in &pool.trends {
-                forecast(flow, trend, report, now);
-            }
-        }
     }
     let pinned = accounts.iter().any(|a| a.pinned);
     let trailing = pinned.then(|| {
@@ -275,6 +267,17 @@ pub fn draw(app: &App, provider: Provider, flow: &mut Flow<'_>, now: &Now) {
             Hit::Row(i),
         );
         flow.gap();
+    }
+    // Where the pool is heading comes after the accounts, so the one
+    // selected is on screen as the page opens, as the keys act on it.
+    if provider.is_subscription()
+        && let Some(pool) = pool
+        && !pool.trends.is_empty()
+    {
+        flow.section("Forecast", None);
+        for trend in &pool.trends {
+            forecast(flow, trend, report, now);
+        }
     }
 }
 
@@ -616,7 +619,9 @@ fn window_row(
 /// The last day's answers and failures, a cell per stretch of time.
 fn health(flow: &mut Flow<'_>, detail: &AccountDetail, pool: &PoolDetail, now: &Now) {
     let theme = flow.theme;
-    let room = flow.width.saturating_sub(17 + 12) as usize;
+    // Room after the title for the summary at the end, its longest
+    // (`  1234 ok since Mon 09:30`) whole.
+    let room = flow.width.saturating_sub(17 + 26) as usize;
     let cells = &detail.health[detail.health.len().saturating_sub(room)..];
     let mut spans = vec![Span::styled(format!("  {:<15}", "Last day"), theme.muted())];
     for cell in cells {

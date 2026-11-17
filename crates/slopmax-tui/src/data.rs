@@ -7,8 +7,8 @@ use std::time::{Duration, Instant as Clock};
 
 use slopmax_client::api::events::Event;
 use slopmax_client::api::ledger::{
-    History, HistoryRange, LedgerRecord, RequestOutcome, RequestPage, RequestRow, Summary,
-    SummaryBy, SummaryRange,
+    History, HistoryRange, LedgerRecord, RequestEnd, RequestOutcome, RequestPage, RequestRow,
+    Summary, SummaryBy, SummaryRange,
 };
 use slopmax_client::api::pools::PoolDetail;
 use slopmax_client::api::report::{AccountView, AgentWiring, RedeemOutcome, Report, Section};
@@ -311,6 +311,25 @@ impl Data {
         take(page, record, self.query.limit);
         true
     }
+}
+
+/// Whether a request of the feed failed, as the daemon counts it: an
+/// error status, or an answer that streamed until the provider broke it
+/// off, went quiet, or the proxy stopped. An agent that hung up first
+/// didn't make it fail.
+pub fn failed(row: &RequestRow) -> bool {
+    let LedgerRecord::Request(r) = &row.record;
+    r.status >= 400
+        || matches!(
+            row.end,
+            Some(RequestEnd::UpstreamError | RequestEnd::Stalled | RequestEnd::Cut)
+        )
+}
+
+/// Whether a request was answered, on another try than the first.
+pub fn rescued(row: &RequestRow) -> bool {
+    let LedgerRecord::Request(r) = &row.record;
+    !failed(row) && r.attempts > 1
 }
 
 /// Whether a page of `query` lists a request just answered.

@@ -31,16 +31,22 @@ impl Theme {
         let color = std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
         let truecolor = std::env::var("COLORTERM")
             .is_ok_and(|v| v.eq_ignore_ascii_case("truecolor") || v.eq_ignore_ascii_case("24bit"));
-        let mut options = terminal_colorsaurus::QueryOptions::default();
-        options.timeout = Duration::from_millis(100);
-        let palette = terminal_colorsaurus::color_palette(options).ok();
-        let (surface, raised) = match (&palette, truecolor && color) {
-            (Some(p), true) => {
+        // Surfaces are drawn only in true color, so the terminal is only
+        // asked where they would be.
+        let palette = (truecolor && color)
+            .then(|| {
+                let mut options = terminal_colorsaurus::QueryOptions::default();
+                options.timeout = Duration::from_millis(100);
+                terminal_colorsaurus::color_palette(options).ok()
+            })
+            .flatten();
+        let (surface, raised) = match &palette {
+            Some(p) => {
                 let bg = p.background.scale_to_8bit();
                 let fg = p.foreground.scale_to_8bit();
                 (Some(mix(bg, fg, 0.045)), Some(mix(bg, fg, 0.11)))
             }
-            _ => (None, None),
+            None => (None, None),
         };
         Self {
             color,

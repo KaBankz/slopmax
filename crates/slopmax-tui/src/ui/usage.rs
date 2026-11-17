@@ -386,17 +386,33 @@ fn token_mix(flow: &mut Flow<'_>, total: &Totals) {
         spans.push(Span::styled(symbol.repeat(w), theme.ink()));
     }
     flow.line(Line::from(spans));
+    // The legend, an item at a time, onto another line where the next
+    // doesn't fit whole.
     let mut legend = vec![Span::raw(" ")];
-    for (i, (title, n, symbol)) in parts.iter().enumerate() {
-        if i > 0 {
-            legend.push(Span::raw("   "));
+    let mut used = 1usize;
+    for (title, n, symbol) in parts {
+        let item = [
+            Span::styled(symbol, theme.ink()),
+            Span::raw(format!(" {title} ")),
+            Span::styled(
+                format!("{} · {:.0}%", format::compact(n), n as f64 / all * 100.0),
+                theme.muted(),
+            ),
+        ];
+        let w: usize = item.iter().map(Span::width).sum();
+        if used > 1 && used + 3 + w > flow.width as usize {
+            flow.line(Line::from(std::mem::replace(
+                &mut legend,
+                vec![Span::raw(" ")],
+            )));
+            used = 1;
         }
-        legend.push(Span::styled(*symbol, theme.ink()));
-        legend.push(Span::raw(format!(" {title} ")));
-        legend.push(Span::styled(
-            format!("{} · {:.0}%", format::compact(*n), *n as f64 / all * 100.0),
-            theme.muted(),
-        ));
+        if used > 1 {
+            legend.push(Span::raw("   "));
+            used += 3;
+        }
+        legend.extend(item);
+        used += w;
     }
     flow.line(Line::from(legend));
 }

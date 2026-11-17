@@ -316,6 +316,35 @@ fn the_selected_row_scrolls_into_view() {
 }
 
 #[test]
+fn a_key_on_a_selection_out_of_view_scrolls_to_it_before_acting() {
+    let mut app = app(Page::Provider(Provider::Claude));
+    // The accounts come before the forecast: the first is in view as the
+    // page opens.
+    let screen = render(&mut app, 80, 24);
+    assert!(screen.contains("Spare"), "{screen}");
+    assert!(app.visible.as_ref().is_some_and(|rows| rows.contains(&0)));
+    // Scrolled to the bottom, with the first account selected again.
+    press(&mut app, KeyCode::End);
+    render(&mut app, 80, 24);
+    app.cursor = 0;
+    assert!(
+        app.visible.as_ref().is_some_and(|rows| !rows.contains(&0)),
+        "{:?} at {}",
+        app.visible,
+        app.scroll
+    );
+    let id = app.selected_account().map(|a| a.id.clone()).unwrap();
+    // The first `p` brings it into view; the next acts on it.
+    assert_eq!(app.key(KeyEvent::from(KeyCode::Char('p'))), []);
+    let screen = render(&mut app, 80, 24);
+    assert!(screen.contains("Spare"), "{screen}");
+    assert_eq!(
+        app.key(KeyEvent::from(KeyCode::Char('p'))),
+        [crate::app::Cmd::Act(crate::data::Action::Pin(id))]
+    );
+}
+
+#[test]
 fn what_lies_below_the_last_row_can_be_scrolled_to() {
     // Settings' proxy details sit under its last setting.
     let mut app = app(Page::Settings);

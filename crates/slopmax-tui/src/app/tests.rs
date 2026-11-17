@@ -57,7 +57,7 @@ fn tab_number_keys_and_arrows_move_between_pages_fetching_what_each_shows() {
     // Wraps around from the first page to the last.
     press(&mut app, KeyCode::Left);
     assert_eq!(app.page, Page::Settings);
-    let cmds = press(&mut app, KeyCode::Char('6'));
+    let cmds = press(&mut app, KeyCode::Char('2'));
     assert_eq!(app.page, Page::Usage);
     assert_eq!(
         cmds,
@@ -67,7 +67,7 @@ fn tab_number_keys_and_arrows_move_between_pages_fetching_what_each_shows() {
         ]
     );
     // A page already being fetched isn't asked for twice.
-    assert_eq!(press(&mut app, KeyCode::Char('6')), []);
+    assert_eq!(press(&mut app, KeyCode::Char('2')), []);
 }
 
 #[test]
@@ -185,7 +185,7 @@ fn esc_never_quits_and_q_and_ctrl_c_do() {
     let mut app = app(Page::Overview);
     press(&mut app, KeyCode::Esc);
     assert!(!app.quit);
-    press(&mut app, KeyCode::Char('6'));
+    press(&mut app, KeyCode::Char('2'));
     assert_eq!(app.page, Page::Usage);
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.page, Page::Overview);
@@ -762,4 +762,110 @@ fn a_long_request_scrolls_and_any_other_key_closes_it() {
     assert!(matches!(app.modal, Some(Modal::Request { scroll: 0, .. })));
     press(&mut app, KeyCode::Char('x'));
     assert!(app.modal.is_none());
+}
+
+#[test]
+fn number_keys_open_the_same_pages_whatever_the_providers() {
+    let mut app = app(Page::Overview);
+    press(&mut app, KeyCode::Char('8'));
+    assert_eq!(app.page, Page::Settings);
+    press(&mut app, KeyCode::Char('4'));
+    assert_eq!(app.page, Page::Requests);
+    // Past the last numbered page, a number does nothing.
+    press(&mut app, KeyCode::Char('9'));
+    assert_eq!(app.page, Page::Requests);
+}
+
+#[test]
+fn revoking_the_last_key_leaves_the_selection_on_a_key() {
+    let mut app = app(Page::Access);
+    let laptop = app.data.keys.value.as_ref().unwrap()[0].clone();
+    let mut ci = laptop.clone();
+    ci.name = "ci".into();
+    app.data.keys.value = Some(vec![laptop.clone(), ci]);
+    press(&mut app, KeyCode::Down);
+    assert_eq!(app.cursor, 1);
+    app.apply(Msg::Done(
+        Action::RemoveKey("ci".into()),
+        Ok(Outcome::Keys(vec![laptop], "Revoked the key \"ci\"".into())),
+    ));
+    assert_eq!(app.cursor, 0);
+    press(&mut app, KeyCode::Char('x'));
+    let Some(Modal::Confirm { action, .. }) = &app.modal else {
+        panic!("x still asks: {:?}", app.modal);
+    };
+    assert_eq!(*action, Action::RemoveKey("laptop".into()));
+}
+
+#[test]
+fn a_new_query_drops_the_last_one_s_rows_and_shows_its_failure() {
+    let mut app = app(Page::Requests);
+    assert!(!app.feed().is_empty());
+    press(&mut app, KeyCode::Char('o'));
+    // The rows answered All; they don't stand under Answered.
+    assert!(app.data.requests.value.is_none());
+    assert!(app.feed().is_empty());
+    let query = app.data.query.clone();
+    app.apply(Msg::Fetched(Box::new(Fetched::Requests(
+        query,
+        Err("the ledger is busy".into()),
+    ))));
+    assert_eq!(
+        app.data.requests.error.as_deref(),
+        Some("the ledger is busy")
+    );
+    let screen = crate::ui::tests::render(&mut app, 120, 36);
+    assert!(screen.contains("the ledger is busy"), "{screen}");
+    assert!(!screen.contains("gpt-6-sol"), "{screen}");
+    // The same query asked again, failing, keeps its rows and says so.
+    let query = app.data.query.clone();
+    app.apply(Msg::Fetched(Box::new(Fetched::Requests(
+        query.clone(),
+        Ok(fixture("usage.requests.ok")),
+    ))));
+    app.apply(Msg::Fetched(Box::new(Fetched::Requests(
+        query,
+        Err("the ledger is busy".into()),
+    ))));
+    let screen = crate::ui::tests::render(&mut app, 120, 36);
+    assert!(screen.contains("the ledger is busy"), "{screen}");
+    assert!(screen.contains("gpt-6-sol"), "{screen}");
+}
+
+#[test]
+fn a_new_report_makes_the_overview_s_settings_stale() {
+    let mut app = app(Page::Overview);
+    let report = app.data.report.clone().unwrap();
+    app.apply(Msg::Event(Box::new(Event::Status {
+        report: Box::new(report),
+    })));
+    assert!(app.data.settings.stale);
+}
+
+#[test]
+fn redeeming_the_only_reset_says_so() {
+    let mut app = app(Page::Provider(Provider::Codex));
+    press(&mut app, KeyCode::Char('R'));
+    let Some(Modal::Confirm { body, .. }) = &app.modal else {
+        panic!("asks first: {:?}", app.modal);
+    };
+    assert!(body.contains("spends the one it holds."), "{body}");
+}
+
+#[test]
+fn the_wheel_scrolls_a_request_s_details() {
+    use crossterm::event::{MouseEvent, MouseEventKind};
+    let mut app = app(Page::Requests);
+    press(&mut app, KeyCode::Enter);
+    let wheel = |kind| MouseEvent {
+        kind,
+        column: 40,
+        row: 10,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.mouse(wheel(MouseEventKind::ScrollDown));
+    assert!(matches!(app.modal, Some(Modal::Request { scroll: 3, .. })));
+    app.mouse(wheel(MouseEventKind::ScrollUp));
+    assert!(matches!(app.modal, Some(Modal::Request { scroll: 0, .. })));
+    assert_eq!(app.scroll, 0, "the page underneath stays put");
 }
