@@ -174,7 +174,7 @@ pub(super) async fn status(config: &Config, json: bool) -> Result<()> {
         let health = super::daemon(config).await.ok().flatten();
         let reached = health.is_some();
         if json {
-            let view = serde_json::json!({ "hub": url, "reachable": reached });
+            let view = serde_json::json!({ "state": "hub", "hub": url, "reachable": reached });
             println!("{}", serde_json::to_string_pretty(&view)?);
         } else if reached {
             println!("This machine uses the hub at {url}, which answers.");

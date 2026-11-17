@@ -145,6 +145,14 @@ pub struct Json {
     pub json: bool,
 }
 
+/// `--json` on a noun, for what it shows with no subcommand.
+#[derive(Args, Default)]
+pub struct ListJson {
+    /// With no subcommand: print JSON instead of text, for scripts and agents
+    #[usage(long)]
+    pub json: bool,
+}
+
 /// `-y, --yes`, on every command that asks before it acts.
 #[derive(Args, Default)]
 pub struct Yes {
@@ -247,7 +255,12 @@ pub struct Setup {
 #[usage(
     effect = "read",
     output("human", default),
-    output("json", media_type = "application/json", select = "--json")
+    output(
+        "json",
+        media_type = "application/json",
+        framing = "json",
+        select = "--json"
+    )
 )]
 pub struct Status {
     /// Fetch fresh usage from the providers first
@@ -276,14 +289,10 @@ pub struct Dashboard {
 ///
 /// Without a subcommand, lists the accounts.
 #[derive(Args)]
-#[usage(
-    effect = "read",
-    output("human", default),
-    output("json", media_type = "application/json", select = "--json")
-)]
+#[usage(effect = "read")]
 pub struct Account {
     #[usage(flatten)]
-    pub json: Json,
+    pub json: ListJson,
     #[usage(subcommand)]
     pub command: Option<AccountCommand>,
 }
@@ -336,7 +345,12 @@ pub enum AccountCommand {
 #[usage(
     effect = "read",
     output("human", default),
-    output("json", media_type = "application/json", select = "--json")
+    output(
+        "json",
+        media_type = "application/json",
+        framing = "json",
+        select = "--json"
+    )
 )]
 pub struct AccountList {
     #[usage(flatten)]
@@ -460,7 +474,12 @@ pub struct AccountPriority {
 #[usage(
     effect = "write",
     output("human", default),
-    output("json", media_type = "application/json", select = "--json"),
+    output(
+        "json",
+        media_type = "application/json",
+        framing = "json",
+        select = "--json"
+    ),
     example("slopmax account order 3 1", header = "Use account 3 first, then 1")
 )]
 pub struct AccountOrder {
@@ -485,7 +504,12 @@ pub struct AccountRef {
 #[usage(
     effect = "write",
     output("human", default),
-    output("json", media_type = "application/json", select = "--json")
+    output(
+        "json",
+        media_type = "application/json",
+        framing = "json",
+        select = "--json"
+    )
 )]
 pub struct AccountCheck {
     /// A number from `slopmax status`, or the account's id, email, or label
@@ -538,7 +562,12 @@ pub struct AccountRemove {
     effect = "read",
     example("slopmax usage 30d --by model", header = "The last 30 days, by model"),
     output("human", default),
-    output("json", media_type = "application/json", select = "--json")
+    output(
+        "json",
+        media_type = "application/json",
+        framing = "json",
+        select = "--json"
+    )
 )]
 pub struct Usage {
     /// Which period
@@ -560,7 +589,12 @@ pub struct Usage {
         header = "The last five requests that failed"
     ),
     output("human", default),
-    output("json", media_type = "application/json", select = "--json")
+    output(
+        "json",
+        media_type = "application/json",
+        framing = "json",
+        select = "--json"
+    )
 )]
 pub struct Requests {
     /// Which period
@@ -592,14 +626,10 @@ pub struct Requests {
 ///
 /// Without a subcommand, lists the agents and whether each is connected.
 #[derive(Args)]
-#[usage(
-    effect = "read",
-    output("human", default),
-    output("json", media_type = "application/json", select = "--json")
-)]
+#[usage(effect = "read")]
 pub struct Agent {
     #[usage(flatten)]
-    pub json: Json,
+    pub json: ListJson,
     #[usage(subcommand)]
     pub command: Option<AgentCommand>,
 }
@@ -628,7 +658,12 @@ pub enum AgentCommand {
 #[usage(
     effect = "read",
     output("human", default),
-    output("json", media_type = "application/json", select = "--json")
+    output(
+        "json",
+        media_type = "application/json",
+        framing = "json",
+        select = "--json"
+    )
 )]
 pub struct AgentList {
     #[usage(flatten)]
@@ -661,7 +696,8 @@ pub struct AgentEnv {
 
 /// Launch an agent through the proxy, starting the proxy if needed.
 ///
-/// Everything after the agent goes to it unchanged.
+/// Everything after the agent goes to it unchanged, and slopmax exits with
+/// the agent's own exit status.
 #[derive(Args)]
 #[usage(
     effect = "write",
@@ -686,14 +722,10 @@ pub struct AgentRun {
 ///
 /// Without a subcommand, shows whether the proxy runs.
 #[derive(Args)]
-#[usage(
-    effect = "read",
-    output("human", default),
-    output("json", media_type = "application/json", select = "--json")
-)]
+#[usage(effect = "read")]
 pub struct Proxy {
     #[usage(flatten)]
-    pub json: Json,
+    pub json: ListJson,
     #[usage(subcommand)]
     pub command: Option<ProxyCommand>,
 }
@@ -731,7 +763,12 @@ pub enum ProxyCommand {
 #[usage(
     effect = "read",
     output("human", default),
-    output("json", media_type = "application/json", select = "--json")
+    output(
+        "json",
+        media_type = "application/json",
+        framing = "json",
+        select = "--json"
+    )
 )]
 pub struct ProxyStatus {
     #[usage(flatten)]
@@ -792,7 +829,12 @@ pub struct ProxyLogs {
         header = "Take turns between accounts"
     ),
     output("human", default),
-    output("json", media_type = "application/json", select = "--json")
+    output(
+        "json",
+        media_type = "application/json",
+        framing = "json",
+        select = "--json"
+    )
 )]
 pub struct ConfigCmd {
     /// The setting, e.g. strategy
@@ -809,14 +851,10 @@ pub struct ConfigCmd {
 ///
 /// Without a subcommand, lists the keys.
 #[derive(Args)]
-#[usage(
-    effect = "read",
-    output("human", default),
-    output("json", media_type = "application/json", select = "--json")
-)]
+#[usage(effect = "read")]
 pub struct Key {
     #[usage(flatten)]
-    pub json: Json,
+    pub json: ListJson,
     #[usage(subcommand)]
     pub command: Option<KeyCommand>,
 }
@@ -839,7 +877,12 @@ pub enum KeyCommand {
 #[usage(
     effect = "read",
     output("human", default),
-    output("json", media_type = "application/json", select = "--json")
+    output(
+        "json",
+        media_type = "application/json",
+        framing = "json",
+        select = "--json"
+    )
 )]
 pub struct KeyList {
     #[usage(flatten)]
@@ -876,14 +919,10 @@ pub struct KeyRemove {
 /// Without a subcommand, shows whether slopmax is published to your
 /// tailnet, and who uses it.
 #[derive(Args)]
-#[usage(
-    effect = "read",
-    output("human", default),
-    output("json", media_type = "application/json", select = "--json")
-)]
+#[usage(effect = "read")]
 pub struct Tailscale {
     #[usage(flatten)]
-    pub json: Json,
+    pub json: ListJson,
     #[usage(subcommand)]
     pub command: Option<TailscaleCommand>,
 }
@@ -912,7 +951,12 @@ pub enum TailscaleCommand {
 #[usage(
     effect = "read",
     output("human", default),
-    output("json", media_type = "application/json", select = "--json")
+    output(
+        "json",
+        media_type = "application/json",
+        framing = "json",
+        select = "--json"
+    )
 )]
 pub struct TailscaleStatus {
     #[usage(flatten)]
@@ -955,14 +999,10 @@ pub struct TailscaleOff;
 ///
 /// Without a subcommand, lists them.
 #[derive(Args)]
-#[usage(
-    effect = "read",
-    output("human", default),
-    output("json", media_type = "application/json", select = "--json")
-)]
+#[usage(effect = "read")]
 pub struct TailnetUsers {
     #[usage(flatten)]
-    pub json: Json,
+    pub json: ListJson,
     #[usage(subcommand)]
     pub command: Option<UserCommand>,
 }
@@ -985,14 +1025,10 @@ pub enum UserCommand {
 ///
 /// Without a subcommand, lists them.
 #[derive(Args)]
-#[usage(
-    effect = "read",
-    output("human", default),
-    output("json", media_type = "application/json", select = "--json")
-)]
+#[usage(effect = "read")]
 pub struct TailnetAdmins {
     #[usage(flatten)]
-    pub json: Json,
+    pub json: ListJson,
     #[usage(subcommand)]
     pub command: Option<AdminCommand>,
 }
@@ -1015,7 +1051,12 @@ pub enum AdminCommand {
 #[usage(
     effect = "read",
     output("human", default),
-    output("json", media_type = "application/json", select = "--json")
+    output(
+        "json",
+        media_type = "application/json",
+        framing = "json",
+        select = "--json"
+    )
 )]
 pub struct TailnetShow {
     #[usage(flatten)]
@@ -1050,7 +1091,12 @@ pub struct Machines {
     exit_code(0, "nothing is broken"),
     exit_code(1, "something is broken"),
     output("human", default),
-    output("json", media_type = "application/json", select = "--json")
+    output(
+        "json",
+        media_type = "application/json",
+        framing = "json",
+        select = "--json"
+    )
 )]
 pub struct Doctor {
     #[usage(flatten)]
@@ -1061,14 +1107,10 @@ pub struct Doctor {
 ///
 /// Notifications are set under [notify] in config.toml.
 #[derive(Args)]
-#[usage(
-    effect = "read",
-    output("human", default),
-    output("json", media_type = "application/json", select = "--json")
-)]
+#[usage(effect = "read")]
 pub struct Notify {
     #[usage(flatten)]
-    pub json: Json,
+    pub json: ListJson,
     #[usage(subcommand)]
     pub command: Option<NotifyCommand>,
 }
@@ -1090,7 +1132,16 @@ pub struct NotifyTest;
 /// It updates the way slopmax was installed, and the proxy changes over
 /// without dropping a connection.
 #[derive(Args)]
-#[usage(effect = "write")]
+#[usage(
+    effect = "write",
+    output("human", default),
+    output(
+        "json",
+        media_type = "application/json",
+        framing = "json",
+        select = "--json"
+    )
+)]
 pub struct Update {
     /// Only say whether a newer release is out
     #[usage(long)]

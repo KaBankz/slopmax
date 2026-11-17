@@ -4,7 +4,7 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
-The command line is rebuilt on [usage](https://usage.jdx.dev) and regrouped: things are nouns with verbs under them (`account`, `agent`, `proxy`, `key`, `tailscale`), the same verbs and flags mean the same thing everywhere, and every command that prints data takes `--json`. Many commands moved; each old spelling now fails with its new one, so a script learns it once.
+The command line is rebuilt on [usage](https://usage.jdx.dev) and regrouped: things are nouns with verbs under them (`account`, `agent`, `proxy`, `key`, `tailscale`), the same verbs and flags mean the same thing everywhere, and every command that prints data takes `--json`. Many commands moved; each old command now fails with its new spelling, so a script learns it once. Renamed flags (below) fail as unknown flags.
 
 ### Changed
 

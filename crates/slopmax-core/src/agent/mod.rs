@@ -9,7 +9,7 @@
 //! - `slopmax run <agent>` launches the agent wired up for that session;
 //! - `slopmax agent env <agent>` prints shell setup to `eval`;
 //! - `slopmax agent connect <agent>` writes the wiring into the agent's own config,
-//!   keeping a backup for `--undo`.
+//!   keeping a backup for `slopmax agent disconnect`.
 
 mod claude_code;
 mod codex;

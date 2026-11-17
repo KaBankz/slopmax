@@ -34,9 +34,9 @@ pub struct HubArgs {
     /// `off`, a URL, `host[:port]`, or a machine's name on the tailnet;
     /// empty to look for a hub.
     pub target: String,
-    /// `--key`, else `$SLOPMAX_HUB_KEY`.
+    /// `--hub-key`, else `$SLOPMAX_HUB_KEY`.
     pub key: Option<String>,
-    /// `--name`: what a key made with the hub's owner key is called.
+    /// `--key-name`: what a key made with the hub's owner key is called.
     pub name: Option<String>,
     /// `--yes`: ask nothing, taking the recommended answers.
     pub yes: bool,
@@ -244,7 +244,7 @@ async fn resolve(target: &str, keyed: bool) -> Result<String> {
     if url.starts_with("http://") && !is_loopback(host) && !keyed {
         bail!(
             "plain http:// reaches only this machine without a key; use the hub's https:// \
-             address, or pass --key for a hub on your LAN"
+             address, or pass --hub-key for a hub on your LAN"
         );
     }
     Ok(url)
@@ -387,7 +387,7 @@ async fn ask_key(client: &Client, health: &Health) -> Result<String> {
     };
     if key.is_empty() {
         bail!(
-            "the hub needs a key from this machine: pass one with --key or SLOPMAX_HUB_KEY \
+            "the hub needs a key from this machine: pass one with --hub-key or SLOPMAX_HUB_KEY \
              (on the hub, `slopmax key add <name>` makes one)"
         );
     }
@@ -439,7 +439,7 @@ async fn mint(owner: &Client, name: &str, yes: bool) -> Result<(String, String)>
                     && term::confirm("Replace it? The old key stops working.", false)?);
             if !replace {
                 bail!(
-                    "kept the hub's key {name:?}; name this machine's with --name, or replace \
+                    "kept the hub's key {name:?}; name this machine's with --key-name, or replace \
                      it with --yes"
                 );
             }
@@ -576,7 +576,7 @@ mod tests {
             "http://127.0.0.1:7600"
         );
         let refused = resolved("http://box.lan:7567", false).await.unwrap_err();
-        assert!(refused.to_string().contains("--key"), "{refused}");
+        assert!(refused.to_string().contains("--hub-key"), "{refused}");
         assert_eq!(
             resolved("http://box.lan:7567", true).await.unwrap(),
             "http://box.lan:7567"

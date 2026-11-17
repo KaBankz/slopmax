@@ -52,7 +52,7 @@ impl Answers {
 pub struct Plan {
     /// `--import`: where to take logins from.
     pub import: Option<Vec<Source>>,
-    /// `--own`: refresh CLIProxyAPI's logins here rather than follow them.
+    /// `--adopt`: refresh CLIProxyAPI's logins here rather than follow them.
     pub own: bool,
     /// `--login`: subscriptions to sign in to.
     pub login: Option<Vec<ProviderId>>,
@@ -68,9 +68,9 @@ pub struct Plan {
     /// `--hub`: use the slopmax on another machine instead, and set up
     /// nothing else; empty to look for one (`--find-hub`).
     pub hub: Option<String>,
-    /// `--key`: with `--hub`, the key the hub takes.
+    /// `--hub-key`: with `--hub`, the key the hub takes.
     pub key: Option<String>,
-    /// `--name`: with `--hub`, the name of a key the hub's owner key makes.
+    /// `--key-name`: with `--hub`, the name of a key the hub's owner key makes.
     pub name: Option<String>,
     /// A first run: look for a hub on the tailnet before anything else.
     pub discover: bool,

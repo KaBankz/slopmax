@@ -21,6 +21,9 @@ Docs: https://github.com/KaBankz/slopmax#readme
 flagset json {
     flag --json help="Print JSON instead of text, for scripts and agents"
 }
+flagset list-json {
+    flag --json help="With no subcommand: print JSON instead of text, for scripts and agents"
+}
 flagset yes {
     flag "-y --yes" help="Don't ask for confirmation"
 }
@@ -105,7 +108,7 @@ Reads the running proxy, else the files on disk. Accounts are numbered; commands
     use json
     flag "-h --help" help="Print help" action=help builtin=#true
     output human default=#true
-    output json media_type="application/json" select=--json
+    output json media_type="application/json" framing=json select=--json
 }
 cmd dashboard help_heading="Start here" help="Open the dashboard in a browser, starting the proxy if needed" effect=write display_order=3 {
     flag --no-browser help="Print the dashboard's address instead of opening a browser"
@@ -161,14 +164,14 @@ List, add, and manage the accounts slopmax pools.
 
 Without a subcommand, lists the accounts.
 """#
-    use json
+    use list-json
     flag "-h --help" help="Print help" action=help builtin=#true
     cmd list help="List the accounts, numbered" effect=read display_order=1 {
         alias ls
         use json
         flag "-h --help" help="Print help" action=help builtin=#true
         output human default=#true
-        output json media_type="application/json" select=--json
+        output json media_type="application/json" framing=json select=--json
     }
     cmd add help="Connect an account: sign in, or enter an API key" effect=write display_order=2 {
         long_help #"""
@@ -265,7 +268,7 @@ With accounts, puts them first, in the order given; the rest follow as they were
         complete accounts run="slopmax __complete_word__ --candidates accounts --line={{ words | shell_join | shell_quote }}"
         example "slopmax account order 3 1" header="Use account 3 first, then 1"
         output human default=#true
-        output json media_type="application/json" select=--json
+        output json media_type="application/json" framing=json select=--json
     }
     cmd enable help="Route to an account again" effect=write display_order=8 {
         flag "-h --help" help="Print help" action=help builtin=#true
@@ -283,7 +286,7 @@ With accounts, puts them first, in the order given; the rest follow as they were
         arg <ACCOUNT> help="A number from `slopmax status`, or the account's id, email, or label"
         complete account run="slopmax __complete_word__ --candidates account --line={{ words | shell_join | shell_quote }}"
         output human default=#true
-        output json media_type="application/json" select=--json
+        output json media_type="application/json" framing=json select=--json
     }
     cmd redeem help="Spend a banked limit reset, resetting the account's usage windows" effect=destructive display_order=11 {
         long_help #"""
@@ -313,8 +316,6 @@ The first refresh signs the other tool's copy out, so stop that tool first.
         arg <ACCOUNT> help="A number from `slopmax status`, or the account's id, email, or label"
         complete account run="slopmax __complete_word__ --candidates account --line={{ words | shell_join | shell_quote }}"
     }
-    output human default=#true
-    output json media_type="application/json" select=--json
 }
 cmd usage help_heading=Activity help="Show token usage and what it would have cost on the API" effect=read display_order=6 {
     flag "-b --by" help="What to group by" default=day {
@@ -339,7 +340,7 @@ cmd usage help_heading=Activity help="Show token usage and what it would have co
     }
     example "slopmax usage 30d --by model" header="The last 30 days, by model"
     output human default=#true
-    output json media_type="application/json" select=--json
+    output json media_type="application/json" framing=json select=--json
 }
 cmd requests help_heading=Activity help="Show the requests the proxy answered" effect=read display_order=7 {
     flag --account help="Only those served by this account" {
@@ -367,13 +368,13 @@ cmd requests help_heading=Activity help="Show the requests the proxy answered" e
     complete account run="slopmax __complete_word__ --candidates account --line={{ words | shell_join | shell_quote }}"
     example "slopmax requests --failed --limit 5" header="The last five requests that failed"
     output human default=#true
-    output json media_type="application/json" select=--json
+    output json media_type="application/json" framing=json select=--json
 }
 cmd run help_heading=Agents help="Launch an agent through the proxy (`agent run`)" effect=write display_order=8 {
     long_help #"""
 Launch an agent through the proxy, starting the proxy if needed.
 
-Everything after the agent goes to it unchanged.
+Everything after the agent goes to it unchanged, and slopmax exits with the agent's own exit status.
 """#
     flag "-h --help" help="Print help" action=help builtin=#true
     arg <AGENT> help="Which agent" {
@@ -393,14 +394,14 @@ Point Claude Code, Codex, and Grok Build at slopmax.
 
 Without a subcommand, lists the agents and whether each is connected.
 """#
-    use json
+    use list-json
     flag "-h --help" help="Print help" action=help builtin=#true
     cmd list help="List the agents and whether each is connected" effect=read display_order=1 {
         alias ls
         use json
         flag "-h --help" help="Print help" action=help builtin=#true
         output human default=#true
-        output json media_type="application/json" select=--json
+        output json media_type="application/json" framing=json select=--json
     }
     cmd connect help="Point an agent at slopmax for good, in its own config file" effect=write display_order=2 {
         flag "-h --help" help="Print help" action=help builtin=#true
@@ -426,7 +427,7 @@ Without a subcommand, lists the agents and whether each is connected.
         long_help #"""
 Launch an agent through the proxy, starting the proxy if needed.
 
-Everything after the agent goes to it unchanged.
+Everything after the agent goes to it unchanged, and slopmax exits with the agent's own exit status.
 """#
         flag "-h --help" help="Print help" action=help builtin=#true
         arg <AGENT> help="Which agent" {
@@ -450,8 +451,6 @@ Everything after the agent goes to it unchanged.
         }
         example "eval \"$(slopmax agent env claude)\"" header="Point this shell's Claude Code at slopmax"
     }
-    output human default=#true
-    output json media_type="application/json" select=--json
 }
 cmd proxy help_heading=Proxy help="Start, stop, and inspect the proxy, and run it at login" effect=read display_order=10 {
     long_help #"""
@@ -459,13 +458,13 @@ Start, stop, and inspect the proxy, and run it at login.
 
 Without a subcommand, shows whether the proxy runs.
 """#
-    use json
+    use list-json
     flag "-h --help" help="Print help" action=help builtin=#true
     cmd status help="Show whether the proxy runs, where, and whether it starts at login" effect=read display_order=1 {
         use json
         flag "-h --help" help="Print help" action=help builtin=#true
         output human default=#true
-        output json media_type="application/json" select=--json
+        output json media_type="application/json" framing=json select=--json
     }
     cmd start help="Start the proxy in the background" effect=write display_order=2 {
         flag "-h --help" help="Print help" action=help builtin=#true
@@ -492,8 +491,6 @@ Without a subcommand, shows whether the proxy runs.
     cmd serve help="Run the proxy in the foreground" effect=write display_order=8 {
         flag "-h --help" help="Print help" action=help builtin=#true
     }
-    output human default=#true
-    output json media_type="application/json" select=--json
 }
 cmd config help_heading=Proxy help="Show the routing settings, or change one while the proxy runs" effect=write display_order=11 {
     long_help #"""
@@ -509,7 +506,7 @@ A change applies at once to a running proxy, and is saved to config.toml. The ot
     complete value run="slopmax __complete_word__ --candidates value --line={{ words | shell_join | shell_quote }}"
     example "slopmax config strategy round-robin" header="Take turns between accounts"
     output human default=#true
-    output json media_type="application/json" select=--json
+    output json media_type="application/json" framing=json select=--json
 }
 cmd key help_heading=Proxy help="Manage keys that let other machines and tools use the proxy" effect=read display_order=12 {
     alias keys hide=#true
@@ -518,14 +515,14 @@ Manage keys that let other machines and tools use the proxy.
 
 Without a subcommand, lists the keys.
 """#
-    use json
+    use list-json
     flag "-h --help" help="Print help" action=help builtin=#true
     cmd list help="List the keys" effect=read display_order=1 {
         alias ls
         use json
         flag "-h --help" help="Print help" action=help builtin=#true
         output human default=#true
-        output json media_type="application/json" select=--json
+        output json media_type="application/json" framing=json select=--json
     }
     cmd add help="Make a key, and print it once" effect=write display_order=2 {
         flag --models help="Models it may use, as patterns (else any)" var=#true delimiter=, {
@@ -542,8 +539,6 @@ Without a subcommand, lists the keys.
         arg <NAME> help="The key's name"
         complete name run="slopmax __complete_word__ --candidates name --line={{ words | shell_join | shell_quote }}"
     }
-    output human default=#true
-    output json media_type="application/json" select=--json
 }
 cmd tailscale help_heading=Proxy help="Share slopmax with your own machines over Tailscale" effect=read display_order=13 {
     long_help #"""
@@ -551,13 +546,13 @@ Share slopmax with your own machines over Tailscale.
 
 Without a subcommand, shows whether slopmax is published to your tailnet, and who uses it.
 """#
-    use json
+    use list-json
     flag "-h --help" help="Print help" action=help builtin=#true
     cmd status help="Show whether slopmax is published to your tailnet, and who uses it" effect=read display_order=1 {
         use json
         flag "-h --help" help="Print help" action=help builtin=#true
         output human default=#true
-        output json media_type="application/json" select=--json
+        output json media_type="application/json" framing=json select=--json
     }
     cmd on help="Publish slopmax to your own machines with `tailscale serve`" effect=write display_order=2 {
         flag --port help="The port to serve on (else the proxy's)" {
@@ -584,14 +579,14 @@ The tailnet logins whose machines use slopmax without a key.
 
 Without a subcommand, lists them.
 """#
-        use json
+        use list-json
         flag "-h --help" help="Print help" action=help builtin=#true
         cmd list help="List the logins let in without a key" effect=read display_order=1 {
             alias ls
             use json
             flag "-h --help" help="Print help" action=help builtin=#true
             output human default=#true
-            output json media_type="application/json" select=--json
+            output json media_type="application/json" framing=json select=--json
         }
         cmd add help="Let these logins' machines in without a key" effect=write display_order=2 {
             flag "-h --help" help="Print help" action=help builtin=#true
@@ -602,8 +597,6 @@ Without a subcommand, lists them.
             flag "-h --help" help="Print help" action=help builtin=#true
             arg <LOGIN>... help="Tailnet logins, such as you@github" delimiter=,
         }
-        output human default=#true
-        output json media_type="application/json" select=--json
     }
     cmd admin help="The machines that may also manage slopmax" effect=read display_order=5 {
         alias admins hide=#true
@@ -612,14 +605,14 @@ The machines that may also manage slopmax: its settings, accounts, and keys.
 
 Without a subcommand, lists them.
 """#
-        use json
+        use list-json
         flag "-h --help" help="Print help" action=help builtin=#true
         cmd list help="List the machines that may manage slopmax" effect=read display_order=1 {
             alias ls
             use json
             flag "-h --help" help="Print help" action=help builtin=#true
             output human default=#true
-            output json media_type="application/json" select=--json
+            output json media_type="application/json" framing=json select=--json
         }
         cmd add help="Let these machines manage slopmax" effect=write display_order=2 {
             flag "-h --help" help="Print help" action=help builtin=#true
@@ -630,17 +623,13 @@ Without a subcommand, lists them.
             flag "-h --help" help="Print help" action=help builtin=#true
             arg <MACHINE>... help="Machine names, as Tailscale shows them" delimiter=,
         }
-        output human default=#true
-        output json media_type="application/json" select=--json
     }
-    output human default=#true
-    output json media_type="application/json" select=--json
 }
 cmd doctor help_heading=Maintenance help="Check the setup and say how to fix what's wrong" effect=read display_order=14 {
     use json
     flag "-h --help" help="Print help" action=help builtin=#true
     output human default=#true
-    output json media_type="application/json" select=--json
+    output json media_type="application/json" framing=json select=--json
     exit_code 0 "nothing is broken"
     exit_code 1 "something is broken"
 }
@@ -650,13 +639,11 @@ Show how slopmax notifies you, or send a test notification.
 
 Notifications are set under [notify] in config.toml.
 """#
-    use json
+    use list-json
     flag "-h --help" help="Print help" action=help builtin=#true
     cmd test help="Send a test notification" effect=write display_order=1 {
         flag "-h --help" help="Print help" action=help builtin=#true
     }
-    output human default=#true
-    output json media_type="application/json" select=--json
 }
 cmd update help_heading=Maintenance help="Install the newest slopmax and move the running proxy to it" effect=write display_order=16 {
     long_help #"""
@@ -667,6 +654,8 @@ It updates the way slopmax was installed, and the proxy changes over without dro
     flag --check help="Only say whether a newer release is out"
     flag --json help="With --check: print JSON instead of text, for scripts and agents" requires=--check
     flag "-h --help" help="Print help" action=help builtin=#true
+    output human default=#true
+    output json media_type="application/json" framing=json select=--json
 }
 cmd completion help_heading=Maintenance help="Print or install a shell completion script" display_order=17 {
     alias completions hide=#true

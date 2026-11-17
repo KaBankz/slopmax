@@ -815,7 +815,7 @@ async fn settings(config: &Config, name: &str, value: &str, json: bool) -> Resul
             return Ok(());
         }
         bail!(
-            "`slopmax config` can't change listen: set it in {}, then restart the proxy (`slopmax proxy restart`)",
+            "`slopmax config` can't change listen: stop the proxy (`slopmax proxy stop`), set listen in {}, then start it (`slopmax proxy start`, or `slopmax proxy install` for the login service)",
             path.display()
         );
     }

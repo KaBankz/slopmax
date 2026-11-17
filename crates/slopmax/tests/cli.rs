@@ -1103,7 +1103,7 @@ fn import_brings_over_codex_and_cliproxyapi_logins() {
     assert!(a.link.is_some());
     assert!(s.account("b@x.dev").link.is_some());
 
-    // Importing again updates the same accounts; --own stops following.
+    // Importing again updates the same accounts; --adopt stops following.
     let out = s.run(&["account", "import", "cliproxyapi", "--adopt"]).ok();
     assert!(out.stdout.contains('~'), "{out:?}");
     assert!(!out.stdout.contains("linked:"), "{out:?}");
@@ -1643,7 +1643,7 @@ fn the_background_proxy_starts_reports_and_stops() {
         "{out:?}"
     );
     assert!(out.stdout.contains("ssh -L"), "{out:?}");
-    // Without --print it asks the system to open it (a stub here).
+    // Without --no-browser it asks the system to open it (a stub here).
     let out = s.run(&["dashboard"]).ok();
     if cfg!(target_os = "macos") {
         assert!(out.stdout.contains("Opened the dashboard"), "{out:?}");

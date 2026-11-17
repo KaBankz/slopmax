@@ -136,7 +136,7 @@ Reads the running proxy, else the files on disk. Accounts are numbered; commands
   **Framing:** `text`
 - **`json`**
 
-  **Framing:** `text`; **Select:** `--json`
+  **Framing:** `json`; **Select:** `--json`
 
   **Media type:** `application/json`
 
@@ -232,19 +232,8 @@ List, add, and manage the accounts slopmax pools.
 Without a subcommand, lists the accounts.
 
 ### Flags
-- **`--json`** — Print JSON instead of text, for scripts and agents
+- **`--json`** — With no subcommand: print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
-
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`; **Select:** `--json`
-
-  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -273,7 +262,7 @@ List the accounts, numbered
   **Framing:** `text`
 - **`json`**
 
-  **Framing:** `text`; **Select:** `--json`
+  **Framing:** `json`; **Select:** `--json`
 
   **Media type:** `application/json`
 
@@ -311,17 +300,6 @@ Subscriptions (claude, codex, grok) sign in through the provider's own page. API
 
   **Choices:** `chat`, `responses`, `messages`
 - **`--models <MODELS>`** — Models it serves, as patterns (else what it lists)
-
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -371,17 +349,6 @@ An imported login shares its refresh token with the tool it came from. CLIProxyA
 - **`--adopt`** — Refresh CLIProxyAPI's logins here instead of following its files
 - **`-h --help`** — Print help
 
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
-
 ### Exit Status
 
 | Code | Meaning |
@@ -406,17 +373,6 @@ New sessions of that provider go to the account while it has quota.
 - **`--auto`** — Let slopmax choose accounts again
 - **`-h --help`** — Print help
 
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
-
 ### Exit Status
 
 | Code | Meaning |
@@ -439,17 +395,6 @@ Set an account's display name
 ### Flags
 - **`-h --help`** — Print help
 
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
-
 ### Exit Status
 
 | Code | Meaning |
@@ -471,17 +416,6 @@ Set an account's priority tier; higher tiers are used first
 
 ### Flags
 - **`-h --help`** — Print help
-
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -514,7 +448,7 @@ With accounts, puts them first, in the order given; the rest follow as they were
   **Framing:** `text`
 - **`json`**
 
-  **Framing:** `text`; **Select:** `--json`
+  **Framing:** `json`; **Select:** `--json`
 
   **Media type:** `application/json`
 
@@ -547,17 +481,6 @@ Route to an account again
 ### Flags
 - **`-h --help`** — Print help
 
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
-
 ### Exit Status
 
 | Code | Meaning |
@@ -578,17 +501,6 @@ Stop routing to an account; its sign-in is still kept fresh
 
 ### Flags
 - **`-h --help`** — Print help
-
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -619,7 +531,7 @@ Lift slopmax's hold on an account and read its usage again
   **Framing:** `text`
 - **`json`**
 
-  **Framing:** `text`; **Select:** `--json`
+  **Framing:** `json`; **Select:** `--json`
 
   **Media type:** `application/json`
 
@@ -647,17 +559,6 @@ Claude and ChatGPT accounts can hold limit resets; this spends the one that expi
 - **`-y --yes`** — Don't ask for confirmation
 - **`-h --help`** — Print help
 
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
-
 ### Exit Status
 
 | Code | Meaning |
@@ -681,17 +582,6 @@ The first refresh signs the other tool's copy out, so stop that tool first.
 ### Flags
 - **`-h --help`** — Print help
 
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
-
 ### Exit Status
 
 | Code | Meaning |
@@ -714,17 +604,6 @@ Forget an account
 ### Flags
 - **`-y --yes`** — Don't ask for confirmation
 - **`-h --help`** — Print help
-
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -764,7 +643,7 @@ Show token usage and what it would have cost on the API
   **Framing:** `text`
 - **`json`**
 
-  **Framing:** `text`; **Select:** `--json`
+  **Framing:** `json`; **Select:** `--json`
 
   **Media type:** `application/json`
 
@@ -818,7 +697,7 @@ Show the requests the proxy answered
   **Framing:** `text`
 - **`json`**
 
-  **Framing:** `text`; **Select:** `--json`
+  **Framing:** `json`; **Select:** `--json`
 
   **Media type:** `application/json`
 
@@ -845,7 +724,7 @@ slopmax requests --failed --limit 5
 
 Launch an agent through the proxy, starting the proxy if needed.
 
-Everything after the agent goes to it unchanged.
+Everything after the agent goes to it unchanged, and slopmax exits with the agent's own exit status.
 
 ### Arguments
 - **`<AGENT>`** — Which agent
@@ -882,19 +761,8 @@ Point Claude Code, Codex, and Grok Build at slopmax.
 Without a subcommand, lists the agents and whether each is connected.
 
 ### Flags
-- **`--json`** — Print JSON instead of text, for scripts and agents
+- **`--json`** — With no subcommand: print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
-
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`; **Select:** `--json`
-
-  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -923,7 +791,7 @@ List the agents and whether each is connected
   **Framing:** `text`
 - **`json`**
 
-  **Framing:** `text`; **Select:** `--json`
+  **Framing:** `json`; **Select:** `--json`
 
   **Media type:** `application/json`
 
@@ -950,17 +818,6 @@ Point an agent at slopmax for good, in its own config file
 ### Flags
 - **`-h --help`** — Print help
 
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
-
 ### Exit Status
 
 | Code | Meaning |
@@ -984,17 +841,6 @@ Restore what `agent connect` replaced
 ### Flags
 - **`-h --help`** — Print help
 
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
-
 ### Exit Status
 
 | Code | Meaning |
@@ -1010,7 +856,7 @@ Restore what `agent connect` replaced
 
 Launch an agent through the proxy, starting the proxy if needed.
 
-Everything after the agent goes to it unchanged.
+Everything after the agent goes to it unchanged, and slopmax exits with the agent's own exit status.
 
 ### Arguments
 - **`<AGENT>`** — Which agent
@@ -1020,17 +866,6 @@ Everything after the agent goes to it unchanged.
 
 ### Flags
 - **`-h --help`** — Print help
-
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1063,17 +898,6 @@ Print shell setup that points an agent at the proxy, for `eval`
 ### Flags
 - **`-h --help`** — Print help
 
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
-
 ### Exit Status
 
 | Code | Meaning |
@@ -1100,19 +924,8 @@ Start, stop, and inspect the proxy, and run it at login.
 Without a subcommand, shows whether the proxy runs.
 
 ### Flags
-- **`--json`** — Print JSON instead of text, for scripts and agents
+- **`--json`** — With no subcommand: print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
-
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`; **Select:** `--json`
-
-  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1140,7 +953,7 @@ Show whether the proxy runs, where, and whether it starts at login
   **Framing:** `text`
 - **`json`**
 
-  **Framing:** `text`; **Select:** `--json`
+  **Framing:** `json`; **Select:** `--json`
 
   **Media type:** `application/json`
 
@@ -1162,17 +975,6 @@ Start the proxy in the background
 ### Flags
 - **`-h --help`** — Print help
 
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
-
 ### Exit Status
 
 | Code | Meaning |
@@ -1191,17 +993,6 @@ Stop the background proxy
 ### Flags
 - **`-h --help`** — Print help
 
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
-
 ### Exit Status
 
 | Code | Meaning |
@@ -1219,17 +1010,6 @@ Stop the proxy and start it again
 
 ### Flags
 - **`-h --help`** — Print help
-
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1253,17 +1033,6 @@ Show the proxy's log
   **Default:** `40`
 - **`-h --help`** — Print help
 
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
-
 ### Exit Status
 
 | Code | Meaning |
@@ -1281,17 +1050,6 @@ Start the proxy at login (a systemd user unit, launchd agent, or Windows login i
 
 ### Flags
 - **`-h --help`** — Print help
-
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1311,17 +1069,6 @@ Stop starting the proxy at login
 ### Flags
 - **`-h --help`** — Print help
 
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
-
 ### Exit Status
 
 | Code | Meaning |
@@ -1339,17 +1086,6 @@ Run the proxy in the foreground
 
 ### Flags
 - **`-h --help`** — Print help
-
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1383,7 +1119,7 @@ A change applies at once to a running proxy, and is saved to config.toml. The ot
   **Framing:** `text`
 - **`json`**
 
-  **Framing:** `text`; **Select:** `--json`
+  **Framing:** `json`; **Select:** `--json`
 
   **Media type:** `application/json`
 
@@ -1413,19 +1149,8 @@ Manage keys that let other machines and tools use the proxy.
 Without a subcommand, lists the keys.
 
 ### Flags
-- **`--json`** — Print JSON instead of text, for scripts and agents
+- **`--json`** — With no subcommand: print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
-
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`; **Select:** `--json`
-
-  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1454,7 +1179,7 @@ List the keys
   **Framing:** `text`
 - **`json`**
 
-  **Framing:** `text`; **Select:** `--json`
+  **Framing:** `json`; **Select:** `--json`
 
   **Media type:** `application/json`
 
@@ -1479,17 +1204,6 @@ Make a key, and print it once
 ### Flags
 - **`--models <MODELS>`** — Models it may use, as patterns (else any)
 - **`-h --help`** — Print help
-
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1522,17 +1236,6 @@ Revoke a key
 - **`-y --yes`** — Don't ask for confirmation
 - **`-h --help`** — Print help
 
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
-
 ### Exit Status
 
 | Code | Meaning |
@@ -1551,19 +1254,8 @@ Share slopmax with your own machines over Tailscale.
 Without a subcommand, shows whether slopmax is published to your tailnet, and who uses it.
 
 ### Flags
-- **`--json`** — Print JSON instead of text, for scripts and agents
+- **`--json`** — With no subcommand: print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
-
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`; **Select:** `--json`
-
-  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1591,7 +1283,7 @@ Show whether slopmax is published to your tailnet, and who uses it
   **Framing:** `text`
 - **`json`**
 
-  **Framing:** `text`; **Select:** `--json`
+  **Framing:** `json`; **Select:** `--json`
 
   **Media type:** `application/json`
 
@@ -1617,17 +1309,6 @@ Publish slopmax to your own machines with `tailscale serve`
 - **`--loopback`** — Serve the proxy's bare port, where every machine needs a key
 - **`--socket`** — Serve the proxy's socket, which Tailscale lets only root publish
 - **`-h --help`** — Print help
-
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1655,17 +1336,6 @@ Stop publishing slopmax to your tailnet
 ### Flags
 - **`-h --help`** — Print help
 
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
-
 ### Exit Status
 
 | Code | Meaning |
@@ -1684,19 +1354,8 @@ The tailnet logins whose machines use slopmax without a key.
 Without a subcommand, lists them.
 
 ### Flags
-- **`--json`** — Print JSON instead of text, for scripts and agents
+- **`--json`** — With no subcommand: print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
-
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`; **Select:** `--json`
-
-  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1725,7 +1384,7 @@ List the logins let in without a key
   **Framing:** `text`
 - **`json`**
 
-  **Framing:** `text`; **Select:** `--json`
+  **Framing:** `json`; **Select:** `--json`
 
   **Media type:** `application/json`
 
@@ -1750,17 +1409,6 @@ Let these logins' machines in without a key
 ### Flags
 - **`-h --help`** — Print help
 
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
-
 ### Exit Status
 
 | Code | Meaning |
@@ -1783,17 +1431,6 @@ Make these logins' machines use a key again
 ### Flags
 - **`-h --help`** — Print help
 
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
-
 ### Exit Status
 
 | Code | Meaning |
@@ -1812,19 +1449,8 @@ The machines that may also manage slopmax: its settings, accounts, and keys.
 Without a subcommand, lists them.
 
 ### Flags
-- **`--json`** — Print JSON instead of text, for scripts and agents
+- **`--json`** — With no subcommand: print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
-
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`; **Select:** `--json`
-
-  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1853,7 +1479,7 @@ List the machines that may manage slopmax
   **Framing:** `text`
 - **`json`**
 
-  **Framing:** `text`; **Select:** `--json`
+  **Framing:** `json`; **Select:** `--json`
 
   **Media type:** `application/json`
 
@@ -1878,17 +1504,6 @@ Let these machines manage slopmax
 ### Flags
 - **`-h --help`** — Print help
 
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
-
 ### Exit Status
 
 | Code | Meaning |
@@ -1910,17 +1525,6 @@ Stop these machines managing slopmax
 
 ### Flags
 - **`-h --help`** — Print help
-
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -1948,7 +1552,7 @@ Check the setup and say how to fix what's wrong
   **Framing:** `text`
 - **`json`**
 
-  **Framing:** `text`; **Select:** `--json`
+  **Framing:** `json`; **Select:** `--json`
 
   **Media type:** `application/json`
 
@@ -1970,19 +1574,8 @@ Show how slopmax notifies you, or send a test notification.
 Notifications are set under [notify] in config.toml.
 
 ### Flags
-- **`--json`** — Print JSON instead of text, for scripts and agents
+- **`--json`** — With no subcommand: print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
-
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`; **Select:** `--json`
-
-  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -2001,17 +1594,6 @@ Send a test notification
 
 ### Flags
 - **`-h --help`** — Print help
-
-### Output Formats
-
-- **`human`** (default)
-
-  **Framing:** `text`
-- **`json`**
-
-  **Framing:** `text`
-
-  **Media type:** `application/json`
 
 ### Exit Status
 
@@ -2034,6 +1616,17 @@ It updates the way slopmax was installed, and the proxy changes over without dro
 - **`--check`** — Only say whether a newer release is out
 - **`--json`** — With --check: print JSON instead of text, for scripts and agents
 - **`-h --help`** — Print help
+
+### Output Formats
+
+- **`human`** (default)
+
+  **Framing:** `text`
+- **`json`**
+
+  **Framing:** `json`; **Select:** `--json`
+
+  **Media type:** `application/json`
 
 ### Exit Status
 
