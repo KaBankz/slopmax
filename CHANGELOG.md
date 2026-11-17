@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-11-17
+
 ### Fixed
 
 - Grok Build driven by an editor is still Grok Build: run over ACP, as T3 Code runs it, it names the editor's client before itself (`grok-code-extension/1.0.77 grok-shell/1.0.77 …`), and slopmax refused it with "serves SuperGrok accounts to Grok Build only".
