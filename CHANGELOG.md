@@ -44,6 +44,7 @@ The command line is rebuilt on [usage](https://usage.jdx.dev) and regrouped: thi
 ### Fixed
 
 - The dashboard named the config file `config.json`; it is `config.toml`.
+- Codex run by another app, such as T3 Code or the Codex desktop app, shows as sent by Codex rather than Other, and its version reaches ChatGPT as Codex's own does. Those apps give Codex their own name, which slopmax didn't recognize; every request Codex makes carries its window id, which slopmax now reads instead.
 
 ## [0.14.1] - 2026-11-17
 
