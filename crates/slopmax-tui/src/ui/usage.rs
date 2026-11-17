@@ -301,9 +301,13 @@ fn inset(area: Rect) -> Rect {
     }
 }
 
+/// How wide a column of names is: as wide as the longest, up to a quarter
+/// of the width, or up to 18 columns in a narrow pane, where a quarter
+/// would cut a model's name.
 fn name_width<'a>(flow: &Flow<'_>, names: impl Iterator<Item = &'a str>) -> u16 {
     let longest = names.map(|n| n.chars().count() as u16).max().unwrap_or(8);
-    longest.clamp(8, (flow.width / 4).max(8)) + 1
+    let most = (flow.width / 4).max((flow.width * 2 / 5).min(18)).max(8);
+    longest.clamp(8, most) + 1
 }
 
 /// The `n` largest, and the rest as one row.
