@@ -841,6 +841,11 @@ impl App {
                     && item.remedy == Remedy::Redeem
                     && let Some(account) = self.data.account(&item.account).cloned()
                 {
+                    // As on every page: a row out of view comes into view
+                    // first, and the next press acts.
+                    if self.unseen() {
+                        return Vec::new();
+                    }
                     self.ask_redeem(&account);
                 }
             }

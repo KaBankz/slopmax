@@ -69,6 +69,16 @@ impl Now {
         }
     }
 
+    /// When `at` was, to the minute: `14:05` today, `Wed 14:05` this week,
+    /// `Nov 3` before.
+    pub fn clock_back(&self, at: Instant) -> String {
+        match self.day(self.at) - self.day(at) {
+            0 => self.hm(at),
+            1..=6 => format!("{} {}", weekday(self.day(at)), self.hm(at)),
+            _ => self.month_day(at),
+        }
+    }
+
     /// `Nov 3`.
     pub fn month_day(&self, at: Instant) -> String {
         let (_, month, day) = at.date(self.offset);

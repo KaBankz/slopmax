@@ -635,11 +635,18 @@ fn health(flow: &mut Flow<'_>, detail: &AccountDetail, pool: &PoolDetail, now: &
     }
     let answered: u64 = cells.iter().map(|c| c.answered).sum();
     let failed: u64 = cells.iter().map(|c| c.failed).sum();
-    let since = pool.health_since;
+    // The first cell shown, not the day's first: a narrow screen shows
+    // fewer of them.
+    let skipped = (detail.health.len() - cells.len()) as i64;
+    let since = pool.health_since
+        + slopmax_common::time::SignedDuration::from_secs(
+            skipped * i64::from(pool.cell_minutes) * 60,
+        );
+    let when = now.clock_back(since);
     let words = if failed > 0 {
-        format!("  {answered} ok, {failed} failed")
+        format!("  {answered} ok, {failed} failed since {when}")
     } else {
-        format!("  {answered} ok since {}", now.stamp(since))
+        format!("  {answered} ok since {when}")
     };
     spans.push(Span::styled(words, theme.muted()));
     flow.line(Line::from(spans));

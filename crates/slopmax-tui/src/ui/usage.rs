@@ -380,7 +380,8 @@ fn token_mix(flow: &mut Flow<'_>, total: &Totals) {
         let w = if i + 1 == parts.len() {
             (width as usize).saturating_sub(given)
         } else {
-            ((*n as f64 / all) * width).round() as usize
+            (((*n as f64 / all) * width).round() as usize)
+                .min((width as usize).saturating_sub(given))
         };
         given += w;
         spans.push(Span::styled(symbol.repeat(w), theme.ink()));
