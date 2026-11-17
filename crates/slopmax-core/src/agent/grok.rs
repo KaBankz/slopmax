@@ -12,7 +12,7 @@
 //! Grok Build keeps the token it was handed for good, even when it is
 //! refused. `run` and `env` keep it in a file of slopmax's own
 //! (`GROK_AUTH_PATH`, one per slopmax key), so Grok Build's own sign-in in
-//! `~/.grok/auth.json` is left alone. `setup` has no such file to point at:
+//! `~/.grok/auth.json` is left alone. `agent connect` has no such file to point at:
 //! the token lands in `~/.grok/auth.json`, and `agent connect` and `disconnect` forget
 //! it there, so the next run asks for the key again.
 

@@ -421,7 +421,7 @@ function ClientKeys() {
           </form>
         </Panel>
         <p className="text-xs text-muted-foreground">
-          A tool presents its key as an API key. Revoking one refuses it at once; slopmax's own key, in config.json,
+          A tool presents its key as an API key. Revoking one refuses it at once; slopmax's own key, in config.toml,
           stays as it is.
         </p>
       </div>

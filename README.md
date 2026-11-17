@@ -432,7 +432,7 @@ Things are nouns with verbs under them, and a noun alone shows its things: `slop
 
 - Every command that prints data takes `--json`. Every command that asks first takes `--yes`; without a terminal and without `--yes`, it fails rather than waits.
 - Exit codes: 0 when it worked, 1 when it failed (the error says why), 2 when the command line was wrong. `slopmax doctor` exits 1 when something is broken.
-- `slopmax __usage_spec__` prints the whole command line as a [usage](https://usage.jdx.dev) spec, with each command marked `read`, `write`, or `destructive`; it is checked in as [docs/cli/slopmax.usage.kdl](docs/cli/slopmax.usage.kdl). `usage mcp -f docs/cli/slopmax.usage.kdl` serves it to an agent as tools.
+- `slopmax __usage_spec__` prints the whole command line as a [usage](https://usage.jdx.dev) spec, with each command marked `read`, `write`, or `destructive`; it is checked in as [docs/cli/slopmax.usage.kdl](docs/cli/slopmax.usage.kdl). `usage mcp -f docs/cli/slopmax.usage.kdl` lets an agent look up every command, and what it touches, over MCP.
 - Commands renamed in 0.15 fail with their new spelling: `slopmax start` says it is now `slopmax proxy start`.
 
 ## Configuration

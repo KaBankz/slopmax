@@ -590,7 +590,7 @@ fn proxy(config: &Config, probe: Probe, service: Option<Status>) -> Section {
         Probe::Ours { version } => s.add(
             Level::Warn,
             format!("running version {version}, but this binary is {ours}"),
-            Some("slopmax proxy restart"),
+            Some("slopmax update"),
         ),
         Probe::Foreign { pid, .. } => {
             let end = pid
@@ -1123,12 +1123,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_older_proxy_should_be_restarted() {
+    async fn an_older_proxy_should_be_updated() {
         let mock = healthz("0.0.1").await;
         let s = proxy(&config_on(port_of(&mock)), None).await;
         let f = finding(&s, "running version 0.0.1");
         assert_eq!(f.level, Level::Warn);
-        assert_eq!(f.fix.as_deref(), Some("slopmax proxy restart"));
+        assert_eq!(f.fix.as_deref(), Some("slopmax update"));
     }
 
     #[tokio::test]
