@@ -9,7 +9,7 @@
 //! cargo run --release --example bench -- raw 127.0.0.1:9102 http://127.0.0.1:9100
 //! cargo run --release --example bench -- swarm http://127.0.0.1:9101 300 20 /tmp/bodies/claude-large.json 20
 //! cargo run --release --example bench -- history-ledger /tmp/home 365 6000
-//! cargo run --release --example bench -- history /tmp/home 300 /tmp/out
+//! cargo run --release --example bench -- history /tmp/home 300 /tmp/out [settle-secs]
 //! ```
 //!
 //! `mise run bench` runs them and drives the proxy with `oha`. `raw` is the
@@ -17,7 +17,10 @@
 //! many agents at once: each streams answers back to back, the mock paced
 //! like a model, and it reports what the hop adds to the first byte and to
 //! the gap between events. `history` times `/slopmax/api/history` warm, and
-//! pages of `/slopmax/api/requests`, on the ledger `history-ledger` writes.
+//! pages of `/slopmax/api/requests`, on the ledger `history-ledger` writes;
+//! its first ask comes `settle-secs` after the daemon starts (default 0, as
+//! the daemon builds its indexes), so the first view after a start is timed
+//! either way.
 
 use std::net::SocketAddr;
 use std::path::Path;
@@ -80,7 +83,10 @@ fn main() -> Result<()> {
         ["history-ledger", home, days, per_day] => {
             history::ledger(home, days.parse()?, per_day.parse()?)
         }
-        ["history", home, rounds, out] => history::serve(home, rounds.parse()?, out),
+        ["history", home, rounds, out] => history::serve(home, rounds.parse()?, out, 0),
+        ["history", home, rounds, out, settle] => {
+            history::serve(home, rounds.parse()?, out, settle.parse()?)
+        }
         ["raw", listen, upstream] => slopmax_daemon::runtime()?.block_on(raw(
             listen.parse()?,
             upstream.trim_end_matches('/').to_owned(),
@@ -93,7 +99,7 @@ fn main() -> Result<()> {
             pace.parse()?,
         )),
         _ => bail!(
-            "usage: bench upstream <addr> | bench proxy <addr> <upstream-url> <home> | bench bodies <dir>\n       bench raw <addr> <upstream-url> | bench swarm <url> <sessions> <seconds> <body> <pace-ms>\n       bench history-ledger <home> <days> <answers-a-day> | bench history <home> <rounds> <out>"
+            "usage: bench upstream <addr> | bench proxy <addr> <upstream-url> <home> | bench bodies <dir>\n       bench raw <addr> <upstream-url> | bench swarm <url> <sessions> <seconds> <body> <pace-ms>\n       bench history-ledger <home> <days> <answers-a-day> | bench history <home> <rounds> <out> [settle-secs]"
         ),
     }
 }

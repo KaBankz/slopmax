@@ -873,11 +873,14 @@ impl Index {
 }
 
 /// The index the daemon keeps of its own ledger, and of the windows that
-/// reset: none until a history is first asked for, then the last month's,
-/// kept current as requests settle.
+/// reset: none until it is built (the daemon builds it as it starts), then
+/// the last month's, kept current as requests settle.
 #[derive(Debug, Default)]
 pub struct Kept {
     stage: Mutex<Stage>,
+    /// Held through a build, so a second caller waits for the first's
+    /// rather than reading the ledger again.
+    building: Mutex<()>,
 }
 
 #[derive(Debug, Default)]
@@ -928,9 +931,10 @@ impl Kept {
 
     /// Reads the last month of the ledger in `usage`, up to the lengths
     /// `ledger.mark` gives, and the windows in `windows` that reset, into
-    /// the index. Blocks: for a blocking thread. `mark` runs under the
-    /// ledger's lock and starts the build there, so each request lands
-    /// either in what is read or in what waits, never both.
+    /// the index. Blocks: for a blocking thread, and while another caller
+    /// builds it. `mark` runs under the ledger's lock and starts the build
+    /// there, so each request lands either in what is read or in what
+    /// waits, never both.
     pub fn build(
         &self,
         usage: &Path,
@@ -938,6 +942,11 @@ impl Kept {
         now: Timestamp,
         mark: impl FnOnce(&mut dyn FnMut()) -> Vec<(PathBuf, u64)>,
     ) {
+        let _one = self.building.lock().unwrap_or_else(|p| p.into_inner());
+        // Another caller built it while this one waited.
+        if self.is_ready() {
+            return;
+        }
         let lengths = {
             let mut start = || {
                 let mut stage = self.stage();
@@ -947,7 +956,6 @@ impl Kept {
             };
             mark(&mut start)
         };
-        // Another caller built it, or is building it.
         if !matches!(*self.stage(), Stage::Building(..)) {
             return;
         }
@@ -1144,6 +1152,51 @@ mod tests {
             // And again, from what the first read kept.
             assert_eq!(read(&mut kept, range), fresh, "{range:?}");
         }
+    }
+
+    #[test]
+    fn a_build_asked_for_while_one_runs_waits_for_it_and_reads_nothing() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::mpsc;
+        let dir = crate::testkit::temp_dir("kept-build");
+        let (usage, windows) = (dir.join("usage"), dir.join("windows"));
+        let now = Timestamp::now();
+        let (kept, marks) = (Kept::default(), AtomicUsize::new(0));
+        let (started_tx, started_rx) = mpsc::channel::<()>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            // The daemon's build, held in the middle until the page asks.
+            let (kept, marks, usage, windows) = (&kept, &marks, &usage, &windows);
+            scope.spawn(move || {
+                kept.build(usage, windows, now, |start| {
+                    marks.fetch_add(1, Ordering::SeqCst);
+                    start();
+                    started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Vec::new()
+                });
+            });
+            started_rx.recv().unwrap();
+            let page = scope.spawn(move || {
+                kept.build(usage, windows, now, |start| {
+                    marks.fetch_add(1, Ordering::SeqCst);
+                    start();
+                    Vec::new()
+                });
+                kept.is_ready()
+            });
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            assert!(!page.is_finished(), "the page's build waits for the first");
+            release_tx.send(()).unwrap();
+            assert!(page.join().unwrap(), "and finds the index kept");
+        });
+        assert_eq!(marks.load(Ordering::SeqCst), 1, "the ledger is read once");
+        // Built: asking again reads nothing.
+        kept.build(&usage, &windows, now, |_| {
+            marks.fetch_add(1, Ordering::SeqCst);
+            Vec::new()
+        });
+        assert_eq!(marks.load(Ordering::SeqCst), 1);
     }
 }
 

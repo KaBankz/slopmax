@@ -437,8 +437,26 @@ impl App {
         }
     }
 
+    /// Builds the indexes kept of the ledger, the history's and the
+    /// pools', so the first page that asks for them needs no wait. Blocks:
+    /// for a blocking thread. A page that asks meanwhile waits for this
+    /// build rather than starting its own.
+    pub fn warm_indexes(&self) {
+        let now = Timestamp::now();
+        let usage = self.home.usage();
+        self.hours
+            .build(&usage, &self.home.windows(), now, |start| {
+                self.ledger.mark(start)
+            });
+        self.quota
+            .build(&usage, now, &self.config().prices, |start| {
+                self.ledger.mark(start)
+            });
+    }
+
     /// What went through over `range`, by display name, from the index
-    /// kept of the ledger: read from the files once, the first time.
+    /// kept of the ledger: built as the daemon starts, or else the first
+    /// time it is asked for.
     pub async fn history(
         self: &Arc<Self>,
         range: crate::history::Range,

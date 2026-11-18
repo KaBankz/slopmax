@@ -196,9 +196,10 @@ pub fn ledger(home: &str, days: i64, per_day: u64) -> Result<()> {
     Ok(())
 }
 
-/// Serves `home` and asks for each range: once to build the index, then
+/// Serves `home` and asks for each range: once first, `settle` seconds
+/// after the daemon answers (while or after it builds its indexes), then
 /// `rounds` times warm. Saves each answer under `out`.
-pub fn serve(home: &str, rounds: usize, out: &str) -> Result<()> {
+pub fn serve(home: &str, rounds: usize, out: &str, settle: u64) -> Result<()> {
     let home = Home::at(home);
     let listen: SocketAddr = {
         let probe = std::net::TcpListener::bind("127.0.0.1:0")?;
@@ -224,6 +225,7 @@ pub fn serve(home: &str, rounds: usize, out: &str) -> Result<()> {
         }
     });
     let mut conn = connect(listen)?;
+    std::thread::sleep(Duration::from_secs(settle));
     std::fs::create_dir_all(out)?;
     for range in ["today", "7d", "30d"] {
         let path = format!("/slopmax/api/history?range={range}");
