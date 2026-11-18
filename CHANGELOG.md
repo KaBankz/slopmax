@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-11-18
+
 ### Fixed
 
 - A ChatGPT account that refuses a turn inside an HTTP stream now stays out for as long as the refusal says, as it already did over WebSocket. A spent account was set aside for a fixed 5 minutes and an overloaded one for 30 seconds, so slopmax kept going back to them. It now waits until the reset the refusal names, or its Retry-After. "Codex is at capacity", and plans that don't include Codex, now move the turn to another account inside a stream too.
