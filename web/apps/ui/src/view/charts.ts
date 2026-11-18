@@ -5,6 +5,13 @@ import type { History, HistoryBucket, HistoryRange } from "@slopmax/client"
 import { compact, fixed, grouped, providerTitle } from "@slopmax/client/format"
 import { count, dollars } from "./words.ts"
 
+/** A point on a figure's trend line: its bucket's label, its tooltip, and its value, if it has one. */
+export interface SparkPoint {
+  readonly label: string
+  readonly tip: string
+  readonly value: number | undefined
+}
+
 /** A value axis: from `bottom` to `top`, with `ticks` evenly spaced lines including both ends. */
 export interface Axis {
   readonly bottom: number

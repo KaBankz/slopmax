@@ -1,24 +1,25 @@
 // The pieces every page is built from, each a composition of shadcn/ui
 // components: a tone's dot and label, meters (Progress), the pool's
-// segmented bar, panels (Card), sections, rows (Item), figures (Card),
+// segmented bar, panels (Card), sections, rows (Item), figures (Card, with
+// a trend line),
 // empty states (Empty), placeholders (Skeleton) and failures (Alert).
 import type { Tone } from "@slopmax/client"
 import { cva } from "class-variance-authority"
 import { Option } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import type { LucideIcon } from "lucide-react"
-import { CircleAlert, Minus, TrendingDown, TrendingUp } from "lucide-react"
+import { CircleAlert } from "lucide-react"
 import type { ReactNode } from "react"
 import appIcon from "../icon-128.png"
 import mark from "../logo.svg"
 import type { Overview } from "../view/groups.ts"
-import type { Change } from "../view/usage.ts"
+import type { Change, Stat as StatView, Trend } from "../view/usage.ts"
 import { failureText, poolBarTip, segmentsShown, sentence, sentenceCase } from "../view/words.ts"
+import { Spark } from "./charts.tsx"
 import { Tip } from "./tip.tsx"
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert.tsx"
-import { Badge } from "./ui/badge.tsx"
 import { Button } from "./ui/button.tsx"
-import { Card, CardAction, CardDescription, CardFooter, CardHeader, CardTitle } from "./ui/card.tsx"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card.tsx"
 import { Empty as EmptyRoot, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "./ui/empty.tsx"
 import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "./ui/item.tsx"
 import { Progress } from "./ui/progress.tsx"
@@ -200,62 +201,93 @@ export function SettingRow({
   )
 }
 
-/** A figure in a Card: its caption, the number, a note, and how it moved since the span before. */
+const changeVariants = cva("inline-flex shrink-0 items-baseline gap-1 font-medium tabular-nums", {
+  variants: { direction: { up: "text-success", down: "text-destructive", flat: "text-muted-foreground" } },
+})
+
+const arrows = { up: "▲", down: "▼", flat: "–" } as const
+
+const sparkInks = ["spark-1", "spark-2", "spark-3", "spark-4"] as const
+
+/**
+ * A figure in a Card: its caption, the number, how it moved since the span
+ * before beside a note, and its trend line beneath. `lg` is a headline.
+ */
 export function Stat({
   title,
   value,
   note,
   change,
+  trend,
+  size = "md",
 }: {
   readonly title: string
   readonly value: string
   readonly note: string
   readonly change?: Change | undefined
+  readonly trend?: Trend | undefined
+  readonly size?: "md" | "lg"
 }) {
+  const words = [change?.versus, note].filter((part) => part !== undefined && part !== "").join(" · ")
   return (
     <Card>
       <CardHeader>
-        <CardDescription>{title}</CardDescription>
-        <CardTitle className="text-2xl tabular-nums">{value}</CardTitle>
-        {change !== undefined && (
-          <CardAction>
-            <Tip content={change.tip}>
-              <Badge variant="outline">
-                {change.direction === "up" ? (
-                  <TrendingUp data-icon="inline-start" />
-                ) : change.direction === "down" ? (
-                  <TrendingDown data-icon="inline-start" />
-                ) : (
-                  <Minus data-icon="inline-start" />
-                )}
-                {change.text}
-              </Badge>
-            </Tip>
-          </CardAction>
+        <CardDescription>
+          <span className="text-xs font-medium tracking-widest uppercase">{title}</span>
+        </CardDescription>
+        {size === "lg" ? (
+          <CardTitle className="text-5xl font-normal tracking-tight tabular-nums @4xl:text-6xl">{value}</CardTitle>
+        ) : (
+          <CardTitle className="text-3xl font-normal tracking-tight tabular-nums">{value}</CardTitle>
         )}
       </CardHeader>
-      <CardFooter>
-        <span className="truncate text-xs text-muted-foreground">{note}</span>
-      </CardFooter>
+      <CardContent>
+        <div className="flex flex-col gap-3">
+          <p
+            className={
+              size === "lg"
+                ? "flex min-w-0 items-baseline gap-1.5 text-sm"
+                : "flex min-w-0 items-baseline gap-1.5 text-xs"
+            }
+          >
+            {change !== undefined && (
+              <Tip content={change.tip}>
+                <span className={changeVariants({ direction: change.direction })}>
+                  <span aria-hidden>{arrows[change.direction]}</span>
+                  <span className="sr-only">{change.direction}</span>
+                  {change.text}
+                </span>
+              </Tip>
+            )}
+            <span className="truncate text-muted-foreground">{words}</span>
+          </p>
+          {trend !== undefined && (
+            <Spark points={trend.points} ink={sparkInks[trend.series - 1] ?? "meter"} size={size} />
+          )}
+        </div>
+      </CardContent>
     </Card>
   )
 }
 
-/** Figures side by side, a Card each. */
+/** Figures side by side, a Card each: four to a row, or two headlines. */
 export function Stats({
   stats,
+  size = "md",
 }: {
-  readonly stats: ReadonlyArray<{
-    readonly title: string
-    readonly value: string
-    readonly note: string
-    readonly change?: Change | undefined
-  }>
+  readonly stats: ReadonlyArray<StatView>
+  readonly size?: "md" | "lg"
 }) {
   return (
-    <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2 @4xl:grid-cols-4">
+    <div
+      className={
+        size === "lg"
+          ? "grid grid-cols-1 gap-4 @2xl:grid-cols-2"
+          : "grid grid-cols-1 gap-4 @xl:grid-cols-2 @4xl:grid-cols-4"
+      }
+    >
       {stats.map((stat) => (
-        <Stat key={stat.title} {...stat} />
+        <Stat key={stat.title} {...stat} size={size} />
       ))}
     </div>
   )

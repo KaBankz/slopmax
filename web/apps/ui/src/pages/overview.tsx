@@ -1,5 +1,6 @@
-// The overview: how the accounts stand in a line, what wants a look, each
-// subscription's pool at a glance, keys and endpoints, and today so far.
+// The overview: how the accounts stand in a line, what wants a look, a
+// day's API value and tokens over the month, each subscription's pool at a
+// glance, keys and endpoints, and today so far.
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
 import { type Report, SubscriptionId } from "@slopmax/client"
 import { DateTime, Duration, Option, Schema } from "effect"
@@ -35,7 +36,7 @@ import { Item, ItemActions, ItemContent, ItemHeader, ItemMedia, ItemTitle } from
 import { type Attention, standing } from "../view/attention.ts"
 import { type Group, resetsLeft } from "../view/groups.ts"
 import { Pages } from "../view/pages.ts"
-import { hourly, isQuiet, todayStats } from "../view/usage.ts"
+import { dailyStats, hourly, isQuiet, todayStats } from "../view/usage.ts"
 import { limitsNotRead, releaseNotes, resetCount, resetsLine, routing, updated } from "../view/words.ts"
 
 /** A newer slopmax, with the command that updates this install and its release notes. */
@@ -247,6 +248,18 @@ function Metered({ group }: { readonly group: Group }) {
   )
 }
 
+/** A day's API value and tokens, as the last week went and over the month; nothing before a whole day is in. */
+function PerDay() {
+  const month = useAtomValue(historyAtom("30d"))
+  const stats = Option.match(AsyncResult.value(month), { onNone: () => [], onSome: dailyStats })
+  if (stats.length === 0) return null
+  return (
+    <Section title="Per day">
+      <Stats stats={stats} size="lg" />
+    </Section>
+  )
+}
+
 function Today() {
   const today = useAtomValue(historyAtom("today"))
   const again = useAtomRefresh(historyAtom("today"))
@@ -319,6 +332,7 @@ export function OverviewPage() {
           </Panel>
         </Section>
       )}
+      <PerDay />
       {pools.length > 0 && (
         <Section title="Subscriptions">
           <Panel>

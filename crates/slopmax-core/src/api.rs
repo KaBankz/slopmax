@@ -228,9 +228,20 @@ pub fn notice(key: &str, e: &notify::Event) -> api::report::Notice {
     }
 }
 
+/// The agent a ledger names, as the API lists it.
+pub fn sender(agent: &str) -> Option<api::ledger::Sender> {
+    use api::ledger::Sender;
+    match agent {
+        "claude" | "claude-code" => Some(Sender::ClaudeCode),
+        "codex" => Some(Sender::Codex),
+        "slopmax" => Some(Sender::Slopmax),
+        _ => None,
+    }
+}
+
 /// A finished request, as the event stream tells it.
 pub fn record(e: &Entry) -> api::ledger::RequestRecord {
-    use api::ledger::{RequestRecord, Sender, Via};
+    use api::ledger::{RequestRecord, Via};
     RequestRecord {
         at: e.at,
         account: (!e.account.is_empty()).then(|| e.account.clone()),
@@ -247,12 +258,7 @@ pub fn record(e: &Entry) -> api::ledger::RequestRecord {
         ms: e.ms,
         first_byte_ms: e.first_byte_ms,
         attempts: e.attempts,
-        agent: e.agent.as_deref().and_then(|agent| match agent {
-            "claude" | "claude-code" => Some(Sender::ClaudeCode),
-            "codex" => Some(Sender::Codex),
-            "slopmax" => Some(Sender::Slopmax),
-            _ => None,
-        }),
+        agent: e.agent.as_deref().and_then(sender),
         session: e.session.clone(),
         via: Via::Http,
         machine: e.machine.clone(),

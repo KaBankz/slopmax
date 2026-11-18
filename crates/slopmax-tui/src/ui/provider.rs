@@ -300,7 +300,10 @@ fn forecast(flow: &mut Flow<'_>, trend: &Trend, report: &Report, now: &Now) {
         theme.tone(tone_of_use(trend.used)),
     ));
     if let Some(burn) = trend.burn {
-        figures.push(Span::styled(format!(" · {burn:.1}%/h recently"), Style::new()));
+        figures.push(Span::styled(
+            format!(" · {burn:.1}%/h recently"),
+            Style::new(),
+        ));
     }
     if let Some(sustainable) = trend.sustainable {
         figures.push(Span::styled(

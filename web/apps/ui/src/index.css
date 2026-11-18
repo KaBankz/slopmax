@@ -1,8 +1,8 @@
 /*
  * shadcn/ui's design system, as `shadcn init -b base -p nova` writes it: its
  * tokens in `:root` and `.dark`, mapped to colors in `@theme inline`, on
- * Tailwind's own scales. slopmax adds two tokens shadcn has no names for,
- * `success` and `warning`.
+ * Tailwind's own scales. slopmax adds tokens shadcn has no names for:
+ * `success` and `warning`, and `spark-1` … `spark-4`, the figures' trend lines.
  * `.dark` on <html> switches the theme, set by the app from the system or
  * from the Appearance setting. See DESIGN.md.
  */
@@ -58,6 +58,12 @@
   /* slopmax's own: the good and warn states (`destructive` is the bad one). */
   --color-success: var(--success);
   --color-warning: var(--warning);
+
+  /* slopmax's own: the figures' trend lines, warmer than the neutral charts. */
+  --color-spark-1: var(--spark-1);
+  --color-spark-2: var(--spark-2);
+  --color-spark-3: var(--spark-3);
+  --color-spark-4: var(--spark-4);
 }
 
 :root {
@@ -96,6 +102,11 @@
 
   --success: oklch(0.527 0.154 150.069);
   --warning: oklch(0.555 0.163 48.998);
+
+  --spark-1: oklch(0.646 0.175 45);
+  --spark-2: oklch(0.6 0.17 5);
+  --spark-3: oklch(0.56 0.15 255);
+  --spark-4: oklch(0.6 0.12 175);
 }
 
 .dark {
@@ -133,6 +144,11 @@
 
   --success: oklch(0.723 0.219 149.579);
   --warning: oklch(0.769 0.188 70.08);
+
+  --spark-1: oklch(0.77 0.135 52);
+  --spark-2: oklch(0.73 0.13 5);
+  --spark-3: oklch(0.72 0.12 250);
+  --spark-4: oklch(0.78 0.11 175);
 }
 
 @layer base {

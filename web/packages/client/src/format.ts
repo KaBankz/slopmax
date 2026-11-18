@@ -34,15 +34,17 @@ const groupedFormat = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0,
 /** A whole number with thousands separated: `1,234,567`. */
 export const grouped = (value: number): string => groupedFormat.format(value)
 
-/** A count in about three figures: `999`, `12.3k`, `1.2M`, `5.0B`. */
+/** A count in about three figures: `999`, `12.3k`, `1.2M`, `5.0B`, `31.7T`. */
 export const compact = (count: number): string =>
-  count >= 1e9
-    ? `${fixed(count / 1e9, 1)}B`
-    : count >= 1e6
-      ? `${fixed(count / 1e6, 1)}M`
-      : count >= 1e3
-        ? `${fixed(count / 1e3, 1)}k`
-        : String(Math.trunc(count))
+  count >= 1e12
+    ? `${fixed(count / 1e12, 1)}T`
+    : count >= 1e9
+      ? `${fixed(count / 1e9, 1)}B`
+      : count >= 1e6
+        ? `${fixed(count / 1e6, 1)}M`
+        : count >= 1e3
+          ? `${fixed(count / 1e3, 1)}k`
+          : String(Math.trunc(count))
 
 /** Dollars to the cent: `$12.50`. */
 export const money = (dollars: number): string => `$${fixed(dollars, 2)}`

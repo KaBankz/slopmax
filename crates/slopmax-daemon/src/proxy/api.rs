@@ -952,7 +952,7 @@ fn whole(query: &str, name: &str, default: usize) -> Result<usize, ApiError> {
 
 /// The ledger's requests over a range, filtered, newest first, a page at a
 /// time.
-async fn requests(app: &App, query: &str) -> Answer {
+async fn requests(app: &Arc<App>, query: &str) -> Answer {
     let range = param(
         query,
         "range",
@@ -981,13 +981,7 @@ async fn requests(app: &App, query: &str) -> Answer {
     };
     let since = summary::since(api::history_range(range).key(), Timestamp::now())
         .expect("every range has a start");
-    let (dir, config) = (app.home.usage(), app.config());
-    let page = crate::blocking::run(move || {
-        let entries = crate::ledger::read(&dir, since);
-        crate::browse::page(&entries, &asked, range, since, &config.prices)
-    })
-    .await;
-    ok(&page)
+    ok(&app.requests(asked, range, since).await)
 }
 
 async fn history(app: &Arc<App>, query: &str) -> Answer {

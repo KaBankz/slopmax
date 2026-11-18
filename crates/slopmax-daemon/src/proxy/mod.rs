@@ -468,6 +468,42 @@ impl App {
         .await
     }
 
+    /// A page of the ledger's requests from `since` on: the totals counted
+    /// from the index kept of the ledger, built the first time, and the rows
+    /// read from the hours they are in.
+    pub async fn requests(
+        self: &Arc<Self>,
+        query: crate::browse::Query,
+        range: slopmax_api::ledger::HistoryRange,
+        since: Timestamp,
+    ) -> slopmax_api::ledger::RequestPage {
+        let app = Arc::clone(self);
+        crate::blocking::run(move || {
+            let (config, usage) = (app.config(), app.home.usage());
+            let now = Timestamp::now();
+            let tally = app
+                .hours
+                .requests(&query, since, now, &config.prices)
+                .or_else(|| {
+                    app.hours.build(&usage, &app.home.windows(), now, |start| {
+                        app.ledger.mark(start)
+                    });
+                    app.hours.requests(&query, since, now, &config.prices)
+                });
+            match tally {
+                Some(tally) => {
+                    let rows = crate::browse::rows(&usage, &query, &tally);
+                    crate::browse::tallied(tally, &rows, &query, range, since, &config.prices)
+                }
+                None => {
+                    let entries = crate::ledger::read(&usage, since);
+                    crate::browse::page(&entries, &query, range, since, &config.prices)
+                }
+            }
+        })
+        .await
+    }
+
     /// Reads each pool's quota and writes the readings that changed, or
     /// that were last written an hour ago, to the ledger.
     pub fn sample_quota(&self) {
