@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-18
+
 ### Added
 
 - The dashboard's overview opens with API value and tokens per day: the last 7 days' average, how it moved week over week, and a line over the month. Every figure on the overview, Usage and Performance pages now carries its own trend line over the range.
