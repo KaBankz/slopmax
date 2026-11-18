@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-18
+
 ### Added
 
 - GPT-6.2 Astra and GPT-6.2 Sol, which ChatGPT now lists for Codex, are priced: $8 and $2 per million input tokens, $40 and $10 output, $0.40 and $0.10 cached, and twice the input and half again the output past 272K input tokens. They showed no API value before.
