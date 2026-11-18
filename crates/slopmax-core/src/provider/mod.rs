@@ -212,6 +212,9 @@ pub fn matches(pattern: &str, model: &str) -> bool {
 pub struct Reading {
     pub limits: Limits,
     pub plan: Option<String>,
+    /// The reading lists every window the account has: windows it leaves
+    /// out are gone, not just unread.
+    pub complete: bool,
 }
 
 /// Why a usage read failed.

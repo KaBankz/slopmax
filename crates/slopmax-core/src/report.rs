@@ -324,7 +324,12 @@ pub async fn offline(
                             log::warn!("saving {}'s plan: {e:#}", account.id);
                         }
                     }
-                    pool.record_reading(&account.id, reading.limits, Timestamp::now());
+                    pool.record_reading(
+                        &account.id,
+                        reading.limits,
+                        reading.complete,
+                        Timestamp::now(),
+                    );
                 }
                 Err(e) => pool.record_error(&account.id, &format!("usage poll: {e:#}")),
             }

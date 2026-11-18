@@ -1009,8 +1009,12 @@ pub async fn poll_one(app: &App, account: &Account) {
     match result {
         Ok((fresh, reading)) => {
             app.adopt(account, &fresh);
-            app.pool
-                .record_reading(&account.id, reading.limits, Timestamp::now());
+            app.pool.record_reading(
+                &account.id,
+                reading.limits,
+                reading.complete,
+                Timestamp::now(),
+            );
             if reading.plan.is_some() && reading.plan != fresh.plan {
                 let (store, id, plan) = (app.store.clone(), fresh.id.clone(), reading.plan);
                 match blocking::run(move || store.update(&id, |a| a.plan = plan)).await {

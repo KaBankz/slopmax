@@ -181,7 +181,11 @@ async fn usage(http: &Client, account: &Account) -> Result<Reading, UsageError> 
         .map_err(|e| UsageError::Other(e.into()))?;
     let body = super::usage_body(response).await?;
     let (limits, plan) = limits::from_usage(&body, Timestamp::now());
-    Ok(Reading { limits, plan })
+    Ok(Reading {
+        limits,
+        plan,
+        complete: false,
+    })
 }
 
 #[cfg(test)]

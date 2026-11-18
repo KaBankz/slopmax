@@ -182,7 +182,7 @@ Claude lists and spends limit resets for Claude Code alone, so slopmax makes tho
 
 ### Usage
 
-Every response carries rate-limit headers (`anthropic-ratelimit-unified-*`, `x-codex-*`), and slopmax updates the serving account's windows from them as requests flow. Grok's SuperGrok plans are a monthly allowance, which slopmax reads from xAI's billing endpoint as a 30-day window. The proxy also polls each subscription's usage endpoint every `poll_mins` minutes and right after a window resets. While an account is blocked it polls every 10 minutes, because quota often comes back before the stated reset.
+Every response carries rate-limit headers (`anthropic-ratelimit-unified-*`, `x-codex-*`), and slopmax updates the serving account's windows from them as requests flow. Grok's SuperGrok plans are a weekly allowance shared by grok.com and Grok Build, which slopmax reads from xAI's billing endpoint as a 7-day window. The proxy also polls each subscription's usage endpoint every `poll_mins` minutes and right after a window resets. While an account is blocked it polls every 10 minutes, because quota often comes back before the stated reset.
 
 ## Accounts
 
@@ -211,7 +211,7 @@ On a [hub](#other-machines), `--by machine` shows which of your machines sent wh
 
 ### Left on the table
 
-A subscription's weekly quota that goes unused is lost at the reset, and with it that part of the fee. slopmax notes each window that resets with how much of it was used (in the usage ledger, `~/.slopmax/usage/`), and values the unused part of each week at the plan's price: Claude Pro $20, Max $100, Ultra $200, ChatGPT Plus $20, Pro $200 (ChatGPT reports every Pro tier as `pro`), and Team $30, SuperGrok Lite $10, SuperGrok $30, Plus $100, and Heavy $300 a month (a SuperGrok allowance is monthly, so its window is valued over the month), or what you pay, under `[plan_prices]`:
+A subscription's weekly quota that goes unused is lost at the reset, and with it that part of the fee. slopmax notes each window that resets with how much of it was used (in the usage ledger, `~/.slopmax/usage/`), and values the unused part of each week at the plan's price: Claude Pro $20, Max $100, Ultra $200, ChatGPT Plus $20, Pro $200 (ChatGPT reports every Pro tier as `pro`), and Team $30, SuperGrok Lite $10, SuperGrok $30, Plus $100, and Heavy $300 a month, or what you pay, under `[plan_prices]`:
 
 ```
 Left on the table: $39.74, 20% unused on average, across 16 weekly windows

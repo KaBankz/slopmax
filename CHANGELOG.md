@@ -4,6 +4,10 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Fixed
+
+- Grok accounts show what they've used. slopmax read xAI's plain billing view, whose monthly credits count only on-demand use and stay at 0% on a subscription, however much it's used. It now reads the credits view Grok Build reads: a weekly allowance that grok.com and Grok Build share, shown as a 7-day window that resets when xAI's week ends. The CLIProxyAPI hub reports the period to T3 Code as weekly too.
+
 ## [0.17.1] - 2026-11-18
 
 ### Fixed

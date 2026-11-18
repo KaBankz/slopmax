@@ -802,15 +802,25 @@ impl Pool {
 
     /// Records a usage poll's reading. The poll got through, so the error
     /// the account last showed (a failed poll, a refused sign-in) is past.
-    pub fn record_reading(&self, id: &str, limits: Limits, now: Timestamp) {
-        self.observe(id, limits, now);
+    /// A `complete` reading also drops the windows it leaves out.
+    pub fn record_reading(&self, id: &str, limits: Limits, complete: bool, now: Timestamp) {
+        self.fold(id, limits, complete, now);
         self.lock().clear_error(id);
     }
 
     /// Folds a usage reading into the account's limits.
     pub fn observe(&self, id: &str, limits: Limits, now: Timestamp) {
+        self.fold(id, limits, false, now);
+    }
+
+    /// Folds a reading in under one lock, so no reader sees the windows a
+    /// `complete` reading drops before it adds its own.
+    fn fold(&self, id: &str, limits: Limits, complete: bool, now: Timestamp) {
         let mut inner = self.lock();
         let state = inner.state_mut(id);
+        if complete {
+            state.limits.keep_slots(&limits);
+        }
         let lapsed = state.limits.lapsed(&limits, now);
         state.limits.merge(limits);
         // A fresh reading below the limit proves an earlier block has lifted,
@@ -1702,8 +1712,32 @@ mod tests {
         // Headers on an answer fold in limits but say nothing of the error.
         pool.observe(&a.id, limits(vec![window("5h", 10.0, None)]), ts(1000));
         assert!(pool.state(&a.id).last_error.is_some());
-        pool.record_reading(&a.id, limits(vec![window("5h", 10.0, None)]), ts(1000));
+        pool.record_reading(
+            &a.id,
+            limits(vec![window("5h", 10.0, None)]),
+            false,
+            ts(1000),
+        );
         assert_eq!(pool.state(&a.id).last_error, None);
+    }
+
+    #[test]
+    fn a_complete_reading_drops_the_windows_it_leaves_out() {
+        let a = account(ProviderId::Grok, "a", 1);
+        let pool = pool(Strategy::FillFirst, &[&a]);
+        let monthly = || limits(vec![window("30d", 0.0, Some(90_000))]);
+        let weekly = || limits(vec![window("7d", 29.0, Some(50_000))]);
+        pool.record_reading(&a.id, monthly(), false, ts(1000));
+        // A partial reading keeps a window it doesn't mention until it resets.
+        pool.record_reading(&a.id, weekly(), false, ts(1000));
+        assert_eq!(pool.state(&a.id).limits.windows.len(), 2);
+        pool.record_reading(&a.id, monthly(), false, ts(1000));
+        pool.record_reading(&a.id, weekly(), true, ts(1000));
+        let windows = pool.state(&a.id).limits.windows;
+        assert_eq!(windows.len(), 1);
+        assert_eq!((windows[0].span.as_str(), windows[0].used), ("7d", 29.0));
+        // A dropped window isn't a lapse: its quota wasn't thrown away.
+        assert!(pool.take_lapses(ts(1000)).is_empty());
     }
 
     #[test]
