@@ -2,8 +2,9 @@
 //!
 //! Grok Build talks to xAI's CLI chat proxy, which takes the account's
 //! OAuth token and the client's own headers; slopmax changes only the
-//! token. The plan's usage is a monthly allowance, read from the proxy's
-//! billing endpoint.
+//! token. The plan's usage is read from the proxy's billing endpoint in
+//! the credits view Grok Build reads: a share of a weekly allowance that
+//! grok.com and Grok Build draw on together.
 
 pub mod oauth;
 
@@ -158,11 +159,11 @@ fn bad_credentials(body: &[u8]) -> bool {
         || text.contains("invalid or expired credentials")
 }
 
-/// `GET /billing`: the plan's monthly allowance, used and resetting with
-/// the billing period.
+/// `GET /billing?format=credits`: the share of the plan's allowance used,
+/// and when its period ends.
 async fn usage(http: &Client, account: &Account) -> Result<Reading, UsageError> {
     let response = http
-        .get(format!("{API}/billing"))
+        .get(format!("{API}/billing?format=credits"))
         .bearer_auth(&account.tokens.access_token)
         .send()
         .await
@@ -178,21 +179,52 @@ async fn usage(http: &Client, account: &Account) -> Result<Reading, UsageError> 
     Ok(Reading { limits, plan })
 }
 
-/// The monthly window in a `/billing` answer, where amounts are `{"val": n}`.
+/// The window in a `/billing` answer. The credits view gives a percentage
+/// of the current period, weekly for subscriptions. Without one, the plain
+/// view's monthly credits stand in, where amounts are `{"val": n}`; on a
+/// subscription those count only on-demand use, and stay at zero.
 fn from_billing(body: &Value, now: Timestamp) -> Limits {
     let config = body.get("config").unwrap_or(body);
-    let amount = |key: &str| config.get(key)?.get("val")?.as_f64();
-    let window = match (amount("monthlyLimit"), amount("used")) {
-        (Some(limit), Some(used)) if limit > 0.0 => {
-            let resets_at = config.get("billingPeriodEnd").and_then(limits::parse_time);
-            Some(Window::new("30d", used / limit * 100.0, resets_at))
-        }
-        _ => None,
-    };
+    let window = credits(config).or_else(|| monthly(config));
     Limits {
         windows: window.into_iter().collect(),
         observed_at: Some(now),
         reset_credits: None,
+    }
+}
+
+fn credits(config: &Value) -> Option<Window> {
+    let used = config.get("creditUsagePercent")?.as_f64()?;
+    let period = config.get("currentPeriod");
+    let time = |key: &str, flat: &str| {
+        period
+            .and_then(|p| p.get(key))
+            .or_else(|| config.get(flat))
+            .and_then(limits::parse_time)
+    };
+    let end = time("end", "billingPeriodEnd");
+    // A period named some other way is measured.
+    let long = || {
+        let start = time("start", "billingPeriodStart")?;
+        Some(end?.duration_since(start) > SignedDuration::from_hours(24 * 8))
+    };
+    let span = match period.and_then(|p| p.get("type")).and_then(Value::as_str) {
+        Some("USAGE_PERIOD_TYPE_MONTHLY") => "30d",
+        Some("USAGE_PERIOD_TYPE_WEEKLY") => "7d",
+        _ if long() == Some(true) => "30d",
+        _ => "7d",
+    };
+    Some(Window::new(span, used, end))
+}
+
+fn monthly(config: &Value) -> Option<Window> {
+    let amount = |key: &str| config.get(key)?.get("val")?.as_f64();
+    match (amount("monthlyLimit")?, amount("used")?) {
+        (limit, used) if limit > 0.0 => {
+            let resets_at = config.get("billingPeriodEnd").and_then(limits::parse_time);
+            Some(Window::new("30d", used / limit * 100.0, resets_at))
+        }
+        _ => None,
     }
 }
 
@@ -344,7 +376,55 @@ mod tests {
     }
 
     #[test]
-    fn billing_is_a_monthly_window() {
+    fn credits_are_a_weekly_window() {
+        let now = Timestamp::from_second(1_000).unwrap();
+        // As xAI answers a SuperGrok Heavy account.
+        let body = json!({ "config": {
+            "currentPeriod": {
+                "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                "start": "2026-11-15T02:04:46.180+00:00",
+                "end": "2026-11-22T02:04:46.180+00:00",
+            },
+            "creditUsagePercent": 29.0,
+            "productUsage": [
+                { "product": "GrokBot", "usagePercent": 28.0 },
+                { "product": "GrokBuild", "usagePercent": 1.0 },
+            ],
+            "isUnifiedBillingUser": true,
+            "prepaidBalance": { "val": 8788 },
+            "billingPeriodStart": "2026-11-15T02:04:46.180+00:00",
+            "billingPeriodEnd": "2026-11-22T02:04:46.180+00:00",
+        } });
+        let limits = from_billing(&body, now);
+        assert_eq!(limits.windows.len(), 1);
+        let window = &limits.windows[0];
+        assert_eq!((window.span.as_str(), window.used), ("7d", 29.0));
+        assert_eq!(
+            window.resets_at,
+            "2026-11-22T02:04:46.180Z".parse::<Timestamp>().ok()
+        );
+        assert_eq!(limits.observed_at, Some(now));
+
+        let monthly = json!({ "config": {
+            "currentPeriod": { "type": "USAGE_PERIOD_TYPE_MONTHLY" },
+            "creditUsagePercent": 5,
+        } });
+        assert_eq!(from_billing(&monthly, now).windows[0].span, "30d");
+        // A period of another name is measured.
+        let measured = json!({ "config": {
+            "currentPeriod": {
+                "type": "USAGE_PERIOD_TYPE_BIWEEKLY",
+                "start": "2026-11-01T00:00:00Z",
+                "end": "2026-11-15T00:00:00Z",
+            },
+            "creditUsagePercent": 5,
+        } });
+        assert_eq!(from_billing(&measured, now).windows[0].span, "30d");
+        assert!(from_billing(&json!({}), now).windows.is_empty());
+    }
+
+    #[test]
+    fn plain_billing_is_a_monthly_window() {
         let now = Timestamp::from_second(1_000).unwrap();
         let body = json!({ "config": {
             "monthlyLimit": { "val": 10000 }, "used": { "val": 2500 },
@@ -353,26 +433,26 @@ mod tests {
             "billingPeriodEnd": "2026-12-01T00:00:00+00:00",
         } });
         let limits = from_billing(&body, now);
-        assert_eq!(limits.windows.len(), 1);
         let window = &limits.windows[0];
         assert_eq!((window.span.as_str(), window.used), ("30d", 25.0));
         assert_eq!(
             window.resets_at,
             "2026-12-01T00:00:00Z".parse::<Timestamp>().ok()
         );
-        assert_eq!(limits.observed_at, Some(now));
         // No allowance, no window.
         let unlimited = json!({ "config": { "monthlyLimit": { "val": 0 }, "used": { "val": 5 } } });
         assert!(from_billing(&unlimited, now).windows.is_empty());
-        assert!(from_billing(&json!({}), now).windows.is_empty());
     }
 
     async fn proxy() -> Mock {
         Mock::start(|seen| match (seen.route(), seen.header("authorization")) {
             ("/v1/billing", Some("Bearer good")) => testkit::json(
                 200,
-                json!({ "config": { "monthlyLimit": { "val": 100 }, "used": { "val": 40 },
-                                    "billingPeriodEnd": "2026-12-01T00:00:00+00:00" } }),
+                json!({ "config": {
+                    "currentPeriod": { "type": "USAGE_PERIOD_TYPE_WEEKLY",
+                                       "end": "2026-11-22T00:00:00+00:00" },
+                    "creditUsagePercent": 40.0,
+                } }),
             ),
             ("/v1/settings", Some("Bearer good")) => testkit::json(
                 200,
@@ -400,7 +480,9 @@ mod tests {
         let fresh = Grok.usage(&http, &account("good")).await.unwrap();
         assert_eq!(fresh.limits.windows[0].used, 40.0);
         assert_eq!(fresh.plan.as_deref(), Some("heavy"));
+        assert_eq!(fresh.limits.windows[0].span, "7d");
         let sent = &mock.seen_at("/v1/billing")[0];
+        assert_eq!(sent.path, "/v1/billing?format=credits");
         assert_eq!(sent.header("authorization"), Some("Bearer good"));
 
         let mut known = account("good");

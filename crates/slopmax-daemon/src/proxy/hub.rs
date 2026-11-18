@@ -293,13 +293,17 @@ fn codex_usage(account: &Account, limits: &Limits, now: Timestamp) -> Value {
 }
 
 /// A reading in the shape of xAI's `GET /v1/billing?format=credits`: the
-/// share of the monthly allowance used, and when the period ends. A plan
-/// with no allowance has no window, and reads as an empty config.
+/// share of the allowance used, and when the period ends. A plan with no
+/// allowance has no window, and reads as an empty config.
 fn grok_usage(limits: &Limits, now: Timestamp) -> Value {
     let Some(window) = limits.windows.iter().find(|w| w.model.is_none()) else {
         return json!({ "config": {} });
     };
-    let mut period = json!({ "type": "USAGE_PERIOD_TYPE_MONTHLY" });
+    let kind = match window.span.as_str() {
+        "30d" => "USAGE_PERIOD_TYPE_MONTHLY",
+        _ => "USAGE_PERIOD_TYPE_WEEKLY",
+    };
+    let mut period = json!({ "type": kind });
     if let Some(end) = reset(window, now) {
         period["end"] = json!(end);
     }
@@ -486,14 +490,14 @@ mod tests {
         assert_eq!(codex_usage(&account, &limits, now)["plan_type"], "pro");
 
         let grok = Limits {
-            windows: vec![Window::new("30d", 25.0, Some(at(70)))],
+            windows: vec![Window::new("7d", 25.0, Some(at(70)))],
             observed_at: Some(now),
             reset_credits: None,
         };
         let usage = grok_usage(&grok, now);
         assert_eq!(usage["config"]["creditUsagePercent"], 25.0);
         let period = &usage["config"]["currentPeriod"];
-        assert_eq!(period["type"], "USAGE_PERIOD_TYPE_MONTHLY");
+        assert_eq!(period["type"], "USAGE_PERIOD_TYPE_WEEKLY");
         assert_eq!(period["end"], at(70).to_string());
         let unlimited = Limits {
             windows: Vec::new(),

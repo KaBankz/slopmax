@@ -182,7 +182,7 @@ Claude lists and spends limit resets for Claude Code alone, so slopmax makes tho
 
 ### Usage
 
-Every response carries rate-limit headers (`anthropic-ratelimit-unified-*`, `x-codex-*`), and slopmax updates the serving account's windows from them as requests flow. Grok's SuperGrok plans are a monthly allowance, which slopmax reads from xAI's billing endpoint as a 30-day window. The proxy also polls each subscription's usage endpoint every `poll_mins` minutes and right after a window resets. While an account is blocked it polls every 10 minutes, because quota often comes back before the stated reset.
+Every response carries rate-limit headers (`anthropic-ratelimit-unified-*`, `x-codex-*`), and slopmax updates the serving account's windows from them as requests flow. Grok's SuperGrok plans are a weekly allowance shared by grok.com and Grok Build, which slopmax reads from xAI's billing endpoint as a 7-day window. The proxy also polls each subscription's usage endpoint every `poll_mins` minutes and right after a window resets. While an account is blocked it polls every 10 minutes, because quota often comes back before the stated reset.
 
 ## Accounts
 
