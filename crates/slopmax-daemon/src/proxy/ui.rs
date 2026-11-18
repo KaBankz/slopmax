@@ -24,11 +24,14 @@ pub(crate) struct Asset {
 
 include!(concat!(env!("OUT_DIR"), "/ui.rs"));
 
-/// The policy. `style-src` allows one inline style besides the page's own
+/// The policy. `style-src` allows two inline styles besides the page's own
 /// files: the stylesheet Sonner (the toasts) inserts when it loads, by its
-/// hash. `web/apps/ui/test/csp.test.ts` fails when an upgrade changes it.
+/// hash, and the empty one (`47DEQ…`) it inserts first and then fills, which
+/// the browser would otherwise report on every load.
+/// `web/apps/ui/test/csp.test.ts` fails when an upgrade changes either.
 const CSP: &str = "default-src 'none'; script-src 'self'; \
-                   style-src 'self' 'sha256-StEaX+se6YS7pqjzrzMIA0KaX9zF/8zAhvQXZAe5epY='; \
+                   style-src 'self' 'sha256-StEaX+se6YS7pqjzrzMIA0KaX9zF/8zAhvQXZAe5epY=' \
+                   'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU='; \
                    font-src 'self'; connect-src 'self'; img-src 'self' data:; \
                    frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 

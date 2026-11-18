@@ -5,12 +5,12 @@
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use slopmax_client::api::Tone;
-use slopmax_client::api::ledger::{History, HistoryRange, NamedTotals, Totals};
+use slopmax_client::api::ledger::{History, HistoryBucket, HistoryRange, NamedTotals, Totals};
+use slopmax_client::api::{Provider, Tone};
 
 use super::widgets::{
-    Flow, Stat, TWO_COLUMNS, axis_labels, bar_row, braille_lines, change, column_chart,
-    scaled_columns, shade, stats, tabs,
+    Flow, Stat, TWO_COLUMNS, axis_labels, bar_row, braille_lines, change, scaled_columns, shade,
+    stacked_columns, stats, tabs,
 };
 use crate::app::{App, Hit, RANGES, range_title};
 use crate::format::{self, Now};
@@ -43,6 +43,177 @@ pub fn hourly(history: &History) -> Vec<f64> {
 
 fn tokens(t: &Totals) -> u64 {
     t.input + t.output + t.cache_read + t.cache_write
+}
+
+/// The model-name prefixes a provider serves, to color a model by.
+fn serves(provider: Provider) -> &'static [&'static str] {
+    match provider {
+        Provider::Claude | Provider::Anthropic => &["claude-"],
+        Provider::Codex | Provider::OpenAi => &["gpt-", "codex-", "o1", "o3", "o4"],
+        Provider::Grok | Provider::Xai => &["grok-"],
+        Provider::Compat => &[],
+    }
+}
+
+/// The provider of the history's that serves a model, first in its order;
+/// none for a name no provider claims.
+pub fn model_provider(providers: &[Provider], model: &str) -> Option<Provider> {
+    providers
+        .iter()
+        .copied()
+        .find(|p| serves(*p).iter().any(|prefix| model.starts_with(prefix)))
+}
+
+/// The provider an agent is made for, by its name; none for `Other` and
+/// `Warmups`.
+pub fn agent_provider(name: &str) -> Option<Provider> {
+    match name {
+        "Claude Code" => Some(Provider::Claude),
+        "Codex" => Some(Provider::Codex),
+        "Grok Build" => Some(Provider::Grok),
+        _ => None,
+    }
+}
+
+/// A provider's color, as the Tokens chart gives it; the foreground for a
+/// row no one provider owns.
+fn provider_ink(flow: &Flow<'_>, providers: &[Provider], provider: Option<Provider>) -> Style {
+    provider
+        .and_then(|p| providers.iter().position(|q| *q == p))
+        .map_or(flow.theme.ink(), |i| flow.theme.series(i))
+}
+
+/// How many whole days the month's pace averages: as many as the 7-day
+/// range holds besides today, so it reads the same there as on 30 days.
+const PACE_DAYS: usize = 6;
+
+/// What 30 days at the recent pace would be worth, and how it was had:
+/// the average of the last [`PACE_DAYS`] whole days, from the first of them
+/// that held a request (today left out, as it is not over); for today, the
+/// hours so far. The same figure on 7 and 30 days.
+pub fn month_pace(history: &History) -> (String, String) {
+    if history.range == HistoryRange::Today {
+        let hours = history.buckets.len();
+        return if hours < 3 {
+            ("—".into(), "after a few hours of today".into())
+        } else {
+            let total: f64 = history.buckets.iter().map(|b| b.cost).sum();
+            (
+                format::dollars(total / hours as f64 * 24.0 * 30.0),
+                "at today's pace".into(),
+            )
+        };
+    }
+    // The window first, then from its first day of use, so a request
+    // older than the 7-day range can't stretch it.
+    let whole = &history.buckets[..history.buckets.len().saturating_sub(1)];
+    let window = &whole[whole.len().saturating_sub(PACE_DAYS)..];
+    let Some(first) = window.iter().position(|d| d.requests + d.failed > 0) else {
+        return ("—".into(), "after a whole day of use".into());
+    };
+    let days: &[HistoryBucket] = &window[first..];
+    let per_day = days.iter().map(|d| d.cost).sum::<f64>() / days.len() as f64;
+    let note = format!("from the last {}", format::count(days.len() as u64, "day"));
+    (format::dollars(per_day * 30.0), note)
+}
+
+/// The "When you work" grid's levels, as a contribution graph has them: 0
+/// for an hour with no request, else 1 to 4 by where it ranks among the
+/// busy hours, so one burst does not wash the rest out.
+pub fn levels(activity: &[Vec<u64>]) -> Vec<Vec<u8>> {
+    // Ranked among the distinct counts, so many quiet hours alike can't
+    // share the peak's level.
+    let mut busy: Vec<u64> = activity
+        .iter()
+        .flatten()
+        .copied()
+        .filter(|n| *n > 0)
+        .collect();
+    busy.sort_unstable();
+    busy.dedup();
+    activity
+        .iter()
+        .map(|hours| {
+            hours
+                .iter()
+                .map(|n| {
+                    if *n == 0 {
+                        return 0;
+                    }
+                    let at_most = busy.iter().filter(|v| **v <= *n).count();
+                    (4 * at_most).div_ceil(busy.len()).clamp(1, 4) as u8
+                })
+                .collect()
+        })
+        .collect()
+}
+
+const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const WEEKDAY_NAMES: [&str; 7] = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+];
+const DAY_PARTS: [&str; 4] = ["Nights", "Mornings", "Afternoons", "Evenings"];
+
+/// What the grid says in words, as (title, figure, note): the busiest hour,
+/// the busiest day, the part of the day most requests fall in, and the
+/// weekends' share. None when no request was made.
+pub fn rhythm(activity: &[Vec<u64>]) -> Vec<(&'static str, String, String)> {
+    let total: u64 = activity.iter().flatten().sum();
+    if total == 0 {
+        return Vec::new();
+    }
+    let share = |n: u64| format!("{:.0}%", n as f64 / total as f64 * 100.0);
+    let mut hour = (0, 0, 0);
+    for (day, hours) in activity.iter().enumerate() {
+        for (h, n) in hours.iter().enumerate() {
+            if *n > hour.2 {
+                hour = (day, h, *n);
+            }
+        }
+    }
+    let days: Vec<u64> = activity.iter().map(|h| h.iter().sum()).collect();
+    // The first of the busiest, as the dashboard picks it.
+    let first_most = |values: &[u64]| {
+        values
+            .iter()
+            .enumerate()
+            .fold(0, |best, (i, n)| if *n > values[best] { i } else { best })
+    };
+    let day = first_most(&days);
+    let parts: Vec<u64> = (0..4)
+        .map(|part| {
+            activity
+                .iter()
+                .map(|h| h.iter().skip(part * 6).take(6).sum::<u64>())
+                .sum()
+        })
+        .collect();
+    let part = first_most(&parts);
+    let weekend = days.get(5).copied().unwrap_or(0) + days.get(6).copied().unwrap_or(0);
+    vec![
+        (
+            "Busiest hour",
+            format!("{} {:02}:00", WEEKDAYS[hour.0.min(6)], hour.1),
+            format::count(hour.2, "request"),
+        ),
+        (
+            "Busiest day",
+            WEEKDAY_NAMES[day.min(6)].into(),
+            format!("{} of requests", share(days[day])),
+        ),
+        (
+            "Most active",
+            DAY_PARTS[part].into(),
+            format!("{} of requests", share(parts[part])),
+        ),
+        ("Weekends", share(weekend), "of requests".into()),
+    ]
 }
 
 /// The span tabs, and the history once it is read; what the page says
@@ -133,11 +304,14 @@ pub fn draw_usage(app: &App, flow: &mut Flow<'_>, _now: &Now) {
                 note: value_note,
                 change: previous.and_then(|p| change(total.cost, p.cost, true)),
             },
-            Stat {
-                title: "Month at this pace".into(),
-                value: history.monthly.map_or("—".into(), format::dollars),
-                note: "at API prices".into(),
-                change: None,
+            {
+                let (value, note) = month_pace(history);
+                Stat {
+                    title: "Month at this pace".into(),
+                    value,
+                    note,
+                    change: None,
+                }
             },
         ],
     );
@@ -148,20 +322,31 @@ pub fn draw_usage(app: &App, flow: &mut Flow<'_>, _now: &Now) {
     } else {
         "by day"
     };
-    flow.section("Tokens", Some(Line::from(Span::styled(by, theme.muted()))));
-    let values: Vec<f64> = history
-        .buckets
+    // The providers' colors, as the dashboard's legend, then the span.
+    let mut legend = Vec::new();
+    for (i, provider) in history.providers.iter().enumerate() {
+        legend.push(Span::styled("█", theme.series(i)));
+        legend.push(Span::styled(
+            format!(" {}  ", provider.title()),
+            theme.muted(),
+        ));
+    }
+    legend.push(Span::styled(by, theme.muted()));
+    flow.section("Tokens", Some(Line::from(legend)));
+    let stacks: Vec<Vec<f64>> = history.buckets.iter().map(|b| b.tokens.clone()).collect();
+    let most = stacks
         .iter()
-        .map(|b| b.tokens.iter().sum())
-        .collect();
-    let most = values.iter().copied().fold(0.0, f64::max);
+        .map(|s| s.iter().sum::<f64>())
+        .fold(0.0, f64::max);
     flow.line(Line::from(Span::styled(
         format!(" {} at the most", format::compact(most as u64)),
         theme.muted(),
     )));
     let area = flow.take(7);
-    let style = theme.ink();
-    column_chart(flow.buf, inset(area), &values, |_| style, true);
+    let styles: Vec<Style> = (0..history.providers.len())
+        .map(|i| theme.series(i))
+        .collect();
+    stacked_columns(flow.buf, inset(area), &stacks, &styles, true);
     let labels: Vec<String> = history.buckets.iter().map(|b| b.label.clone()).collect();
     flow.line(Line::from(Span::styled(
         format!(" {}", axis_labels(&labels, inset(area).width)),
@@ -178,14 +363,17 @@ pub fn draw_usage(app: &App, flow: &mut Flow<'_>, _now: &Now) {
     flow.columns(&widths, 4, |i, column| {
         if i == 0 {
             column.section("Models", None);
-            named_bars(column, &top(&history.models, 5));
+            let providers = &history.providers;
+            named_bars(column, &top(&history.models, 5), providers, |name| {
+                model_provider(providers, name)
+            });
         }
         if i == 1 || !wide {
             if !wide {
                 column.gap();
             }
             column.section("Agents", None);
-            named_bars(column, &history.agents);
+            named_bars(column, &history.agents, &history.providers, agent_provider);
         }
     });
     flow.gap();
@@ -206,6 +394,7 @@ pub fn draw_usage(app: &App, flow: &mut Flow<'_>, _now: &Now) {
         let name_w = name_width(flow, history.accounts.iter().map(|a| a.name.as_str()));
         for account in &history.accounts {
             let t = &account.totals;
+            let ink = provider_ink(flow, &history.providers, Some(account.provider));
             bar_row(
                 flow,
                 &account.name,
@@ -217,6 +406,7 @@ pub fn draw_usage(app: &App, flow: &mut Flow<'_>, _now: &Now) {
                     account.provider.title().into(),
                 ],
                 name_w,
+                ink,
             );
         }
         flow.gap();
@@ -234,7 +424,7 @@ pub fn draw_usage(app: &App, flow: &mut Flow<'_>, _now: &Now) {
             .collect();
         if !rows.is_empty() {
             flow.section("Machines", None);
-            named_bars(flow, &rows);
+            named_bars(flow, &rows, &[], |_| None);
             flow.gap();
         }
     }
@@ -276,6 +466,7 @@ pub fn draw_usage(app: &App, flow: &mut Flow<'_>, _now: &Now) {
         flow.gap();
         let name_w = name_width(flow, left.accounts.iter().map(|a| a.name.as_str()));
         for account in &left.accounts {
+            let ink = provider_ink(flow, &history.providers, Some(account.provider));
             bar_row(
                 flow,
                 &account.name,
@@ -286,6 +477,7 @@ pub fn draw_usage(app: &App, flow: &mut Flow<'_>, _now: &Now) {
                     format::count(account.windows, "window"),
                 ],
                 name_w,
+                ink,
             );
         }
         flow.gap();
@@ -335,7 +527,14 @@ fn top(rows: &[NamedTotals], n: usize) -> Vec<NamedTotals> {
     shown
 }
 
-fn named_bars(flow: &mut Flow<'_>, rows: &[NamedTotals]) {
+/// Rows of names and bars, each bar in the color of the provider `owner`
+/// names for the row.
+fn named_bars(
+    flow: &mut Flow<'_>,
+    rows: &[NamedTotals],
+    providers: &[Provider],
+    owner: impl Fn(&str) -> Option<Provider>,
+) {
     if rows.is_empty() {
         let theme = flow.theme;
         flow.line(Line::from(Span::styled(" None", theme.muted())));
@@ -350,6 +549,7 @@ fn named_bars(flow: &mut Flow<'_>, rows: &[NamedTotals]) {
     let name_w = name_width(flow, rows.iter().map(|r| r.name.as_str()));
     for row in rows {
         let t = &row.totals;
+        let ink = provider_ink(flow, providers, owner(&row.name));
         bar_row(
             flow,
             &row.name,
@@ -359,6 +559,7 @@ fn named_bars(flow: &mut Flow<'_>, rows: &[NamedTotals]) {
                 format::priced(t.cost, t.unpriced, t.requests),
             ],
             name_w,
+            ink,
         );
     }
 }
@@ -418,10 +619,12 @@ fn token_mix(flow: &mut Flow<'_>, total: &Totals) {
     flow.line(Line::from(legend));
 }
 
-/// Requests by weekday and hour, in shades.
+/// Requests by weekday and hour, as a contribution graph: a cell per hour
+/// in four levels of the Requests blue by where it ranks among the busy
+/// hours, and what the grid says in words beneath.
 fn activity(flow: &mut Flow<'_>, activity: &[Vec<u64>]) {
     let theme = flow.theme;
-    let most = activity.iter().flatten().copied().max().unwrap_or(0);
+    let grid = levels(activity);
     let cell = if flow.width >= 6 + 24 * 3 { 3 } else { 2 };
     let mut axis = String::from("      ");
     for hour in 0..24 {
@@ -433,19 +636,51 @@ fn activity(flow: &mut Flow<'_>, activity: &[Vec<u64>]) {
         axis.push_str(&format!("{label:<w$}", w = cell));
     }
     flow.line(Line::from(Span::styled(axis, theme.muted())));
-    for (day, hours) in ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        .iter()
-        .zip(activity)
-    {
+    let blue = theme.spark(3);
+    for (day, hours) in WEEKDAYS.iter().zip(&grid) {
         let mut spans = vec![Span::styled(format!("  {day} "), theme.muted())];
-        for n in hours {
-            let symbol = shade(*n, most);
-            let style = if *n == 0 { theme.rule() } else { theme.ink() };
-            spans.push(Span::styled(symbol.repeat(cell - 1), style));
+        for level in hours {
+            let style = if *level == 0 { theme.rule() } else { blue };
+            spans.push(Span::styled(shade(*level).repeat(cell - 1), style));
             spans.push(Span::raw(" "));
         }
         flow.line(Line::from(spans));
     }
+    let mut key = vec![Span::styled("      less ", theme.muted())];
+    for level in 0..=4 {
+        let style = if level == 0 { theme.rule() } else { blue };
+        key.push(Span::styled(shade(level), style));
+        key.push(Span::raw(" "));
+    }
+    key.push(Span::styled("more", theme.muted()));
+    flow.line(Line::from(key));
+    flow.gap();
+    // The facts, a pair at a time, onto another line where the next
+    // doesn't fit whole.
+    let mut line = vec![Span::raw(" ")];
+    let mut used = 1usize;
+    for (title, value, note) in rhythm(activity) {
+        let item = [
+            Span::styled(format!("{title} "), theme.muted()),
+            Span::styled(value, theme.strong()),
+            Span::styled(format!(" · {note}"), theme.muted()),
+        ];
+        let w: usize = item.iter().map(Span::width).sum();
+        if used > 1 && used + 3 + w > flow.width as usize {
+            flow.line(Line::from(std::mem::replace(
+                &mut line,
+                vec![Span::raw(" ")],
+            )));
+            used = 1;
+        }
+        if used > 1 {
+            line.push(Span::raw("   "));
+            used += 3;
+        }
+        line.extend(item);
+        used += w;
+    }
+    flow.line(Line::from(line));
 }
 
 pub fn draw_performance(app: &App, flow: &mut Flow<'_>, _now: &Now) {
@@ -505,7 +740,7 @@ pub fn draw_performance(app: &App, flow: &mut Flow<'_>, _now: &Now) {
     flow.section(
         "Reliability",
         Some(Line::from(vec![
-            Span::styled("█", theme.ink()),
+            Span::styled("█", theme.spark(3)),
             Span::styled(" answered  ", theme.muted()),
             Span::styled("█", theme.tone(Tone::Bad)),
             Span::styled(" failed  ", theme.muted()),
@@ -529,7 +764,8 @@ pub fn draw_performance(app: &App, flow: &mut Flow<'_>, _now: &Now) {
     )));
     let area = inset(flow.take(5));
     let ink = theme.ink();
-    scaled_columns(flow.buf, area, &answered, most, |_| ink, true);
+    let blue = theme.spark(3);
+    scaled_columns(flow.buf, area, &answered, most, |_| blue, true);
     let row = inset(flow.take(1));
     let bad = theme.tone(Tone::Bad);
     scaled_columns(flow.buf, row, &failed, most, |_| bad, true);
@@ -584,6 +820,7 @@ pub fn draw_performance(app: &App, flow: &mut Flow<'_>, _now: &Now) {
             .max(f64::EPSILON);
         let name_w = name_width(flow, history.speeds.iter().map(|s| s.model.as_str()));
         for speed in history.speeds.iter().take(8) {
+            let ink = provider_ink(flow, &history.providers, Some(speed.provider));
             bar_row(
                 flow,
                 &speed.model,
@@ -593,6 +830,7 @@ pub fn draw_performance(app: &App, flow: &mut Flow<'_>, _now: &Now) {
                     speed.provider.title().into(),
                 ],
                 name_w,
+                ink,
             );
         }
     }
@@ -758,4 +996,130 @@ fn line_chart(
         Span::raw(" ".repeat(gutter as usize)),
         Span::styled(axis.trim_end().to_owned(), muted),
     ]));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_month_at_this_pace_averages_the_last_whole_days() {
+        let mut history: History = super::super::tests::fixture("usage.history.ok");
+        assert_eq!(
+            month_pace(&history),
+            ("—".into(), "after a whole day of use".into())
+        );
+        // Days of $20, $30, $40 and today: today is left out.
+        let n = history.buckets.len();
+        for (bucket, cost) in history.buckets[n - 4..]
+            .iter_mut()
+            .zip([20.0, 30.0, 40.0, 5.0])
+        {
+            bucket.cost = cost;
+            bucket.requests = 1;
+        }
+        assert_eq!(
+            month_pace(&history),
+            ("$900.00".into(), "from the last 3 days".into())
+        );
+        // A full week reads the same on 7 days (six whole days besides
+        // today) as on 30 (a seventh before them, left out on both).
+        let day = |cost: f64| HistoryBucket {
+            cost,
+            requests: 1,
+            ..history.buckets[0].clone()
+        };
+        let mut month = history.clone();
+        month.range = HistoryRange::Month;
+        month.buckets = [999.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 5.0]
+            .map(day)
+            .to_vec();
+        let mut week = month.clone();
+        week.range = HistoryRange::Week;
+        week.buckets.remove(0);
+        assert_eq!(
+            month_pace(&month),
+            ("$1,050".into(), "from the last 6 days".into())
+        );
+        assert_eq!(month_pace(&week), month_pace(&month));
+        // A request older than the 7-day range, then idle days: 30 days
+        // reads as 7 do.
+        let mut sparse = week.clone();
+        sparse.range = HistoryRange::Month;
+        for (bucket, cost) in sparse
+            .buckets
+            .iter_mut()
+            .zip([0.0, 0.0, 0.0, 20.0, 30.0, 40.0])
+        {
+            bucket.cost = cost;
+            bucket.requests = u64::from(cost > 0.0);
+        }
+        let short = sparse.clone();
+        sparse.buckets.insert(0, day(999.0));
+        assert_eq!(month_pace(&sparse), month_pace(&short));
+        assert_eq!(
+            month_pace(&sparse),
+            ("$900.00".into(), "from the last 3 days".into())
+        );
+        history.range = HistoryRange::Today;
+        history.buckets.truncate(2);
+        assert_eq!(
+            month_pace(&history),
+            ("—".into(), "after a few hours of today".into())
+        );
+    }
+
+    #[test]
+    fn the_grid_levels_hours_by_rank_and_says_when_the_work_falls() {
+        assert_eq!(
+            levels(&[vec![0, 1, 2, 3, 4, 100]]),
+            vec![vec![0, 1, 2, 3, 4, 4]]
+        );
+        assert_eq!(levels(&[vec![5, 5, 5, 0]]), vec![vec![4, 4, 4, 0]]);
+        assert_eq!(
+            levels(&[vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 25]]),
+            vec![vec![2, 2, 2, 2, 2, 2, 2, 2, 2, 4]]
+        );
+        let week: Vec<Vec<u64>> = (0..7)
+            .map(|day| {
+                (0..24)
+                    .map(|hour| match (day, hour) {
+                        (1, 20) => 9,
+                        (5, 3) => 1,
+                        _ => 0,
+                    })
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            rhythm(&week),
+            vec![
+                ("Busiest hour", "Tue 20:00".into(), "9 requests".into()),
+                ("Busiest day", "Tuesday".into(), "90% of requests".into()),
+                ("Most active", "Evenings".into(), "90% of requests".into()),
+                ("Weekends", "10%".into(), "of requests".into()),
+            ]
+        );
+        assert!(rhythm(&[vec![0, 0]]).is_empty());
+    }
+
+    #[test]
+    fn models_and_agents_take_the_provider_they_belong_to() {
+        let providers = [Provider::Claude, Provider::Codex, Provider::Grok];
+        assert_eq!(
+            model_provider(&providers, "claude-opus-5-5"),
+            Some(Provider::Claude)
+        );
+        assert_eq!(
+            model_provider(&[Provider::Anthropic], "claude-opus-5-5"),
+            Some(Provider::Anthropic)
+        );
+        assert_eq!(
+            model_provider(&providers, "gpt-6.1-sol"),
+            Some(Provider::Codex)
+        );
+        assert_eq!(model_provider(&providers, "unknown"), None);
+        assert_eq!(agent_provider("Grok Build"), Some(Provider::Grok));
+        assert_eq!(agent_provider("Other"), None);
+    }
 }

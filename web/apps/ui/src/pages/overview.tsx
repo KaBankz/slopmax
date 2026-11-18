@@ -36,7 +36,7 @@ import { Item, ItemActions, ItemContent, ItemHeader, ItemMedia, ItemTitle } from
 import { type Attention, standing } from "../view/attention.ts"
 import { type Group, resetsLeft } from "../view/groups.ts"
 import { Pages } from "../view/pages.ts"
-import { dailyStats, hourly, isQuiet, todayStats } from "../view/usage.ts"
+import { dailyStats, hourTip, hourly, isQuiet, todayStats } from "../view/usage.ts"
 import { limitsNotRead, releaseNotes, resetCount, resetsLine, routing, updated } from "../view/words.ts"
 
 /** A newer slopmax, with the command that updates this install and its release notes. */
@@ -273,7 +273,7 @@ function Today() {
             <Stats stats={todayStats(history)} />
             <Card>
               <CardContent>
-                <Hours values={hourly(history)} />
+                <Hours values={hourly(history)} tip={hourTip} ink="spark-2" />
               </CardContent>
             </Card>
           </div>
@@ -352,7 +352,7 @@ export function OverviewPage() {
         </Section>
       )}
       {pools.length > 0 && (
-        <Section title="Last day">
+        <Section title="Health">
           <div className="grid grid-cols-1 gap-4 @4xl:grid-cols-2">
             <HealthCard groups={pools} />
             <RecentFailures />

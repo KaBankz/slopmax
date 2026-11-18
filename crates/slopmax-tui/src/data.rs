@@ -287,7 +287,7 @@ impl Data {
     /// overview's latest, at the top, where their queries would list it;
     /// its cost comes with the next fetch. Everything drawn from the ledger
     /// is stale from now. True when the feed took it.
-    pub fn record(&mut self, record: &LedgerRecord) -> bool {
+    pub fn record(&mut self, record: &LedgerRecord, cost: Option<f64>) -> bool {
         for slot in &mut self.history {
             slot.stale = true;
         }
@@ -300,7 +300,7 @@ impl Data {
         self.requests.stale = true;
         self.latest.stale = true;
         if let Some(page) = &mut self.latest.value {
-            take(page, record, LATEST);
+            take(page, record, cost, LATEST);
         }
         if !lists(&self.query, record) {
             return false;
@@ -308,7 +308,7 @@ impl Data {
         let Some(page) = &mut self.requests.value else {
             return false;
         };
-        take(page, record, self.query.limit);
+        take(page, record, cost, self.query.limit);
         true
     }
 }
@@ -354,16 +354,20 @@ fn lists(query: &RequestQuery, record: &LedgerRecord) -> bool {
 }
 
 /// Puts a request just answered at the top of a page and counts it.
-fn take(page: &mut RequestPage, record: &LedgerRecord, limit: u64) {
+fn take(page: &mut RequestPage, record: &LedgerRecord, cost: Option<f64>, limit: u64) {
     let LedgerRecord::Request(request) = record;
     page.rows.insert(
         0,
         RequestRow {
             record: record.clone(),
-            cost: None,
+            cost,
             end: None,
         },
     );
+    // As the daemon counts it: what answered requests were worth.
+    if request.status < 400 {
+        page.cost += cost.unwrap_or(0.0);
+    }
     page.rows.truncate(limit.max(1) as usize);
     page.matched += 1;
     page.tokens += request.usage.tokens();

@@ -300,7 +300,9 @@ function LiveRequests() {
   const { filter, choose, name, views, open, setOpen } = usePage()
   const feed = useAtomValue(feedAtom)
   const live = useAtomValue(liveAtom)
-  const feedRows = feed.map((entry) => new RequestRow({ record: entry.record }))
+  const feedRows = feed.map(
+    (entry) => new RequestRow({ record: entry.record, ...(entry.cost === undefined ? {} : { cost: entry.cost }) }),
+  )
   const shown = views(liveRows(filter, feedRows))
   const facets = {
     accounts: [...new Set(feedRows.flatMap((r) => r.record.account ?? []))].toSorted(),

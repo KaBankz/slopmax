@@ -85,11 +85,11 @@ export const machinesCard = (view: TailnetView): MachinesCard => {
     rows.push(
       view.identity && view.users.length > 0
         ? {
-            title: "No key for",
+            title: "No key needed for",
             value: view.users.join(", "),
             detail: "Machines signed in as these logins use slopmax and see its status.",
           }
-        : { title: "No key for", value: "No one", detail: "Every machine needs a key: slopmax key add <name>." },
+        : { title: "No key needed for", value: "No one", detail: "Every machine needs a key: slopmax key add <name>." },
     )
     rows.push(
       view.admins.length > 0

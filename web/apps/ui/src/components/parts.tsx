@@ -201,6 +201,21 @@ export function SettingRow({
   )
 }
 
+/**
+ * An account's name in a narrow column: the address gives way first, so a
+ * label that tells two logins of one address apart (`a@b.dev (Work)`) stays.
+ */
+export function AccountName({ name }: { readonly name: string }) {
+  const parts = /^(.*\S)\s+(\([^()]*\))$/.exec(name)
+  if (parts === null) return <span className="min-w-0 truncate">{name}</span>
+  return (
+    <span className="flex min-w-0">
+      <span className="truncate">{parts[1]}</span>
+      <span className="shrink-0 whitespace-pre"> {parts[2]}</span>
+    </span>
+  )
+}
+
 const changeVariants = cva("inline-flex shrink-0 items-baseline gap-1 font-medium tabular-nums", {
   variants: { direction: { up: "text-success", down: "text-destructive", flat: "text-muted-foreground" } },
 })
@@ -241,13 +256,13 @@ export function Stat({
           <CardTitle className="text-3xl font-normal tracking-tight tabular-nums">{value}</CardTitle>
         )}
       </CardHeader>
-      <CardContent>
-        <div className="flex flex-col gap-3">
+      <CardContent className="flex flex-1 flex-col">
+        <div className="flex flex-1 flex-col justify-between gap-3">
           <p
             className={
               size === "lg"
-                ? "flex min-w-0 items-baseline gap-1.5 text-sm"
-                : "flex min-w-0 items-baseline gap-1.5 text-xs"
+                ? "flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-sm"
+                : "flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-xs"
             }
           >
             {change !== undefined && (
@@ -259,7 +274,7 @@ export function Stat({
                 </span>
               </Tip>
             )}
-            <span className="truncate text-muted-foreground">{words}</span>
+            <span className="text-muted-foreground">{words}</span>
           </p>
           {trend !== undefined && (
             <Spark points={trend.points} ink={sparkInks[trend.series - 1] ?? "meter"} size={size} />

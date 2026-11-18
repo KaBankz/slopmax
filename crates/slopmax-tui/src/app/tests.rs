@@ -246,6 +246,7 @@ fn a_request_from_the_stream_tops_the_feed_and_makes_the_ledger_stale() {
     record.model = Some("claude-sonnet-5-5".into());
     app.apply(Msg::Event(Box::new(Event::Request {
         record: LedgerRecord::Request(record),
+        cost: None,
     })));
     assert_eq!(app.feed().len(), before + 1);
     assert_eq!(app.arrived, 1);
@@ -568,6 +569,7 @@ fn the_overview_s_latest_requests_ignore_the_feed_s_filters() {
     let feed = app.data.requests.value.as_ref().map_or(0, |p| p.matched);
     app.apply(Msg::Event(Box::new(Event::Request {
         record: request(200, 1),
+        cost: None,
     })));
     let latest = app.data.latest.value.as_ref().unwrap();
     assert_eq!(latest.matched, before + 1);
@@ -583,9 +585,11 @@ fn a_request_answered_on_a_second_try_counts_as_rescued() {
     let (rescued, failed) = (page.rescued, page.failed);
     app.apply(Msg::Event(Box::new(Event::Request {
         record: request(200, 2),
+        cost: None,
     })));
     app.apply(Msg::Event(Box::new(Event::Request {
         record: request(529, 3),
+        cost: None,
     })));
     let page = app.data.requests.value.as_ref().unwrap();
     assert_eq!((page.rescued, page.failed), (rescued + 1, failed + 1));
@@ -662,6 +666,7 @@ fn the_feed_s_selection_stays_on_its_request_as_others_come_in() {
     // what they were on.
     app.apply(Msg::Event(Box::new(Event::Request {
         record: answered(5, "claude-sonnet-5-5"),
+        cost: None,
     })));
     assert_eq!(app.arrived, 1);
     assert_eq!(app.cursor, 2);
@@ -671,6 +676,7 @@ fn the_feed_s_selection_stays_on_its_request_as_others_come_in() {
     app.scroll = 0;
     app.apply(Msg::Event(Box::new(Event::Request {
         record: answered(6, "claude-sonnet-5-5"),
+        cost: None,
     })));
     assert_eq!((app.cursor, app.scroll), (3, 0));
     // One the filter hides neither counts nor moves anything.
@@ -678,6 +684,7 @@ fn the_feed_s_selection_stays_on_its_request_as_others_come_in() {
     app.cursor = 0;
     app.apply(Msg::Event(Box::new(Event::Request {
         record: answered(7, "claude-opus-5-5"),
+        cost: None,
     })));
     assert_eq!(app.arrived, 2);
     assert_eq!(app.cursor, 0);

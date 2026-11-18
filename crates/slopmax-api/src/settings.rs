@@ -120,7 +120,7 @@ live! {
     session_affinity: Switch = "sessionAffinity", "session_affinity", Switch, 0,
         "Keep a session on its account, for the prompt cache";
     session_minutes: Minutes = "sessionMinutes", "session_ttl_mins", Minutes, 1,
-        "Idle minutes before a session's account is forgotten";
+        "How long a session keeps its account while idle";
     redeem_expiring: Switch = "redeemExpiring", "redeem_expiring_credits", Switch, 0,
         "Redeem a limit reset before it expires unused";
     redeem_when_exhausted: Switch = "redeemWhenExhausted", "redeem_when_exhausted", Switch, 0,

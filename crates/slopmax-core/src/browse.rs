@@ -73,7 +73,8 @@ fn end(entry: &Entry) -> Option<RequestEnd> {
     }
 }
 
-fn cost(entry: &Entry, prices: &BTreeMap<String, Custom>) -> Option<f64> {
+/// What `entry` is worth at API prices, when its model has a known price.
+pub fn cost(entry: &Entry, prices: &BTreeMap<String, Custom>) -> Option<f64> {
     let price = pricing::price(entry.model.as_deref()?, prices)?;
     Some(price.cost(
         entry.input,

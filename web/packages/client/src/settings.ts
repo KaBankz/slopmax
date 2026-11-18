@@ -159,7 +159,7 @@ export class Settings extends Schema.Class<Settings>("Settings")({
   sessionMinutes: PositiveInt.annotate({
     description: "Minutes a session stays on its account after its last request.",
     default: 60,
-    live: { summary: "Idle minutes before a session's account is forgotten" },
+    live: { summary: "How long a session keeps its account while idle" },
   }).pipe(withDefault(60)),
   redeemExpiring: Schema.Boolean.annotate({
     description:

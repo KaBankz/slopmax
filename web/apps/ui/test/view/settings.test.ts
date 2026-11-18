@@ -27,7 +27,7 @@ describe("the settings page's live settings", () => {
       _tag: "Minutes",
       name: "sessionMinutes",
       title: "Session timeout",
-      detail: "Idle minutes before a session's account is forgotten.",
+      detail: "How long a session keeps its account while idle.",
       value: 60,
       shown: "1 h",
       less: 30,

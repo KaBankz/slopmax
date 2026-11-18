@@ -1,7 +1,8 @@
-// The daemon's content security policy allows one inline style: the
-// stylesheet Sonner inserts when it loads, by its hash. This recomputes that
-// hash from the Sonner installed here, so an upgrade that changes the
-// stylesheet fails here rather than leaving toasts unstyled in the dashboard.
+// The daemon's content security policy allows two inline styles: the
+// stylesheet Sonner inserts when it loads, by its hash, and the empty one it
+// inserts first. This recomputes the hash from the Sonner installed here, so
+// an upgrade that changes the stylesheet fails here rather than leaving
+// toasts unstyled in the dashboard.
 import { describe, expect, test } from "bun:test"
 
 const policy = new URL("../../../../crates/slopmax-daemon/src/proxy/ui.rs", import.meta.url)
@@ -15,5 +16,10 @@ describe("the dashboard's content security policy", () => {
     expect(typeof css).toBe("string")
     const hash = new Bun.CryptoHasher("sha256").update(String(css)).digest("base64")
     expect(await Bun.file(policy).text()).toContain(`'sha256-${hash}'`)
+  })
+
+  test("allows the empty stylesheet Sonner inserts before it fills it", async () => {
+    const empty = new Bun.CryptoHasher("sha256").update("").digest("base64")
+    expect(await Bun.file(policy).text()).toContain(`'sha256-${empty}'`)
   })
 })

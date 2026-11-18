@@ -10,8 +10,8 @@ export const Event = Schema.TaggedUnion({
   Hello: { version: Schema.String },
   /** The report, at connect and whenever it changes. */
   Status: { report: Report },
-  /** One per request slopmax answered. */
-  Request: { record: LedgerRecord.cases.Request },
+  /** One per request slopmax answered, with its worth at API prices when its model has a known price. */
+  Request: { record: LedgerRecord.cases.Request, cost: Schema.optionalKey(Schema.Number) },
   /** Once per notice; the proxy remembers what it told. */
   Notice: { notice: Notice },
   /** Sign-in progress, for sign-ins started through the API. */

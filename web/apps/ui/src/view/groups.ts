@@ -424,10 +424,14 @@ export const groups = (report: Report, now: DateTime.Utc, zone: DateTime.TimeZon
     ]
   })
 
-/** What a pool reads as one: `Across 3 accounts, weighted by plan`, saying when some are out of service. */
+/**
+ * What a pool reads as one: `Across 3 accounts, weighted by plan`, saying
+ * when some are out of service; `One account` when there is nothing to pool.
+ */
 export const across = (group: Group): string => {
   const all = group.rows.length
   const basis = poolBasis(group.weighted)
+  if (all === 1) return group.working >= 1 ? "One account" : "One account, out of service"
   return group.working >= all
     ? `Across ${count(all, "account")}, ${basis}`
     : `Across ${group.working} of ${count(all, "account")}, ${basis}; the rest are out of service`

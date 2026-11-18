@@ -72,7 +72,7 @@ describe("groups", () => {
     // A signed-out account is out of service, so its segment reads as idle.
     expect(codex?.overview[0]?.shares.map((share) => share.idle)).toEqual([false, true])
     expect(across(claude ?? assert())).toBe("Across 3 accounts, weighted by plan")
-    expect(across(codex ?? assert())).toBe("Across 1 of 2 accounts, average of accounts; the rest are out of service")
+    expect(across(codex ?? assert())).toBe("Across 1 of 2 accounts, averaged; the rest are out of service")
   })
 
   test("read plans in title case, keys per token, and name the tool a followed login comes from", () => {

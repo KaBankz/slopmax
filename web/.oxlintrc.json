@@ -245,6 +245,11 @@
               {
                 "name": "bun",
                 "message": "The UI runs in a browser, never on Bun."
+              },
+              {
+                "name": "recharts",
+                "importNames": ["Area", "Bar", "Line"],
+                "message": "Draw series with ChartArea, ChartBar and ChartLine from components/ui/chart.tsx, which carry the house look."
               }
             ],
             "patterns": [
@@ -355,7 +360,32 @@
         "shadcn/no-inline-styles": "off",
         "shadcn/no-unknown-classes": "off",
         "typescript/consistent-type-assertions": "off",
-        "no-shadow": "off"
+        "no-shadow": "off",
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "bun",
+                "message": "The UI runs in a browser, never on Bun."
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["bun:*", "!bun:test"],
+                "message": "The UI runs in a browser, never on Bun."
+              },
+              {
+                "group": ["@effect/platform-bun", "@effect/platform-bun/*"],
+                "message": "Nothing here runs on Bun's platform layer: the client loads in the browser."
+              },
+              {
+                "group": ["@effect/platform-node", "@effect/platform-node/*"],
+                "message": "Nothing here runs on Node."
+              }
+            ]
+          }
+        ]
       }
     },
     {
