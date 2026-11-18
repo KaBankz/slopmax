@@ -1,7 +1,7 @@
-//! What the dashboard waits for on `/slopmax/api/history`: a ledger written
-//! as one machine's would be, then the daemon serving it and asked for each
-//! range over one kept-alive connection, so the time is the HTTP round
-//! trip with the answer.
+//! What the dashboard waits for on `/slopmax/api/history` and
+//! `/slopmax/api/requests`: a ledger written as one machine's would be,
+//! then the daemon serving it and asked for each range over one kept-alive
+//! connection, so the time is the HTTP round trip with the answer.
 //!
 //! ```sh
 //! bench history-ledger /tmp/home 365 6000
@@ -253,6 +253,35 @@ pub fn serve(home: &str, rounds: usize, out: &str) -> Result<()> {
             body.len()
         );
         std::fs::write(Path::new(out).join(format!("history-{range}.json")), &body)?;
+    }
+    // A page of requests, the overview's latest few, and a filtered page,
+    // as the TUI and the dashboard ask for them after each new request.
+    let pages = [
+        ("today", "page", "range=today&limit=100"),
+        ("today", "latest", "range=today&limit=6"),
+        ("today", "failed", "range=today&outcome=failed&limit=100"),
+        ("7d", "page", "range=7d&limit=100"),
+        ("30d", "page", "range=30d&limit=100"),
+        ("30d", "model", "range=30d&model=claude-haiku-4-5&limit=100"),
+    ];
+    let rounds = rounds.clamp(1, 20);
+    for (range, what, query) in pages {
+        let path = format!("/slopmax/api/requests?{query}");
+        let mut times: Vec<Duration> = (0..rounds)
+            .map(|_| {
+                let started = Instant::now();
+                conn.get(&path)?;
+                Ok(started.elapsed())
+            })
+            .collect::<Result<_>>()?;
+        times.sort();
+        let ms = |d: Duration| d.as_secs_f64() * 1e3;
+        println!(
+            "requests {range:>5} {what:<6}: min {:9.2} p50 {:9.2} max {:9.2} ms",
+            ms(times[0]),
+            ms(times[times.len() / 2]),
+            ms(times[times.len() - 1]),
+        );
     }
     Ok(())
 }

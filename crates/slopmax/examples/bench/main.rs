@@ -16,8 +16,8 @@
 //! least a proxy on the same HTTP stack can do, slopmax's floor. `swarm` is
 //! many agents at once: each streams answers back to back, the mock paced
 //! like a model, and it reports what the hop adds to the first byte and to
-//! the gap between events. `history` times `/slopmax/api/history` warm on
-//! the ledger `history-ledger` writes.
+//! the gap between events. `history` times `/slopmax/api/history` warm, and
+//! pages of `/slopmax/api/requests`, on the ledger `history-ledger` writes.
 
 use std::net::SocketAddr;
 use std::path::Path;
