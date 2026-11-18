@@ -290,6 +290,13 @@ pub async fn serve_with(
         ),
     ];
     app.spawn(schedule(app.clone(), jobs));
+    // The history and pools pages read from indexes of the ledger, which
+    // take a moment to build on a busy one: built now, not on first view.
+    {
+        let app = app.clone();
+        app.clone()
+            .spawn(async move { blocking::run(move || app.warm_indexes()).await });
+    }
 
     log::info!(
         "slopmax {} listening on {}",

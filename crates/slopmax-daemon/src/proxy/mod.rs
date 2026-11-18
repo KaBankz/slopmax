@@ -437,8 +437,26 @@ impl App {
         }
     }
 
+    /// Builds the indexes kept of the ledger, the history's and the
+    /// pools', so the first page that asks for them needs no wait. Blocks:
+    /// for a blocking thread. A page that asks meanwhile waits for this
+    /// build rather than starting its own.
+    pub fn warm_indexes(&self) {
+        let now = Timestamp::now();
+        let usage = self.home.usage();
+        self.hours
+            .build(&usage, &self.home.windows(), now, |start| {
+                self.ledger.mark(start)
+            });
+        self.quota
+            .build(&usage, now, &self.config().prices, |start| {
+                self.ledger.mark(start)
+            });
+    }
+
     /// What went through over `range`, by display name, from the index
-    /// kept of the ledger: read from the files once, the first time.
+    /// kept of the ledger: built as the daemon starts, or else the first
+    /// time it is asked for.
     pub async fn history(
         self: &Arc<Self>,
         range: crate::history::Range,
@@ -464,6 +482,48 @@ impl App {
             app.hours
                 .history(range, now, &prices, &names)
                 .unwrap_or_else(|| crate::history::load(&app.home, range, now, &prices, &names))
+        })
+        .await
+    }
+
+    /// A page of the ledger's requests from `since` on: the totals counted
+    /// from the index kept of the ledger, built the first time, and the rows
+    /// read from the hours they are in.
+    pub async fn requests(
+        self: &Arc<Self>,
+        query: crate::browse::Query,
+        range: slopmax_api::ledger::HistoryRange,
+        since: Timestamp,
+    ) -> slopmax_api::ledger::RequestPage {
+        let app = Arc::clone(self);
+        crate::blocking::run(move || {
+            let (config, usage) = (app.config(), app.home.usage());
+            let now = Timestamp::now();
+            // Counted while no request is written, and the ledger's
+            // lengths then: the rows read are the ones counted.
+            let count = || {
+                let mut tally = None;
+                let lengths = app.ledger.mark(&mut || {
+                    tally = app.hours.requests(&query, since, now, &config.prices);
+                });
+                tally.map(|tally| (tally, lengths))
+            };
+            let counted = count().or_else(|| {
+                app.hours.build(&usage, &app.home.windows(), now, |start| {
+                    app.ledger.mark(start)
+                });
+                count()
+            });
+            match counted {
+                Some((tally, lengths)) => {
+                    let rows = crate::browse::rows(&usage, &query, &tally, &lengths);
+                    crate::browse::tallied(tally, &rows, &query, range, since, &config.prices)
+                }
+                None => {
+                    let entries = crate::ledger::read(&usage, since);
+                    crate::browse::page(&entries, &query, range, since, &config.prices)
+                }
+            }
         })
         .await
     }
@@ -527,7 +587,8 @@ impl App {
         {
             self.pool.saw_codex_model(model);
         }
-        if self.api_events.receiver_count() > 0 {
+        // An agent's housekeeping is no request the feed lists.
+        if self.api_events.receiver_count() > 0 && (entry.answered() || entry.failed()) {
             let event = slopmax_api::events::Event::Request {
                 record: slopmax_api::ledger::LedgerRecord::Request(crate::api::record(entry)),
             };

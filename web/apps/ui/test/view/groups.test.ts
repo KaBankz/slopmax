@@ -108,7 +108,7 @@ describe("groups", () => {
 
   test("show a gauge's pace only for an account's own window, not for the pool's", () => {
     const own = gauge(Window.of("5h", 90, at(150)), now, zone)
-    expect(own.pace?.label).toEqual({ text: "Runs out ~12:16", tone: "warn" })
+    expect(own.pace?.label).toEqual({ text: "Runs out ~12:16 at the pace so far", tone: "warn" })
     expect(own.pace?.elapsed).toBeCloseTo(0.5)
     expect(gauge(Window.of("5h", 90, at(150)), now, zone, false).pace).toBeUndefined()
     // Nothing used: nothing to reset, so no reset time.

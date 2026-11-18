@@ -9,7 +9,7 @@ expression: screen
 "                                                                             ┃  "
 "    slopmax login claude            sign in to a Claude subscription         ┃  "
 "    slopmax login codex             sign in to a ChatGPT subscription        ┃  "
-"    slopmax login grok              sign in to SuperGrok                     ┃  "
+"    slopmax login grok              sign in to a Grok subscription           ┃  "
 "    slopma╭ New client key ──────────────────────────────────────────╮       ┃  "
 "    slopma│                                                          │       ┃  "
 "          │ A name for the machine or tool that will use it          │       ┃  "

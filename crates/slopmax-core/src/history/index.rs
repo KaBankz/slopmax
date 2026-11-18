@@ -12,7 +12,7 @@
 //! it was; a median read from them is within 0.1% of the exact one.
 
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -54,8 +54,30 @@ struct Sums {
     cache_read: u64,
     cache_write: u64,
     failed: u64,
-    /// Answers that needed another account.
+    /// Answers that needed another account, and what they moved.
     rescued: u64,
+    rescued_moved: Moved,
+}
+
+/// The tokens some answers moved.
+#[derive(Debug, Clone, Copy, Default)]
+struct Moved {
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_write: u64,
+}
+
+impl Moved {
+    fn tokens(&self) -> u64 {
+        self.input + self.output + self.cache_read + self.cache_write
+    }
+
+    fn cost(&self, price: Option<Price>) -> f64 {
+        price.map_or(0., |p| {
+            p.cost(self.input, self.output, self.cache_read, self.cache_write)
+        })
+    }
 }
 
 impl Sums {
@@ -67,6 +89,20 @@ impl Sums {
         self.cache_write += other.cache_write;
         self.failed += other.failed;
         self.rescued += other.rescued;
+        let (mine, theirs) = (&mut self.rescued_moved, other.rescued_moved);
+        mine.input += theirs.input;
+        mine.output += theirs.output;
+        mine.cache_read += theirs.cache_read;
+        mine.cache_write += theirs.cache_write;
+    }
+
+    fn moved(&self) -> Moved {
+        Moved {
+            input: self.input,
+            output: self.output,
+            cache_read: self.cache_read,
+            cache_write: self.cache_write,
+        }
     }
 
     /// As a ledger summary counts them, at `price` when the model has one.
@@ -106,6 +142,10 @@ struct Span {
     /// Each model's output tokens a second, in thousandths, once each
     /// answer began.
     speeds: Vec<(Model, Hist)>,
+    /// When its first request arrived, and when its last one ended: the
+    /// stretch of the ledger its lines were written in.
+    first: Option<Timestamp>,
+    settled: Option<Timestamp>,
 }
 
 /// A model as the history lists it, with the provider that served it.
@@ -135,6 +175,8 @@ impl Span {
         for (model, hist) in &other.speeds {
             self.speeds(model).merge(hist);
         }
+        self.first = self.first.into_iter().chain(other.first).min();
+        self.settled = self.settled.into_iter().chain(other.settled).max();
     }
 
     fn speeds(&mut self, model: &Model) -> &mut Hist {
@@ -358,7 +400,7 @@ struct Past {
 }
 
 /// An instant's local hour, counted from the epoch.
-fn hour_of(at: Timestamp) -> i64 {
+pub(crate) fn hour_of(at: Timestamp) -> i64 {
     (at.as_second() + at.local_offset().as_secs()).div_euclid(3_600)
 }
 
@@ -409,6 +451,9 @@ impl Index {
             self.pasts.clear();
         }
         let span = self.hours.entry(hour).or_default();
+        let settled = entry.at + crate::time::SignedDuration::from_millis(entry.ms as i64);
+        span.first = Some(span.first.map_or(entry.at, |f| f.min(entry.at)));
+        span.settled = Some(span.settled.map_or(settled, |s| s.max(settled)));
         if answered && entry.agent.as_deref() != Some(WARMUP) {
             span.work[hour.rem_euclid(24) as usize] += 1;
         }
@@ -441,7 +486,96 @@ impl Index {
         sums.cache_write += entry.cache_write;
         if entry.attempts > 1 {
             sums.rescued += 1;
+            let moved = &mut sums.rescued_moved;
+            moved.input += entry.input;
+            moved.output += entry.output;
+            moved.cache_read += entry.cache_read;
+            moved.cache_write += entry.cache_write;
         }
+    }
+
+    /// What the requests from `since` on that `query` takes came to, what
+    /// they can be filtered by, and the hours that hold them, for the
+    /// Requests page: counted here, so no line is read for them. `since`
+    /// starts a local hour (the ranges start at midnight): the index holds
+    /// whole hours.
+    pub fn requests(
+        &self,
+        query: &crate::browse::Query,
+        since: Timestamp,
+        prices: &BTreeMap<String, pricing::Custom>,
+    ) -> crate::browse::Tally {
+        use slopmax_api::ledger::{RequestOutcome, Sender};
+        let mut tally = crate::browse::Tally::default();
+        let mut priced: HashMap<Arc<str>, Option<Pricing>, Fast> = HashMap::default();
+        let (mut accounts, mut models, mut agents) = (BTreeSet::new(), BTreeSet::new(), [false; 3]);
+        const SENDERS: [Sender; 3] = [Sender::ClaudeCode, Sender::Codex, Sender::Slopmax];
+        for (&hour, span) in self.hours.range(hour_of(since)..).rev() {
+            let mut matched = 0;
+            for (cell, sums) in &span.cells {
+                let sender = cell.agent.as_deref().and_then(crate::api::sender);
+                if !cell.account.is_empty() {
+                    accounts.insert(cell.account.clone());
+                }
+                if let Some(model) = &cell.model {
+                    models.insert(model.clone());
+                }
+                if let Some(i) = SENDERS.iter().position(|s| Some(*s) == sender) {
+                    agents[i] = true;
+                }
+                if !query.takes_one(&cell.account, cell.model.as_deref(), sender) {
+                    continue;
+                }
+                let (n, failed, rescued, moved) = match query.outcome {
+                    RequestOutcome::All => (
+                        sums.answered + sums.failed,
+                        sums.failed,
+                        sums.rescued,
+                        sums.moved(),
+                    ),
+                    RequestOutcome::Answered => (sums.answered, 0, sums.rescued, sums.moved()),
+                    RequestOutcome::Failed => (sums.failed, sums.failed, 0, Moved::default()),
+                    RequestOutcome::Rescued => (sums.rescued, 0, sums.rescued, sums.rescued_moved),
+                };
+                if n == 0 {
+                    continue;
+                }
+                matched += n;
+                tally.failed += failed;
+                tally.rescued += rescued;
+                tally.tokens += moved.tokens();
+                if moved.tokens() > 0 {
+                    let price = cell.model.as_ref().and_then(|model| {
+                        priced
+                            .entry(model.clone())
+                            .or_insert_with(|| pricing::price(model, prices))
+                            .map(|p| p.tier(cell.long))
+                    });
+                    tally.cost += moved.cost(price);
+                }
+            }
+            tally.matched += matched;
+            if matched > 0
+                && let (Some(first), Some(settled)) = (span.first, span.settled)
+            {
+                tally.hours.push(crate::browse::Hour {
+                    hour,
+                    matched,
+                    first,
+                    settled,
+                });
+            }
+        }
+        tally.facets = slopmax_api::ledger::RequestFacets {
+            accounts: accounts.into_iter().map(|a| a.to_string()).collect(),
+            models: models.into_iter().map(|m| m.to_string()).collect(),
+            agents: SENDERS
+                .into_iter()
+                .zip(agents)
+                .filter_map(|(s, seen)| seen.then_some(s))
+                .collect(),
+        };
+        tally
     }
 
     /// Forgets the hours before `hour`, and the days they made.
@@ -741,11 +875,14 @@ impl Index {
 }
 
 /// The index the daemon keeps of its own ledger, and of the windows that
-/// reset: none until a history is first asked for, then the last month's,
-/// kept current as requests settle.
+/// reset: none until it is built (the daemon builds it as it starts), then
+/// the last month's, kept current as requests settle.
 #[derive(Debug, Default)]
 pub struct Kept {
     stage: Mutex<Stage>,
+    /// Held through a build, so a second caller waits for the first's
+    /// rather than reading the ledger again.
+    building: Mutex<()>,
 }
 
 #[derive(Debug, Default)]
@@ -796,9 +933,10 @@ impl Kept {
 
     /// Reads the last month of the ledger in `usage`, up to the lengths
     /// `ledger.mark` gives, and the windows in `windows` that reset, into
-    /// the index. Blocks: for a blocking thread. `mark` runs under the
-    /// ledger's lock and starts the build there, so each request lands
-    /// either in what is read or in what waits, never both.
+    /// the index. Blocks: for a blocking thread, and while another caller
+    /// builds it. `mark` runs under the ledger's lock and starts the build
+    /// there, so each request lands either in what is read or in what
+    /// waits, never both.
     pub fn build(
         &self,
         usage: &Path,
@@ -806,6 +944,11 @@ impl Kept {
         now: Timestamp,
         mark: impl FnOnce(&mut dyn FnMut()) -> Vec<(PathBuf, u64)>,
     ) {
+        let _one = self.building.lock().unwrap_or_else(|p| p.into_inner());
+        // Another caller built it while this one waited.
+        if self.is_ready() {
+            return;
+        }
         let lengths = {
             let mut start = || {
                 let mut stage = self.stage();
@@ -815,7 +958,6 @@ impl Kept {
             };
             mark(&mut start)
         };
-        // Another caller built it, or is building it.
         if !matches!(*self.stage(), Stage::Building(..)) {
             return;
         }
@@ -833,6 +975,23 @@ impl Kept {
             lapses.extend(lapsed);
             *stage = Stage::Ready(Box::new(Ready { index, lapses }));
         }
+    }
+
+    /// What the Requests page's `query` from `since` on came to, when the
+    /// index is kept; else `None`, and [`Kept::build`] is due.
+    pub fn requests(
+        &self,
+        query: &crate::browse::Query,
+        since: Timestamp,
+        now: Timestamp,
+        prices: &BTreeMap<String, pricing::Custom>,
+    ) -> Option<crate::browse::Tally> {
+        let mut stage = self.stage();
+        let Stage::Ready(ready) = &mut *stage else {
+            return None;
+        };
+        ready.index.keep_from(hour_of(now) - 24 * KEPT_DAYS);
+        Some(ready.index.requests(query, since, prices))
     }
 
     /// The history over `range`, when the index is kept; else `None`, and
@@ -995,6 +1154,51 @@ mod tests {
             // And again, from what the first read kept.
             assert_eq!(read(&mut kept, range), fresh, "{range:?}");
         }
+    }
+
+    #[test]
+    fn a_build_asked_for_while_one_runs_waits_for_it_and_reads_nothing() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::mpsc;
+        let dir = crate::testkit::temp_dir("kept-build");
+        let (usage, windows) = (dir.join("usage"), dir.join("windows"));
+        let now = Timestamp::now();
+        let (kept, marks) = (Kept::default(), AtomicUsize::new(0));
+        let (started_tx, started_rx) = mpsc::channel::<()>();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            // The daemon's build, held in the middle until the page asks.
+            let (kept, marks, usage, windows) = (&kept, &marks, &usage, &windows);
+            scope.spawn(move || {
+                kept.build(usage, windows, now, |start| {
+                    marks.fetch_add(1, Ordering::SeqCst);
+                    start();
+                    started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Vec::new()
+                });
+            });
+            started_rx.recv().unwrap();
+            let page = scope.spawn(move || {
+                kept.build(usage, windows, now, |start| {
+                    marks.fetch_add(1, Ordering::SeqCst);
+                    start();
+                    Vec::new()
+                });
+                kept.is_ready()
+            });
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            assert!(!page.is_finished(), "the page's build waits for the first");
+            release_tx.send(()).unwrap();
+            assert!(page.join().unwrap(), "and finds the index kept");
+        });
+        assert_eq!(marks.load(Ordering::SeqCst), 1, "the ledger is read once");
+        // Built: asking again reads nothing.
+        kept.build(&usage, &windows, now, |_| {
+            marks.fetch_add(1, Ordering::SeqCst);
+            Vec::new()
+        });
+        assert_eq!(marks.load(Ordering::SeqCst), 1);
     }
 }
 

@@ -230,6 +230,34 @@ async fn stops_with_every_answer_in_the_ledger_and_state_saved() {
 }
 
 #[tokio::test]
+async fn keeps_the_history_of_its_ledger_from_the_start_without_being_asked() {
+    let upstream = upstream(Seen::default()).await;
+    let home = temp_home(&[claude("a@x", "tok-a", 1000)]);
+    let daemon = start(&home, &upstream).await;
+    daemon.request().await;
+    daemon.request().await;
+    let (home, _) = daemon.stop().await;
+    let daemon = start(&home, &upstream).await;
+    // Built as it starts, from a ledger this small in a moment: once it
+    // is, the files are not read again, so the history outlives them.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    std::fs::remove_dir_all(home.join("usage")).unwrap();
+    let history: serde_json::Value = Client::builder()
+        .build()
+        .get(format!("{}/slopmax/api/history?range=today", daemon.base))
+        .header("authorization", format!("Bearer {KEY}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(history["total"]["requests"], 2);
+    let (home, _) = daemon.stop().await;
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[tokio::test]
 async fn refuses_to_start_beside_another_daemon_on_the_same_home() {
     let upstream = upstream(Seen::default()).await;
     let home = temp_home(&[claude("a@x", "tok-a", 1000)]);

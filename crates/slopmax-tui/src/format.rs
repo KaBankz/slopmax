@@ -224,7 +224,8 @@ fn span_seconds(span: Span) -> i64 {
 }
 
 /// A window's use against spending it evenly until it resets: `Runs out
-/// ~Wed 14:20` when ahead of an even spend, else how much is in reserve.
+/// ~Wed 14:20 at the pace so far` when ahead of an even spend, else how
+/// much is in reserve. The pool's forecast measures the recent pace instead.
 pub fn pace(window: &Window, now: &Now) -> Option<(String, Tone)> {
     let used = window.used_at(now.at);
     let resets = window.upcoming_reset(now.at)?;
@@ -241,7 +242,10 @@ pub fn pace(window: &Window, now: &Now) -> Option<(String, Tone)> {
     if ahead > 0.0 {
         let rate = used / passed as f64;
         let out = now.at + SignedDuration::from_secs(((100.0 - used) / rate) as i64);
-        return Some((format!("Runs out ~{}", now.clock(out)), Tone::Warn));
+        return Some((
+            format!("Runs out ~{} at the pace so far", now.clock(out)),
+            Tone::Warn,
+        ));
     }
     Some((format!("{:.0}% in reserve", -ahead), Tone::Muted))
 }
@@ -367,7 +371,7 @@ mod tests {
         };
         assert_eq!(
             pace(&window, &now),
-            Some(("Runs out ~12:37".into(), Tone::Warn))
+            Some(("Runs out ~12:37 at the pace so far".into(), Tone::Warn))
         );
         let easy = Window {
             used: 20.0,

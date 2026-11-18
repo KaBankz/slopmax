@@ -41,7 +41,7 @@ pub(super) async fn login(
     let spec = provider.spec();
     if options.device && !spec.device_login() {
         bail!(
-            "--device works for ChatGPT and SuperGrok accounts; {} signs in with a browser",
+            "--device works for ChatGPT and Grok accounts; {} signs in with a browser",
             spec.title
         );
     }

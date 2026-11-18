@@ -50,7 +50,8 @@ export const fixtureRequests = (now: DateTime.Utc): ReadonlyArray<Kept> => {
     const n = noise(i * 7)
     const account = accounts[Math.floor(noise(i * 3) * 11) % accounts.length] ?? accounts[0]
     const model = account.models[Math.floor(noise(i * 5) * account.models.length)] ?? account.models[0]
-    const status = n < 0.02 ? 529 : n < 0.03 ? 429 : 200
+    // The newest failed, so today holds a failure at any hour, just after midnight too.
+    const status = i === 1 || n < 0.02 ? 529 : n < 0.03 ? 429 : 200
     const attempts = status === 200 && noise(i * 11) < 0.04 ? 2 : status === 200 ? 1 : 3
     const failed = status !== 200
     const input = failed ? 0 : Math.round(300 + noise(i * 13) * 4_000)

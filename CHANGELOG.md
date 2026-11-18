@@ -4,6 +4,22 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Added
+
+- The dashboard's overview opens with API value and tokens per day: the last 7 days' average, how it moved week over week, and a line over the month. Every figure on the overview, Usage and Performance pages now carries its own trend line over the range.
+
+### Fixed
+
+- The Requests page no longer lists agents' housekeeping as blank rows: Claude Code listing models (`GET /v1/models`), token counts, and Grok Build fetching its settings moved no tokens and showed with no model. Every other count already left them out; the page now does too, and so does `slopmax requests`. The live feed no longer shows them either.
+- The dashboard's forecast names the first account out in full: it showed the part before the `@`, so two logins of one address read the same.
+
+### Changed
+
+- The Requests page answers in about a millisecond over any range: its totals and filters are counted from the history the daemon keeps in memory, and only the hours a page's rows are in are read from the ledger. At 8,000 requests a day a 30-day page took 223 ms and now takes 0.6 ms; at 40,000 a day, 1.1 s and now 0.9 ms. An open dashboard or TUI asks for it every few seconds while requests flow.
+- The daemon reads its ledger into the history and pool indexes as it starts, not on the first view, so the first dashboard or Requests page after a start no longer waits on it (half a second at 8,000 requests a day, three at 40,000). A page asked for while it reads waits for that read instead of starting a second.
+- The provider is called Grok, as Claude and ChatGPT are named for the product and not the plan; SuperGrok, Lite, and Heavy are its plans. The sign-in help lists Claude's Ultra and Team plans beside Pro and Max.
+- A window's "Runs out" says which pace it means: an account's row measures the pace since the window began ("at the pace so far"), and the forecast the last few hours ("at the recent pace"), which is why the two can name different days.
+
 ## [0.15.1] - 2026-11-17
 
 ### Fixed

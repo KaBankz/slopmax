@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { AccountDetail, AccountId, HealthCell, Trend, TrendPoint, WindowSpend } from "@slopmax/client"
+import { AccountDetail, AccountId, Burn, HealthCell, Trend, TrendPoint, WindowSpend } from "@slopmax/client"
 import { DateTime } from "effect"
 import { health, lanes, rate, spendView, trendView } from "../../src/view/forecast.ts"
 import { fixturePool } from "../support/pools.ts"
@@ -35,6 +35,7 @@ describe("a pool's forecast", () => {
     const view = trendView(
       trend({
         burn: 1.2,
+        burns: [new Burn({ hours: 1, rate: 2 }), new Burn({ hours: 3, rate: 1.2 })],
         sustainable: 0.6,
         runsOutAt: at(300),
         dryUntil: at(480),
@@ -46,10 +47,11 @@ describe("a pool's forecast", () => {
     )
     const [pace, dry, first] = view.figures
     expect(pace).toMatchObject({ value: "1.2%/h", tone: "warn" })
-    expect(pace?.detail).toContain("Faster than the 0.6%/h")
+    expect(pace?.detail).toBe("Over the last 3 hours, faster than the 0.6%/h that lasts the window")
     expect(dry).toMatchObject({ value: "~17:00", tone: "warn" })
-    expect(dry?.detail).toBe("In 5h00m, until a reset at 20:00")
-    expect(first).toMatchObject({ value: "ana", tone: "warn" })
+    expect(dry?.detail).toBe("In 5h00m at the recent pace, until a reset at 20:00")
+    expect(first).toMatchObject({ value: "ana@studio.dev", tone: "warn" })
+    expect(first?.detail).toBe("~13:30, in 1h30m, at its recent pace")
     expect(view.dry).toBe(true)
   })
 

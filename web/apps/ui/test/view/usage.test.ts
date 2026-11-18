@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { History, NamedTotals, Summary, SummaryRow, Totals } from "@slopmax/client"
+import { History, HistoryBucket, NamedTotals, Summary, SummaryRow, Totals } from "@slopmax/client"
 import { DateTime } from "effect"
 import {
   accountRows,
   change,
+  dailyStats,
   hourly,
   isQuiet,
   machineRows,
@@ -21,13 +22,25 @@ const now = DateTime.makeUnsafe("2026-10-31T15:30:00Z")
 const totals = (requests: number, tokens: number, cost = 0, unpriced = 0, failed = 0) =>
   new Totals({ requests, input: tokens, output: 0, cacheRead: 0, cacheWrite: 0, cost, unpriced, failed })
 
+const bucket = (label: string, requests: number, failed: number, cached?: number, cost = 0, tokens = 0) =>
+  new HistoryBucket({
+    label,
+    tokens: [tokens],
+    requests,
+    failed,
+    rescued: 0,
+    sessions: 0,
+    cost,
+    ...(cached === undefined ? {} : { cached }),
+  })
+
 const history = (fields: Partial<ConstructorParameters<typeof History>[0]>) =>
   new History({ ...quietHistory("7d"), ...fields })
 
 describe("the figures across the top", () => {
   test("the overview's today: requests, tokens, value and what failover saved", () => {
     const today = history({ range: "today", total: totals(908, 34_500_000, 21.7, 0, 12), rescued: 36, cached: 0.86 })
-    expect(todayStats(today)).toEqual([
+    expect(todayStats(today).map(({ title, value, note }) => ({ title, value, note }))).toEqual([
       { title: "Requests", value: "908", note: "12 failed" },
       { title: "Tokens", value: "34.5M", note: "86% from cache" },
       { title: "API value", value: "$21.70", note: "what the API would charge" },
@@ -163,15 +176,20 @@ describe("usage by machine", () => {
 })
 
 describe("changes since the span before", () => {
-  test("read as a signed percent, finer under ten, flat within half a point", () => {
-    expect(change(125, 100, "100", "the 7 days before")).toEqual({
-      text: "+25%",
+  test("read as a percent to a tenth with its direction, flat when that rounds to nothing", () => {
+    expect(change(125, 100, "100", "the 7 days before", "w/w")).toEqual({
+      text: "25.0%",
       direction: "up",
+      versus: "w/w",
       tip: "100 the 7 days before",
     })
-    expect(change(93.5, 100, "$100", "yesterday by this hour")?.text).toBe("−6.5%")
-    expect(change(100.2, 100, "100", "")?.direction).toBe("flat")
-    expect(change(5, 0, "0", "")).toBeUndefined()
+    expect(change(93.5, 100, "$100", "yesterday by this hour", "vs yesterday")).toMatchObject({
+      text: "6.5%",
+      direction: "down",
+    })
+    expect(change(100.04, 100, "100", "", "w/w")).toMatchObject({ text: "0.0%", direction: "flat" })
+    expect(change(100.2, 100, "100", "", "w/w")?.direction).toBe("up")
+    expect(change(5, 0, "0", "", "w/w")).toBeUndefined()
   })
 
   test("the usage figures carry them when the history has a span before", () => {
@@ -179,8 +197,75 @@ describe("changes since the span before", () => {
     const [tokens, requests, value, month] = usageStats(lastWeek)
     expect(tokens?.change?.direction).toBe("up")
     expect(requests?.change?.tip).toContain("the 7 days before")
+    expect(requests?.change?.versus).toBe("w/w")
+    expect(usageStats(fixtureHistory("today", DateTime.makeUnsafe("2026-11-16T12:00:00Z")))[0]?.change?.versus).toBe(
+      "vs yesterday",
+    )
     expect(value?.change?.direction).toBe("down")
     expect(month?.change).toBeUndefined()
     expect(usageStats(fixtureHistory("30d", DateTime.makeUnsafe("2026-11-16T12:00:00Z")))[0]?.change).toBeUndefined()
+  })
+})
+
+describe("trend lines", () => {
+  test("each figure with one has a point a bucket, its tooltip the bucket and the figure", () => {
+    const week = fixtureHistory("7d", DateTime.makeUnsafe("2026-11-16T12:00:00Z"))
+    const [tokens, , value, month] = usageStats(week)
+    expect(tokens?.trend?.points.length).toBe(week.buckets.length)
+    expect(tokens?.trend?.points[0]?.tip).toMatch(/^Nov 10\n[\d.]+M tokens$/)
+    expect(value?.trend?.series).toBe(1)
+    expect(month?.trend).toBeUndefined()
+    // A bucket without a reading is a gap, not a zero.
+    const [answered, , cache] = performanceStats(
+      history({ buckets: [bucket("Nov 10", 0, 0), bucket("Nov 11", 9, 1, 0.5)] }),
+    )
+    expect(answered?.trend?.points.map((p) => p.value)).toEqual([undefined, 90])
+    expect(cache?.trend?.points.map((p) => p.value)).toEqual([undefined, 50])
+  })
+})
+
+/** A month's history with a day each of [API value, tokens]. */
+const month = (days: ReadonlyArray<readonly [number, number]>) =>
+  history({
+    range: "30d",
+    buckets: days.map(([cost, tokens], i) => bucket(`Nov ${i + 1}`, tokens > 0 ? 1 : 0, 0, undefined, cost, tokens)),
+  })
+
+describe("the overview's figures a day", () => {
+  test("the last 7 whole days' average, against the 7 before, today left out", () => {
+    const days: Array<readonly [number, number]> = [
+      ...Array.from({ length: 10 }, () => [0, 0] as const),
+      ...Array.from({ length: 7 }, () => [8_200_000, 25e12] as const),
+      ...Array.from({ length: 7 }, () => [10_190_000, 31.7e12] as const),
+      [1, 1],
+    ]
+    const [value, tokens] = dailyStats(month(days))
+    expect(value).toMatchObject({ title: "API value / day", value: "$10.19M", note: "at API prices" })
+    expect(value?.change).toMatchObject({ text: "24.3%", direction: "up", versus: "w/w" })
+    expect(value?.change?.tip).toBe("$8.20M a day the 7 days before")
+    expect(tokens).toMatchObject({ title: "Tokens / day", value: "31.7T", note: "" })
+    // From the first day that held a request, to yesterday.
+    expect(tokens?.trend?.points.map((p) => p.label)).toEqual(days.slice(10, -1).map((_, i) => `Nov ${i + 11}`))
+  })
+
+  test("a young ledger: no change before two weeks, the days it has, none before a whole one", () => {
+    const [value] = dailyStats(
+      month([
+        [0, 0],
+        [3, 10],
+        [5, 20],
+        [1, 1],
+      ]),
+    )
+    expect(value).toMatchObject({ value: "$4.00", note: "over 2 days" })
+    expect(value?.change).toBeUndefined()
+    expect(
+      dailyStats(
+        month([
+          [0, 0],
+          [2, 5],
+        ]),
+      ),
+    ).toEqual([])
   })
 })

@@ -123,7 +123,7 @@ pub fn draw_access(app: &App, flow: &mut Flow<'_>, _now: &Now) {
     for (command, what) in [
         ("slopmax login claude", "sign in to a Claude subscription"),
         ("slopmax login codex", "sign in to a ChatGPT subscription"),
-        ("slopmax login grok", "sign in to SuperGrok"),
+        ("slopmax login grok", "sign in to a Grok subscription"),
         ("slopmax account import", "copy the logins your agents hold"),
         (
             "slopmax login anthropic --key",

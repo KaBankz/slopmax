@@ -32,7 +32,7 @@ Environment:
 
 Docs: https://github.com/KaBankz/slopmax#readme";
 
-/// Pool your Claude, ChatGPT, and SuperGrok subscriptions behind one local
+/// Pool your Claude, ChatGPT, and Grok subscriptions behind one local
 /// proxy, so Claude Code, Codex, and Grok Build keep working when an account
 /// runs out.
 ///
@@ -390,7 +390,7 @@ pub struct AccountList {
     effect = "write",
     example(
         "slopmax login claude",
-        header = "Sign in to a Claude Pro or Max account"
+        header = "Sign in to a Claude Pro, Max, Ultra, or Team account"
     ),
     example(
         "slopmax login codex --device",
@@ -1182,11 +1182,11 @@ pub struct Update {
 /// Which kind of account.
 #[derive(ValueEnum, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ProviderArg {
-    /// Claude Pro or Max, used by Claude Code
+    /// Claude Pro, Max, Ultra, or Team, used by Claude Code
     Claude,
     /// ChatGPT Plus, Pro, or Team, used by Codex
     Codex,
-    /// SuperGrok, used by Grok Build
+    /// SuperGrok, Lite, or Heavy, used by Grok Build
     Grok,
     /// An Anthropic API key
     Anthropic,

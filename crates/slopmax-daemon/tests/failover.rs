@@ -777,10 +777,7 @@ async fn supergrok_accounts_serve_grok_build_alone() {
         };
         let (status, body) = grok_build(&h, method, path, "codex_exec/0.169.0").await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{path}: {body}");
-        assert!(
-            body.contains("SuperGrok accounts to Grok Build only"),
-            "{body}"
-        );
+        assert!(body.contains("Grok accounts to Grok Build only"), "{body}");
     }
     // Asked for by model on a plain /v1 path, as another client would.
     let (status, body) = post(&h, "/v1/responses", GROK_BODY).await;

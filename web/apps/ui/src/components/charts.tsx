@@ -1,6 +1,6 @@
 // The charts, on shadcn/ui's Chart (Recharts): stacked and grouped columns,
-// lines, the hours of a day, and a pool's use over time with where it is
-// heading; plus two small compositions Recharts has no
+// lines, the hours of a day, a pool's use over time with where it is
+// heading, and a figure's trend line; plus two small compositions Recharts has no
 // shape for, the "When you work" grid and the token mix. Series take the
 // theme's chart colors, and state colors where they mean a state (a failure
 // is destructive).
@@ -9,6 +9,7 @@ import type { DateTime } from "effect"
 import { useId } from "react"
 import {
   Area,
+  AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
@@ -19,13 +20,34 @@ import {
   XAxis,
   YAxis,
 } from "recharts"
-import { type Axis, activityTip, busiest, shade, shadeScale, tickValues, weekdays } from "../view/charts.ts"
+import {
+  type Axis,
+  activityTip,
+  busiest,
+  type SparkPoint,
+  shade,
+  shadeScale,
+  tickValues,
+  weekdays,
+} from "../view/charts.ts"
 import { tickLabel, type TrendView } from "../view/forecast.ts"
 import { Tip } from "./tip.tsx"
 import { type ChartConfig, ChartContainer, ChartTooltip } from "./ui/chart.tsx"
 
-/** A series' color: one of the theme's chart colors, the primary color, or a state. */
-export type Ink = "chart-1" | "chart-2" | "chart-3" | "chart-4" | "chart-5" | "meter" | "bad" | "warn"
+/** A series' color: one of the theme's chart colors, a trend line's, the primary color, or a state. */
+export type Ink =
+  | "chart-1"
+  | "chart-2"
+  | "chart-3"
+  | "chart-4"
+  | "chart-5"
+  | "spark-1"
+  | "spark-2"
+  | "spark-3"
+  | "spark-4"
+  | "meter"
+  | "bad"
+  | "warn"
 
 /** The CSS color of an ink, which follows the theme. */
 const color = (ink: Ink): string => {
@@ -49,6 +71,10 @@ const fill = cva("", {
       "chart-3": "bg-chart-3",
       "chart-4": "bg-chart-4",
       "chart-5": "bg-chart-5",
+      "spark-1": "bg-spark-1",
+      "spark-2": "bg-spark-2",
+      "spark-3": "bg-spark-3",
+      "spark-4": "bg-spark-4",
       meter: "bg-primary",
       bad: "bg-destructive",
       warn: "bg-warning",
@@ -309,6 +335,53 @@ export function TrendChart({ view, zone }: { readonly view: TrendView; readonly 
             isAnimationActive={false}
           />
         </ComposedChart>
+      </ChartContainer>
+    </div>
+  )
+}
+
+const sparkHeights = cva("w-full", { variants: { size: { md: "h-12", lg: "h-24" } } })
+
+/**
+ * A figure's trend, without axes: a line over its buckets, filled to the
+ * foot in its color fading out, each point's tooltip under the pointer.
+ */
+export function Spark({
+  points,
+  ink,
+  size = "md",
+}: {
+  readonly points: ReadonlyArray<SparkPoint>
+  readonly ink: Ink
+  readonly size?: "md" | "lg"
+}) {
+  const gradient = `spark-${useId().replaceAll(":", "")}`
+  return (
+    <div className={sparkHeights({ size })}>
+      <ChartContainer config={{ value: { color: color(ink) } }} className="aspect-auto size-full">
+        <AreaChart data={[...points]} margin={{ top: 4, right: 2, bottom: 0, left: 2 }}>
+          <defs>
+            <linearGradient id={gradient} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--color-value)" stopOpacity={0.32} />
+              <stop offset="100%" stopColor="var(--color-value)" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <XAxis dataKey="label" hide />
+          <YAxis hide domain={[0, "auto"]} />
+          <ChartTooltip cursor={{ stroke: "var(--border)" }} content={TipContent} />
+          <Area
+            dataKey="value"
+            type="monotone"
+            stroke="var(--color-value)"
+            strokeWidth={2}
+            strokeLinejoin="round"
+            fill={`url(#${gradient})`}
+            dot={false}
+            activeDot={{ r: 3, strokeWidth: 0 }}
+            connectNulls
+            isAnimationActive={false}
+          />
+        </AreaChart>
       </ChartContainer>
     </div>
   )

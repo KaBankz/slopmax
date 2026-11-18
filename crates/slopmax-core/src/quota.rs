@@ -244,12 +244,15 @@ fn step_of(at: Timestamp) -> i64 {
     at.as_millisecond().div_euclid(step) * step
 }
 
-/// The readings and spending the daemon keeps: none until a pool's detail
-/// is first asked for, then the last week's, kept current as requests
-/// settle and readings are written.
+/// The readings and spending the daemon keeps: none until they are built
+/// (the daemon builds them as it starts), then the last week's, kept
+/// current as requests settle and readings are written.
 #[derive(Debug, Default)]
 pub struct Kept {
     stage: Mutex<Stage>,
+    /// Held through a build, so a second caller waits for the first's
+    /// rather than reading the ledger again.
+    building: Mutex<()>,
 }
 
 #[derive(Debug, Default)]
@@ -289,9 +292,10 @@ impl Kept {
     }
 
     /// Reads the last week of the ledger in `usage`, up to the lengths
-    /// `ledger.mark` gives. Blocks: for a blocking thread. `mark` runs under
-    /// the ledger's lock and starts the build there, so each line lands
-    /// either in what is read or in what waits, never both.
+    /// `ledger.mark` gives. Blocks: for a blocking thread, and while another
+    /// caller builds it. `mark` runs under the ledger's lock and starts the
+    /// build there, so each line lands either in what is read or in what
+    /// waits, never both.
     pub fn build(
         &self,
         usage: &Path,
@@ -299,6 +303,11 @@ impl Kept {
         prices: &BTreeMap<String, Custom>,
         mark: impl FnOnce(&mut dyn FnMut()) -> Vec<(PathBuf, u64)>,
     ) {
+        let _one = self.building.lock().unwrap_or_else(|p| p.into_inner());
+        // Another caller built it while this one waited.
+        if self.is_ready() {
+            return;
+        }
         let lengths = {
             let mut start = || {
                 let mut stage = self.stage();

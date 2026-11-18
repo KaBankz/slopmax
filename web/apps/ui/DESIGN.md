@@ -32,9 +32,12 @@ shadcn's tokens, by shadcn's names: `background`, `foreground`, `card`,
 `-foreground` where shadcn has one. The values are shadcn's neutral defaults
 (oklch), and `--radius` (0.625rem) sets every radius step.
 
-slopmax adds two tokens, because shadcn has no names for them: `success` and
-`warning`, the good and warn states (`destructive` is the bad one). They take
-Tailwind's green and amber, 700 in light and 500 in dark.
+slopmax adds tokens shadcn has no names for: `success` and `warning`, the
+good and warn states (`destructive` is the bad one), which take Tailwind's
+green and amber, 700 in light and 500 in dark; and `spark-1` … `spark-4`, the
+trend lines under the figures (API value, tokens, requests, the fourth),
+orange, pink, blue and teal, deeper in light. The neutral `chart-*` colors
+stay for the charts with axes.
 
 Type, spacing, radius, shadows and motion are Tailwind's and shadcn's: `text-sm`
 is body text, `text-xs` secondary text, `text-base` and up for headings;
@@ -91,21 +94,21 @@ and carry the change over.
 
 In `src/components/`, each built from shadcn's components:
 
-| File            | What                                                                                                                                                                                                       |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `parts.tsx`     | `Panel` (Card, flush), `Section`, `Row`, `SettingRow` (Item), `Stat`/`Stats` (Card), `Empty`, `Skeleton`, `Failed` (Alert), `Loaded`, `Meter` and `SegmentedBar` (Progress), `Label`, `Dot`, `Logo`, `Kbd` |
-| `charts.tsx`    | `Columns`, `Lines`, `Hours`, `TrendChart` (Chart over Recharts); `Heatmap` and `SplitBar`, which Recharts has no shape for; `Legend`, `Swatch`                                                             |
-| `forecast.tsx`  | `PoolForecast` (Card, Segmented, TrendChart, figures in the CardFooter), `ResetLanes` (Card, Tooltip marks on a lane per account), `HealthStrip` (a Tooltip over an account's half hours)                  |
-| `sidebar.tsx`   | the window's Sidebar: SidebarProvider sized from the preferences, a draggable edge, the pages, the proxy's state at its foot                                                                               |
-| `tip.tsx`       | `Tip`, a Tooltip on one control in a line                                                                                                                                                                  |
-| `health.tsx`    | the overview's `HealthCard` (Card, a HealthStrip per account) and `RecentFailures` (Card, CardAction to the Requests page)                                                                                 |
-| `pick.tsx`      | `Pick`, a small Select of a few choices or "any", for filters                                                                                                                                              |
-| `segmented.tsx` | `Segmented`, a ToggleGroup that always keeps one choice                                                                                                                                                    |
-| `choices.tsx`   | `Choices`, a RadioGroup of choice cards (FieldLabel around a Field)                                                                                                                                        |
-| `stepper.tsx`   | `Stepper`, less and more around a value (ButtonGroup)                                                                                                                                                      |
-| `ask.tsx`       | the app's one confirm-or-prompt Dialog, opened with `ask(…)`                                                                                                                                               |
-| `toasts.tsx`    | hands the toasts atom's entries to Sonner                                                                                                                                                                  |
-| `sign-in.tsx`   | the sign-in Card above every page while a sign-in is under way                                                                                                                                             |
+| File            | What                                                                                                                                                                                                                                      |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `parts.tsx`     | `Panel` (Card, flush), `Section`, `Row`, `SettingRow` (Item), `Stat`/`Stats` (Card, a `Spark`; `lg` for headlines), `Empty`, `Skeleton`, `Failed` (Alert), `Loaded`, `Meter` and `SegmentedBar` (Progress), `Label`, `Dot`, `Logo`, `Kbd` |
+| `charts.tsx`    | `Columns`, `Lines`, `Hours`, `TrendChart`, `Spark` (Chart over Recharts); `Heatmap` and `SplitBar`, which Recharts has no shape for; `Legend`, `Swatch`                                                                                   |
+| `forecast.tsx`  | `PoolForecast` (Card, Segmented, TrendChart, figures in the CardFooter), `ResetLanes` (Card, Tooltip marks on a lane per account), `HealthStrip` (a Tooltip over an account's half hours)                                                 |
+| `sidebar.tsx`   | the window's Sidebar: SidebarProvider sized from the preferences, a draggable edge, the pages, the proxy's state at its foot                                                                                                              |
+| `tip.tsx`       | `Tip`, a Tooltip on one control in a line                                                                                                                                                                                                 |
+| `health.tsx`    | the overview's `HealthCard` (Card, a HealthStrip per account) and `RecentFailures` (Card, CardAction to the Requests page)                                                                                                                |
+| `pick.tsx`      | `Pick`, a small Select of a few choices or "any", for filters                                                                                                                                                                             |
+| `segmented.tsx` | `Segmented`, a ToggleGroup that always keeps one choice                                                                                                                                                                                   |
+| `choices.tsx`   | `Choices`, a RadioGroup of choice cards (FieldLabel around a Field)                                                                                                                                                                       |
+| `stepper.tsx`   | `Stepper`, less and more around a value (ButtonGroup)                                                                                                                                                                                     |
+| `ask.tsx`       | the app's one confirm-or-prompt Dialog, opened with `ask(…)`                                                                                                                                                                              |
+| `toasts.tsx`    | hands the toasts atom's entries to Sonner                                                                                                                                                                                                 |
+| `sign-in.tsx`   | the sign-in Card above every page while a sign-in is under way                                                                                                                                                                            |
 
 A new pattern that two pages share becomes a composition here, built the same
 way. Every file opens with a comment saying what it is.

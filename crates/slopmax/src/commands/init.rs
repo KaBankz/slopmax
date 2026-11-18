@@ -186,7 +186,7 @@ pub async fn run(config: &Config, store: &Store, answers: Answers, plan: Plan) -
                 "no accounts are connected, so there is nothing to proxy. Add one of:\n  \
                  --import claude-code,codex   use the logins Claude Code and Codex have here\n  \
                  --import cliproxyapi         use CLIProxyAPI's logins\n  \
-                 --login claude,codex,grok    sign in (ChatGPT by device code without a browser; SuperGrok always)\n  \
+                 --login claude,codex,grok    sign in (ChatGPT by device code without a browser; Grok always)\n  \
                  --keys-from-env              add ANTHROPIC_API_KEY, OPENAI_API_KEY, XAI_API_KEY"
             );
         }
@@ -284,9 +284,9 @@ async fn offer_hub() -> Result<Option<String>> {
 /// What each provider is, for choosing which to add.
 fn offer(provider: ProviderId) -> &'static str {
     match provider {
-        ProviderId::Claude => "Claude Pro or Max, for Claude Code",
+        ProviderId::Claude => "Claude Pro, Max, Ultra, or Team, for Claude Code",
         ProviderId::Codex => "ChatGPT Plus, Pro, or Team, for Codex",
-        ProviderId::Grok => "SuperGrok, for Grok Build",
+        ProviderId::Grok => "a SuperGrok plan, for Grok Build",
         ProviderId::Anthropic => "an Anthropic API key, billed per token",
         ProviderId::OpenAI => "an OpenAI API key, billed per token",
         ProviderId::Xai => "an xAI API key, for Grok models",

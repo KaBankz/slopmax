@@ -358,6 +358,117 @@ pub fn read(dir: &Path, since: Timestamp) -> Vec<Entry> {
     entries
 }
 
+/// How long after a request ends its line may be written: a request is
+/// written as it ends, so its line lands in the order requests end.
+const WRITTEN_WITHIN: SignedDuration = SignedDuration::from_mins(2);
+
+/// Bytes past which [`between`] looks for its first line by halving
+/// instead of reading.
+const HALVE_OVER: u64 = 64 * 1024;
+
+/// Every request that arrived at or after `from` and ended by `settled`,
+/// and others near them, in the order written, read from the stretch of the
+/// month files they were written in: a file is halved to where requests
+/// that ended before `from` give way, and read on until requests that
+/// arrived after `settled` begin. Lines land in the order requests end, so
+/// none of these is outside that stretch. Only what was written within the
+/// files and lengths a [`Ledger::mark`] gave is read, so the lines match
+/// what was counted then.
+pub fn between(
+    dir: &Path,
+    from: Timestamp,
+    settled: Timestamp,
+    lengths: &[(PathBuf, u64)],
+    mut each: impl FnMut(Entry),
+) {
+    let until = settled + WRITTEN_WITHIN;
+    let (first, last) = (file_for(dir, from), file_for(dir, until));
+    let mut files: Vec<&(PathBuf, u64)> = lengths
+        .iter()
+        .filter(|(p, _)| *p >= first && *p <= last)
+        .collect();
+    files.sort();
+    let floor = Floor::of(from);
+    for (path, len) in files {
+        let Ok(file) = File::open(path) else {
+            continue;
+        };
+        let mut reader = BufReader::new(file);
+        let mut pos = start(&mut reader, *len, from);
+        if reader.seek(SeekFrom::Start(pos)).is_err() {
+            continue;
+        }
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => pos += read as u64,
+            }
+            // Written since the mark.
+            if pos > *len {
+                break;
+            }
+            if floor.before(&line) {
+                continue;
+            }
+            let Ok(entry) = serde_json::from_str::<Entry>(&line) else {
+                continue;
+            };
+            // Every line from here on was written later still.
+            if entry.at > until {
+                break;
+            }
+            if entry.at >= from {
+                each(entry);
+            }
+        }
+    }
+}
+
+/// Where in a month file of `len` bytes to start reading for requests
+/// that arrived at or after `from`: a line before which every request had
+/// ended earlier.
+fn start(reader: &mut BufReader<File>, len: u64, from: Timestamp) -> u64 {
+    let (mut low, mut high) = (0, len);
+    while high - low > HALVE_OVER {
+        let mid = low + (high - low) / 2;
+        match entry_after(reader, mid, high) {
+            Some((at, entry)) if entry_end(&entry) + WRITTEN_WITHIN < from => low = at,
+            _ => high = mid,
+        }
+    }
+    low
+}
+
+/// When a request ended.
+fn entry_end(entry: &Entry) -> Timestamp {
+    entry.at + SignedDuration::from_millis(entry.ms as i64)
+}
+
+/// The first request whose line begins after `pos` and before `high`, and
+/// where its line begins.
+fn entry_after(reader: &mut BufReader<File>, pos: u64, high: u64) -> Option<(u64, Entry)> {
+    reader.seek(SeekFrom::Start(pos)).ok()?;
+    let mut line = String::new();
+    // The rest of the line `pos` falls in.
+    let mut at = pos + reader.read_line(&mut line).ok()? as u64;
+    loop {
+        if at >= high {
+            return None;
+        }
+        line.clear();
+        let read = reader.read_line(&mut line).ok()?;
+        if read == 0 {
+            return None;
+        }
+        if let Ok(entry) = serde_json::from_str::<Entry>(&line) {
+            return Some((at, entry));
+        }
+        at += read as u64;
+    }
+}
+
 /// A time to skip a request's line before, read off the line's first
 /// field (an entry writes `at` first) without parsing the rest: a month
 /// file holds the whole month, and a range often wants its last day.
@@ -524,6 +635,58 @@ mod tests {
         ledger.record(&entry("2026-10-02T00:00:01Z", "b"));
         assert_eq!(read(&dir, Timestamp::UNIX_EPOCH).len(), 1);
         assert_eq!(ledger.dropped(), 1);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn between_finds_every_request_in_its_stretch_however_long_some_ran() {
+        let dir = temp_dir();
+        let ledger = Ledger::at(dir.clone());
+        // A request every 10 seconds over three days across a month's end,
+        // every other one running 20 minutes, each written as it ends.
+        let start: Timestamp = "2026-10-30T00:00:00Z".parse().unwrap();
+        let mut entries: Vec<Entry> = (0..26_000)
+            .map(|i| Entry {
+                at: start + SignedDuration::from_secs(i * 10),
+                ms: if i % 2 == 0 { 1_200_000 } else { 3_000 },
+                ..entry("2026-10-30T00:00:00Z", "m")
+            })
+            .collect();
+        entries.sort_by_key(entry_end);
+        for entry in &entries {
+            ledger.record(entry);
+        }
+        assert!(fs::metadata(dir.join("2026-10.jsonl")).unwrap().len() > 20 * HALVE_OVER);
+        let lengths = ledger.mark(&mut || {});
+        // Written after the mark, the last to end: not read with its
+        // lengths.
+        let late = entries.iter().map(entry_end).max().unwrap() + SignedDuration::from_secs(1);
+        ledger.record(&Entry {
+            at: late,
+            ..entry("2026-10-30T00:00:00Z", "m")
+        });
+        let mut found = Vec::new();
+        between(&dir, late, late, &lengths, |e| found.push(e.at));
+        assert!(!found.contains(&late));
+        let mut found = Vec::new();
+        between(&dir, late, late, &ledger.mark(&mut || {}), |e| {
+            found.push(e.at);
+        });
+        assert!(found.contains(&late), "and read once marked");
+        for hour in (0..72).step_by(5) {
+            let from = start + SignedDuration::from_mins(hour * 60 + 7);
+            let settled = from + SignedDuration::from_hours(1);
+            let mut found = Vec::new();
+            between(&dir, from, settled, &lengths, |e| found.push(e.at));
+            let wanted = entries
+                .iter()
+                .filter(|e| e.at >= from && entry_end(e) <= settled);
+            for e in wanted {
+                assert!(found.contains(&e.at), "{} missing from {from}", e.at);
+            }
+            // And little else.
+            assert!(found.len() < 2 * 6 * 80, "{} read from {from}", found.len());
+        }
         fs::remove_dir_all(dir).unwrap();
     }
 }

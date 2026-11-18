@@ -27,7 +27,7 @@ pub struct Grok;
 
 static SPEC: Spec = Spec {
     id: "grok",
-    title: "SuperGrok",
+    title: "Grok",
     api: API,
     dialects: &[Dialect::Responses, Dialect::Chat],
     models: &["grok-*"],

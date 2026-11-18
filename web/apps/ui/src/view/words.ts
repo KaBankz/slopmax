@@ -98,6 +98,16 @@ export const count = (n: number, noun: string): string => (n === 1 ? `1 ${noun}`
 /** `1 limit reset`, `3 limit resets`. */
 export const resetCount = (n: number): string => count(n, "limit reset")
 
+/** Dollars in about four figures, for a headline: `$412.30`, `$12.34k`, `$10.19M`. */
+export const headlineDollars = (amount: number): string =>
+  amount >= 1e9
+    ? `$${fixed(amount / 1e9, 2)}B`
+    : amount >= 1e6
+      ? `$${fixed(amount / 1e6, 2)}M`
+      : amount >= 1e3
+        ? `$${fixed(amount / 1e3, 2)}k`
+        : `$${fixed(amount, 2)}`
+
 /** Dollars as a figure: `$1,204` from a thousand up, `$412.30` below. */
 export const dollars = (amount: number): string =>
   amount >= 1000 ? `$${grouped(Math.round(amount))}` : `$${fixed(amount, 2)}`
