@@ -70,11 +70,13 @@ const CLAUDE: &[(&str, f64, f64, f64)] = &[
     ("claude-haiku-4-5", 1.0, 5.0, 0.10),
 ];
 
-/// OpenAI API list prices as of 2026-11-14 (GPT-5.6 Sol's is a promotion
+/// OpenAI API list prices as of 2026-11-18 (GPT-5.6 Sol's is a promotion
 /// that ends 2026-11-30). Cached input is a tenth of input or less, and a
 /// 30-minute cache write costs 1.25× input.
 const OPENAI: &[(&str, f64, f64, f64)] = &[
     // (model, input, output, cache read)
+    ("gpt-6.2-astra", 8.0, 40.0, 0.40),
+    ("gpt-6.2-sol", 2.0, 10.0, 0.10),
     ("gpt-6-astra", 10.0, 50.0, 1.0),
     ("gpt-6.1-sol", 2.0, 10.0, 0.10),
     ("gpt-6.1-terra", 1.0, 5.0, 0.05),
@@ -85,7 +87,7 @@ const OPENAI: &[(&str, f64, f64, f64)] = &[
     ("gpt-5.6-luna", 0.20, 1.20, 0.02),
 ];
 
-/// The models priced by prompt length, as of 2026-11-15: a request whose
+/// The models priced by prompt length, as of 2026-11-18: a request whose
 /// prompt is over `over` tokens pays these prices on all of its tokens,
 /// output included. A prompt counts all of the request's input tokens,
 /// cache reads and cache writes among them, and cache writes cost 1.25×
@@ -97,6 +99,8 @@ const OPENAI: &[(&str, f64, f64, f64)] = &[
 const LONG: &[(&str, u64, f64, f64, f64)] = &[
     // (model, over, input, output, cache read)
     ("claude-haiku-5-5", 100_000, 0.50, 2.50, 0.05),
+    ("gpt-6.2-astra", 272_000, 16.0, 60.0, 0.80),
+    ("gpt-6.2-sol", 272_000, 4.0, 15.0, 0.20),
     ("gpt-6-astra", 272_000, 20.0, 75.0, 2.0),
     ("gpt-6.1-sol", 272_000, 4.0, 15.0, 0.20),
     ("gpt-6.1-terra", 272_000, 2.0, 7.5, 0.10),
@@ -466,7 +470,7 @@ mod tests {
         assert_eq!(list("gpt-6-luna").unwrap().output, 0.50);
     }
 
-    /// The models both providers listed on 2026-11-14, at that day's
+    /// The models both providers listed on 2026-11-18, at that day's
     /// list prices: (model, input, output, cache read).
     #[test]
     fn prices_every_listed_model() {
@@ -477,6 +481,8 @@ mod tests {
             ("claude-sonnet-5-5", 2.0, 10.0, 0.10),
             ("claude-opus-4-5-20251101", 5.0, 25.0, 0.50),
             ("claude-sonnet-4-5-20250929", 3.0, 15.0, 0.30),
+            ("gpt-6.2-astra", 8.0, 40.0, 0.40),
+            ("gpt-6.2-sol", 2.0, 10.0, 0.10),
             ("gpt-6-astra", 10.0, 50.0, 1.0),
             ("gpt-6.1-sol", 2.0, 10.0, 0.10),
             ("gpt-6.1-terra", 1.0, 5.0, 0.05),
