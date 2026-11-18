@@ -804,17 +804,23 @@ impl Pool {
     /// the account last showed (a failed poll, a refused sign-in) is past.
     /// A `complete` reading also drops the windows it leaves out.
     pub fn record_reading(&self, id: &str, limits: Limits, complete: bool, now: Timestamp) {
-        if complete {
-            self.lock().state_mut(id).limits.keep_slots(&limits);
-        }
-        self.observe(id, limits, now);
+        self.fold(id, limits, complete, now);
         self.lock().clear_error(id);
     }
 
     /// Folds a usage reading into the account's limits.
     pub fn observe(&self, id: &str, limits: Limits, now: Timestamp) {
+        self.fold(id, limits, false, now);
+    }
+
+    /// Folds a reading in under one lock, so no reader sees the windows a
+    /// `complete` reading drops before it adds its own.
+    fn fold(&self, id: &str, limits: Limits, complete: bool, now: Timestamp) {
         let mut inner = self.lock();
         let state = inner.state_mut(id);
+        if complete {
+            state.limits.keep_slots(&limits);
+        }
         let lapsed = state.limits.lapsed(&limits, now);
         state.limits.merge(limits);
         // A fresh reading below the limit proves an earlier block has lifted,
