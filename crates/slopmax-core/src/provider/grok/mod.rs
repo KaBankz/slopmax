@@ -176,7 +176,12 @@ async fn usage(http: &Client, account: &Account) -> Result<Reading, UsageError> 
         Some(_) => None,
         None => plan(http, account).await,
     };
-    Ok(Reading { limits, plan })
+    // One window, whose span can change: a reading replaces the last.
+    Ok(Reading {
+        limits,
+        plan,
+        complete: true,
+    })
 }
 
 /// The window in a `/billing` answer. The credits view gives a percentage
@@ -203,16 +208,14 @@ fn credits(config: &Value) -> Option<Window> {
             .and_then(limits::parse_time)
     };
     let end = time("end", "billingPeriodEnd");
-    // A period named some other way is measured.
-    let long = || {
-        let start = time("start", "billingPeriodStart")?;
-        Some(end?.duration_since(start) > SignedDuration::from_hours(24 * 8))
-    };
     let span = match period.and_then(|p| p.get("type")).and_then(Value::as_str) {
         Some("USAGE_PERIOD_TYPE_MONTHLY") => "30d",
         Some("USAGE_PERIOD_TYPE_WEEKLY") => "7d",
-        _ if long() == Some(true) => "30d",
-        _ => "7d",
+        // A period named some other way is classed by its length.
+        _ => match (time("start", "billingPeriodStart"), end) {
+            (Some(start), Some(end)) => limits::span_for(end.duration_since(start).as_secs()),
+            _ => "7d",
+        },
     };
     Some(Window::new(span, used, end))
 }
@@ -410,12 +413,12 @@ mod tests {
             "creditUsagePercent": 5,
         } });
         assert_eq!(from_billing(&monthly, now).windows[0].span, "30d");
-        // A period of another name is measured.
+        // A period of another name is classed by its length.
         let measured = json!({ "config": {
             "currentPeriod": {
-                "type": "USAGE_PERIOD_TYPE_BIWEEKLY",
+                "type": "USAGE_PERIOD_TYPE_CALENDAR_MONTH",
                 "start": "2026-11-01T00:00:00Z",
-                "end": "2026-11-15T00:00:00Z",
+                "end": "2026-12-01T00:00:00Z",
             },
             "creditUsagePercent": 5,
         } });
@@ -481,6 +484,7 @@ mod tests {
         assert_eq!(fresh.limits.windows[0].used, 40.0);
         assert_eq!(fresh.plan.as_deref(), Some("heavy"));
         assert_eq!(fresh.limits.windows[0].span, "7d");
+        assert!(fresh.complete);
         let sent = &mock.seen_at("/v1/billing")[0];
         assert_eq!(sent.path, "/v1/billing?format=credits");
         assert_eq!(sent.header("authorization"), Some("Bearer good"));

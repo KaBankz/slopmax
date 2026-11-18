@@ -136,6 +136,12 @@ impl Limits {
         }
     }
 
+    /// Drops the windows `newer` doesn't carry.
+    pub(crate) fn keep_slots(&mut self, newer: &Limits) {
+        self.windows
+            .retain(|old| newer.windows.iter().any(|w| w.same_slot(old)));
+    }
+
     /// The windows of this reading that `newer`, taken at `now`, shows
     /// have reset: their time passed, or a later period of the same slot
     /// began. Each is reported once, as merging then drops it.

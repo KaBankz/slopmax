@@ -132,6 +132,7 @@ async fn usage(http: &Client, account: &Account) -> Result<Reading, UsageError> 
     Ok(Reading {
         limits: limits::from_usage(&body, Timestamp::now()),
         plan: renamed_plan(http, account).await,
+        complete: false,
     })
 }
 
