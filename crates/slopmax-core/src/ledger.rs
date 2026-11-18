@@ -371,27 +371,31 @@ const HALVE_OVER: u64 = 64 * 1024;
 /// month files they were written in: a file is halved to where requests
 /// that ended before `from` give way, and read on until requests that
 /// arrived after `settled` begin. Lines land in the order requests end, so
-/// none of these is outside that stretch.
-pub fn between(dir: &Path, from: Timestamp, settled: Timestamp, mut each: impl FnMut(Entry)) {
+/// none of these is outside that stretch. Only what was written within the
+/// files and lengths a [`Ledger::mark`] gave is read, so the lines match
+/// what was counted then.
+pub fn between(
+    dir: &Path,
+    from: Timestamp,
+    settled: Timestamp,
+    lengths: &[(PathBuf, u64)],
+    mut each: impl FnMut(Entry),
+) {
     let until = settled + WRITTEN_WITHIN;
     let (first, last) = (file_for(dir, from), file_for(dir, until));
-    let Ok(listing) = fs::read_dir(dir) else {
-        return;
-    };
-    let mut files: Vec<PathBuf> = listing
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|ext| ext == "jsonl") && *p >= first && *p <= last)
+    let mut files: Vec<&(PathBuf, u64)> = lengths
+        .iter()
+        .filter(|(p, _)| *p >= first && *p <= last)
         .collect();
     files.sort();
     let floor = Floor::of(from);
-    for path in files {
-        let Ok(file) = File::open(&path) else {
+    for (path, len) in files {
+        let Ok(file) = File::open(path) else {
             continue;
         };
-        let len = file.metadata().map_or(0, |m| m.len());
         let mut reader = BufReader::new(file);
-        let start = start(&mut reader, len, from);
-        if reader.seek(SeekFrom::Start(start)).is_err() {
+        let mut pos = start(&mut reader, *len, from);
+        if reader.seek(SeekFrom::Start(pos)).is_err() {
             continue;
         }
         let mut line = String::new();
@@ -399,7 +403,11 @@ pub fn between(dir: &Path, from: Timestamp, settled: Timestamp, mut each: impl F
             line.clear();
             match reader.read_line(&mut line) {
                 Ok(0) | Err(_) => break,
-                Ok(_) => {}
+                Ok(read) => pos += read as u64,
+            }
+            // Written since the mark.
+            if pos > *len {
+                break;
             }
             if floor.before(&line) {
                 continue;
@@ -649,11 +657,27 @@ mod tests {
             ledger.record(entry);
         }
         assert!(fs::metadata(dir.join("2026-10.jsonl")).unwrap().len() > 20 * HALVE_OVER);
+        let lengths = ledger.mark(&mut || {});
+        // Written after the mark, the last to end: not read with its
+        // lengths.
+        let late = entries.iter().map(entry_end).max().unwrap() + SignedDuration::from_secs(1);
+        ledger.record(&Entry {
+            at: late,
+            ..entry("2026-10-30T00:00:00Z", "m")
+        });
+        let mut found = Vec::new();
+        between(&dir, late, late, &lengths, |e| found.push(e.at));
+        assert!(!found.contains(&late));
+        let mut found = Vec::new();
+        between(&dir, late, late, &ledger.mark(&mut || {}), |e| {
+            found.push(e.at);
+        });
+        assert!(found.contains(&late), "and read once marked");
         for hour in (0..72).step_by(5) {
             let from = start + SignedDuration::from_mins(hour * 60 + 7);
             let settled = from + SignedDuration::from_hours(1);
             let mut found = Vec::new();
-            between(&dir, from, settled, |e| found.push(e.at));
+            between(&dir, from, settled, &lengths, |e| found.push(e.at));
             let wanted = entries
                 .iter()
                 .filter(|e| e.at >= from && entry_end(e) <= settled);

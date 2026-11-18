@@ -496,7 +496,9 @@ impl Index {
 
     /// What the requests from `since` on that `query` takes came to, what
     /// they can be filtered by, and the hours that hold them, for the
-    /// Requests page: counted here, so no line is read for them.
+    /// Requests page: counted here, so no line is read for them. `since`
+    /// starts a local hour (the ranges start at midnight): the index holds
+    /// whole hours.
     pub fn requests(
         &self,
         query: &crate::browse::Query,

@@ -10,7 +10,7 @@
 //! request in the range instead, for when no index is kept.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use slopmax_api::ledger::{
     LedgerRecord, RequestEnd, RequestFacets, RequestOutcome, RequestPage, RequestRow, Sender,
@@ -112,8 +112,8 @@ pub struct Hour {
 
 /// The requests on `query`'s page, newest first, read from the ledger in
 /// `dir`: only the stretch the hours they are in were written in, which
-/// `tally` names.
-pub fn rows(dir: &Path, query: &Query, tally: &Tally) -> Vec<Entry> {
+/// `tally` names, within the `lengths` marked as `tally` was counted.
+pub fn rows(dir: &Path, query: &Query, tally: &Tally, lengths: &[(PathBuf, u64)]) -> Vec<Entry> {
     let limit = query.limit.clamp(1, MOST);
     let (offset, end) = (query.offset as u64, (query.offset + limit) as u64);
     // The hours the page's rows are in, and how many of the first hour's
@@ -142,7 +142,7 @@ pub fn rows(dir: &Path, query: &Query, tally: &Tally) -> Vec<Entry> {
         .max()
         .unwrap_or(newest.settled);
     let mut found = Vec::new();
-    crate::ledger::between(dir, oldest.first, settled, |entry| {
+    crate::ledger::between(dir, oldest.first, settled, lengths, |entry| {
         if (entry.answered() || entry.failed())
             && hours.contains(&crate::history::index::hour_of(entry.at))
             && query.takes(&entry, entry.agent.as_deref().and_then(crate::api::sender))
@@ -444,6 +444,7 @@ mod tests {
         let all = crate::ledger::read(&dir, Timestamp::UNIX_EPOCH);
         assert!(all.len() > 2_000);
         let index = crate::history::index::Index::of(&all);
+        let lengths = crate::ledger::Ledger::at(dir.clone()).mark(&mut || {});
         let prices = BTreeMap::new();
         let queries = [
             Query::default(),
@@ -519,7 +520,7 @@ mod tests {
                 let tally = index.requests(query, since, &prices);
                 let fast = tallied(
                     tally.clone(),
-                    &rows(&dir, query, &tally),
+                    &rows(&dir, query, &tally, &lengths),
                     query,
                     range,
                     since,

@@ -499,18 +499,24 @@ impl App {
         crate::blocking::run(move || {
             let (config, usage) = (app.config(), app.home.usage());
             let now = Timestamp::now();
-            let tally = app
-                .hours
-                .requests(&query, since, now, &config.prices)
-                .or_else(|| {
-                    app.hours.build(&usage, &app.home.windows(), now, |start| {
-                        app.ledger.mark(start)
-                    });
-                    app.hours.requests(&query, since, now, &config.prices)
+            // Counted while no request is written, and the ledger's
+            // lengths then: the rows read are the ones counted.
+            let count = || {
+                let mut tally = None;
+                let lengths = app.ledger.mark(&mut || {
+                    tally = app.hours.requests(&query, since, now, &config.prices);
                 });
-            match tally {
-                Some(tally) => {
-                    let rows = crate::browse::rows(&usage, &query, &tally);
+                tally.map(|tally| (tally, lengths))
+            };
+            let counted = count().or_else(|| {
+                app.hours.build(&usage, &app.home.windows(), now, |start| {
+                    app.ledger.mark(start)
+                });
+                count()
+            });
+            match counted {
+                Some((tally, lengths)) => {
+                    let rows = crate::browse::rows(&usage, &query, &tally, &lengths);
                     crate::browse::tallied(tally, &rows, &query, range, since, &config.prices)
                 }
                 None => {
