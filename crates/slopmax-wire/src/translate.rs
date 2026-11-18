@@ -260,6 +260,45 @@ mod tests {
         assert!(text.contains("response.completed"), "{text}");
     }
 
+    /// Claude Code reading a PDF on a GPT model: its Read tool answers with
+    /// a line of text and the PDF as a document, which must reach the
+    /// model beside the call's output in either dialect.
+    #[test]
+    fn documents_a_tool_returned_reach_the_model() {
+        let body = br#"{"model":"gpt-6-sol","max_tokens":1000,"stream":true,
+            "messages":[{"role":"user","content":"read a.pdf"},
+                {"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"a.pdf"}}]},
+                {"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":[
+                    {"type":"text","text":"PDF file read: a.pdf (537 bytes)"},
+                    {"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"JVBERi0x"}},
+                    {"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBOR"}}]}]}],
+            "tools":[{"name":"Read","input_schema":{"type":"object"}}]}"#;
+        let request = decode(Dialect::Messages, body).unwrap();
+
+        let responses = encode(Dialect::Responses, &request);
+        let input = responses["input"].as_array().unwrap();
+        assert_eq!(input[2]["type"], "function_call_output");
+        assert_eq!(input[2]["output"], "PDF file read: a.pdf (537 bytes)");
+        assert_eq!(input[3]["role"], "user");
+        assert_eq!(input[3]["content"][0]["type"], "input_file");
+        assert_eq!(
+            input[3]["content"][0]["file_data"],
+            "data:application/pdf;base64,JVBERi0x"
+        );
+        assert_eq!(input[3]["content"][1]["type"], "input_image");
+
+        let chat = encode(Dialect::Chat, &request);
+        let messages = chat["messages"].as_array().unwrap();
+        assert_eq!(messages[2]["role"], "tool");
+        assert_eq!(messages[3]["role"], "user");
+        assert_eq!(messages[3]["content"][0]["type"], "file");
+        assert_eq!(
+            messages[3]["content"][0]["file"]["file_data"],
+            "data:application/pdf;base64,JVBERi0x"
+        );
+        assert_eq!(messages[3]["content"][1]["type"], "image_url");
+    }
+
     #[test]
     fn nothing_translates_into_messages() {
         assert!(can_translate(Dialect::Messages, Dialect::Responses));

@@ -150,12 +150,18 @@ fn part(block: &Value) -> Option<Part> {
         "image" => media(block).map(Part::Image),
         "document" => {
             let source = block.get("source")?;
-            // A plain-text document is just text.
+            // A plain-text document is text, under its title and context:
+            // Claude Code names the project doc it read there.
             if source.get("type").and_then(Value::as_str) == Some("text") {
-                return source
-                    .get("data")
-                    .and_then(Value::as_str)
-                    .map(|text| Part::Text(text.to_owned()));
+                let text = source.get("data").and_then(Value::as_str)?;
+                let header = [("Document", "title"), ("Context", "context")]
+                    .into_iter()
+                    .filter_map(|(label, key)| {
+                        let value = block.get(key)?.as_str()?.trim();
+                        (!value.is_empty()).then(|| format!("{label}: {value}\n"))
+                    })
+                    .collect::<String>();
+                return Some(Part::Text(header + text));
             }
             let mut file = media(block)?;
             file.name = block
@@ -310,6 +316,28 @@ mod tests {
             "string"
         );
         assert_eq!(request.messages.len(), 2, "the reminder text is kept");
+    }
+
+    /// Claude Code 2.1.325 hands the model a project doc it read as a
+    /// plain-text document: the title is the doc's path.
+    #[test]
+    fn text_documents_keep_their_title_and_context() {
+        let body = json!({"model": "gpt-6-sol", "messages": [{"role": "user", "content": [
+            {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "Run mise run check."},
+                "title": "AGENTS.md", "context": "A doc of this project."},
+            {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "bare"}, "title": " "}
+        ]}]});
+        let request = decode(&body).unwrap();
+        assert_eq!(
+            request.messages[0].parts,
+            [
+                Part::Text(
+                    "Document: AGENTS.md\nContext: A doc of this project.\nRun mise run check."
+                        .into()
+                ),
+                Part::Text("bare".into()),
+            ]
+        );
     }
 
     #[test]

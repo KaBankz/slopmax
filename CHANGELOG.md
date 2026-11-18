@@ -8,6 +8,11 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 - GPT-6.2 Astra and GPT-6.2 Sol, which ChatGPT now lists for Codex, are priced: $8 and $2 per million input tokens, $40 and $10 output, $0.40 and $0.10 cached, and twice the input and half again the output past 272K input tokens. They showed no API value before.
 
+### Fixed
+
+- Claude Code on a GPT model can read PDFs: its Read tool hands a PDF back as a document inside the tool result, and slopmax passed on only the line of text beside it ("PDF file read: …"), so the model never saw the file. The document now follows the tool's output, as a tool's images already did, on ChatGPT accounts and on compat endpoints that speak Responses or Chat.
+- A project doc Claude Code hands a GPT model as a text document keeps its title and context: the model got the doc's text with no name, so it could not tell which file it was reading.
+
 ## [0.16.0] - 2026-11-18
 
 ### Added

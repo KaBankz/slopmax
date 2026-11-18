@@ -294,8 +294,9 @@ fn messages(request: &Request) -> Vec<Value> {
             }
             Role::User => {
                 let mut content = Vec::new();
-                // Images a tool returned go to the model with the next user turn.
-                let mut images = Vec::new();
+                // Images and documents a tool returned go to the model with
+                // the next user turn.
+                let mut media = Vec::new();
                 for part in &message.parts {
                     match part {
                         Part::Result(result) => {
@@ -307,22 +308,20 @@ fn messages(request: &Request) -> Vec<Value> {
                                 json!({"role": "tool", "tool_call_id": result.id, "content": text}),
                             );
                             for part in &result.content {
-                                if let Part::Image(image) = part {
-                                    images.push(json!({"type": "image_url", "image_url": {"url": image.url()}}));
+                                match part {
+                                    Part::Image(image) => media.push(image_url(image)),
+                                    Part::File(file) => media.push(file_part(file)),
+                                    _ => {}
                                 }
                             }
                         }
                         Part::Text(text) => content.push(json!({"type": "text", "text": text})),
-                        Part::Image(image) => content
-                            .push(json!({"type": "image_url", "image_url": {"url": image.url()}})),
-                        Part::File(file) => content.push(json!({"type": "file", "file": {
-                            "filename": file.name.clone().unwrap_or_else(|| "document.pdf".into()),
-                            "file_data": file.url(),
-                        }})),
+                        Part::Image(image) => content.push(image_url(image)),
+                        Part::File(file) => content.push(file_part(file)),
                         Part::Call(_) | Part::Reasoning(_) => {}
                     }
                 }
-                let mut user = images;
+                let mut user = media;
                 user.extend(content);
                 match user.as_slice() {
                     [] => {}
@@ -336,6 +335,17 @@ fn messages(request: &Request) -> Vec<Value> {
         }
     }
     out
+}
+
+fn image_url(image: &Media) -> Value {
+    json!({"type": "image_url", "image_url": {"url": image.url()}})
+}
+
+fn file_part(file: &Media) -> Value {
+    json!({"type": "file", "file": {
+        "filename": file.name.clone().unwrap_or_else(|| "document.pdf".into()),
+        "file_data": file.url(),
+    }})
 }
 
 fn str_of(value: &Value, key: &str) -> String {

@@ -296,7 +296,7 @@ fn input(request: &Request) -> Vec<Value> {
     let mut items = Vec::new();
     for message in &request.messages {
         let mut content = Vec::new();
-        let mut images = Vec::new();
+        let mut media = Vec::new();
         let flush = |content: &mut Vec<Value>, items: &mut Vec<Value>| {
             if content.is_empty() {
                 return;
@@ -317,11 +317,7 @@ fn input(request: &Request) -> Vec<Value> {
                 Part::Image(image) => {
                     content.push(json!({"type": "input_image", "image_url": image.url()}));
                 }
-                Part::File(file) => content.push(json!({
-                    "type": "input_file",
-                    "filename": file.name.clone().unwrap_or_else(|| "document.pdf".into()),
-                    "file_data": file.url(),
-                })),
+                Part::File(file) => content.push(input_file(file)),
                 Part::Call(call) => {
                     flush(&mut content, &mut items);
                     items.push(match call.kind {
@@ -343,8 +339,12 @@ fn input(request: &Request) -> Vec<Value> {
                     };
                     items.push(json!({"type": kind, "call_id": result.id, "output": output}));
                     for part in &result.content {
-                        if let Part::Image(image) = part {
-                            images.push(json!({"type": "input_image", "image_url": image.url()}));
+                        match part {
+                            Part::Image(image) => {
+                                media.push(json!({"type": "input_image", "image_url": image.url()}))
+                            }
+                            Part::File(file) => media.push(input_file(file)),
+                            _ => {}
                         }
                     }
                 }
@@ -363,12 +363,21 @@ fn input(request: &Request) -> Vec<Value> {
             }
         }
         flush(&mut content, &mut items);
-        // Images a tool returned follow its output as a user message.
-        if !images.is_empty() {
-            items.push(json!({"type": "message", "role": "user", "content": images}));
+        // Images and documents a tool returned follow its output as a user
+        // message, as a function's output is text.
+        if !media.is_empty() {
+            items.push(json!({"type": "message", "role": "user", "content": media}));
         }
     }
     items
+}
+
+fn input_file(file: &Media) -> Value {
+    json!({
+        "type": "input_file",
+        "filename": file.name.clone().unwrap_or_else(|| "document.pdf".into()),
+        "file_data": file.url(),
+    })
 }
 
 fn tool(tool: &Tool) -> Value {
