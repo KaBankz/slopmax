@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-18
+
 ### Changed
 
 - The dashboard's charts are dithered: bars and the fills under lines are a pixel scatter in the series' color, solid at the foot and thinning toward the top, under a soft cap on each bar. The columns you aren't pointing at step back, and a stacked column fades as one. On the Usage page the tokens, requests and API value charts take the colors of the figures above them.
