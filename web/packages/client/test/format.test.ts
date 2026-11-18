@@ -102,7 +102,7 @@ describe("pace", () => {
     expect(text(52)).toEqual(Option.some("On pace"))
     expect(text(30)).toEqual(Option.some("20% in reserve"))
     // At 75% used halfway, the same rate fills the window in another 50 minutes.
-    expect(text(75)).toEqual(Option.some(`Runs out ~${clock(ts(start + length / 2 + 3_000), now, utc)}`))
+    expect(text(75)).toEqual(Option.some(`Runs out ~${clock(ts(start + length / 2 + 3_000), now, utc)} at the pace so far`))
     expect(Option.map(pace(Window.of("5h", 75, resets), now, utc), (p) => p.tone)).toEqual(Option.some("warn"))
     // Too soon to say, already spent, or without a reset: nothing.
     expect(pace(Window.of("5h", 10, ts(start + length)), ts(start + 60), utc)).toEqual(Option.none())

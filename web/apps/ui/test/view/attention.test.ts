@@ -80,7 +80,7 @@ describe("what wants a look", () => {
       windows: [Window.of("5h", 90, at(150))],
     })
     expect(attention(withAccounts([fast]), now, zone).map((item) => item.text)).toEqual([
-      "a@x.dev's 5-hour window runs out ~12:16",
+      "a@x.dev's 5-hour window runs out ~12:16 at the pace so far",
     ])
   })
 

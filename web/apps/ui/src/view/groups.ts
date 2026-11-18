@@ -198,9 +198,6 @@ export const slots = (accounts: ReadonlyArray<AccountView>): ReadonlyArray<Slot>
 /** Whether an account serves requests: turned on and signed in. */
 export const serving = (account: AccountView): boolean => !account.disabled && account.condition._tag !== "SignInNeeded"
 
-/** An address's local part, for narrow places: `ana@example.com` → `ana`. */
-export const shortName = (name: string): string => name.split("@")[0] ?? name
-
 const isUnexpired = (reset: LimitReset, now: DateTime.Utc) =>
   reset.expiresAt === undefined || DateTime.isGreaterThan(reset.expiresAt, now)
 

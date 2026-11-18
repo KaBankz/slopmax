@@ -6,7 +6,7 @@
 import type { AccountDetail, HealthCell, PoolDetail, Span, Tone, Trend, WindowSpend } from "@slopmax/client"
 import { clock, compact, fixed, grouped, until } from "@slopmax/client/format"
 import { DateTime } from "effect"
-import { shortName, spanTitle } from "./groups.ts"
+import { spanTitle } from "./groups.ts"
 import { dollars } from "./words.ts"
 
 /** One point of a trend chart: a recorded value, a projected one, or both where they meet (now). */
@@ -112,9 +112,14 @@ const figures = (
   now: DateTime.Utc,
   zone: DateTime.TimeZone,
 ): ReadonlyArray<Figure> => {
-  const name = (id: string) => shortName(names.get(id) ?? id)
+  // Whole, as the accounts table names them: two logins can share a user.
+  const name = (id: string) => names.get(id) ?? id
   const sustainable = trend.sustainable
   const fast = trend.burn !== undefined && sustainable !== undefined && trend.burn > sustainable * 1.1
+  // The pace is the first of the daemon's measures it could take: 3 hours, else 1, else 6.
+  const hours = trend.burns.find((b) => b.rate === trend.burn)?.hours
+  const over =
+    hours === undefined ? "Over the last few hours" : `Over the last ${hours === 1 ? "hour" : `${hours} hours`}`
   const pace: Figure =
     trend.burn === undefined
       ? {
@@ -128,10 +133,10 @@ const figures = (
           value: rate(trend.burn),
           detail:
             sustainable === undefined
-              ? "Over the last few hours"
+              ? over
               : fast
-                ? `Faster than the ${rate(sustainable)} that lasts the window`
-                : `Within the ${rate(sustainable)} that lasts the window`,
+                ? `${over}, faster than the ${rate(sustainable)} that lasts the window`
+                : `${over}, within the ${rate(sustainable)} that lasts the window`,
           tone: fast ? "warn" : "good",
         }
   const dry: Figure =
@@ -147,8 +152,8 @@ const figures = (
           value: `~${clock(trend.runsOutAt, now, zone)}`,
           detail:
             trend.dryUntil === undefined
-              ? `In ${until(trend.runsOutAt, now)}`
-              : `In ${until(trend.runsOutAt, now)}, until a reset at ${clock(trend.dryUntil, now, zone)}`,
+              ? `In ${until(trend.runsOutAt, now)}, at the recent pace`
+              : `In ${until(trend.runsOutAt, now)} at the recent pace, until a reset at ${clock(trend.dryUntil, now, zone)}`,
           tone: "warn",
         }
   const first: Figure =
@@ -162,7 +167,7 @@ const figures = (
       : {
           title: "First account out",
           value: name(trend.firstOut.account),
-          detail: `~${clock(trend.firstOut.at, now, zone)}, in ${until(trend.firstOut.at, now)}`,
+          detail: `~${clock(trend.firstOut.at, now, zone)}, in ${until(trend.firstOut.at, now)}, at its recent pace`,
           tone: "warn",
         }
   const soonest = trend.resets[0]

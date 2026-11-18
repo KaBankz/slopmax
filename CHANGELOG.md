@@ -6,11 +6,13 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ### Fixed
 
-- The Requests page no longer lists agents' housekeeping as blank rows: Claude Code listing models (`GET /v1/models`), token counts, and Grok Build fetching its settings moved no tokens and showed with no model. Every other count already left them out; the page now does too, and so does `slopmax requests`.
+- The Requests page no longer lists agents' housekeeping as blank rows: Claude Code listing models (`GET /v1/models`), token counts, and Grok Build fetching its settings moved no tokens and showed with no model. Every other count already left them out; the page now does too, and so does `slopmax requests`. The live feed no longer shows them either.
+- The dashboard's forecast names the first account out in full: it showed the part before the `@`, so two logins of one address read the same.
 
 ### Changed
 
 - The provider is called Grok, as Claude and ChatGPT are named for the product and not the plan; SuperGrok, Lite, and Heavy are its plans. The sign-in help lists Claude's Ultra and Team plans beside Pro and Max.
+- A window's "Runs out" says which pace it means: an account's row measures the pace since the window began ("at the pace so far"), and the forecast the last few hours ("at the recent pace"), which is why the two can name different days.
 
 ## [0.15.1] - 2026-11-17
 

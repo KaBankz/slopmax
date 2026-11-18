@@ -142,8 +142,8 @@ const spanSeconds = { "5h": 5 * 3_600, "7d": 7 * 86_400, "30d": 30 * 86_400 } as
 const onPace = 5
 
 /**
- * How a window is being spent: `On pace`, `Runs out ~Wed 20:27` when ahead
- * of an even spend, or `12% in reserve` when behind. Nothing before 3% of
+ * How a window is being spent: `On pace`, `Runs out ~Wed 20:27 at the pace so
+ * far` when ahead * of an even spend, or `12% in reserve` when behind. Nothing before 3% of
  * the window has passed (too soon to say), nor once it is spent.
  */
 export const pace = (window: Window, now: DateTime.DateTime, zone: DateTime.TimeZone): Option.Option<Pace> => {
@@ -160,7 +160,7 @@ export const pace = (window: Window, now: DateTime.DateTime, zone: DateTime.Time
       // Ahead of an even spend, the same rate fills the window before it resets.
       const rate = used / passed
       const out = DateTime.addDuration(now, Duration.seconds(Math.trunc((100 - used) / rate)))
-      return Option.some({ elapsed, text: `Runs out ~${clock(out, now, zone)}`, tone: "warn" })
+      return Option.some({ elapsed, text: `Runs out ~${clock(out, now, zone)} at the pace so far`, tone: "warn" })
     }
     return Option.some({ elapsed, text: `${fixed(-ahead, 0)}% in reserve`, tone: "muted" })
   })

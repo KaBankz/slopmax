@@ -1,6 +1,6 @@
 ---
 source: crates/slopmax-tui/src/ui/tests.rs
-expression: "render(&mut app, 120, 36)"
+expression: screen
 ---
 "                          Claude  2 of 2 ready                                                                    09:30 "
 "  ◆ slopmax              ────────────────────────────────────────────────────────────────────────────────────────────── "
@@ -24,7 +24,7 @@ expression: "render(&mut app, 120, 36)"
 "                                                                                                                     ┃  "
 "                           claude@example.com                                                                 Max 20x┃  "
 "                            ● ready                                                                                  ┃  "
-"                            5-hour         ━━━━━━━━━━━━━───  82%  2h30m · 12:00  Runs out ~10:02                     ┃  "
+"                            5-hour         ━━━━━━━━━━━━━───  82%  2h30m · 12:00  Runs out ~10:02 at the pace so far  ┃  "
 "                            Weekly         ━━━━━━━╸────────  47%  2h30m · 12:00  52% in reserve                      ┃  "
 "                            Weekly · Fable ━━━━━━━━━━──────  64%  2h30m · 12:00  35% in reserve                      ┃  "
 "                            Last day       ················································  0 ok since 12:00        ┃  "

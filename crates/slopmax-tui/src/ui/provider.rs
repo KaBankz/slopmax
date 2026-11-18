@@ -300,7 +300,7 @@ fn forecast(flow: &mut Flow<'_>, trend: &Trend, report: &Report, now: &Now) {
         theme.tone(tone_of_use(trend.used)),
     ));
     if let Some(burn) = trend.burn {
-        figures.push(Span::styled(format!(" · {burn:.1}%/h now"), Style::new()));
+        figures.push(Span::styled(format!(" · {burn:.1}%/h recently"), Style::new()));
     }
     if let Some(sustainable) = trend.sustainable {
         figures.push(Span::styled(
@@ -395,7 +395,7 @@ fn forecast(flow: &mut Flow<'_>, trend: &Trend, report: &Report, now: &Now) {
     let mut notes = Vec::new();
     if let Some(first) = &trend.first_out {
         notes.push(format!(
-            "{} is out first ~{}",
+            "{} is out first ~{}, at its recent pace",
             name(&first.account),
             now.clock(first.at)
         ));

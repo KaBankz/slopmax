@@ -9,7 +9,7 @@ expression: screen
 "▌ Overview           1                                                                                               ┃  "
 "                          Needs attention ───────────────────────────────────────────────────────────────────────── 3┃  "
 "    Claude        ●                                                                                                  ┃  "
-"    ChatGPT       ●       ▌● claude@example.com's 5-hour window runs out ~10:02                                ⏎ show┃  "
+"    ChatGPT       ●       ▌● claude@example.com's 5-hour window runs out ~10:02 at the pace so far             ⏎ show┃  "
 "    Anthropic API          ● codex@example.com is limited until 12:00, and holds 1 limit reset               R redeem┃  "
 "    Compatible API         ● A limit reset on codex@example.com expires in 2h30m · 12:00                     R redeem┃  "
 "  Usage              2                                                                                               ┃  "

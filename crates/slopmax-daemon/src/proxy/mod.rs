@@ -527,7 +527,8 @@ impl App {
         {
             self.pool.saw_codex_model(model);
         }
-        if self.api_events.receiver_count() > 0 {
+        // An agent's housekeeping is no request the feed lists.
+        if self.api_events.receiver_count() > 0 && (entry.answered() || entry.failed()) {
             let event = slopmax_api::events::Event::Request {
                 record: slopmax_api::ledger::LedgerRecord::Request(crate::api::record(entry)),
             };
