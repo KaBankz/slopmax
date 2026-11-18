@@ -426,7 +426,7 @@ impl App {
                         self.data.settings.stale = true;
                     }
                 }
-                Event::Request { record } => self.arrive(&record),
+                Event::Request { record, cost } => self.arrive(&record, cost),
                 Event::Notice { notice } => {
                     let tone = match notice.kind {
                         NoticeKind::Limited | NoticeKind::Exhausted | NoticeKind::SignedOut => {
@@ -605,15 +605,15 @@ impl App {
     /// that comes in above the selection leaves it on the row it was on,
     /// and the view on what it showed, unless the view is at the top,
     /// where new requests are watched coming in.
-    fn arrive(&mut self, record: &LedgerRecord) {
+    fn arrive(&mut self, record: &LedgerRecord, cost: Option<f64>) {
         let had = self.page == Page::Requests && !self.feed().is_empty();
-        if !self.data.record(record) {
+        if !self.data.record(record, cost) {
             return;
         }
         let needle = self.filter.to_lowercase();
         let row = RequestRow {
             record: record.clone(),
-            cost: None,
+            cost,
             end: None,
         };
         if !needle.is_empty() && !self.matches(&row, &needle) {

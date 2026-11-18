@@ -1,38 +1,35 @@
 // The charts, on shadcn/ui's Chart (Recharts): stacked and grouped columns,
 // lines, the hours of a day, a pool's use over time with where it is
-// heading, and a figure's trend line; plus two small compositions Recharts has no
-// shape for, the "When you work" grid and the token mix. Series take the
+// heading, a figure's trend line, and a list row's bar; plus two small
+// compositions Recharts has no shape for, the "When you work" grid and the
+// token mix. Series take the
 // theme's chart colors, and state colors where they mean a state (a failure
 // is destructive).
 import { cva } from "class-variance-authority"
 import type { DateTime } from "effect"
-import { useId } from "react"
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  ComposedChart,
-  Line,
-  LineChart,
-  ReferenceLine,
-  XAxis,
-  YAxis,
-} from "recharts"
+import { AreaChart, BarChart, CartesianGrid, ComposedChart, ReferenceLine, XAxis, YAxis } from "recharts"
 import {
   type Axis,
   activityTip,
-  busiest,
+  type Level,
+  levelScale,
+  levels,
+  rhythm,
   type SparkPoint,
-  shade,
-  shadeScale,
   tickValues,
   weekdays,
 } from "../view/charts.ts"
 import { tickLabel, type TrendView } from "../view/forecast.ts"
 import { Tip } from "./tip.tsx"
-import { type ChartConfig, ChartContainer, ChartTooltip } from "./ui/chart.tsx"
+import {
+  ChartArea,
+  ChartBar,
+  type ChartConfig,
+  ChartContainer,
+  ChartLine,
+  ChartMeter,
+  ChartTooltip,
+} from "./ui/chart.tsx"
 
 /** A series' color: one of the theme's chart colors, a trend line's, the primary color, or a state. */
 export type Ink =
@@ -176,6 +173,7 @@ export function Columns({
   readonly grouped?: boolean
 }) {
   const inks = buckets[0]?.parts.map((part) => part.ink) ?? []
+  const keys = inks.map((_, i) => `s${i}`)
   const data: Array<Datum> = buckets.map((bucket) => ({
     label: bucket.label,
     tip: bucket.tip,
@@ -188,13 +186,11 @@ export function Columns({
           {axes(scale, tick, every)}
           <ChartTooltip cursor={false} content={TipContent} />
           {inks.map((_, i) => (
-            <Bar
+            <ChartBar
               key={i}
               dataKey={`s${i}`}
-              fill={`var(--color-s${i})`}
-              radius={grouped || i === inks.length - 1 ? [3, 3, 0, 0] : 0}
-              {...(grouped ? {} : { stackId: "stack" })}
-              isAnimationActive={false}
+              top={grouped || i === inks.length - 1}
+              {...(grouped ? {} : { stack: keys })}
             />
           ))}
         </BarChart>
@@ -233,16 +229,14 @@ export function Lines({
   return (
     <div className={heights({ size })}>
       <ChartContainer config={configFor(series.map((line) => line.ink))} className="aspect-auto size-full">
-        <LineChart accessibilityLayer data={data}>
+        <AreaChart accessibilityLayer data={data}>
           {axes(scale, tick, every, 20)}
           <ChartTooltip cursor={false} content={TipContent} />
           {series.map((line, k) => (
-            <Line
+            <ChartArea
               key={k}
               dataKey={`s${k}`}
-              type="linear"
-              stroke={`var(--color-s${k})`}
-              strokeWidth={2}
+              connectNulls={false}
               dot={(props: { readonly cx?: number; readonly cy?: number; readonly index?: number }) =>
                 props.index !== undefined && lone(line.values, props.index) ? (
                   <circle key={props.index} cx={props.cx} cy={props.cy} r={2.5} fill={`var(--color-s${k})`} />
@@ -250,10 +244,9 @@ export function Lines({
                   <g key={props.index} />
                 )
               }
-              isAnimationActive={false}
             />
           ))}
-        </LineChart>
+        </AreaChart>
       </ChartContainer>
     </div>
   )
@@ -267,7 +260,6 @@ const percents = [0, 25, 50, 75, 100]
  * line at 100%, now, and each account's reset ahead as a faint rule.
  */
 export function TrendChart({ view, zone }: { readonly view: TrendView; readonly zone: DateTime.TimeZone }) {
-  const gradient = `trend-${useId().replaceAll(":", "")}`
   const config: ChartConfig = {
     recorded: { color: "var(--primary)" },
     projected: { color: view.dry ? "var(--warning)" : "var(--muted-foreground)" },
@@ -276,12 +268,6 @@ export function TrendChart({ view, zone }: { readonly view: TrendView; readonly 
     <div className={heights({ size: "lg" })}>
       <ChartContainer config={config} className="aspect-auto size-full">
         <ComposedChart accessibilityLayer data={[...view.data]} margin={{ top: 12, right: 12, bottom: 0, left: 0 }}>
-          <defs>
-            <linearGradient id={gradient} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="var(--color-recorded)" stopOpacity={0.25} />
-              <stop offset="100%" stopColor="var(--color-recorded)" stopOpacity={0.02} />
-            </linearGradient>
-          </defs>
           <CartesianGrid vertical={false} />
           <XAxis
             dataKey="t"
@@ -314,26 +300,8 @@ export function TrendChart({ view, zone }: { readonly view: TrendView; readonly 
             strokeDasharray="2 3"
             label={{ value: "Now", position: "insideTopLeft", fill: "var(--muted-foreground)", fontSize: 11 }}
           />
-          <Area
-            dataKey="recorded"
-            type="linear"
-            stroke="var(--color-recorded)"
-            strokeWidth={2}
-            fill={`url(#${gradient})`}
-            dot={false}
-            activeDot={{ r: 3 }}
-            isAnimationActive={false}
-          />
-          <Line
-            dataKey="projected"
-            type="linear"
-            stroke="var(--color-projected)"
-            strokeWidth={2}
-            strokeDasharray="5 4"
-            dot={false}
-            activeDot={{ r: 3 }}
-            isAnimationActive={false}
-          />
+          <ChartArea dataKey="recorded" type="linear" />
+          <ChartLine dataKey="projected" type="linear" strokeDasharray="5 4" />
         </ComposedChart>
       </ChartContainer>
     </div>
@@ -355,53 +323,38 @@ export function Spark({
   readonly ink: Ink
   readonly size?: "md" | "lg"
 }) {
-  const gradient = `spark-${useId().replaceAll(":", "")}`
   return (
     <div className={sparkHeights({ size })}>
       <ChartContainer config={{ value: { color: color(ink) } }} className="aspect-auto size-full">
         <AreaChart data={[...points]} margin={{ top: 4, right: 2, bottom: 0, left: 2 }}>
-          <defs>
-            <linearGradient id={gradient} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="var(--color-value)" stopOpacity={0.32} />
-              <stop offset="100%" stopColor="var(--color-value)" stopOpacity={0} />
-            </linearGradient>
-          </defs>
           <XAxis dataKey="label" hide />
           <YAxis hide domain={[0, "auto"]} />
           <ChartTooltip cursor={{ stroke: "var(--border)" }} content={TipContent} />
-          <Area
-            dataKey="value"
-            type="monotone"
-            stroke="var(--color-value)"
-            strokeWidth={2}
-            strokeLinejoin="round"
-            fill={`url(#${gradient})`}
-            dot={false}
-            activeDot={{ r: 3, strokeWidth: 0 }}
-            connectNulls
-            isAnimationActive={false}
-          />
+          <ChartArea dataKey="value" connectNulls />
         </AreaChart>
       </ChartContainer>
     </div>
   )
 }
 
-/** Small columns for the hours of a day, without axes: the overview's Today. */
-export function Hours({ values }: { readonly values: ReadonlyArray<number> }) {
-  const data = values.map((value, hour) => ({ hour, value }))
+/** Small columns for the hours of a day, without axes: the overview's Today. `tip` words an hour's value. */
+export function Hours({
+  values,
+  tip,
+  ink = "meter",
+}: {
+  readonly values: ReadonlyArray<number>
+  readonly tip: (hour: number, value: number) => string
+  readonly ink?: Ink
+}) {
+  const data = values.map((value, hour) => ({ hour, value, tip: tip(hour, value) }))
   return (
     <div className="flex flex-col gap-1">
       <div className="h-16 w-full">
-        <ChartContainer config={{ value: { color: "var(--primary)" } }} className="aspect-auto size-full">
+        <ChartContainer config={{ value: { color: color(ink) } }} className="aspect-auto size-full">
           <BarChart data={data} barCategoryGap="25%" margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
-            <Bar
-              dataKey="value"
-              fill="var(--color-value)"
-              radius={[2, 2, 0, 0]}
-              minPointSize={2}
-              isAnimationActive={false}
-            />
+            <ChartTooltip cursor={false} content={TipContent} />
+            <ChartBar dataKey="value" />
           </BarChart>
         </ChartContainer>
       </div>
@@ -416,53 +369,69 @@ export function Hours({ values }: { readonly values: ReadonlyArray<number> }) {
   )
 }
 
-/** The week by hour: a cell per weekday and hour, darker the busier, each with a Tooltip. */
+/** A grid cell's fill at each level: a faint well for none, then the Requests blue, deeper the busier. */
+const cell = cva("rounded-xs", {
+  variants: {
+    level: {
+      0: "bg-foreground/6",
+      1: "bg-spark-3/30",
+      2: "bg-spark-3/55",
+      3: "bg-spark-3/80",
+      4: "bg-spark-3",
+    },
+  },
+})
+
+const hourLabels = ["00:00", "06:00", "12:00", "18:00"]
+
+/**
+ * The week by hour, as a contribution graph: a square per weekday and hour,
+ * in four levels of the Requests blue by how busy it was, each with a
+ * Tooltip; beside it, what it says in words.
+ */
 export function Heatmap({ activity }: { readonly activity: ReadonlyArray<ReadonlyArray<number>> }) {
-  const most = Math.max(0, ...activity.flat())
-  const peak = busiest(activity)
+  const grid = levels(activity)
+  const facts = rhythm(activity)
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex flex-col gap-0.5">
-        {activity.map((hours, day) => (
-          <div key={day} className="flex items-center gap-0.5">
-            <span className="w-8 shrink-0 text-xs text-muted-foreground">{weekdays[day]}</span>
-            {hours.map((n, hour) => (
-              <Tip key={hour} content={activityTip(day, hour, n)}>
-                <div className="h-4 min-w-0 flex-1 rounded-xs bg-muted">
-                  {n > 0 && (
-                    <div
-                      className="size-full rounded-xs bg-primary opacity-(--shade)"
-                      style={{ "--shade": String(shade(n, most)) }}
-                    />
-                  )}
-                </div>
+    <div className="flex flex-col gap-6 @3xl:flex-row @3xl:items-start">
+      <div className="flex max-w-3xl min-w-0 flex-1 flex-col gap-3">
+        <div className="grid grid-cols-[2rem_repeat(24,minmax(0,1fr))] gap-0.75">
+          {grid.map((hours, day) => [
+            <span key={`d${day}`} className="self-center text-xs text-muted-foreground">
+              {weekdays[day]}
+            </span>,
+            ...hours.map((level: Level, hour) => (
+              <Tip key={`${day}:${hour}`} content={activityTip(day, hour, activity[day]?.[hour] ?? 0)}>
+                <div className={`aspect-square ${cell({ level })}`} />
               </Tip>
-            ))}
-          </div>
-        ))}
-        <div className="flex pl-8.5 text-xs text-muted-foreground">
-          {["00:00", "06:00", "12:00", "18:00"].map((label) => (
-            <span key={label} className="flex-1">
+            )),
+          ])}
+          <span />
+          {hourLabels.map((label) => (
+            <span key={label} className="col-span-6 pt-1 text-xs text-muted-foreground">
               {label}
             </span>
           ))}
         </div>
-      </div>
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span>{peak ?? ""}</span>
-        <span className="inline-flex items-center gap-1">
-          Less
-          {shadeScale.map((level) => (
-            <span
-              key={level}
-              aria-hidden
-              className="size-2.5 rounded-xs bg-primary opacity-(--shade)"
-              style={{ "--shade": String(level) }}
-            />
+        <div className="flex items-center justify-end gap-1 text-xs text-muted-foreground">
+          <span className="mr-1">Less</span>
+          {levelScale.map((level) => (
+            <span key={level} aria-hidden className={`size-3 ${cell({ level })}`} />
           ))}
-          More
-        </span>
+          <span className="ml-1">More</span>
+        </div>
       </div>
+      {facts.length > 0 && (
+        <dl className="grid shrink-0 grid-cols-2 gap-x-6 gap-y-4 @3xl:w-48 @3xl:grid-cols-1">
+          {facts.map((fact) => (
+            <div key={fact.title} className="flex flex-col gap-0.5">
+              <dt className="text-xs text-muted-foreground">{fact.title}</dt>
+              <dd className="text-sm font-medium tabular-nums">{fact.value}</dd>
+              <dd className="text-xs text-muted-foreground">{fact.note}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
     </div>
   )
 }
@@ -486,6 +455,11 @@ export function SplitBar({
         ))}
     </div>
   )
+}
+
+/** A row's bar in a list, as long as its share of the largest, in its series' color. */
+export function Share({ fraction, ink }: { readonly fraction: number; readonly ink: Ink }) {
+  return <ChartMeter value={fraction} color={color(ink)} />
 }
 
 /** A swatch of a series' color. */

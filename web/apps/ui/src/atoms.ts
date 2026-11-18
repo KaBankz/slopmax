@@ -265,7 +265,7 @@ const onEvent = (event: Event, store: Store, later: FiberHandle.FiberHandle) =>
       case "Request": {
         const seq = store.read(feedSeqAtom) + 1
         store.set(feedSeqAtom, seq)
-        store.set(feedAtom, pushFeed(store.read(feedAtom), event.record, seq))
+        store.set(feedAtom, pushFeed(store.read(feedAtom), event.record, seq, event.cost))
         yield* FiberHandle.run(
           later,
           Effect.sleep(historyDebounce).pipe(Effect.andThen(Reactivity.invalidate(["history"]))),

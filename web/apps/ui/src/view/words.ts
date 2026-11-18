@@ -62,11 +62,11 @@ export const failureText = (cause: Cause.Cause<unknown>): string => {
 /**
  * A finding or a note read as a sentence: its first letter capitalized,
  * unless it starts with a name that keeps its case, such as slopmax itself,
- * an address, a host or a path.
+ * a name cased inside (`xAI`), an address, a host or a path.
  */
 export const sentenceCase = (text: string): string => {
   const first = text.split(/\s/, 1)[0] ?? ""
-  return first === "slopmax" || /[.@/:]/.test(first) ? text : capitalize(text)
+  return first === "slopmax" || /[.@/:]/.test(first) || /[A-Z]/.test(first.slice(1)) ? text : capitalize(text)
 }
 
 /** The first letter lowercased, for a title used inside a sentence: `Weekly` → `weekly`. */
@@ -258,7 +258,7 @@ export const leftLine = (windows: number, unused: number): string =>
       : `${windows} weekly windows · ${fixed(unused, 0)}% unused on average across them`
 
 /** How a pool reads its accounts as one. */
-export const poolBasis = (weighted: boolean): string => (weighted ? "weighted by plan" : "average of accounts")
+export const poolBasis = (weighted: boolean): string => (weighted ? "weighted by plan" : "averaged")
 
 /** What a pool's segmented bar shows. */
 const segmentsTip = (weighted: boolean): string =>

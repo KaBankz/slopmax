@@ -79,8 +79,11 @@ const at = (t: number): DateTime.Utc => DateTime.makeUnsafe(t)
 
 const hour = 3_600_000
 
-/** `0.9%/h`, finer below one a tenth. */
-export const rate = (perHour: number): string => `${fixed(perHour, perHour < 0.1 ? 2 : 1)}%/h`
+/** `0.9%/h`, finer below one a tenth; `0%/h` for none. */
+export const rate = (perHour: number): string => {
+  const text = fixed(perHour, perHour < 0.1 ? 2 : 1)
+  return Number(text) === 0 ? "0%/h" : `${text}%/h`
+}
 
 /** Ticks on the time axis: every few hours for a day or less, else at each local midnight. */
 const timeTicks = (from: number, to: number, zone: DateTime.TimeZone): ReadonlyArray<number> => {
@@ -144,7 +147,12 @@ const figures = (
       ? {
           title: "Runs dry",
           value: "Not at this pace",
-          detail: trend.burn === undefined ? "No pace to project yet" : "Resets give back more than it uses",
+          detail:
+            trend.burn === undefined
+              ? "No pace to project yet"
+              : Number(fixed(trend.burn, 2)) === 0
+                ? "Nothing used lately"
+                : "Resets give back more than it uses",
           tone: "good",
         }
       : {
@@ -323,7 +331,7 @@ export const lanes = (
 export interface SpendView {
   /** `$412 so far`. */
   readonly line: string
-  /** `$8.40 a percent`, once enough of the window is used. */
+  /** `$8.40 per 1%`, once enough of the window is used. */
   readonly rate?: string
   readonly tip: string
 }
@@ -333,10 +341,13 @@ export const spendView = (spend: WindowSpend): SpendView | undefined => {
   const window = spanTitle(spend.span).toLowerCase()
   const worth = spend.perPercent === undefined ? undefined : spend.perPercent * 100
   return {
-    line: `${dollars(spend.cost)} so far`,
-    ...(spend.perPercent === undefined ? {} : { rate: `${dollars(spend.perPercent)} a percent` }),
+    // Tokens and no cost: the models are not priced, not free.
+    line: spend.cost === 0 && spend.tokens > 0 ? "Not priced" : `${dollars(spend.cost)} so far`,
+    ...(spend.perPercent === undefined || spend.cost === 0 ? {} : { rate: `${dollars(spend.perPercent)} per 1%` }),
     tip: [
-      `This ${window} window has answered ${grouped(spend.requests)} requests, ${compact(spend.tokens)} tokens, worth ${dollars(spend.cost)} at API prices.`,
+      spend.cost === 0 && spend.tokens > 0
+        ? `This ${window} window has answered ${grouped(spend.requests)} requests, ${compact(spend.tokens)} tokens, on models slopmax has no API prices for.`
+        : `This ${window} window has answered ${grouped(spend.requests)} requests, ${compact(spend.tokens)} tokens, worth ${dollars(spend.cost)} at API prices.`,
       worth === undefined ? undefined : `At that rate the whole window is worth about ${dollars(worth)}.`,
     ]
       .filter((line) => line !== undefined)

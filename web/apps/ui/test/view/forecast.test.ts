@@ -114,7 +114,7 @@ describe("an account's windows and last day", () => {
     })
     const view = spendView(spend)
     expect(view?.line).toBe("$1,622 so far")
-    expect(view?.rate).toBe("$33.80 a percent")
+    expect(view?.rate).toBe("$33.80 per 1%")
     expect(view?.tip).toContain("whole window is worth about $3,380")
     expect(spendView(new WindowSpend({ ...spend, requests: 0 }))).toBeUndefined()
   })

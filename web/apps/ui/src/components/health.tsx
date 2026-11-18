@@ -21,7 +21,7 @@ import type { Group } from "../view/groups.ts"
 import { Pages } from "../view/pages.ts"
 import { pageSize, type RequestFilter, rowView } from "../view/requests.ts"
 import { HealthStrip, usePoolDetail } from "./forecast.tsx"
-import { Label } from "./parts.tsx"
+import { AccountName, Label } from "./parts.tsx"
 import { Button } from "./ui/button.tsx"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card.tsx"
 
@@ -41,7 +41,9 @@ function ProviderHealth({ group }: { readonly group: Group }) {
         const day = health(account, pool.healthSince, pool.cellMinutes, zone)
         return (
           <div key={account.id} className="flex items-center gap-3">
-            <span className="w-36 shrink-0 truncate text-sm">{row?.name ?? account.id}</span>
+            <span className="flex w-40 shrink-0 text-sm">
+              <AccountName name={row?.name ?? account.id} />
+            </span>
             <div className="min-w-0 flex-1">
               <HealthStrip health={day} />
             </div>

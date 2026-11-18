@@ -356,6 +356,79 @@ pub fn scaled_columns(
     }
 }
 
+/// Columns of parts stacked bottom up, one style per part, scaled to the
+/// tallest stack: each cell takes the style of the part that fills most
+/// of it, so a part too thin for a cell of its own folds into its
+/// neighbour rather than vanishing the stack's height.
+pub fn stacked_columns(
+    buf: &mut Buffer,
+    area: Rect,
+    stacks: &[Vec<f64>],
+    styles: &[Style],
+    gap: bool,
+) {
+    if stacks.is_empty() || area.width == 0 || area.height == 0 {
+        return;
+    }
+    let totals: Vec<f64> = stacks.iter().map(|s| s.iter().sum()).collect();
+    let most = totals.iter().copied().fold(0.0, f64::max);
+    let n = stacks.len() as u16;
+    let step = (area.width / n).max(1);
+    let bar_w = if gap && step >= 3 { step - 1 } else { step };
+    let left = area.x + (area.width.saturating_sub(step * n)) / 2;
+    let per = |v: f64| {
+        if most > 0.0 {
+            v / most * f64::from(area.height) * 8.0
+        } else {
+            0.0
+        }
+    };
+    for (i, (parts, total)) in stacks.iter().zip(&totals).enumerate() {
+        let x = left + i as u16 * step;
+        if x + bar_w > area.right() {
+            break;
+        }
+        let eighths = (per(*total).round() as u16).max(u16::from(*total > 0.0));
+        // Where each part ends, in eighths from the bottom.
+        let mut ends = Vec::with_capacity(parts.len());
+        let mut sum = 0.0;
+        for part in parts {
+            sum += part;
+            ends.push(per(sum));
+        }
+        for row in 0..area.height {
+            let from = f64::from(row * 8);
+            let fill = eighths.saturating_sub(row * 8).min(8);
+            let y = area.bottom() - 1 - row;
+            let (symbol, style) = if fill == 0 {
+                if row == 0 {
+                    ("▁", Style::new().add_modifier(Modifier::DIM))
+                } else {
+                    (" ", Style::new())
+                }
+            } else {
+                let top = from + f64::from(fill);
+                let mut best = (0.0, 0usize);
+                let mut start: f64 = 0.0;
+                for (k, end) in ends.iter().enumerate() {
+                    let covered = end.min(top) - start.max(from);
+                    if covered > best.0 {
+                        best = (covered, k);
+                    }
+                    start = *end;
+                }
+                (
+                    EIGHTHS[fill as usize],
+                    styles.get(best.1).copied().unwrap_or_default(),
+                )
+            };
+            for dx in 0..bar_w {
+                buf[(x + dx, y)].set_symbol(symbol).set_style(style);
+            }
+        }
+    }
+}
+
 /// Labels under a column chart: as many as fit, spread evenly.
 pub fn axis_labels(labels: &[String], width: u16) -> String {
     let n = labels.len();
@@ -449,15 +522,13 @@ pub fn braille_lines(buf: &mut Buffer, area: Rect, series: &[(&[(f64, f64)], Sty
 }
 
 /// Counts as shades, darkest for the most: for a week by hour.
-pub fn shade(value: u64, most: u64) -> &'static str {
-    if value == 0 || most == 0 {
-        return "·";
-    }
-    match value as f64 / most as f64 {
-        f if f > 0.75 => "█",
-        f if f > 0.5 => "▓",
-        f if f > 0.25 => "▒",
-        _ => "░",
+pub fn shade(level: u8) -> &'static str {
+    match level {
+        0 => "·",
+        1 => "░",
+        2 => "▒",
+        3 => "▓",
+        _ => "█",
     }
 }
 
@@ -568,6 +639,7 @@ pub fn bar_row(
     fraction: f64,
     figures: &[String],
     name_width: u16,
+    ink: Style,
 ) {
     let theme = flow.theme;
     let figure_widths: u16 = figures.iter().map(|f| f.chars().count() as u16 + 2).sum();
@@ -575,7 +647,10 @@ pub fn bar_row(
         .width
         .saturating_sub(name_width + 1 + figure_widths)
         .max(4);
-    let mut spans = vec![Span::raw(crate::format::fit(name, name_width as usize))];
+    let mut spans = vec![Span::raw(crate::format::fit_name(
+        name,
+        name_width as usize,
+    ))];
     let pad = name_width as usize
         - Line::from(spans[0].content.to_string())
             .width()
@@ -586,7 +661,7 @@ pub fn bar_row(
             .into_iter()
             .map(|s| {
                 if s.content.starts_with('━') || s.content.starts_with('╸') {
-                    s.style(theme.ink())
+                    s.style(ink)
                 } else {
                     s
                 }

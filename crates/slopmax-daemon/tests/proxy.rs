@@ -2284,7 +2284,7 @@ async fn the_api_reports_acts_and_streams() {
     response.bytes().await.unwrap();
     let record = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if let Some(Ok(Event::Request { record })) = events.next().await {
+            if let Some(Ok(Event::Request { record, .. })) = events.next().await {
                 break record;
             }
         }

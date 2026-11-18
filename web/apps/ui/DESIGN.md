@@ -36,8 +36,25 @@ slopmax adds tokens shadcn has no names for: `success` and `warning`, the
 good and warn states (`destructive` is the bad one), which take Tailwind's
 green and amber, 700 in light and 500 in dark; and `spark-1` … `spark-4`, the
 trend lines under the figures (API value, tokens, requests, the fourth),
-orange, pink, blue and teal, deeper in light. The neutral `chart-*` colors
-stay for the charts with axes.
+orange, pink, blue and teal, deeper in light. A chart of the same measure
+as a figure takes that figure's color (the Usage page's tokens, requests and
+API value columns, and the "When you work" grid, which counts requests). A
+row that is one provider's (a model, an agent, an account, a speed) takes
+that provider's color from the Tokens chart, grey when no one provider owns
+it; the neutral `chart-*` colors stay for the rest.
+
+Every chart draws its series with `ChartArea`, `ChartLine` and `ChartBar`
+from `components/ui/chart.tsx`, never Recharts' own `Area`, `Line` and `Bar`
+(oxlint refuses those imports outside `components/ui/`). So a change to how
+charts look is made there once. Both bars and the fills under curves are an
+ordered (Bayer) dither in the series' color, after Dither Kit's: 2px cells
+lit where the density beats the matrix, solid at the foot and thinning to a
+scatter at the top, the unlit cells a faint tint. A bar fades from its
+column's top under a soft rounded cap (a stack fades as one column), and the
+columns not under the pointer step back; a curve is smooth and 2px over
+its fill. A list row's bar is `ChartMeter`, the same dither on its side over
+a dotted track, fading over the track's length so short bars stay solid.
+State meters (a pool's use, with warning and failure tones) stay `Meter`.
 
 Type, spacing, radius, shadows and motion are Tailwind's and shadcn's: `text-sm`
 is body text, `text-xs` secondary text, `text-base` and up for headings;
@@ -67,14 +84,14 @@ Spinner, Switch, Table, Textarea, Toggle, ToggleGroup, Tooltip.
 
 Our customizations, each noted at the top of its file:
 
-| Component  | Change                                                                                                                                    |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `alert`    | a `warning` variant, the destructive variant's shape in the warning color                                                                 |
-| `progress` | `tone` (`default`, `warning`, `destructive`) colors the fill; `marker` draws a tick where an even spend would have reached                |
-| `card`     | a `flush` size, no padding or gap, for a panel of rows edge to edge                                                                       |
-| `chart`    | series colors are set in the container's `style`, not an injected `<style>` (the CSP refuses one), so a series takes `color`, not `theme` |
-| `sonner`   | the theme comes from slopmax's Appearance setting, not next-themes                                                                        |
-| `sidebar`  | no cookie: whether it is open lives in slopmax's preferences                                                                              |
+| Component  | Change                                                                                                                                                                                                                                                                                                                      |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `alert`    | a `warning` variant, the destructive variant's shape in the warning color                                                                                                                                                                                                                                                   |
+| `progress` | `tone` (`default`, `warning`, `destructive`) colors the fill; `marker` draws a tick where an even spend would have reached                                                                                                                                                                                                  |
+| `card`     | a `flush` size, no padding or gap, for a panel of rows edge to edge                                                                                                                                                                                                                                                         |
+| `chart`    | series colors are set in the container's `style`, not an injected `<style>` (the CSP refuses one), so a series takes `color`, not `theme`; `ChartArea` (`texture`: `dither`, `fade`), `ChartLine` and `ChartBar` (`variant`: `dither`, `solid`) draw every series in the house look; `ChartMeter` is a list row's bar in it |
+| `sonner`   | the theme comes from slopmax's Appearance setting, not next-themes                                                                                                                                                                                                                                                          |
+| `sidebar`  | no cookie: whether it is open lives in slopmax's preferences                                                                                                                                                                                                                                                                |
 
 ### Adding one
 
@@ -97,7 +114,7 @@ In `src/components/`, each built from shadcn's components:
 | File            | What                                                                                                                                                                                                                                      |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `parts.tsx`     | `Panel` (Card, flush), `Section`, `Row`, `SettingRow` (Item), `Stat`/`Stats` (Card, a `Spark`; `lg` for headlines), `Empty`, `Skeleton`, `Failed` (Alert), `Loaded`, `Meter` and `SegmentedBar` (Progress), `Label`, `Dot`, `Logo`, `Kbd` |
-| `charts.tsx`    | `Columns`, `Lines`, `Hours`, `TrendChart`, `Spark` (Chart over Recharts); `Heatmap` and `SplitBar`, which Recharts has no shape for; `Legend`, `Swatch`                                                                                   |
+| `charts.tsx`    | `Columns`, `Lines`, `Hours`, `TrendChart`, `Spark`, `Share` (Chart over Recharts); `Heatmap` (a contribution graph) and `SplitBar`, which Recharts has no shape for; `Legend`, `Swatch`                                                   |
 | `forecast.tsx`  | `PoolForecast` (Card, Segmented, TrendChart, figures in the CardFooter), `ResetLanes` (Card, Tooltip marks on a lane per account), `HealthStrip` (a Tooltip over an account's half hours)                                                 |
 | `sidebar.tsx`   | the window's Sidebar: SidebarProvider sized from the preferences, a draggable edge, the pages, the proxy's state at its foot                                                                                                              |
 | `tip.tsx`       | `Tip`, a Tooltip on one control in a line                                                                                                                                                                                                 |

@@ -119,25 +119,84 @@ export const firstByteTip = (bucket: HistoryBucket): string =>
     ? `${bucket.label}\nNo answers`
     : `${bucket.label}\nMedian ${fixed(bucket.firstByte[0] / 1000, 2)} s\nSlowest 5% ${fixed(bucket.firstByte[1] / 1000, 2)} s`
 
-/** A cell of the "When you work" grid: its shade, 0 for none, else from 0.12 up to 0.8 with the busiest hour. */
-export const shade = (n: number, most: number): number => (n <= 0 || most <= 0 ? 0 : 0.12 + (0.68 * n) / most)
+/** A cell's level in the "When you work" grid: 0 for none, else 1 to 4. */
+export type Level = 0 | 1 | 2 | 3 | 4
 
-/** The scale beside the grid, from least to most. */
-export const shadeScale: ReadonlyArray<number> = [0.12, 0.35, 0.58, 0.8]
+/**
+ * The "When you work" grid's levels, as a contribution graph has them: 0
+ * for an hour with no request, else 1 to 4 by where the hour ranks among
+ * the busy ones, so a single burst does not wash every other hour out.
+ * The busiest hours are 4; hours alike share a level.
+ */
+export const levels = (activity: ReadonlyArray<ReadonlyArray<number>>): ReadonlyArray<ReadonlyArray<Level>> => {
+  // Ranked among the distinct counts, so many quiet hours alike can't share the peak's level.
+  const busy = [...new Set(activity.flat().filter((n) => n > 0))]
+  const level = (n: number): Level => {
+    if (n <= 0) return 0
+    const atMost = busy.filter((v) => v <= n).length
+    const step = Math.max(1, Math.min(4, Math.ceil((4 * atMost) / busy.length)))
+    return step === 1 ? 1 : step === 2 ? 2 : step === 3 ? 3 : 4
+  }
+  return activity.map((hours) => hours.map(level))
+}
+
+/** The levels beside the grid, from least to most. */
+export const levelScale: ReadonlyArray<Level> = [0, 1, 2, 3, 4]
 
 export const weekdays: ReadonlyArray<string> = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+const weekdayNames: ReadonlyArray<string> = [
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+  "Sunday",
+]
 
-/** `Busiest at 14:00 on Tue`, or nothing when no request was made. */
-export const busiest = (activity: ReadonlyArray<ReadonlyArray<number>>): string | undefined => {
-  let best: { day: number; hour: number; n: number } | undefined
+/** The parts of a day, six hours each, for when most of the work falls. */
+const dayParts: ReadonlyArray<string> = ["Nights", "Mornings", "Afternoons", "Evenings"]
+
+/** A fact beside the grid: what it is, its figure, and a line under it. */
+export interface RhythmFact {
+  readonly title: string
+  readonly value: string
+  readonly note: string
+}
+
+const share = (part: number, whole: number): string => `${fixed(whole === 0 ? 0 : (part / whole) * 100, 0)}%`
+
+/**
+ * What the grid says in words: the busiest hour, the busiest day, the part
+ * of the day most requests fall in, and the weekends' share. None when no
+ * request was made.
+ */
+export const rhythm = (activity: ReadonlyArray<ReadonlyArray<number>>): ReadonlyArray<RhythmFact> => {
+  const total = activity.flat().reduce((sum, n) => sum + n, 0)
+  if (total === 0) return []
+  let hour = { day: 0, hour: 0, n: -1 }
   activity.forEach((hours, day) =>
-    hours.forEach((n, hour) => {
-      if (n > 0 && (best === undefined || n > best.n)) best = { day, hour, n }
+    hours.forEach((n, h) => {
+      if (n > hour.n) hour = { day, hour: h, n }
     }),
   )
-  return best === undefined
-    ? undefined
-    : `Busiest at ${String(best.hour).padStart(2, "0")}:00 on ${weekdays[best.day] ?? ""}`
+  const days = activity.map((hours) => hours.reduce((sum, n) => sum + n, 0))
+  const day = days.reduce((best, n, i) => ((days[best] ?? 0) >= n ? best : i), 0)
+  const parts = dayParts.map((_, part) =>
+    activity.reduce((sum, hours) => sum + hours.slice(part * 6, part * 6 + 6).reduce((s, n) => s + n, 0), 0),
+  )
+  const part = parts.reduce((best, n, i) => ((parts[best] ?? 0) >= n ? best : i), 0)
+  const weekend = (days[5] ?? 0) + (days[6] ?? 0)
+  return [
+    {
+      title: "Busiest hour",
+      value: `${weekdays[hour.day] ?? ""} ${String(hour.hour).padStart(2, "0")}:00`,
+      note: count(hour.n, "request"),
+    },
+    { title: "Busiest day", value: weekdayNames[day] ?? "", note: `${share(days[day] ?? 0, total)} of requests` },
+    { title: "Most active", value: dayParts[part] ?? "", note: `${share(parts[part] ?? 0, total)} of requests` },
+    { title: "Weekends", value: share(weekend, total), note: "of requests" },
+  ]
 }
 
 /** A cell's tooltip: `Tue 14:00 | 12 requests`. */

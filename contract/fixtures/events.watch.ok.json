@@ -272,7 +272,8 @@
         "agent": "claude-code",
         "via": "http",
         "machine": "laptop"
-      }
+      },
+      "cost": 0.00014
     }
   ]
 }

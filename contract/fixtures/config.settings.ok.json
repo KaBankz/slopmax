@@ -48,7 +48,7 @@
       },
       {
         "name": "sessionMinutes",
-        "summary": "Idle minutes before a session's account is forgotten",
+        "summary": "How long a session keeps its account while idle",
         "kind": "minutes"
       },
       {

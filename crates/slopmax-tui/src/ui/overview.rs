@@ -387,7 +387,8 @@ fn hours_chart(flow: &mut Flow<'_>, history: &History) {
     )]));
     let values = hourly(history);
     let area = flow.take(5);
-    let style = theme.ink();
+    // In the Tokens figure's pink, as the dashboard's.
+    let style = theme.spark(2);
     column_chart(flow.buf, area, &values, |_| style, false);
     let labels: Vec<String> = (0..24)
         .map(|h| {

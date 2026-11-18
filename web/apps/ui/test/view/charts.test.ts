@@ -3,16 +3,16 @@ import { HistoryBucket } from "@slopmax/client"
 import {
   activityTip,
   axis,
-  busiest,
   cacheAxis,
   cacheTip,
   firstByteTip,
   labelEvery,
+  levels,
   moneyTick,
   places,
   requestsTip,
+  rhythm,
   secondsTick,
-  shade,
   tickValues,
   tokensTick,
   tokensTip,
@@ -85,15 +85,26 @@ describe("tooltips", () => {
 })
 
 describe("when you work", () => {
-  test("shades each hour by how busy it was, and names the busiest", () => {
-    expect(shade(0, 10)).toBe(0)
-    expect(shade(10, 10)).toBeCloseTo(0.8)
-    expect(shade(5, 10)).toBeCloseTo(0.46)
+  test("levels each hour by where it ranks among the busy ones, as a contribution graph does", () => {
+    expect(levels([[0, 1, 2, 3, 4, 100]])).toEqual([[0, 1, 2, 3, 4, 4]])
+    // One burst does not wash the rest out, and hours alike share a level.
+    expect(levels([[5, 5, 5, 0]])).toEqual([[4, 4, 4, 0]])
+    expect(levels([[0, 0]])).toEqual([[0, 0]])
+    // Many quiet hours alike stay below the one busy hour.
+    expect(levels([[1, 1, 1, 1, 1, 1, 1, 1, 1, 25]])).toEqual([[2, 2, 2, 2, 2, 2, 2, 2, 2, 4]])
+  })
+
+  test("says when the work falls, in words", () => {
     const week = Array.from({ length: 7 }, (_, day) =>
-      Array.from({ length: 24 }, (_hour, hour) => (day === 1 && hour === 14 ? 9 : 1)),
+      Array.from({ length: 24 }, (_hour, hour) => (day === 1 && hour === 20 ? 9 : day === 5 && hour === 3 ? 1 : 0)),
     )
-    expect(busiest(week)).toBe("Busiest at 14:00 on Tue")
-    expect(busiest([[0, 0]])).toBeUndefined()
+    expect(rhythm(week)).toEqual([
+      { title: "Busiest hour", value: "Tue 20:00", note: "9 requests" },
+      { title: "Busiest day", value: "Tuesday", note: "90% of requests" },
+      { title: "Most active", value: "Evenings", note: "90% of requests" },
+      { title: "Weekends", value: "10%", note: "of requests" },
+    ])
+    expect(rhythm([[0, 0]])).toEqual([])
     expect(activityTip(1, 9, 1)).toBe("Tue 09:00 | 1 request")
   })
 })

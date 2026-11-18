@@ -15,6 +15,8 @@ export interface FeedEntry {
   /** Unique within the feed, for React keys and the flash on arrival. */
   readonly seq: number
   readonly record: RequestRecord
+  /** Its worth at API prices, when the daemon knows its model's price. */
+  readonly cost?: number
 }
 
 /** Adds a request to the top of the feed, keeping the newest {@link feedSize}. */
@@ -22,7 +24,8 @@ export const pushFeed = (
   feed: ReadonlyArray<FeedEntry>,
   record: RequestRecord,
   seq: number,
-): ReadonlyArray<FeedEntry> => [{ seq, record }, ...feed].slice(0, feedSize)
+  cost?: number,
+): ReadonlyArray<FeedEntry> => [{ seq, record, ...(cost === undefined ? {} : { cost }) }, ...feed].slice(0, feedSize)
 
 /** `420 ms`, `1.24 s`, `12.3 s`. */
 export const secs = (ms: number): string =>

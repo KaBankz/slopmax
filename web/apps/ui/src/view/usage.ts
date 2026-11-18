@@ -2,7 +2,16 @@
 // per-day panels, say about a history: the figures across the top with
 // their trend lines, the tables, and the token mix. The history is the
 // ledger's own shape (`GET /history`).
-import { type History, type HistoryBucket, providerFacts, type Summary, Totals } from "@slopmax/client"
+import {
+  agentFacts,
+  type History,
+  type HistoryBucket,
+  matchesAny,
+  providerFacts,
+  type ProviderId,
+  type Summary,
+  Totals,
+} from "@slopmax/client"
 import { compact, fixed, grouped, providerTitle } from "@slopmax/client/format"
 import type { SparkPoint } from "./charts.ts"
 import { count, dollars, headlineDollars, priced } from "./words.ts"
@@ -81,13 +90,18 @@ const trend = (
   series: Trend["series"],
   pick: (bucket: HistoryBucket) => number | undefined,
   say: (n: number) => string,
-): Trend => ({
-  series,
-  points: buckets.map((bucket) => {
+): Trend => {
+  const points = buckets.map((bucket) => {
     const value = pick(bucket)
     return { label: bucket.label, value, tip: value === undefined ? bucket.label : `${bucket.label}\n${say(value)}` }
-  }),
-})
+  })
+  // A measure with nothing to measure at either end (a rate before the
+  // first request) starts and stops where it has values, rather than
+  // leaving the card's width empty.
+  const first = points.findIndex((point) => point.value !== undefined)
+  const last = points.findLastIndex((point) => point.value !== undefined)
+  return { series, points: first < 0 ? [] : points.slice(first, last + 1) }
+}
 
 /** The share of input read from cache, as words: `62% from cache`. */
 const cacheNote = (cached: number | undefined) =>
@@ -129,7 +143,7 @@ export const todayStats = (history: History): ReadonlyArray<Stat> => [
     {
       title: "API value",
       value: priced(history.total.cost, history.total.unpriced, history.total.requests),
-      note: "what the API would charge",
+      note: "at API prices",
       trend: trend(
         history.buckets,
         1,
@@ -208,12 +222,37 @@ export const usageStats = (history: History): ReadonlyArray<Stat> => {
       (t) => t.cost,
       dollars,
     ),
-    {
-      title: "A month at this pace",
-      value: history.monthly === undefined ? "—" : dollars(history.monthly),
-      note: history.range === "7d" ? "at API prices" : "from a week's use",
-    },
+    monthPace(history),
   ]
+}
+
+/** How many whole days the month's pace averages: as many as the 7-day range holds besides today, so it reads the same there as on 30 days. */
+export const paceDays = 6
+
+/**
+ * What 30 days at the recent pace would be worth: the average of the last
+ * {@link paceDays} whole days, from the first of them that held a request
+ * (today left out, as it is not over); for today, the hours so far. The
+ * same figure on 7 and 30 days.
+ */
+const monthPace = (history: History): Stat => {
+  const title = "A month at this pace"
+  if (history.range === "today") {
+    const hours = history.buckets.length
+    return hours < 3
+      ? { title, value: "—", note: "after a few hours of today" }
+      : { title, value: dollars((history.total.cost / hours) * 24 * 30), note: "at today's pace" }
+  }
+  // The window first, then from its first day of use, so a request older than the 7-day range can't stretch it.
+  const window = history.buckets.slice(0, -1).slice(-paceDays)
+  const first = window.findIndex((day) => day.requests + day.failed > 0)
+  if (first < 0) return { title, value: "—", note: "after a whole day of use" }
+  const days = window.slice(first)
+  return {
+    title,
+    value: dollars(perDay(days, (day) => day.cost) * 30),
+    note: `from the last ${count(days.length, "day")}`,
+  }
 }
 
 /** The Performance page's figures. */
@@ -298,7 +337,7 @@ export const dailyStats = (history: History): ReadonlyArray<Stat> => {
     return {
       title,
       value: say(perDay(week, pick)),
-      note: week.length < 7 ? `over ${count(week.length, "day")}` : note,
+      note: week.length < 7 ? `averaged over ${count(week.length, "day")}` : note,
       ...(changed === undefined ? {} : { change: changed }),
       trend: trend(days, series, pick, say),
     }
@@ -312,6 +351,8 @@ export const dailyStats = (history: History): ReadonlyArray<Stat> => {
 /** A row of a bar list: a name, how long its bar is against the largest, and its figures. */
 export interface BarRow {
   readonly name: string
+  /** Whose it is, for its color, when it is one provider's. */
+  readonly provider?: ProviderId
   readonly detail?: string
   readonly fraction: number
   readonly tokens: string
@@ -320,11 +361,17 @@ export interface BarRow {
 }
 
 const bars = (
-  rows: ReadonlyArray<{ readonly name: string; readonly detail?: string; readonly totals: Totals }>,
+  rows: ReadonlyArray<{
+    readonly name: string
+    readonly provider?: ProviderId | undefined
+    readonly detail?: string
+    readonly totals: Totals
+  }>,
 ): ReadonlyArray<BarRow> => {
   const most = Math.max(1, ...rows.map((row) => row.totals.tokens))
   return rows.map((row) => ({
     name: row.name,
+    ...(row.provider === undefined ? {} : { provider: row.provider }),
     ...(row.detail === undefined ? {} : { detail: row.detail }),
     fraction: row.totals.tokens / most,
     tokens: compact(row.totals.tokens),
@@ -332,6 +379,14 @@ const bars = (
     value: priced(row.totals.cost, row.totals.unpriced, row.totals.requests),
   }))
 }
+
+/** The provider of the range's that serves a model, first in its order; none for a name no provider claims. */
+export const modelProvider = (providers: ReadonlyArray<ProviderId>, model: string): ProviderId | undefined =>
+  providers.find((id) => matchesAny(providerFacts[id].models, model))
+
+/** The provider an agent is made for, by its title; none for `Other` and `Warmups`. */
+export const agentProvider = (name: string): ProviderId | undefined =>
+  Object.values(agentFacts).find((agent) => agent.title === name)?.provider
 
 /** How many models are named before the rest are summed as Other. */
 export const topModels = 5
@@ -355,14 +410,18 @@ export const modelRows = (history: History): ReadonlyArray<BarRow> => {
     Totals.zero,
   )
   return bars([
-    ...named.map((row) => ({ name: row.name, totals: row.totals })),
+    ...named.map((row) => ({
+      name: row.name,
+      provider: modelProvider(history.providers, row.name),
+      totals: row.totals,
+    })),
     ...(other.tokens > 0 ? [{ name: "Other", totals: other }] : []),
   ])
 }
 
 /** The agents by tokens. */
 export const agentRows = (history: History): ReadonlyArray<BarRow> =>
-  bars(history.agents.map((row) => ({ name: row.name, totals: row.totals })))
+  bars(history.agents.map((row) => ({ name: row.name, provider: agentProvider(row.name), totals: row.totals })))
 
 /** What the summary calls requests sent with slopmax's own key: here, or the hub read from another machine. */
 const ownKey: ReadonlyArray<string> = ["this machine", "hub"]
@@ -414,6 +473,8 @@ export const perRequest = (total: Totals): { readonly context: string; readonly 
 export interface AccountRow {
   readonly name: string
   readonly provider: string
+  /** For its color; none on the total. */
+  readonly providerId?: ProviderId
   readonly fraction: number
   readonly share: string
   readonly tokens: string
@@ -432,6 +493,7 @@ export const accountRows = (
   const rows = history.accounts.map((row) => ({
     name: row.name,
     provider: providerFacts[row.provider].title,
+    providerId: row.provider,
     fraction: row.totals.tokens / most,
     share: `${fixed(shareOf(row.totals.tokens), 0)}%`,
     tokens: compact(row.totals.tokens),
@@ -459,12 +521,27 @@ export const accountRows = (
 /** The output speeds, fastest first, for the Performance page. */
 export const speedRows = (
   history: History,
-): ReadonlyArray<{ readonly model: string; readonly provider: string; readonly speed: string }> =>
-  history.speeds.slice(0, 6).map((row) => ({
+): ReadonlyArray<{
+  readonly model: string
+  readonly provider: string
+  readonly providerId: ProviderId
+  readonly speed: string
+  readonly fraction: number
+}> => {
+  const rows = history.speeds.slice(0, 6)
+  const fastest = Math.max(1, ...rows.map((row) => row.tokensPerSecond))
+  return rows.map((row) => ({
     model: row.model,
     provider: providerTitle(row.provider),
+    providerId: row.provider,
     speed: `${fixed(row.tokensPerSecond, 0)} tok/s`,
+    fraction: row.tokensPerSecond / fastest,
   }))
+}
+
+/** An hour's tooltip on the overview's Today: `09:00` over `120.4M tokens`. */
+export const hourTip = (hour: number, tokens: number): string =>
+  `${String(hour).padStart(2, "0")}:00\n${tokens === 0 ? "No tokens" : `${compact(tokens)} tokens`}`
 
 /** Today's tokens hour by hour, all 24 hours, for the overview's small chart. */
 export const hourly = (history: History): ReadonlyArray<number> => {

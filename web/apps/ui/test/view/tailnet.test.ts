@@ -50,7 +50,7 @@ describe("the Other machines card", () => {
     expect(card.rows.map((row) => [row.title, row.value])).toEqual([
       ["Address", "https://hub.example.ts.net:7567"],
       ["Reached through", "slopmax's socket"],
-      ["No key for", "you@github"],
+      ["No key needed for", "you@github"],
       ["Admins", "desk"],
       ["On another machine", "slopmax setup --hub hub"],
     ])
@@ -61,7 +61,7 @@ describe("the Other machines card", () => {
   test("through a private path, machines need no key, as through the socket", () => {
     const rows = machinesCard(new TailnetView({ ...published, transport: "private" })).rows
     expect(rows.find((row) => row.title === "Reached through")?.value).toBe("a private path on 127.0.0.1")
-    expect(rows.find((row) => row.title === "No key for")?.value).toBe("you@github")
+    expect(rows.find((row) => row.title === "No key needed for")?.value).toBe("you@github")
   })
 
   test("over loopback, or with no logins, every machine needs a key", () => {
@@ -69,7 +69,7 @@ describe("the Other machines card", () => {
       new TailnetView({ ...published, transport: "loopback", identity: false, admins: [] }),
     ).rows
     expect(loopback.find((row) => row.title === "Reached through")?.value).toBe("127.0.0.1")
-    expect(loopback.find((row) => row.title === "No key for")?.value).toBe("No one")
+    expect(loopback.find((row) => row.title === "No key needed for")?.value).toBe("No one")
     expect(loopback.find((row) => row.title === "Admins")?.detail).toBe(
       "To let a machine manage slopmax: slopmax tailscale admin add <machine>.",
     )

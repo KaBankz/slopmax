@@ -4,9 +4,24 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Changed
+
+- The dashboard's charts are dithered: bars and the fills under lines are a pixel scatter in the series' color, solid at the foot and thinning toward the top, under a soft cap on each bar. The columns you aren't pointing at step back, and a stacked column fades as one. On the Usage page the tokens, requests and API value charts take the colors of the figures above them.
+- The bars in the Usage page's lists (models, agents, accounts, what was left on the table) and the Performance page's speeds are dithered too, in their provider's color from the Tokens chart, over a dotted track, instead of thin white lines. The Output speed card gains these bars, and the overview's hours of today have a tooltip.
+- "When you work" is a contribution graph: a square per weekday and hour in four shades of the Requests blue, ranked so one busy burst doesn't wash out the rest, with the busiest hour and day, the part of the day most requests fall in, and the weekends' share beside it.
+- Notes under the dashboard's figures wrap instead of being cut short, and a name like `a@b.dev (Work)` keeps its label when its column is narrow.
+- Trend lines under the Performance page's figures start where there are readings, rather than leaving part of the card empty.
+- `slopmax`'s terminal UI draws what the dashboard does: the Tokens chart stacks each provider in its color with a legend, the bars of models, agents, accounts, what was left and speeds take their provider's color, the requests and today's hours take the figures' blue and pink, and "When you work" ranks its hours in four levels of blue with the busiest hour and day, the most active part of the day and the weekends' share beneath. Account names keep their `(label)` when cut.
+
 ### Fixed
 
 - Grok accounts show what they've used. slopmax read xAI's plain billing view, whose monthly credits count only on-demand use and stay at 0% on a subscription, however much it's used. It now reads the credits view Grok Build reads: a weekly allowance that grok.com and Grok Build share, shown as a 7-day window that resets when xAI's week ends. The CLIProxyAPI hub reports the period to T3 Code as weekly too.
+- "A month at this pace" on the Usage page, on the dashboard and in the terminal UI, shows the same figure on 7 and 30 days, from the average of the last six whole days. It was blank except on 7 days, and there it assumed a full week of use, which halved it for a ledger younger than a week. On Today it is the day so far, scaled up.
+- Requests from Grok Build are named Grok Build on the Usage page's agents, not "Other".
+- The live Requests feed, on the dashboard and in the terminal UI, shows each request's API value, which it showed as "—".
+- A window on models slopmax has no prices for reads "Not priced", not "$0.00 so far", in the terminal UI too.
+- The dashboard no longer logs a content security policy violation on every load.
+- Smaller wording fixes, in the terminal UI where it says the same: "xAI is reachable", "$20.05 per 1%", "One account" for a pool of one, "0%/h" and "Nothing used lately" for an idle pool, the Usage page's footnote names `[plan_prices]`, and the Session timeout setting says what it does.
 
 ## [0.17.1] - 2026-11-18
 

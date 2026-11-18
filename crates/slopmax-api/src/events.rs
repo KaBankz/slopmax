@@ -14,8 +14,13 @@ pub enum Event {
     Hello { version: String },
     /// The report, at connect and whenever it changes.
     Status { report: Box<Report> },
-    /// One per request slopmax answered.
-    Request { record: LedgerRecord },
+    /// One per request slopmax answered, with its worth at API prices when
+    /// its model has a known price.
+    Request {
+        record: LedgerRecord,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cost: Option<f64>,
+    },
     /// Once per notice; the proxy remembers what it told.
     Notice { notice: Notice },
     /// Sign-in progress, for sign-ins started through the API.

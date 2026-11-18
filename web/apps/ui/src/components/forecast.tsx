@@ -13,6 +13,7 @@ import { nowAtom, poolDetailAtom, zone } from "../atoms.ts"
 import { type Figure, type Health, laneDays, type Lanes, trendViews } from "../view/forecast.ts"
 import type { Group } from "../view/groups.ts"
 import { TrendChart } from "./charts.tsx"
+import { AccountName } from "./parts.tsx"
 import { Segmented } from "./segmented.tsx"
 import { Tip } from "./tip.tsx"
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "./ui/card.tsx"
@@ -120,7 +121,9 @@ export function ResetLanes({ lanes }: { readonly lanes: Lanes }) {
           </div>
           {lanes.lanes.map((lane) => (
             <div key={lane.id} className="flex items-center gap-3">
-              <span className="w-36 shrink-0 truncate text-sm">{lane.name}</span>
+              <span className="flex w-40 shrink-0 text-sm">
+                <AccountName name={lane.name} />
+              </span>
               <div className="relative h-7 flex-1 rounded-md bg-muted/60">
                 {lanes.days.map((day) => (
                   <span

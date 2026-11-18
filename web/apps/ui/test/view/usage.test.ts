@@ -3,11 +3,13 @@ import { History, HistoryBucket, NamedTotals, Summary, SummaryRow, Totals } from
 import { DateTime } from "effect"
 import {
   accountRows,
+  agentProvider,
   change,
   dailyStats,
   hourly,
   isQuiet,
   machineRows,
+  modelProvider,
   modelRows,
   perRequest,
   performanceStats,
@@ -43,20 +45,55 @@ describe("the figures across the top", () => {
     expect(todayStats(today).map(({ title, value, note }) => ({ title, value, note }))).toEqual([
       { title: "Requests", value: "908", note: "12 failed" },
       { title: "Tokens", value: "34.5M", note: "86% from cache" },
-      { title: "API value", value: "$21.70", note: "what the API would charge" },
+      { title: "API value", value: "$21.70", note: "at API prices" },
       { title: "Saved by failover", value: "36", note: "answered by another account" },
     ])
     expect(todayStats(quietHistory("today"))[0]?.note).toBe("none failed")
   })
 
   test("the usage page: conversations, what keys billed, and a month at this pace", () => {
-    const week = history({ total: totals(6_334, 240_700_000, 152.04), sessions: 244, billed: 3.49, monthly: 651.61 })
+    // Three whole days of $20, $30 and $40, then today's $5 (not over, left out): $30 a day.
+    const week = history({
+      total: totals(6_334, 240_700_000, 152.04),
+      sessions: 244,
+      billed: 3.49,
+      buckets: [
+        bucket("Nov 10", 0, 0),
+        bucket("Nov 11", 0, 0),
+        bucket("Nov 12", 0, 0),
+        bucket("Nov 13", 9, 0, undefined, 20),
+        bucket("Nov 14", 9, 0, undefined, 30),
+        bucket("Nov 15", 9, 0, undefined, 40),
+        bucket("Nov 16", 1, 0, undefined, 5),
+      ],
+    })
     expect(usageStats(week).map((stat) => [stat.value, stat.note])).toEqual([
       ["240.7M", "no cache reads"],
       ["6,334", "in 244 conversations"],
       ["$152.04", "Billed to API keys $3.49"],
-      ["$651.61", "at API prices"],
+      ["$900.00", "from the last 3 days"],
     ])
+    // The same pace on a month's range, which holds the same days.
+    expect(usageStats(history({ ...week, range: "30d" }))[3]?.value).toBe("$900.00")
+    // Today: the hours so far, scaled to a day, then a month.
+    const today = history({
+      range: "today",
+      total: totals(10, 1_000, 6),
+      buckets: Array.from({ length: 6 }, (_, i) => bucket(`0${i}:00`, 1, 0)),
+    })
+    expect(usageStats(today)[3]).toMatchObject({ value: "$720.00", note: "at today's pace" })
+    // A full week reads the same on 7 days (six whole days besides today) as on 30 (which holds a seventh before them).
+    const days = [10, 20, 30, 40, 50, 60].map((cost, i) => bucket(`Nov ${i + 11}`, 9, 0, undefined, cost))
+    const full7 = history({ buckets: [...days, bucket("Nov 17", 1, 0, undefined, 5)] })
+    const full30 = history({
+      range: "30d",
+      buckets: [bucket("Nov 10", 9, 0, undefined, 999), ...days, bucket("Nov 17", 1, 0, undefined, 5)],
+    })
+    expect(usageStats(full7)[3]).toMatchObject({ value: "$1,050", note: "from the last 6 days" })
+    expect(usageStats(full30)[3]).toMatchObject({ value: "$1,050", note: "from the last 6 days" })
+    // A request older than the 7-day range, then idle days: 30 days reads as 7 do.
+    const sparse = history({ ...week, range: "30d", buckets: [bucket("Nov 6", 9, 0, undefined, 999), ...week.buckets] })
+    expect(usageStats(sparse)[3]).toMatchObject({ value: "$900.00", note: "from the last 3 days" })
     const unpriced = history({ range: "30d", total: totals(4, 1_000, 0, 4) })
     expect(
       usageStats(unpriced)
@@ -64,7 +101,7 @@ describe("the figures across the top", () => {
         .slice(2),
     ).toEqual([
       ["—", "4 requests unpriced"],
-      ["—", "from a week's use"],
+      ["—", "after a whole day of use"],
     ])
   })
 
@@ -103,6 +140,15 @@ describe("tables and parts", () => {
     expect(rows[0]?.fraction).toBe(1)
   })
 
+  test("a model and an agent take the provider they belong to, for their color", () => {
+    expect(modelProvider(["claude", "codex", "grok"], "claude-opus-5-5")).toBe("claude")
+    expect(modelProvider(["anthropic", "codex"], "claude-opus-5-5")).toBe("anthropic")
+    expect(modelProvider(["claude", "codex"], "gpt-6.1-sol")).toBe("codex")
+    expect(modelProvider(["claude", "grok"], "unknown")).toBeUndefined()
+    expect(agentProvider("Grok Build")).toBe("grok")
+    expect(agentProvider("Other")).toBeUndefined()
+  })
+
   test("the token mix splits every token four ways, and says what a request carries", () => {
     const total = new Totals({
       requests: 10,
@@ -137,7 +183,13 @@ describe("tables and parts", () => {
     expect(table.rows[3]?.failed).toBe("4")
     expect(table.unplaced).toBe(3)
     expect(table.total.share).toBe("100%")
-    expect(speedRows(week)[0]).toEqual({ model: "gpt-6-mini", provider: "ChatGPT", speed: "182 tok/s" })
+    expect(speedRows(week)[0]).toEqual({
+      model: "gpt-6-mini",
+      provider: "ChatGPT",
+      providerId: "codex",
+      speed: "182 tok/s",
+      fraction: 1,
+    })
   })
 
   test("today's tokens fill all twenty-four hours", () => {
@@ -215,12 +267,21 @@ describe("trend lines", () => {
     expect(tokens?.trend?.points[0]?.tip).toMatch(/^Nov 10\n[\d.]+M tokens$/)
     expect(value?.trend?.series).toBe(1)
     expect(month?.trend).toBeUndefined()
-    // A bucket without a reading is a gap, not a zero.
+    // A bucket without a reading is a gap, not a zero; the line starts and
+    // stops where there are readings.
     const [answered, , cache] = performanceStats(
-      history({ buckets: [bucket("Nov 10", 0, 0), bucket("Nov 11", 9, 1, 0.5)] }),
+      history({
+        buckets: [
+          bucket("Nov 10", 0, 0),
+          bucket("Nov 11", 9, 1, 0.5),
+          bucket("Nov 12", 0, 0),
+          bucket("Nov 13", 4, 0, 1),
+          bucket("Nov 14", 0, 0),
+        ],
+      }),
     )
-    expect(answered?.trend?.points.map((p) => p.value)).toEqual([undefined, 90])
-    expect(cache?.trend?.points.map((p) => p.value)).toEqual([undefined, 50])
+    expect(answered?.trend?.points.map((p) => p.value)).toEqual([90, undefined, 100])
+    expect(cache?.trend?.points.map((p) => p.label)).toEqual(["Nov 11", "Nov 12", "Nov 13"])
   })
 })
 
@@ -257,7 +318,7 @@ describe("the overview's figures a day", () => {
         [1, 1],
       ]),
     )
-    expect(value).toMatchObject({ value: "$4.00", note: "over 2 days" })
+    expect(value).toMatchObject({ value: "$4.00", note: "averaged over 2 days" })
     expect(value?.change).toBeUndefined()
     expect(
       dailyStats(

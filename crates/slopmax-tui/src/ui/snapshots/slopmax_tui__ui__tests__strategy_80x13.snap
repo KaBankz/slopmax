@@ -9,7 +9,7 @@ expression: screen
 "        │ › fill-first                                                 │     ┃  "
 "  ▌Strat│   least-used                                                 │ it… ┃  "
 "   Sessi│   round-robin                                                │cco… │  "
-"   Sessi│                                                              │ess… │  "
+"   Sessi│                                                              │s i… │  "
 "        │                                                              │     │  "
 "  Limit │                                                              │─────│  "
 "        │ ↑↓ choose   ⏎ apply   esc cancel                             │     │  "

@@ -256,7 +256,7 @@ function AddAccount() {
           <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "codex" })}>
             ChatGPT
           </Button>
-          <Button disabled={!canChange} variant="ghost" onClick={() => start({ provider: "codex", device: true })}>
+          <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "codex", device: true })}>
             ChatGPT with a code
           </Button>
           <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "grok", device: true })}>

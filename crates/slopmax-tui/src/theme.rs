@@ -132,10 +132,33 @@ impl Theme {
         }
     }
 
-    /// A chart's marks: the foreground itself, as the dashboard draws its
-    /// charts in its text color.
+    /// A chart's marks with no color of their own: the foreground itself.
     pub fn ink(&self) -> Style {
         Style::new()
+    }
+
+    /// The dashboard's figure colors: API value orange (1), tokens pink
+    /// (2), requests blue (3), and teal (4). Its charts of the same measure
+    /// take these, and its providers take 2, 3, 4 and 1 in turn.
+    pub fn spark(&self, n: u8) -> Style {
+        self.fg(match n {
+            1 => Color::Yellow,
+            2 => Color::Magenta,
+            3 => Color::Blue,
+            _ => Color::Green,
+        })
+    }
+
+    /// The color of the `i`-th provider of a history, as the dashboard's
+    /// Tokens chart gives it; past the fourth, the foreground.
+    pub fn series(&self, i: usize) -> Style {
+        match i {
+            0 => self.spark(2),
+            1 => self.spark(3),
+            2 => self.spark(4),
+            3 => self.spark(1),
+            _ => self.ink(),
+        }
     }
 }
 

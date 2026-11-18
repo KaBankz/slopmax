@@ -282,6 +282,43 @@ pub fn fit(text: &str, width: usize) -> String {
     out
 }
 
+/// A name cut to `width` columns as [`fit`] cuts text, but keeping a
+/// trailing `(label)` whole where it fits, so `a@b.dev (Work)` loses its
+/// address first: `a@b… (Work)`.
+pub fn fit_name(name: &str, width: usize) -> String {
+    use ratatui::text::Line;
+    if Line::from(name).width() <= width {
+        return name.to_owned();
+    }
+    match name.strip_suffix(')').and_then(|n| n.rsplit_once(" (")) {
+        Some((base, label)) if !base.is_empty() => {
+            let label = format!(" ({label})");
+            let room = width.saturating_sub(Line::from(label.as_str()).width());
+            // At least a few letters of the address, else plain cutting.
+            if room >= 4 {
+                format!("{}{label}", fit(base, room))
+            } else {
+                fit(name, width)
+            }
+        }
+        _ => fit(name, width),
+    }
+}
+
+/// Burn as `0.9%/h`, finer below a tenth, and `0%/h` for none.
+pub fn rate(per_hour: f64) -> String {
+    let text = if per_hour < 0.1 {
+        format!("{per_hour:.2}")
+    } else {
+        format!("{per_hour:.1}")
+    };
+    if text.parse::<f64>().is_ok_and(|v| v == 0.0) {
+        "0%/h".into()
+    } else {
+        format!("{text}%/h")
+    }
+}
+
 /// The end of `text` that fits in `width` columns, after an ellipsis when
 /// the start is cut: where a cursor typing at the end stays in view.
 pub fn tail(text: &str, width: usize) -> String {
@@ -307,6 +344,23 @@ pub fn tail(text: &str, width: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_name_keeps_its_label_as_it_is_cut() {
+        assert_eq!(fit_name("a@b.dev (Work)", 20), "a@b.dev (Work)");
+        assert_eq!(
+            fit_name("someone@example.dev (Work)", 16),
+            "someone@… (Work)"
+        );
+        assert_eq!(fit_name("someone@example.dev", 10), "someone@e…");
+    }
+
+    #[test]
+    fn a_rate_of_nothing_reads_as_zero() {
+        assert_eq!(rate(0.004), "0%/h");
+        assert_eq!(rate(0.05), "0.05%/h");
+        assert_eq!(rate(1.26), "1.3%/h");
+    }
+
     use super::*;
 
     fn at(secs: i64) -> Instant {

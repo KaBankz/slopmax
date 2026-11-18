@@ -211,13 +211,13 @@ fn speed(entry: &Entry) -> Option<f64> {
         .then(|| entry.output as f64 * 1e3 / writing as f64)
 }
 
-/// An agent as people know it.
+/// An agent as people know it: its title in the registry (`Grok Build`
+/// for `grok`), `Warmups` for slopmax's own, else `Other`.
 fn agent(id: Option<&str>) -> &'static str {
     match id {
-        Some("claude") => "Claude Code",
-        Some("codex") => "Codex",
         Some(WARMUP) => "Warmups",
-        _ => "Other",
+        Some(id) => crate::agent::find(id).map_or("Other", |a| a.title()),
+        None => "Other",
     }
 }
 
@@ -491,6 +491,16 @@ mod tests {
         assert_eq!(work, 3);
         assert_eq!(history.cached, Some(1.));
         assert_eq!(history.buckets.last().unwrap().cached, Some(1.));
+    }
+
+    #[test]
+    fn agents_go_by_their_titles() {
+        assert_eq!(agent(Some("claude")), "Claude Code");
+        assert_eq!(agent(Some("codex")), "Codex");
+        assert_eq!(agent(Some("grok")), "Grok Build");
+        assert_eq!(agent(Some(WARMUP)), "Warmups");
+        assert_eq!(agent(Some("someone-else")), "Other");
+        assert_eq!(agent(None), "Other");
     }
 
     #[test]

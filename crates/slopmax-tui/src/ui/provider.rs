@@ -211,9 +211,15 @@ pub fn draw(app: &App, provider: Provider, flow: &mut Flow<'_>, now: &Now) {
             let basis = if weighted {
                 "weighted by plan"
             } else {
-                "each account counted alike"
+                "averaged"
             };
-            let across = if working >= accounts.len() {
+            let across = if accounts.len() == 1 {
+                if working >= 1 {
+                    "One account".to_owned()
+                } else {
+                    "One account, out of service".to_owned()
+                }
+            } else if working >= accounts.len() {
                 format!(
                     "Across {}, {basis}",
                     format::count(accounts.len() as u64, "account")
@@ -301,13 +307,13 @@ fn forecast(flow: &mut Flow<'_>, trend: &Trend, report: &Report, now: &Now) {
     ));
     if let Some(burn) = trend.burn {
         figures.push(Span::styled(
-            format!(" · {burn:.1}%/h recently"),
+            format!(" · {} recently", format::rate(burn)),
             Style::new(),
         ));
     }
     if let Some(sustainable) = trend.sustainable {
         figures.push(Span::styled(
-            format!(" · {sustainable:.1}%/h sustainable"),
+            format!(" · {} sustainable", format::rate(sustainable)),
             theme.muted(),
         ));
     }
@@ -325,7 +331,12 @@ fn forecast(flow: &mut Flow<'_>, trend: &Trend, report: &Report, now: &Now) {
             theme.tone(Tone::Warn),
         )),
         _ => figures.push(Span::styled(
-            " · lasts to its resets",
+            // A pool that used nothing lately has no pace to outlast.
+            if trend.burn.is_some_and(|burn| format::rate(burn) == "0%/h") {
+                " · nothing used lately"
+            } else {
+                " · lasts to its resets"
+            },
             theme.tone(Tone::Good),
         )),
     }
@@ -607,14 +618,17 @@ fn window_row(
     if let Some(spend) = spend
         && flow.width >= 110
     {
-        let per = spend
-            .per_percent
-            .map(|p| format!(" · {}/1%", format::dollars(p)))
-            .unwrap_or_default();
-        spans.push(Span::styled(
-            format!("  {} served{per}", format::dollars(spend.cost)),
-            theme.muted(),
-        ));
+        // Tokens and no cost: the models are not priced, not free.
+        let words = if spend.cost == 0.0 && spend.tokens > 0 {
+            "  not priced".to_owned()
+        } else {
+            let per = spend
+                .per_percent
+                .map(|p| format!(" · {} per 1%", format::dollars(p)))
+                .unwrap_or_default();
+            format!("  {} served{per}", format::dollars(spend.cost))
+        };
+        spans.push(Span::styled(words, theme.muted()));
     }
     flow.line(Line::from(spans));
 }

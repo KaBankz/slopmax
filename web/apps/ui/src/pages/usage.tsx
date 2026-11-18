@@ -3,15 +3,15 @@
 // the table)
 // and the Performance page (reliability, cache, speed, first byte).
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react"
-import type { History, HistoryRange } from "@slopmax/client"
+import type { History, HistoryRange, ProviderId } from "@slopmax/client"
 import { compact, grouped, providerTitle } from "@slopmax/client/format"
 import { cva } from "class-variance-authority"
 import { Option } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import type { ReactNode } from "react"
 import { historyAtom, machinesAtom, rangeAtom } from "../atoms.ts"
-import { Columns, Heatmap, type Ink, Legend, Lines, SplitBar, Swatch } from "../components/charts.tsx"
-import { Loaded, Meter, Section, Skeleton, Stats } from "../components/parts.tsx"
+import { Columns, Heatmap, type Ink, Legend, Lines, Share, SplitBar, Swatch } from "../components/charts.tsx"
+import { Loaded, Section, Skeleton, Stats } from "../components/parts.tsx"
 import { Quiet } from "../components/quiet.tsx"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.tsx"
 import { Separator } from "../components/ui/separator.tsx"
@@ -47,7 +47,20 @@ import {
 } from "../view/usage.ts"
 import { dollars, leftLine } from "../view/words.ts"
 
-const providerInks: ReadonlyArray<Ink> = ["chart-1", "chart-2", "chart-3", "chart-4"]
+const mixInks: ReadonlyArray<Ink> = ["chart-1", "chart-2", "chart-3", "chart-4"]
+/**
+ * The columns take the colors of the figures above them: tokens in the
+ * Tokens figure's pink (then the other trend colors, a provider each),
+ * requests in the Requests figure's blue, API value in its orange.
+ */
+const tokenInks: ReadonlyArray<Ink> = ["spark-2", "spark-3", "spark-4", "spark-1"]
+const answeredInk: Ink = "spark-3"
+/** A row no one provider owns, such as Other: grey. */
+const noInk: Ink = "chart-2"
+/** A provider's color, as the Tokens chart gives it. */
+const providerInk = (providers: ReadonlyArray<ProviderId>, provider: ProviderId | undefined): Ink =>
+  (provider === undefined ? undefined : tokenInks[providers.indexOf(provider)]) ?? noInk
+const valueInk: Ink = "spark-1"
 
 /** A chart's Card: its title and legend over the plot. */
 function ChartPanel({
@@ -110,22 +123,25 @@ function WithHistory({ children }: { readonly children: (history: History, range
 
 function Bars({
   rows,
+  providers,
   mono = false,
   requests = false,
 }: {
   readonly rows: ReadonlyArray<BarRow>
+  /** The range's providers, whose colors the rows take. */
+  readonly providers: ReadonlyArray<ProviderId>
   readonly mono?: boolean
   readonly requests?: boolean
 }) {
   return (
-    <div className="flex flex-col gap-2.5">
+    <div className="@container flex flex-col gap-2.5">
       {rows.map((row) => (
         <div key={row.name} className="flex items-center gap-3 text-xs">
-          <span className={mono ? "w-40 shrink-0 truncate font-mono text-xs" : "w-28 shrink-0 truncate"}>
+          <span className={mono ? "w-24 shrink-0 truncate font-mono text-xs @sm:w-40" : "w-28 shrink-0 truncate"}>
             {row.name}
           </span>
           <span className="min-w-0 flex-1">
-            <Meter fraction={row.fraction} tone="muted" />
+            <Share fraction={row.fraction} ink={providerInk(providers, row.provider)} />
           </span>
           <span className="w-14 shrink-0 text-right tabular-nums">{row.tokens}</span>
           {requests && (
@@ -146,14 +162,14 @@ function TokenMix({ history }: { readonly history: History }) {
       <SplitBar
         parts={mix.map((part) => ({
           share: part.share,
-          ink: providerInks[part.series - 1] ?? "meter",
+          ink: mixInks[part.series - 1] ?? "meter",
           title: part.title,
         }))}
       />
       <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
         {mix.map((part) => (
           <span key={part.title} className="flex items-center gap-2">
-            <Swatch ink={providerInks[part.series - 1] ?? "meter"} />
+            <Swatch ink={mixInks[part.series - 1] ?? "meter"} />
             <span className="flex-1 text-muted-foreground">{part.title}</span>
             <span className="tabular-nums">{compact(part.tokens)}</span>
           </span>
@@ -211,7 +227,7 @@ function AccountsTable({ history }: { readonly history: History }) {
                 <TableCell>
                   <span className="flex min-w-24 items-center gap-2">
                     <span className="min-w-0 flex-1">
-                      <Meter fraction={row.fraction} tone="muted" />
+                      <Share fraction={row.fraction} ink={providerInk(history.providers, row.providerId)} />
                     </span>
                     <span className="w-10 shrink-0 text-right text-muted-foreground tabular-nums">{row.share}</span>
                   </span>
@@ -320,7 +336,7 @@ function LeftOnTheTable({ history }: { readonly history: History }) {
                   </TableCell>
                   <TableCell>
                     <span className="flex w-30">
-                      <Meter fraction={account.unused / 100} tone="muted" />
+                      <Share fraction={account.unused / 100} ink={providerInk(history.providers, account.provider)} />
                     </span>
                   </TableCell>
                   <TableCell>
@@ -339,7 +355,7 @@ function LeftOnTheTable({ history }: { readonly history: History }) {
         </CardContent>
       </Card>
       <p className="text-xs text-muted-foreground">
-        The share of each plan's weekly fee that resets threw away, at plan list prices or planPrices in config.toml.
+        The share of each plan's weekly fee that resets threw away, at plan list prices or config.toml's [plan_prices].
       </p>
     </div>
   )
@@ -352,7 +368,7 @@ function Machines({ range }: { readonly range: HistoryRange }) {
   if (rows.length === 0) return null
   return (
     <ChartPanel title="Machines">
-      <Bars rows={rows} requests />
+      <Bars rows={rows} providers={[]} requests />
     </ChartPanel>
   )
 }
@@ -370,7 +386,7 @@ function UsageBody({ history, range }: { readonly history: History; readonly ran
         legend={
           <Legend
             items={history.providers.map((provider, i) => ({
-              ink: providerInks[i] ?? "meter",
+              ink: tokenInks[i] ?? "meter",
               title: providerTitle(provider),
             }))}
           />
@@ -384,7 +400,7 @@ function UsageBody({ history, range }: { readonly history: History; readonly ran
           buckets={history.buckets.map((bucket) => ({
             label: bucket.label,
             tip: tokensTip(history, bucket),
-            parts: bucket.tokens.map((value, i) => ({ value, ink: providerInks[i] ?? "meter" })),
+            parts: bucket.tokens.map((value, i) => ({ value, ink: tokenInks[i] ?? "meter" })),
           }))}
         />
       </ChartPanel>
@@ -394,7 +410,7 @@ function UsageBody({ history, range }: { readonly history: History; readonly ran
           legend={
             <Legend
               items={[
-                { ink: "meter", title: "Answered" },
+                { ink: answeredInk, title: "Answered" },
                 { ink: "bad", title: "Failed" },
               ]}
             />
@@ -409,7 +425,7 @@ function UsageBody({ history, range }: { readonly history: History; readonly ran
               label: bucket.label,
               tip: requestsTip(bucket),
               parts: [
-                { value: bucket.requests, ink: "meter" },
+                { value: bucket.requests, ink: answeredInk },
                 { value: bucket.failed, ink: "bad" },
               ],
             }))}
@@ -424,21 +440,21 @@ function UsageBody({ history, range }: { readonly history: History; readonly ran
             buckets={history.buckets.map((bucket) => ({
               label: bucket.label,
               tip: costTip(bucket),
-              parts: [{ value: bucket.cost, ink: "meter" }],
+              parts: [{ value: bucket.cost, ink: valueInk }],
             }))}
           />
         </ChartPanel>
       </Pair>
       <Pair>
         <ChartPanel title="Models">
-          <Bars rows={modelRows(history)} mono />
+          <Bars rows={modelRows(history)} providers={history.providers} mono />
         </ChartPanel>
         <ChartPanel title="Token mix">
           <TokenMix history={history} />
         </ChartPanel>
       </Pair>
       <ChartPanel title="Agents">
-        <Bars rows={agentRows(history)} requests />
+        <Bars rows={agentRows(history)} providers={history.providers} requests />
       </ChartPanel>
       <Machines range={range} />
       {range !== "today" && (
@@ -516,12 +532,15 @@ function PerformanceBody({ history, range }: { readonly history: History; readon
           {speeds.length === 0 ? (
             <span className="text-xs text-muted-foreground">No answers long enough to time yet.</span>
           ) : (
-            <div className="flex flex-col gap-2.5">
+            <div className="@container flex flex-col gap-2.5">
               {speeds.map((row) => (
                 <div key={row.model} className="flex items-center gap-3 text-xs">
-                  <span className="min-w-0 flex-1 truncate font-mono text-xs">{row.model}</span>
-                  <span className="w-20 shrink-0 text-muted-foreground">{row.provider}</span>
-                  <span className="w-20 shrink-0 text-right tabular-nums">{row.speed}</span>
+                  <span className="w-24 shrink-0 truncate font-mono text-xs @sm:w-40">{row.model}</span>
+                  <span className="min-w-0 flex-1">
+                    <Share fraction={row.fraction} ink={providerInk(history.providers, row.providerId)} />
+                  </span>
+                  <span className="w-16 shrink-0 text-muted-foreground">{row.provider}</span>
+                  <span className="w-16 shrink-0 text-right tabular-nums">{row.speed}</span>
                 </div>
               ))}
             </div>
