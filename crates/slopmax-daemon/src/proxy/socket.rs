@@ -623,14 +623,12 @@ async fn forward(ends: &mut Ends, message: &Message) -> Next {
 
 /// A failure event that is the account's rather than the request's.
 fn refusal(event: &Value, now: Timestamp) -> Option<Refusal> {
-    let error = event
-        .pointer("/response/error")
-        .or_else(|| event.get("error"))?;
+    let error = crate::limits::event_error(event)?;
     let code = ["code", "type"]
         .iter()
         .find_map(|k| error.get(*k).and_then(Value::as_str))
         .unwrap_or_default();
-    let headers = event_headers(event, error);
+    let headers = crate::limits::event_headers(event);
     match code {
         "usage_limit_reached"
         | "usage_limit_exceeded"
@@ -649,30 +647,6 @@ fn refusal(event: &Value, now: Timestamp) -> Option<Refusal> {
         }),
         _ => None,
     }
-}
-
-/// The response headers a failure event carries, as Codex reads them:
-/// beside the event's `error`, or, as ChatGPT sends an overload, inside it.
-/// The event's own win over the error's.
-fn event_headers(event: &Value, error: &Value) -> HeaderMap {
-    let mut headers = HeaderMap::new();
-    let fields = [error, event]
-        .into_iter()
-        .filter_map(|v| v.get("headers").and_then(Value::as_object));
-    for (name, value) in fields.flatten() {
-        let value = match value {
-            Value::String(text) => text.clone(),
-            Value::Number(number) => number.to_string(),
-            _ => continue,
-        };
-        if let (Ok(name), Ok(value)) = (
-            http::HeaderName::try_from(name.as_str()),
-            HeaderValue::try_from(value),
-        ) {
-            headers.insert(name, value);
-        }
-    }
-    headers
 }
 
 /// Records a turn in the ledger and the account's counters: finished

@@ -39,12 +39,18 @@ pub fn opening(event: &Value) -> Opening {
     match event.get("type").and_then(Value::as_str) {
         Some("response.created" | "response.in_progress" | "response.queued") => Opening::Wait,
         Some("response.failed" | "error") => match failure_code(event) {
-            Some("usage_limit_reached" | "usage_limit_exceeded") => {
-                Opening::Refused { exhausted: true }
-            }
-            Some("server_is_overloaded" | "slow_down" | "rate_limit_exceeded") => {
-                Opening::Refused { exhausted: false }
-            }
+            Some(
+                "usage_limit_reached"
+                | "usage_limit_exceeded"
+                | "usage_not_included"
+                | "insufficient_quota",
+            ) => Opening::Refused { exhausted: true },
+            Some(
+                "turn_rate_limit_exceeded"
+                | "server_is_overloaded"
+                | "slow_down"
+                | "rate_limit_exceeded",
+            ) => Opening::Refused { exhausted: false },
             _ => Opening::Content,
         },
         _ => Opening::Content,

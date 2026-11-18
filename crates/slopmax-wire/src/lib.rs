@@ -196,6 +196,11 @@ mod tests {
             Dialect::Responses.opening(&failed),
             Opening::Refused { exhausted: true }
         );
+        let capacity = json!({"type": "response.failed", "response": {"error": {"code": "turn_rate_limit_exceeded"}}});
+        assert_eq!(
+            Dialect::Responses.opening(&capacity),
+            Opening::Refused { exhausted: false }
+        );
         // Claude and chat refuse before streaming: anything is content.
         assert_eq!(Dialect::Messages.opening(&failed), Opening::Content);
         assert_eq!(Dialect::Chat.opening(&failed), Opening::Content);

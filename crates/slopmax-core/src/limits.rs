@@ -432,6 +432,39 @@ pub(crate) fn parse_time(value: &Value) -> Option<Timestamp> {
     }
 }
 
+/// The error a stream's failure event carries: `response.error` in a
+/// Responses `response.failed`, else the event's own `error`.
+pub fn event_error(event: &Value) -> Option<&Value> {
+    event
+        .pointer("/response/error")
+        .or_else(|| event.get("error"))
+}
+
+/// The response headers a failure event carries, as Codex reads them:
+/// beside the event's error, or, as ChatGPT sends an overload, inside it.
+/// The event's own win over the error's.
+pub fn event_headers(event: &Value) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    let fields = [event_error(event), Some(event)]
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.get("headers").and_then(Value::as_object));
+    for (name, value) in fields.flatten() {
+        let value = match value {
+            Value::String(text) => text.clone(),
+            Value::Number(number) => number.to_string(),
+            _ => continue,
+        };
+        if let (Ok(name), Ok(value)) = (
+            http::HeaderName::try_from(name.as_str()),
+            http::HeaderValue::try_from(value),
+        ) {
+            headers.insert(name, value);
+        }
+    }
+    headers
+}
+
 /// Why an upstream refused a request.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Refusal {

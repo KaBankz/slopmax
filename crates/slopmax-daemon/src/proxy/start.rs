@@ -11,6 +11,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use http_body_util::BodyExt;
 use hyper::body::Body;
+use serde_json::Value;
 use tokio::time::Instant;
 
 use crate::net::body::BoxError;
@@ -31,8 +32,13 @@ pub enum Start<B> {
         body: B,
         broke: Option<BoxError>,
     },
-    /// The stream opened with a refusal; these are the bytes received.
-    Refused { exhausted: bool, held: Bytes },
+    /// The stream opened with a refusal; these are the bytes received,
+    /// and the refusing event when it could be read.
+    Refused {
+        exhausted: bool,
+        held: Bytes,
+        event: Option<Value>,
+    },
 }
 
 pub async fn hold<B>(mut body: B, dialect: Dialect) -> Start<B>
@@ -68,6 +74,7 @@ where
                 return Start::Refused {
                     exhausted,
                     held: held.concat().into(),
+                    event: opener.refusal(),
                 };
             }
         }
@@ -102,9 +109,14 @@ mod tests {
     async fn a_spent_quota_is_caught_before_the_agent_sees_it() {
         let stream = "data: {\"type\":\"response.created\"}\n\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"usage_limit_reached\"}}}\n\n";
         match hold(full(stream), Dialect::Responses).await {
-            Start::Refused { exhausted, held } => {
+            Start::Refused {
+                exhausted,
+                held,
+                event,
+            } => {
                 assert!(exhausted);
                 assert_eq!(held, stream);
+                assert_eq!(event.unwrap()["type"], "response.failed");
             }
             Start::Streaming { .. } => panic!("should be refused"),
         }

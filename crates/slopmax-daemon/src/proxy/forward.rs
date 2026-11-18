@@ -36,7 +36,7 @@ use crate::net::headers::keep_returnable;
 use crate::net::server::{Request, Response};
 use crate::pool::{Choice, DEFAULT_BLOCK, DEFAULT_THROTTLE, Pick, Unavailable};
 use crate::provider::credits::Outcome;
-use crate::provider::{ProviderId, Verdict};
+use crate::provider::{Provider, ProviderId, Verdict};
 use crate::route::{self, NoRoute, Step, Steps};
 use crate::time::{SignedDuration, Timestamp};
 use crate::wire::ir::{self, Answer, Event, Part};
@@ -689,14 +689,46 @@ async fn attempt(
                     Start::Streaming { held, body, broke } => {
                         opened = Opened { held, body, broke };
                     }
-                    Start::Refused { exhausted, held } => {
-                        if exhausted {
-                            app.pool
-                                .block(&id, now + DEFAULT_BLOCK, None, "usage limit reached");
-                            log::info!("{id}: limited inside the stream; switching accounts");
-                        } else {
-                            app.pool.throttle(&id, now + DEFAULT_THROTTLE);
-                        }
+                    Start::Refused {
+                        exhausted,
+                        held,
+                        event,
+                    } => {
+                        // The provider reads the event as it would the same
+                        // refusal sent as a 429, for the wait it names.
+                        let verdict = event
+                            .as_ref()
+                            .and_then(|event| refused(provider, event, &headers, model, now));
+                        let exhausted = match verdict {
+                            Some(Verdict::Exhausted { until, model }) => {
+                                let until = until.unwrap_or(now + DEFAULT_BLOCK);
+                                app.pool
+                                    .block(&id, until, model.as_deref(), "usage limit reached");
+                                log::info!(
+                                    "{id}: limited inside the stream until {until}; switching accounts"
+                                );
+                                true
+                            }
+                            Some(Verdict::Throttled { until }) => {
+                                app.pool
+                                    .throttle(&id, until.unwrap_or(now + DEFAULT_THROTTLE));
+                                false
+                            }
+                            _ if exhausted => {
+                                app.pool.block(
+                                    &id,
+                                    now + DEFAULT_BLOCK,
+                                    None,
+                                    "usage limit reached",
+                                );
+                                log::info!("{id}: limited inside the stream; switching accounts");
+                                true
+                            }
+                            _ => {
+                                app.pool.throttle(&id, now + DEFAULT_THROTTLE);
+                                false
+                            }
+                        };
                         let failure = Failure {
                             status,
                             headers,
@@ -809,6 +841,23 @@ async fn attempt(
             }
         }
     }
+}
+
+/// The provider's verdict on a refusal that came inside a 200 stream, read
+/// as the same error sent as a 429: the event's error is the body, and its
+/// headers stand over the response's.
+fn refused(
+    provider: &dyn Provider,
+    event: &serde_json::Value,
+    headers: &HeaderMap,
+    model: Option<&str>,
+    now: Timestamp,
+) -> Option<Verdict> {
+    let error = crate::limits::event_error(event)?;
+    let body = serde_json::to_vec(&serde_json::json!({ "error": error })).ok()?;
+    let mut headers = headers.clone();
+    headers.extend(crate::limits::event_headers(event));
+    Some(provider.verdict(StatusCode::TOO_MANY_REQUESTS, &headers, &body, model, now))
 }
 
 /// The format to translate a `client` request into for an API speaking

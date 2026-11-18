@@ -422,6 +422,7 @@ fn event(dialect: Dialect, line: &[u8], outcome: &mut Outcome) {
 pub struct Opener {
     dialect: Dialect,
     lines: Lines,
+    refusal: Option<Value>,
 }
 
 impl Opener {
@@ -429,39 +430,52 @@ impl Opener {
         Self {
             dialect,
             lines: Lines::default(),
+            refusal: None,
         }
     }
 
     /// The first telling event in `chunk`, or [`Opening::Wait`].
     pub fn feed(&mut self, chunk: &[u8]) -> Opening {
         let dialect = self.dialect;
+        let refusal = &mut self.refusal;
         let flow = self.lines.feed(chunk, |line| match opening(dialect, line) {
-            Opening::Wait => ControlFlow::Continue(()),
-            told => ControlFlow::Break(told),
+            (Opening::Wait, _) => ControlFlow::Continue(()),
+            (told, event) => {
+                if matches!(told, Opening::Refused { .. }) {
+                    *refusal = event;
+                }
+                ControlFlow::Break(told)
+            }
         });
         match flow {
             ControlFlow::Break(told) => told,
             ControlFlow::Continue(()) => Opening::Wait,
         }
     }
+
+    /// The event the stream was refused with, for the wait it names.
+    pub fn refusal(self) -> Option<Value> {
+        self.refusal
+    }
 }
 
-fn opening(dialect: Dialect, line: &[u8]) -> Opening {
+/// How `line` opens a stream, with the event when it was read whole.
+fn opening(dialect: Dialect, line: &[u8]) -> (Opening, Option<Value>) {
     let Some(data) = data(line) else {
-        return Opening::Wait;
+        return (Opening::Wait, None);
     };
     match (dialect, kind(data)) {
         (
             Dialect::Responses,
             Some(b"response.created" | b"response.in_progress" | b"response.queued"),
-        ) => Opening::Wait,
+        ) => (Opening::Wait, None),
         (Dialect::Responses, Some(b"response.failed" | b"error")) | (_, None) => {
             match serde_json::from_slice::<Value>(data) {
-                Ok(event) => dialect.opening(&event),
-                Err(_) => Opening::Wait,
+                Ok(event) => (dialect.opening(&event), Some(event)),
+                Err(_) => (Opening::Wait, None),
             }
         }
-        (_, Some(_)) => Opening::Content,
+        (_, Some(_)) => (Opening::Content, None),
     }
 }
 
@@ -728,6 +742,11 @@ mod tests {
         assert_eq!(
             opener.feed(b"led\",\"response\":{\"error\":{\"code\":\"usage_limit_reached\"}}}\n"),
             Opening::Refused { exhausted: true }
+        );
+        assert_eq!(
+            opener.refusal().unwrap()["response"]["error"]["code"],
+            "usage_limit_reached",
+            "the refusal is kept for the wait it names"
         );
         let mut opener = Opener::new(Dialect::Responses);
         assert_eq!(

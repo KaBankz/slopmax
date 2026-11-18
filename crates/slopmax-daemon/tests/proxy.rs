@@ -470,7 +470,16 @@ fn mock_codex(log: &Log, headers: &HeaderMap) -> Response {
             &[("content-type", "text/event-stream".to_owned())],
             concat!(
                 "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\"}}\n\n",
-                "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"usage_limit_reached\",\"message\":\"limit\"}}}\n\n",
+                "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"usage_limit_reached\",\"message\":\"limit\",\"resets_in_seconds\":7200}}}\n\n",
+            ),
+        ),
+        // Overloaded, said inside a 200 stream with the wait in the error.
+        "Bearer tok-overloaded" => reply(
+            StatusCode::OK,
+            &[("content-type", "text/event-stream".to_owned())],
+            concat!(
+                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\"}}\n\n",
+                "data: {\"type\":\"error\",\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"busy\",\"headers\":{\"retry-after\":\"326\"}}}\n\n",
             ),
         ),
         _ if spent => reply(
@@ -1561,6 +1570,33 @@ async fn codex_streams_that_open_spent_move_to_the_next_account() {
     assert_eq!(response.status(), 429);
     let body: Value = response.json().await.unwrap();
     assert_eq!(body["error"]["type"], "usage_limit_reached");
+}
+
+#[tokio::test]
+async fn codex_streams_refused_inside_wait_as_long_as_the_refusal_says() {
+    let left = |until: Timestamp| until.duration_since(Timestamp::now());
+
+    let h = harness(ProviderId::Codex, &["tok-quiet", "tok-ok"]).await;
+    let response = codex_request(&h).send().await.unwrap();
+    assert_eq!(response.status(), 200, "served by the other account");
+    let blocked = left(h.app.pool.state(&h.ids[0]).blocked_until.unwrap());
+    assert!(
+        blocked > SignedDuration::from_secs(7000) && blocked <= SignedDuration::from_secs(7200),
+        "blocked for {blocked:?}"
+    );
+
+    let h = harness(ProviderId::Codex, &["tok-overloaded", "tok-ok"]).await;
+    let response = codex_request(&h).send().await.unwrap();
+    assert_eq!(response.status(), 200, "served by the other account");
+    let text = response.text().await.unwrap();
+    assert!(!text.contains("server_is_overloaded"), "{text}");
+    let state = h.app.pool.state(&h.ids[0]);
+    assert_eq!(state.blocked_until, None, "its allowance is untouched");
+    let throttled = left(state.throttled_until.unwrap());
+    assert!(
+        throttled > SignedDuration::from_secs(300) && throttled <= SignedDuration::from_secs(326),
+        "throttled for {throttled:?}"
+    );
 }
 
 #[tokio::test]
