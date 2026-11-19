@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-11-19
+
 ### Fixed
 
 - A sleeping Mac no longer signs your accounts out. On battery, macOS wakes for a few seconds at a time to do maintenance, and a token refresh that came due then could go out just before the Mac slept again: the provider replaced the refresh token, the reply was lost, and the account needed a new sign-in. slopmax now waits for the Mac to wake fully before it refreshes a sign-in, for Claude, ChatGPT and Grok alike.
