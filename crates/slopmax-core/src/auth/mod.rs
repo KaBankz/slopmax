@@ -3,6 +3,7 @@
 pub mod callback;
 pub mod jwt;
 pub mod pkce;
+mod wake;
 
 use std::fmt;
 use std::time::Duration;
@@ -312,6 +313,9 @@ pub async fn ensure_fresh(
         }
         if rotated_elsewhere || !due(&current) {
             return Ok(current);
+        }
+        if let Some(why) = wake::deferral().await {
+            return Err(RefreshError::Transient(anyhow!(why)));
         }
         refresh_and_save(&http, &store, current).await
     });
