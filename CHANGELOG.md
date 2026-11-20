@@ -4,6 +4,18 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-20
+
+### Added
+
+- The web dashboard opens with answered and failed requests, success rate, cache use, equivalent value at API prices, and time to first response. Switch between today, 7 days, and 30 days, or open the selected range in Requests.
+- Account readiness shows which providers can take work and when a quota-blocked account is expected back. Subscription cards show quota used and when it resets.
+
+### Changed
+
+- Overview and Usage use the same request chart. Wide bars retain the dithered finish, and narrow bars keep small failures visible. Both light and dark themes fit phone-sized screens.
+- Usage shows actual API-key charges alongside the equivalent value at API prices. Estimates mark missing prices and compare periods only when both have complete pricing.
+
 ## [0.18.4] - 2026-11-20
 
 ### Fixed
@@ -582,7 +594,8 @@ The first version.
 - `slopmax run`, `env`, and `setup` (with `--undo`) connect Claude Code and Codex.
 - Adapted Claude requests to the serving account (`metadata.user_id` and the billing-header checksum). 0.2.0 removed this.
 
-[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/KaBankz/slopmax/compare/v0.18.4...v0.19.0
 [0.9.0]: https://github.com/KaBankz/slopmax/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/KaBankz/slopmax/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/KaBankz/slopmax/compare/v0.7.0...v0.8.0
