@@ -234,7 +234,17 @@ fn same_file(a: &Path, b: &Path) -> bool {
 pub fn mise_upgrade(tool: &str, bump: bool) -> anyhow::Result<()> {
     use anyhow::Context;
     let mise = mise().context("mise installed slopmax, but the mise program can't be found")?;
-    let mut command = Command::new(&mise);
+    let status = upgrade_command(&mise, tool, bump)
+        .status()
+        .with_context(|| format!("running {}", mise.display()))?;
+    if !status.success() {
+        anyhow::bail!("`mise upgrade {tool}` failed");
+    }
+    Ok(())
+}
+
+fn upgrade_command(mise: &Path, tool: &str, bump: bool) -> Command {
+    let mut command = Command::new(mise);
     command
         .env("MISE_FETCH_REMOTE_VERSIONS_CACHE", "0")
         .env("MISE_MINIMUM_RELEASE_AGE", "0s")
@@ -246,13 +256,7 @@ pub fn mise_upgrade(tool: &str, bump: bool) -> anyhow::Result<()> {
     if let Some(home) = std::env::home_dir() {
         command.current_dir(home);
     }
-    let status = command
-        .status()
-        .with_context(|| format!("running {}", mise.display()))?;
-    if !status.success() {
-        anyhow::bail!("`mise upgrade {tool}` failed");
-    }
-    Ok(())
+    command
 }
 
 /// Where the login service's link points, if it is there.
@@ -324,6 +328,19 @@ impl FileId {
 mod tests {
     use super::*;
     use crate::testkit::temp_dir;
+
+    #[test]
+    fn mise_upgrades_to_a_release_made_today() {
+        let command = upgrade_command(Path::new("mise"), "github:KaBankz/slopmax", true);
+        let envs: Vec<_> = command.get_envs().collect();
+        assert!(envs.contains(&(
+            "MISE_FETCH_REMOTE_VERSIONS_CACHE".as_ref(),
+            Some("0".as_ref())
+        )));
+        assert!(envs.contains(&("MISE_MINIMUM_RELEASE_AGE".as_ref(), Some("0s".as_ref()))));
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(args, ["upgrade", "--bump", "github:KaBankz/slopmax"]);
+    }
 
     #[test]
     fn installs_are_told_by_where_the_binary_is() {
