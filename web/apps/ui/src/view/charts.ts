@@ -98,25 +98,22 @@ export const tokensTip = (history: Pick<History, "providers">, bucket: HistoryBu
   ].join("\n")
 
 export const requestsTip = (bucket: HistoryBucket): string =>
-  [
-    bucket.label,
-    count(bucket.requests, "request"),
-    ...(bucket.failed > 0 ? [`${grouped(bucket.failed)} failed`] : []),
-  ].join("\n")
+  [bucket.label, `${grouped(bucket.requests)} answered`, `${grouped(bucket.failed)} failed`].join("\n")
 
 export const costTip = (bucket: HistoryBucket): string => `${bucket.label}\n${dollars(bucket.cost)} at API prices`
 
 export const reliabilityTip = (bucket: HistoryBucket): string =>
   `${bucket.label}\n${grouped(bucket.rescued)} saved by failover\n${grouped(bucket.failed)} failed`
 
-export const cacheTip = (bucket: HistoryBucket): string =>
-  bucket.cached === undefined
-    ? `${bucket.label}\nNo input`
-    : `${bucket.label}\n${fixed(bucket.cached * 100, 0)}% from cache`
+/** The percentage of input read from cache, when recorded. */
+export const cacheShare = (cached: number | undefined): string =>
+  cached === undefined ? "No cache data" : `${fixed(cached * 100, 0)}% of input from cache`
+
+export const cacheTip = (bucket: HistoryBucket): string => `${bucket.label}\n${cacheShare(bucket.cached)}`
 
 export const firstByteTip = (bucket: HistoryBucket): string =>
   bucket.firstByte === undefined
-    ? `${bucket.label}\nNo answers`
+    ? `${bucket.label}\nNo response timings`
     : `${bucket.label}\nMedian ${fixed(bucket.firstByte[0] / 1000, 2)} s\nSlowest 5% ${fixed(bucket.firstByte[1] / 1000, 2)} s`
 
 /** A cell's level in the "When you work" grid: 0 for none, else 1 to 4. */
@@ -199,6 +196,6 @@ export const rhythm = (activity: ReadonlyArray<ReadonlyArray<number>>): Readonly
   ]
 }
 
-/** A cell's tooltip: `Tue 14:00 | 12 requests`. */
+/** An activity cell as a time and the number of client requests answered. */
 export const activityTip = (day: number, hour: number, n: number): string =>
-  `${weekdays[day] ?? ""} ${String(hour).padStart(2, "0")}:00 | ${count(n, "request")}`
+  `${weekdays[day] ?? ""} ${String(hour).padStart(2, "0")}:00 | ${grouped(n)} answered`

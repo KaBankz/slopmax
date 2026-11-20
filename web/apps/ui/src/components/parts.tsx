@@ -223,17 +223,23 @@ export function AccountName({ name }: { readonly name: string }) {
   )
 }
 
-const changeVariants = cva("inline-flex shrink-0 items-baseline gap-1 font-medium tabular-nums", {
-  variants: { direction: { up: "text-success", down: "text-destructive", flat: "text-muted-foreground" } },
-})
-
-const arrows = { up: "▲", down: "▼", flat: "–" } as const
+/** A comparison with the previous value available from pointer or keyboard focus. */
+export function StatChange({ change }: { readonly change: Change }) {
+  return (
+    <Tip content={change.tip}>
+      <span tabIndex={0} aria-description={change.tip} className="font-medium tabular-nums">
+        {change.direction === "flat" ? "Steady" : `${change.direction === "up" ? "Up" : "Down"} ${change.text}`}{" "}
+        {change.versus}
+      </span>
+    </Tip>
+  )
+}
 
 const sparkInks = ["spark-1", "spark-2", "spark-3", "spark-4"] as const
 
 /**
  * A figure in a Card: its caption, the number, how it moved since the span
- * before beside a note, and its trend line beneath. `lg` is a headline.
+ * before, its note, and its trend line beneath. `lg` is a headline.
  */
 export function Stat({
   title,
@@ -250,12 +256,11 @@ export function Stat({
   readonly trend?: Trend | undefined
   readonly size?: "md" | "lg"
 }) {
-  const words = [change?.versus, note].filter((part) => part !== undefined && part !== "").join(" · ")
   return (
     <Card>
       <CardHeader>
         <CardDescription>
-          <span className="text-xs font-medium tracking-widest uppercase">{title}</span>
+          <span className="text-xs font-medium">{title}</span>
         </CardDescription>
         {size === "lg" ? (
           <CardTitle className="text-5xl font-normal tracking-tight tabular-nums @4xl:text-6xl">{value}</CardTitle>
@@ -265,24 +270,14 @@ export function Stat({
       </CardHeader>
       <CardContent className="flex flex-1 flex-col">
         <div className="flex flex-1 flex-col justify-between gap-3">
-          <p
-            className={
-              size === "lg"
-                ? "flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-sm"
-                : "flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 text-xs"
-            }
-          >
+          <div className={size === "lg" ? "flex flex-col gap-1 text-sm" : "flex flex-col gap-1 text-xs"}>
             {change !== undefined && (
-              <Tip content={change.tip}>
-                <span className={changeVariants({ direction: change.direction })}>
-                  <span aria-hidden>{arrows[change.direction]}</span>
-                  <span className="sr-only">{change.direction}</span>
-                  {change.text}
-                </span>
-              </Tip>
+              <p>
+                <StatChange change={change} />
+              </p>
             )}
-            <span className="text-muted-foreground">{words}</span>
-          </p>
+            <p className="text-muted-foreground">{note}</p>
+          </div>
           {trend !== undefined && (
             <Spark points={trend.points} ink={sparkInks[trend.series - 1] ?? "meter"} size={size} />
           )}

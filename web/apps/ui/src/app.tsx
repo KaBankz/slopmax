@@ -261,9 +261,9 @@ function Window() {
       <SidebarInset className="min-w-0">
         <header className="flex h-14 shrink-0 items-center border-b">
           {/* As wide as the content column, so the page's tools sit over the page they act on. */}
-          <div className="mx-auto flex w-full max-w-6xl items-center gap-2 px-4 md:px-6">
+          <div className="mx-auto flex w-full max-w-6xl items-center gap-2 px-3 sm:px-4 md:px-6">
             <SidebarTrigger className="-ml-1" />
-            <Separator orientation="vertical" className="mr-2 data-[orientation=vertical]:h-4" />
+            <Separator orientation="vertical" className="data-[orientation=vertical]:h-4 sm:mr-2" />
             <h1 className="min-w-0 flex-1 truncate text-base font-medium">{pageTitle(page)}</h1>
             <div className="flex items-center gap-2">
               <Tools page={page} />

@@ -4,13 +4,13 @@ import { type AccountView, type Notice, type ProviderId, type Report, type Tone,
 import { clock, fixed, pace, until } from "@slopmax/client/format"
 import { DateTime, Duration, Option } from "effect"
 import { expiringWithin, resetsLeft, unexpiredResets, windowTitle } from "./groups.ts"
-import { lowercaseFirst, resetCount } from "./words.ts"
+import { listed, lowercaseFirst, resetCount } from "./words.ts"
 
 /** How the accounts stand: what an overview leads with. */
 export interface Standing {
   /** `All 4 accounts are ready`, or `3 of 4 accounts are ready`. */
   readonly headline: string
-  /** What keeps the rest: `1 limited · 1 needs signing in`. */
+  /** What keeps the rest: `1 limited and 1 needs signing in`. */
   readonly detail?: string
   readonly tone: Tone
 }
@@ -39,8 +39,8 @@ export const standing = (report: Report): Standing => {
   ]
   return {
     headline,
-    ...(parts.length > 0 ? { detail: parts.join(" · ") } : {}),
-    tone: signedOut > 0 ? "bad" : limited > 0 ? "warn" : "good",
+    ...(parts.length > 0 ? { detail: listed(parts) } : {}),
+    tone: signedOut > 0 ? "bad" : limited > 0 ? "warn" : ready > 0 ? "good" : "muted",
   }
 }
 

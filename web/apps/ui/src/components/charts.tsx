@@ -1,23 +1,28 @@
 // The charts, on shadcn/ui's Chart (Recharts): stacked and grouped columns,
-// lines, the hours of a day, a pool's use over time with where it is
+// lines, a pool's use over time with where it is
 // heading, a figure's trend line, and a list row's bar; plus two small
 // compositions Recharts has no shape for, the "When you work" grid and the
 // token mix. Series take the
 // theme's chart colors, and state colors where they mean a state (a failure
 // is destructive).
+import type { History } from "@slopmax/client"
 import { cva } from "class-variance-authority"
 import type { DateTime } from "effect"
 import { AreaChart, BarChart, CartesianGrid, ComposedChart, ReferenceLine, XAxis, YAxis } from "recharts"
 import {
   type Axis,
   activityTip,
+  countTick,
+  labelEvery,
   type Level,
   levelScale,
   levels,
+  requestsTip,
   rhythm,
   type SparkPoint,
   tickValues,
   weekdays,
+  zeroAxis,
 } from "../view/charts.ts"
 import { tickLabel, type TrendView } from "../view/forecast.ts"
 import { Tip } from "./tip.tsx"
@@ -93,7 +98,7 @@ export function Legend({ items }: { readonly items: ReadonlyArray<{ readonly ink
   )
 }
 
-const heights = cva("w-full", { variants: { size: { sm: "h-36", md: "h-44", lg: "h-56" } } })
+const heights = cva("w-full", { variants: { size: { sm: "h-36", md: "h-44", lg: "h-44 sm:h-56" } } })
 
 /** A row of chart data: the bucket's label, its tooltip, and a value per series (`s0`, `s1`, …). */
 interface Datum {
@@ -120,6 +125,8 @@ function TipContent({ active, payload }: { readonly active?: boolean; readonly p
 const configFor = (inks: ReadonlyArray<Ink>): ChartConfig =>
   Object.fromEntries(inks.map((ink, i) => [`s${i}`, { color: color(ink) }]))
 
+const axisText = { fill: "var(--muted-foreground)", fontSize: 12 }
+
 export interface ColumnBucket {
   readonly label: string
   readonly parts: ReadonlyArray<{ readonly value: number; readonly ink: Ink }>
@@ -131,16 +138,19 @@ export interface ColumnBucket {
  * every `every`th. `inset` pads the ends of the label axis, for lines, whose
  * first and last points sit on the plot's edges and would cut their labels.
  */
-function axes(scale: Axis, tick: (value: number) => string, every: number, inset = 0) {
+function axes(scale: Axis, tick: (value: number) => string, labels: ReadonlyArray<string>, every: number, inset = 0) {
   return [
     <CartesianGrid key="grid" vertical={false} />,
     <XAxis
       key="x"
       dataKey="label"
+      tick={axisText}
       tickLine={false}
       axisLine={false}
       tickMargin={8}
-      interval={Math.max(0, every - 1)}
+      ticks={labels.filter((_, index) => index % every === 0 || index === labels.length - 1)}
+      interval="preserveStartEnd"
+      minTickGap={10}
       padding={{ left: inset, right: inset }}
     />,
     <YAxis
@@ -148,6 +158,7 @@ function axes(scale: Axis, tick: (value: number) => string, every: number, inset
       domain={[scale.bottom, scale.top]}
       ticks={[...tickValues(scale)]}
       tickFormatter={tick}
+      tick={axisText}
       interval={0}
       tickLine={false}
       axisLine={false}
@@ -182,8 +193,18 @@ export function Columns({
   return (
     <div className={heights({ size })}>
       <ChartContainer config={configFor(inks)} className="aspect-auto size-full">
-        <BarChart accessibilityLayer data={data} barCategoryGap="20%">
-          {axes(scale, tick, every)}
+        <BarChart
+          accessibilityLayer
+          data={data}
+          barCategoryGap="20%"
+          margin={{ top: 5, right: 20, bottom: 5, left: 0 }}
+        >
+          {axes(
+            scale,
+            tick,
+            buckets.map((bucket) => bucket.label),
+            every,
+          )}
           <ChartTooltip cursor={false} content={TipContent} />
           {inks.map((_, i) => (
             <ChartBar
@@ -196,6 +217,34 @@ export function Columns({
         </BarChart>
       </ChartContainer>
     </div>
+  )
+}
+
+export const requestInks = { answered: "spark-3", failed: "bad" } as const
+
+/** Requests by outcome, with each stacked column showing the total for its bucket. */
+export function RequestColumns({ history, size }: { readonly history: History; readonly size: "sm" | "lg" }) {
+  const most = Math.max(0, ...history.buckets.map((bucket) => bucket.requests + bucket.failed))
+  return (
+    <figure>
+      <figcaption className="sr-only">
+        Answered and failed requests by {history.range === "today" ? "hour" : "day"}
+      </figcaption>
+      <Columns
+        size={size}
+        every={labelEvery(history.range)}
+        scale={zeroAxis(most, 1)}
+        tick={countTick}
+        buckets={history.buckets.map((bucket) => ({
+          label: bucket.label,
+          tip: requestsTip(bucket),
+          parts: [
+            { value: bucket.requests, ink: requestInks.answered },
+            { value: bucket.failed, ink: requestInks.failed },
+          ],
+        }))}
+      />
+    </figure>
   )
 }
 
@@ -230,7 +279,7 @@ export function Lines({
     <div className={heights({ size })}>
       <ChartContainer config={configFor(series.map((line) => line.ink))} className="aspect-auto size-full">
         <AreaChart accessibilityLayer data={data}>
-          {axes(scale, tick, every, 20)}
+          {axes(scale, tick, labels, every, 20)}
           <ChartTooltip cursor={false} content={TipContent} />
           {series.map((line, k) => (
             <ChartArea
@@ -276,6 +325,7 @@ export function TrendChart({ view, zone }: { readonly view: TrendView; readonly 
             domain={[view.from, view.to]}
             ticks={[...view.ticks]}
             tickFormatter={(t: number) => tickLabel(t, view.span, zone)}
+            tick={axisText}
             tickLine={false}
             axisLine={false}
             tickMargin={8}
@@ -285,6 +335,7 @@ export function TrendChart({ view, zone }: { readonly view: TrendView; readonly 
             ticks={percents}
             tickFormatter={(value: number) => `${value}%`}
             interval={0}
+            tick={axisText}
             tickLine={false}
             axisLine={false}
             width={44}
@@ -333,38 +384,6 @@ export function Spark({
           <ChartArea dataKey="value" connectNulls />
         </AreaChart>
       </ChartContainer>
-    </div>
-  )
-}
-
-/** Small columns for the hours of a day, without axes: the overview's Today. `tip` words an hour's value. */
-export function Hours({
-  values,
-  tip,
-  ink = "meter",
-}: {
-  readonly values: ReadonlyArray<number>
-  readonly tip: (hour: number, value: number) => string
-  readonly ink?: Ink
-}) {
-  const data = values.map((value, hour) => ({ hour, value, tip: tip(hour, value) }))
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="h-16 w-full">
-        <ChartContainer config={{ value: { color: color(ink) } }} className="aspect-auto size-full">
-          <BarChart data={data} barCategoryGap="25%" margin={{ top: 0, right: 0, bottom: 0, left: 0 }}>
-            <ChartTooltip cursor={false} content={TipContent} />
-            <ChartBar dataKey="value" />
-          </BarChart>
-        </ChartContainer>
-      </div>
-      <div className="flex text-xs text-muted-foreground">
-        {["00:00", "06:00", "12:00", "18:00"].map((label) => (
-          <span key={label} className="flex-1">
-            {label}
-          </span>
-        ))}
-      </div>
     </div>
   )
 }

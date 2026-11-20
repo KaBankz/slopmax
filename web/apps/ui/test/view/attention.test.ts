@@ -16,7 +16,7 @@ describe("how the accounts stand", () => {
   test("a headline, what keeps the rest, and the worst tone", () => {
     expect(standing(report)).toEqual({
       headline: "5 of 7 accounts are ready",
-      detail: "1 limited · 1 needs signing in",
+      detail: "1 limited and 1 needs signing in",
       tone: "bad",
     })
     expect(standing(emptyReport(now)).headline).toBe("No accounts yet")
@@ -31,7 +31,7 @@ describe("how the accounts stand", () => {
         condition: Condition.cases.Disabled.make({}),
       }),
     ])
-    expect(standing(off)).toEqual({ headline: "Every account is turned off", detail: "1 turned off", tone: "good" })
+    expect(standing(off)).toEqual({ headline: "Every account is turned off", detail: "1 turned off", tone: "muted" })
     const limited = withAccounts([
       account({ id: "claude-1", provider: "claude", name: "a" }),
       account({ id: "claude-2", provider: "claude", name: "b", condition: Condition.cases.Throttled.make({}) }),

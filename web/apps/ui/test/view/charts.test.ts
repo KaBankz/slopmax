@@ -72,12 +72,12 @@ describe("value axes", () => {
 
 describe("tooltips", () => {
   test("say each bucket's figures", () => {
-    expect(requestsTip(bucket({ requests: 12, failed: 2 }))).toBe("Oct 31\n12 requests\n2 failed")
-    expect(requestsTip(bucket({ requests: 1 }))).toBe("Oct 31\n1 request")
-    expect(cacheTip(bucket({ cached: 0.864 }))).toBe("Oct 31\n86% from cache")
-    expect(cacheTip(bucket())).toBe("Oct 31\nNo input")
+    expect(requestsTip(bucket({ requests: 12, failed: 2 }))).toBe("Oct 31\n12 answered\n2 failed")
+    expect(requestsTip(bucket({ requests: 1 }))).toBe("Oct 31\n1 answered\n0 failed")
+    expect(cacheTip(bucket({ cached: 0.864 }))).toBe("Oct 31\n86% of input from cache")
+    expect(cacheTip(bucket())).toBe("Oct 31\nNo cache data")
     expect(firstByteTip(bucket({ firstByte: [840, 3_125] }))).toBe("Oct 31\nMedian 0.84 s\nSlowest 5% 3.12 s")
-    expect(firstByteTip(bucket())).toBe("Oct 31\nNo answers")
+    expect(firstByteTip(bucket())).toBe("Oct 31\nNo response timings")
     expect(tokensTip({ providers: ["claude", "codex"] }, bucket({ tokens: [30_900_000, 11_100_000] }))).toBe(
       "Oct 31\nClaude: 30.9M\nChatGPT: 11.1M\nTotal: 42.0M",
     )
@@ -105,6 +105,6 @@ describe("when you work", () => {
       { title: "Weekends", value: "10%", note: "of requests" },
     ])
     expect(rhythm([[0, 0]])).toEqual([])
-    expect(activityTip(1, 9, 1)).toBe("Tue 09:00 | 1 request")
+    expect(activityTip(1, 9, 1)).toBe("Tue 09:00 | 1 answered")
   })
 })
