@@ -13,29 +13,27 @@ import {
   eventsAtom,
   feedAtom,
   requestFilterAtom,
-  go,
   pageAtom,
   prefsAtom,
   rangeAtom,
   readOnlyAtom,
   refresh,
   refreshingAtom,
-  settingsAtom,
   tailnetProbeAtom,
   tailnetRetryAtom,
-  toggleSidebar,
   unansweredAtom,
 } from "./atoms.ts"
 import { AskHost } from "./components/ask.tsx"
 import { Segmented } from "./components/segmented.tsx"
-import { Sidebar, SidebarFrame } from "./components/sidebar.tsx"
+import { Masthead, SectionNavigation } from "./components/navigation.tsx"
 import { SignInCard } from "./components/sign-in.tsx"
 import { Toasts } from "./components/toasts.tsx"
 import { Alert, AlertDescription, AlertTitle } from "./components/ui/alert.tsx"
-import { Button } from "./components/ui/button.tsx"
-import { SidebarInset, SidebarTrigger } from "./components/ui/sidebar.tsx"
+import { Button, ButtonLink } from "./components/ui/button.tsx"
 import { TooltipProvider } from "./components/ui/tooltip.tsx"
 import { AccessPage } from "./pages/access.tsx"
+import { AccountsPage } from "./pages/accounts.tsx"
+import { AddAccountPage } from "./pages/add-account.tsx"
 import { AgentsPage } from "./pages/agents.tsx"
 import { DiagnosticsPage, DiagnosticsTools } from "./pages/diagnostics.tsx"
 import { Gate } from "./pages/gate.tsx"
@@ -44,7 +42,7 @@ import { ProviderPage } from "./pages/provider.tsx"
 import { RequestsPage } from "./pages/requests.tsx"
 import { SettingsPage } from "./pages/settings.tsx"
 import { PerformancePage, UsagePage } from "./pages/usage.tsx"
-import { keyFromHash, type Page, pageDescription, Pages, pageTitle } from "./view/pages.ts"
+import { keyFromHash, type Page, pageDescription, pageHash, Pages, pageTitle } from "./view/pages.ts"
 import { adminCommand, onTheHub } from "./view/tailnet.ts"
 import { rangeTitle, ranges } from "./view/words.ts"
 
@@ -71,13 +69,14 @@ function RefreshButton() {
   return (
     <Button
       variant="outline"
-      aria-label="Refresh usage"
+      size="pageAction"
+      aria-label="Refresh"
       aria-busy={refreshing || undefined}
       disabled={!canChange || refreshing}
       onClick={() => again()}
     >
       <RefreshCw aria-hidden className={refreshing ? "animate-spin motion-reduce:animate-none" : undefined} />
-      {refreshing ? "Refreshing…" : "Refresh"}
+      <span className="hidden sm:inline">{refreshing ? "Refreshing…" : "Refresh"}</span>
     </Button>
   )
 }
@@ -89,14 +88,15 @@ function Tools({ page }: { readonly page: Page }) {
   const listing = useAtomValue(requestFilterAtom).span
   switch (page._tag) {
     case "Overview":
+    case "Accounts":
     case "Provider":
       return (
         <>
           <RefreshButton />
-          <Button variant="secondary" onClick={() => go(Pages.access)}>
-            <Plus />
+          <ButtonLink variant="secondary" size="pageAction" href={pageHash(Pages.addAccount)}>
+            <Plus aria-hidden />
             Add account
-          </Button>
+          </ButtonLink>
         </>
       )
     case "Usage":
@@ -119,6 +119,7 @@ function Tools({ page }: { readonly page: Page }) {
           Clear
         </Button>
       )
+    case "AddAccount":
     case "Agents":
     case "Access":
     case "Settings":
@@ -130,6 +131,10 @@ function PageBody({ page }: { readonly page: Page }) {
   switch (page._tag) {
     case "Overview":
       return <OverviewPage />
+    case "Accounts":
+      return <AccountsPage />
+    case "AddAccount":
+      return <AddAccountPage />
     case "Provider":
       return <ProviderPage provider={page.provider} account={page.account} />
     case "Usage":
@@ -198,23 +203,23 @@ function ReadOnlyBanner() {
 function Window() {
   useAtomMount(eventsAtom)
   const page = useAtomValue(pageAtom)
-  const host = useAtomValue(hostAtom)
-  const settings = useAtomValue(settingsAtom)
-  const toggle = useAtomSet(toggleSidebar)
   const pane = useRef<HTMLDivElement>(null)
   const heading = useRef<HTMLHeadingElement>(null)
+  const previousPage = useRef(page)
   useEffect(() => {
+    if (previousPage.current === page) return
+    previousPage.current = page
     if (pane.current !== null) pane.current.scrollTop = 0
+    // Give the focused account row the first chance to receive focus on a deep link.
+    const frame = requestAnimationFrame(() => {
+      const accountLink = page._tag === "Provider" && page.account !== undefined
+      if (accountLink && pane.current?.contains(document.activeElement)) return
+      heading.current?.focus({ preventScroll: true })
+    })
+    return () => cancelAnimationFrame(frame)
   }, [page])
-  const listen = Option.map(AsyncResult.value(settings), (view) => view.settings.listen)
-  const address = Option.getOrElse(listen, () =>
-    Option.match(host, {
-      onNone: () => "",
-      onSome: (h) => h.origin.replace(/^https?:\/\//, ""),
-    }),
-  )
   return (
-    <SidebarFrame onToggle={() => toggle()}>
+    <div className="flex h-full min-h-0 flex-col pb-(--dashboard-dock) [--dashboard-dock:calc(3.5rem+var(--dashboard-safe-bottom))] md:[--dashboard-dock:0px]">
       <a
         href="#dashboard-title"
         className="sr-only z-50 rounded-md bg-card px-4 py-2 font-medium focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:outline-2 focus:outline-ring"
@@ -225,39 +230,44 @@ function Window() {
       >
         Skip to main content
       </a>
-      <Sidebar address={address} />
-      <SidebarInset className="min-w-0" aria-labelledby="dashboard-title">
-        <header className="shrink-0 border-b bg-card">
-          <div className="mx-auto grid w-full max-w-7xl grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-3 px-4 py-4 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:px-6 lg:px-8">
-            <div className="min-w-0">
-              <h1
-                ref={heading}
-                id="dashboard-title"
-                tabIndex={-1}
-                className="font-heading text-display font-semibold tracking-tight"
-              >
-                {pageTitle(page)}
-              </h1>
-              <p className="mt-1 text-sm text-muted-foreground">{pageDescription(page)}</p>
+      <Masthead page={page} />
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col" aria-labelledby="dashboard-title">
+        <div ref={pane} data-slot="dashboard-scroll" className="relative min-h-0 flex-1 overflow-y-auto">
+          <div className="@container mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 pt-5 pb-8 sm:gap-7 sm:px-6 sm:pt-8 lg:px-8">
+            <div className="flex flex-col gap-3">
+              <SectionNavigation page={page} />
+              <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-3">
+                <div className="min-w-0">
+                  <h1
+                    ref={heading}
+                    id="dashboard-title"
+                    tabIndex={-1}
+                    className="w-fit rounded-sm font-heading text-display font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                  >
+                    {pageTitle(page)}
+                  </h1>
+                  <p
+                    data-compact={page._tag === "Overview" || undefined}
+                    className="mt-1.5 text-sm text-muted-foreground data-compact:hidden sm:data-compact:block"
+                  >
+                    {pageDescription(page)}
+                  </p>
+                </div>
+                <div className="flex min-w-0 flex-wrap items-center gap-2 empty:hidden">
+                  <Tools page={page} />
+                </div>
+              </div>
             </div>
-            <SidebarTrigger className="col-start-2 row-start-1 self-start sm:col-start-3 sm:self-center" />
-            <div className="col-span-2 flex min-w-0 flex-wrap items-center gap-2 empty:hidden sm:col-span-1 sm:col-start-2 sm:row-start-1 sm:justify-end">
-              <Tools page={page} />
-            </div>
-          </div>
-        </header>
-        <div ref={pane} className="relative min-h-0 flex-1 overflow-y-auto">
-          <div className="@container mx-auto flex w-full max-w-7xl flex-col gap-7 px-4 py-5 sm:px-6 sm:py-6 lg:px-8">
             <ReadOnlyBanner />
             <UnansweredBanner />
             <SignInCard />
             <PageBody page={page} />
           </div>
         </div>
-      </SidebarInset>
+      </main>
       <Toasts />
       <AskHost />
-    </SidebarFrame>
+    </div>
   )
 }
 
@@ -308,7 +318,7 @@ function Entrance() {
 function Probe() {
   const probe = useAtomValue(tailnetProbeAtom)
   if (AsyncResult.isInitial(probe) || AsyncResult.isWaiting(probe)) {
-    return <main aria-busy="true" aria-label="Opening slopmax…" className="h-full bg-sidebar" />
+    return <main aria-busy="true" aria-label="Opening slopmax…" className="h-full bg-background" />
   }
   return <Gate />
 }

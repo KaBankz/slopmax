@@ -1,305 +1,38 @@
-// The accounts slopmax sends requests to, and the keys other machines and
-// tools reach it with: sign in, import logins, add an API key or a
-// compatible endpoint, make or revoke client keys, and see how your other
-// machines reach slopmax over your tailnet.
+// Client keys and the other machines that connect to slopmax.
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
-import type { Dialect } from "@slopmax/client"
-import { NotFound, providerFacts } from "@slopmax/client"
+import { NotFound } from "@slopmax/client"
 import { Cause, Exit, Option } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import { CircleAlert, Copy, KeyRound } from "lucide-react"
 import { type FormEvent, type ReactNode, useId, useState } from "react"
 import {
-  addAccount,
   canChangeAtom,
   copy,
   dismissNewKey,
-  importLogins,
   keysAtom,
   makeKey,
   newKeyAtom,
   prefsAtom,
   readOnlyAtom,
   revokeKey,
-  signIn,
   tailnetAtom,
   unansweredAtom,
 } from "../atoms.ts"
 import { useAsk } from "../components/ask.tsx"
 import { Failed, Loaded, Panel, Section, SettingRow, Skeleton } from "../components/parts.tsx"
-import { Segmented } from "../components/segmented.tsx"
+import { ModelPatternHelp } from "../components/model-pattern-help.tsx"
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert.tsx"
-import { Button } from "../components/ui/button.tsx"
-import { Field, FieldDescription, FieldError, FieldLabel, FieldTitle } from "../components/ui/field.tsx"
+import { Button, ButtonLink } from "../components/ui/button.tsx"
+import { Field, FieldError } from "../components/ui/field.tsx"
 import { Input } from "../components/ui/input.tsx"
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "../components/ui/input-group.tsx"
-import { Item, ItemActions, ItemContent, ItemDescription, ItemFooter, ItemTitle } from "../components/ui/item.tsx"
+import { Item, ItemContent, ItemDescription } from "../components/ui/item.tsx"
 import { askRevoke } from "../view/asks.ts"
 import { cannotChange } from "../view/live.ts"
+import { pageHash, Pages } from "../view/pages.ts"
 import { maskEmails } from "../view/privacy.ts"
 import { machinesCard } from "../view/tailnet.ts"
 import { failureText, patterns, sentenceCase } from "../view/words.ts"
-
-type KeyProvider = "anthropic" | "openai" | "xai"
-const keyProviders: ReadonlyArray<KeyProvider> = ["anthropic", "openai", "xai"]
-
-const dialects: ReadonlyArray<{
-  readonly value: Dialect
-  readonly title: string
-}> = [
-  { value: "chat", title: "Chat completions" },
-  { value: "responses", title: "Responses" },
-  { value: "messages", title: "Messages" },
-]
-
-function KeyRow({ disabled }: { readonly disabled: boolean }) {
-  const add = useAtomSet(addAccount, { mode: "promiseExit" })
-  const [provider, setProvider] = useState<KeyProvider>("anthropic")
-  const [key, setKey] = useState("")
-  const [refused, setRefused] = useState<string | undefined>(undefined)
-  const [busy, setBusy] = useState(false)
-  const errorId = useId()
-  const submit = (event: FormEvent) => {
-    event.preventDefault()
-    if (key.trim() === "" || busy) return
-    setRefused(undefined)
-    setBusy(true)
-    void add({ _tag: "Key", provider, key: key.trim() }).then((exit) => {
-      setBusy(false)
-      if (Exit.isSuccess(exit)) setKey("")
-      else setRefused(failureText(exit.cause))
-    })
-  }
-  // A SettingRow, but why a key was refused takes the place of its description,
-  // with the form that asked rather than as a toast.
-  return (
-    <div className="border-t first:border-t-0">
-      <Item>
-        <ItemContent className="min-w-56">
-          <ItemTitle>API key</ItemTitle>
-          {refused === undefined ? (
-            <ItemDescription>A key bills by the token; slopmax spends subscriptions first.</ItemDescription>
-          ) : (
-            <FieldError id={errorId}>{sentenceCase(refused)}</FieldError>
-          )}
-        </ItemContent>
-        <ItemActions>
-          <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
-            <Segmented
-              label="Provider"
-              value={provider}
-              onChange={setProvider}
-              options={keyProviders.map((id) => ({
-                value: id,
-                title: providerFacts[id].title,
-              }))}
-            />
-            <Input
-              type="password"
-              aria-label="Paste an API key"
-              placeholder="Paste an API key"
-              className="w-56 max-w-full"
-              value={key}
-              aria-invalid={refused !== undefined || undefined}
-              aria-describedby={refused === undefined ? undefined : errorId}
-              onChange={(event) => setKey(event.currentTarget.value)}
-            />
-            <Button type="submit" disabled={disabled || busy || key.trim() === ""}>
-              {busy ? "Checking key…" : "Add key"}
-            </Button>
-          </form>
-        </ItemActions>
-      </Item>
-    </div>
-  )
-}
-
-/** A field of the endpoint form: its label in a column at the left, the control beside it. */
-function Line({
-  label,
-  htmlFor,
-  invalid = false,
-  children,
-}: {
-  readonly label: string
-  readonly htmlFor: string
-  readonly invalid?: boolean
-  readonly children: ReactNode
-}) {
-  return (
-    <Field
-      orientation="horizontal"
-      data-invalid={invalid || undefined}
-      className="grid grid-cols-1 @md:grid-cols-[6rem_minmax(0,1fr)]"
-    >
-      <FieldLabel htmlFor={htmlFor} className="@md:min-h-8 @md:self-start">
-        {label}
-      </FieldLabel>
-      {children}
-    </Field>
-  )
-}
-
-function ModelPatternHelp({ id }: { readonly id: string }) {
-  return (
-    <FieldDescription id={id}>
-      Separate model patterns with commas, for example <code className="font-mono">gpt-*, claude-haiku-*</code>.
-    </FieldDescription>
-  )
-}
-
-function EndpointRow({ disabled }: { readonly disabled: boolean }) {
-  const add = useAtomSet(addAccount, { mode: "promiseExit" })
-  const [refused, setRefused] = useState<string | undefined>(undefined)
-  const id = useId()
-  const errorId = `${id}-error`
-  const invalid = {
-    "aria-invalid": refused !== undefined || undefined,
-    "aria-describedby": refused === undefined ? undefined : errorId,
-  }
-  const [url, setUrl] = useState("")
-  const [dialect, setDialect] = useState<Dialect>("chat")
-  const [models, setModels] = useState("")
-  const [key, setKey] = useState("")
-  const [name, setName] = useState("")
-  const [busy, setBusy] = useState(false)
-  const submit = (event: FormEvent) => {
-    event.preventDefault()
-    if (url.trim() === "" || busy) return
-    setRefused(undefined)
-    setBusy(true)
-    void add({
-      _tag: "Endpoint",
-      url: url.trim().replace(/\/+$/, ""),
-      dialect,
-      models: patterns(models),
-      ...(key.trim() === "" ? {} : { key: key.trim() }),
-      ...(name.trim() === "" ? {} : { label: name.trim() }),
-    }).then((exit) => {
-      setBusy(false)
-      if (Exit.isFailure(exit)) return setRefused(failureText(exit.cause))
-      setUrl("")
-      setModels("")
-      setKey("")
-      setName("")
-    })
-  }
-  return (
-    <div className="border-t first:border-t-0">
-      <Item>
-        <ItemContent>
-          <ItemTitle>Compatible endpoint</ItemTitle>
-          <ItemDescription>
-            An API that speaks OpenAI's or Anthropic's format, such as a local model server or a gateway. Its key is
-            checked before it is saved.
-          </ItemDescription>
-        </ItemContent>
-        <ItemFooter>
-          <form onSubmit={submit} className="flex w-full max-w-5xl flex-col gap-2">
-            <Line label="Address" htmlFor={`${id}-url`} invalid={refused !== undefined}>
-              <Input
-                id={`${id}-url`}
-                placeholder="https://example.com/v1"
-                value={url}
-                {...invalid}
-                onChange={(e) => setUrl(e.currentTarget.value)}
-              />
-            </Line>
-            <Field orientation="horizontal" className="grid grid-cols-1 @md:grid-cols-[6rem_minmax(0,1fr)]">
-              <FieldTitle>API</FieldTitle>
-              <Segmented label="API" value={dialect} onChange={setDialect} options={dialects} />
-            </Field>
-            <Line label="Models" htmlFor={`${id}-models`}>
-              <div className="flex min-w-0 flex-col gap-1">
-                <Input
-                  id={`${id}-models`}
-                  aria-describedby={`${id}-models-help`}
-                  placeholder="Any model"
-                  value={models}
-                  onChange={(e) => setModels(e.currentTarget.value)}
-                />
-                <ModelPatternHelp id={`${id}-models-help`} />
-              </div>
-            </Line>
-            <Line label="Key" htmlFor={`${id}-key`} invalid={refused !== undefined}>
-              <Input
-                id={`${id}-key`}
-                type="password"
-                placeholder="Its API key"
-                value={key}
-                {...invalid}
-                onChange={(e) => setKey(e.currentTarget.value)}
-              />
-            </Line>
-            <Line label="Name" htmlFor={`${id}-name`}>
-              <Input
-                id={`${id}-name`}
-                placeholder="Name (optional)"
-                value={name}
-                onChange={(e) => setName(e.currentTarget.value)}
-              />
-            </Line>
-            <Field orientation="horizontal" className="justify-end">
-              {refused !== undefined && (
-                <FieldError id={errorId} className="min-w-0 flex-1">
-                  {sentenceCase(refused)}
-                </FieldError>
-              )}
-              <Button type="submit" disabled={disabled || busy || url.trim() === ""}>
-                {busy ? "Adding…" : "Add endpoint"}
-              </Button>
-            </Field>
-          </form>
-        </ItemFooter>
-      </Item>
-    </div>
-  )
-}
-
-function AddAccount() {
-  const canChange = useAtomValue(canChangeAtom)
-  const start = useAtomSet(signIn)
-  const importAll = useAtomSet(importLogins, { mode: "promiseExit" })
-  const [importing, setImporting] = useState(false)
-  const runImport = () => {
-    if (importing) return
-    setImporting(true)
-    void importAll().then(() => setImporting(false))
-  }
-  return (
-    <Section title="Add an account">
-      <Panel>
-        <SettingRow
-          title="Sign in"
-          detail="With your browser, as the agent's own sign-in does. Grok signs in with a code."
-        >
-          <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "claude" })}>
-            Claude
-          </Button>
-          <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "codex" })}>
-            ChatGPT
-          </Button>
-          <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "codex", device: true })}>
-            ChatGPT with a code
-          </Button>
-          <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "grok", device: true })}>
-            Grok
-          </Button>
-        </SettingRow>
-        <SettingRow
-          title="Import"
-          detail="Logins Claude Code, Codex, or CLIProxyAPI (Claude, ChatGPT, and Grok) already have."
-        >
-          <Button variant="outline" disabled={!canChange || importing} onClick={runImport}>
-            {importing ? "Importing…" : "Import"}
-          </Button>
-        </SettingRow>
-        <KeyRow disabled={!canChange} />
-        <EndpointRow disabled={!canChange} />
-      </Panel>
-    </Section>
-  )
-}
 
 function NewKeyWell() {
   const shown = useAtomValue(newKeyAtom)
@@ -535,9 +268,14 @@ function OtherMachines() {
 export function AccessPage() {
   return (
     <>
-      <AddAccount />
       <ClientKeys />
       <OtherMachines />
+      <p className="text-sm text-muted-foreground">
+        Connecting an upstream provider?{" "}
+        <ButtonLink href={pageHash(Pages.addAccount)} variant="link" size="sm">
+          Add a provider account
+        </ButtonLink>
+      </p>
     </>
   )
 }

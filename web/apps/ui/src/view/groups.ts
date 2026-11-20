@@ -105,7 +105,7 @@ export interface Row {
   readonly id: string
   readonly account: AccountView
   readonly name: string
-  /** The plan in title case, `per token` for keys, or empty. */
+  /** The plan in title case, `billed per token` for keys, or empty. */
   readonly plan: string
   /** One gauge per column of the group, or nothing where this account reports no such window. */
   readonly gauges: ReadonlyArray<Gauge | undefined>
@@ -129,7 +129,7 @@ export interface Row {
 export interface Group {
   readonly provider: ProviderId
   readonly title: string
-  /** Whether its accounts have usage windows; keys bill per token. */
+  /** Whether this provider reports subscription quota windows. */
   readonly subscription: boolean
   /** The column titles: `5-hour`, `Weekly`, then any limited to one model. */
   readonly columns: ReadonlyArray<string>
@@ -354,13 +354,13 @@ const row = (
   const windows = columns.map((slot) => account.windows.find((window) => holds(slot, window)))
   const full = windows.map((window) => window !== undefined && usedAt(window, now) >= 100)
   const anyFull = full.some(Boolean)
-  const metered = providerFacts[account.provider].billing === "metered"
+  const keyed = account.provider !== "compat" && providerFacts[account.provider].billing === "metered"
   const accountCredits = credits(account, now, zone)
   return {
     id: account.id,
     account,
     name: account.name,
-    plan: account.plan !== undefined ? titleCase(account.plan) : metered ? "per token" : "",
+    plan: account.plan !== undefined ? titleCase(account.plan) : keyed ? "Billed per token" : "",
     gauges: windows.map((window) => (window === undefined ? undefined : gauge(window, now, zone))),
     faded: full.map((isFull) => account.disabled || (anyFull && !isFull)),
     status: status(account, now),
@@ -387,7 +387,13 @@ const nextLine = (
   const next = pool?.next
   if (next !== undefined) {
     const name = accounts.find((account) => account.id === next.account)?.name ?? next.account
-    return { text: `New sessions → ${name} · ${next.why}`, tone: "muted" }
+    const reason =
+      next.reason === "week-ending"
+        ? "a weekly or monthly limit resets within a day with quota left"
+        : next.reason === "resets-first"
+          ? "selected by Reset first"
+          : next.why
+    return { text: `New sessions → ${name} · ${reason}`, tone: "muted" }
   }
   let back: { readonly until: DateTime.Utc; readonly name: string } | undefined
   for (const account of accounts) {

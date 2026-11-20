@@ -1,47 +1,21 @@
 import { describe, expect, test } from "bun:test"
-import { DateTime } from "effect"
-import {
-  clampWidth,
-  dragSidebar,
-  keyFromHash,
-  movePage,
-  pageHash,
-  pageOrder,
-  Pages,
-  pageTitle,
-  parsePage,
-} from "../../src/view/pages.ts"
-import { emptyReport, fixtureReport } from "../support/fixtures.ts"
-
-const now = DateTime.makeUnsafe("2026-10-31T12:00:00Z")
+import { destinationOf, destinations, keyFromHash, pageHash, Pages, parsePage } from "../../src/view/pages.ts"
 
 describe("pages", () => {
-  test("run in sidebar order: the overview, a page per provider with accounts, activity, then setup", () => {
-    expect(pageOrder(fixtureReport(now)).map(pageTitle)).toEqual([
-      "Overview",
-      "Claude",
-      "ChatGPT",
-      "Anthropic API",
-      "Compatible endpoint",
-      "Usage",
-      "Performance",
-      "Requests",
-      "Agents",
-      "Access",
-      "Diagnostics",
-      "Settings",
+  test("group existing routes under four permanent destinations", () => {
+    expect(destinations.map(({ label, page }) => [label, pageHash(page)])).toEqual([
+      ["Quota", "#/overview"],
+      ["Accounts", "#/accounts"],
+      ["Activity", "#/usage"],
+      ["Proxy", "#/settings"],
     ])
-    expect(pageOrder(emptyReport(now))[1]).toEqual(Pages.usage)
-    expect(pageOrder(undefined)[1]).toEqual(Pages.usage)
-  })
-
-  test("the arrow keys move through them and stop at either end", () => {
-    const order = pageOrder(fixtureReport(now))
-    expect(movePage(order, Pages.overview, 1)).toEqual(Pages.provider("claude"))
-    expect(movePage(order, Pages.overview, -1)).toEqual(Pages.overview)
-    expect(movePage(order, Pages.settings, 1)).toEqual(Pages.settings)
-    // A provider page whose accounts are gone starts over at the top.
-    expect(movePage(pageOrder(emptyReport(now)), Pages.provider("xai"), 1)).toEqual(Pages.overview)
+    expect(destinationOf(Pages.provider("codex", "account"))).toBe("accounts")
+    expect(destinationOf(Pages.addAccount)).toBe("accounts")
+    expect(destinationOf(Pages.performance)).toBe("activity")
+    expect(destinationOf(Pages.requests)).toBe("activity")
+    expect(destinationOf(Pages.access)).toBe("proxy")
+    expect(destinationOf(Pages.agents)).toBe("proxy")
+    expect(destinationOf(Pages.diagnostics)).toBe("proxy")
   })
 
   test("live in the address's fragment, so a reload or a link lands on the same page", () => {
@@ -49,6 +23,9 @@ describe("pages", () => {
     expect(pageHash(Pages.diagnostics)).toBe("#/diagnostics")
     expect(parsePage("#/codex")).toEqual(Pages.provider("codex"))
     expect(parsePage("#/settings")).toEqual(Pages.settings)
+    expect(parsePage("#/accounts")).toEqual(Pages.accounts)
+    expect(parsePage("#/accounts/add")).toEqual(Pages.addAccount)
+    expect(parsePage("#/codex?account=name%20with%20spaces")).toEqual(Pages.provider("codex", "name with spaces"))
     expect(parsePage("")).toEqual(Pages.overview)
     expect(parsePage("#/nowhere")).toEqual(Pages.overview)
   })
@@ -59,16 +36,5 @@ describe("pages", () => {
     expect(keyFromHash("#key=sm%2Fx&/codex")).toEqual({ key: "sm/x", rest: "#/codex" })
     expect(keyFromHash("#/usage")).toEqual({ rest: "#/usage" })
     expect(keyFromHash("#key=")).toEqual({ rest: "" })
-  })
-})
-
-describe("the sidebar", () => {
-  test("dragging its edge sets its width within limits, and far enough left hides it", () => {
-    expect(dragSidebar(260, 220)).toEqual({ hidden: false, width: 260 })
-    expect(dragSidebar(600, 220).width).toBe(340)
-    expect(dragSidebar(150, 220).width).toBe(190)
-    // Hiding keeps the width the drag began with, for when it shows again.
-    expect(dragSidebar(100, 250)).toEqual({ hidden: true, width: 250 })
-    expect(clampWidth(Number.NaN)).toBe(220)
   })
 })

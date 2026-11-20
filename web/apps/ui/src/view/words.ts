@@ -301,7 +301,7 @@ export const resetsLine = (resetsIn: string | undefined, resetsAt: string | unde
  * how they get read, and that polling will not read them when it is off.
  */
 export const limitsNotRead = (pollOff: boolean): string =>
-  `Limits not read yet: slopmax reads them on the first request, or press Refresh (R).${pollOff ? " Usage polling is off." : ""}`
+  `Limits not read yet: slopmax reads them on the first request, or press Refresh.${pollOff ? " Usage polling is off." : ""}`
 
 /** An account's limit resets, counted by its usage before slopmax has listed each one. */
 export const resetsUnlisted = (n: number): string =>

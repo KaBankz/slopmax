@@ -12,12 +12,11 @@ describe("preferences", () => {
     expect(Schema.decodeUnknownSync(UiPrefs)({})).toEqual(
       new UiPrefs({
         appearance: "system",
-        sidebarWidth: 220,
-        sidebarHidden: false,
         hideEmails: false,
       }),
     )
-    expect(Schema.decodeUnknownSync(UiPrefs)({ sidebarHidden: true }).sidebarWidth).toBe(220)
+    const oldPrefs = { appearance: "dark", hideEmails: true, sidebarWidth: 235, sidebarHidden: true }
+    expect(Schema.decodeUnknownSync(UiPrefs)(oldPrefs)).toEqual(new UiPrefs({ appearance: "dark", hideEmails: true }))
   })
 })
 

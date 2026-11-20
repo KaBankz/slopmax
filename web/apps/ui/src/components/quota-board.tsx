@@ -45,20 +45,18 @@ function ResetLead({
   return (
     <Card variant="quota">
       <CardHeader>
+        <CardDescription>{current ? "Next reset with quota left" : "Next reset in last report"}</CardDescription>
         <CardTitle>
-          <h3>{current ? "Next reset with quota left" : "Next reset in last report"}</h3>
+          <h3 className="wrap-anywhere">{next.account}</h3>
         </CardTitle>
-        <CardDescription>
-          <span className="wrap-anywhere">{next.account}</span>
-          <span className="block">
-            {provider} / {window}
-          </span>
-        </CardDescription>
+        <p className="text-sm text-quota-muted">
+          {provider} · {window}
+        </p>
       </CardHeader>
       <CardContent className="mt-auto">
-        <div className="flex flex-col gap-5">
+        <div className="flex flex-col gap-3 sm:gap-5">
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <p className="font-heading text-quota-number font-semibold tracking-tight tabular-nums">
+            <p className="font-heading text-quota-number font-semibold text-quota-fill tracking-tight tabular-nums">
               {quotaPercent(next.left)}
             </p>
             <p className="text-base font-medium">quota left</p>
@@ -72,7 +70,9 @@ function ResetLead({
             />
             <div className="mt-2 flex flex-wrap justify-between gap-x-4 gap-y-1 text-sm text-quota-muted">
               <span>{quotaPercent(next.used)} used</span>
-              <span>Resets in {until(next.resetsAt, now)}</span>
+              <span className="font-medium text-quota-foreground tabular-nums">
+                Resets in {until(next.resetsAt, now)}
+              </span>
             </div>
             {Option.isSome(comparison) && (
               <p className="mt-2 text-sm font-medium">
@@ -80,7 +80,7 @@ function ResetLead({
               </p>
             )}
           </div>
-          <div className="flex flex-wrap items-end justify-between gap-x-5 gap-y-3 border-t border-quota-track pt-4">
+          <div className="flex flex-wrap items-end justify-between gap-x-5 gap-y-3 border-t border-quota-track pt-3 sm:pt-4">
             <dl className="flex flex-wrap gap-x-5 gap-y-3">
               <div>
                 <dt className="text-xs text-quota-muted">Reset time</dt>
@@ -174,7 +174,7 @@ export function QuotaBoard({ report }: { readonly report: Report }) {
     <section aria-labelledby="quota-heading" className="flex min-w-0 flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-2">
         <h2 id="quota-heading" className="font-heading text-xl font-semibold tracking-tight">
-          Quota before reset
+          Reset opportunities
         </h2>
         <Segmented label="Quota window" value={scope} onChange={select} options={scopeOptions} />
       </div>
@@ -188,6 +188,12 @@ export function QuotaBoard({ report }: { readonly report: Report }) {
               Check Subscription limits for blocked accounts and windows awaiting a reading.
             </CardDescription>
           </CardHeader>
+          <CardContent>
+            <ButtonLink variant="link" size="sm" href={pageHash(Pages.usage)}>
+              Review past resets
+              <ChevronRight aria-hidden data-icon="inline-end" />
+            </ButtonLink>
+          </CardContent>
         </Card>
       ) : (
         <div className="grid min-w-0 items-start gap-3 @4xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">

@@ -141,7 +141,7 @@ export const makeStub = (options: StubOptions = {}): Stub => {
   const scenario = options.scenario ?? "full"
   const latency = Effect.sleep(options.latency ?? Duration.zero)
   let report = scenario === "full" ? fixtureReport(now()) : emptyReport(now())
-  let settings: Settings = defaultSettings(ownerKey)
+  let settings = new Settings({ ...defaultSettings(ownerKey), strategy: report.strategy })
   let keys: ReadonlyArray<KeyInfo> = scenario === "full" ? fixtureKeys() : []
   let agents: ReadonlyArray<AgentWiring> = fixtureAgents()
   const doctor: ReadonlyArray<Section> = fixtureDoctor()

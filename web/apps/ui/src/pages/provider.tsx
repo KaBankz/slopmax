@@ -444,15 +444,20 @@ function AccountRow({
             )}
           </ItemContent>
           {metered ? (
-            <div className="flex min-w-0 flex-1 flex-col gap-1 text-xs">
-              <span className="font-medium">Models</span>
+            <dl className="flex min-w-0 flex-1 flex-col gap-2 text-xs @3xl:flex-row @3xl:gap-6">
               {row.account.endpoint !== undefined && (
-                <span className="truncate font-mono text-xs text-muted-foreground">{row.account.endpoint}</span>
+                <div className="min-w-0">
+                  <dt className="font-medium">Address</dt>
+                  <dd className="mt-1 font-mono wrap-anywhere text-muted-foreground">{row.account.endpoint}</dd>
+                </div>
               )}
-              <span className="text-muted-foreground">
-                {row.account.models.length === 0 ? "Any model" : row.account.models.join(", ")}
-              </span>
-            </div>
+              <div className="min-w-0">
+                <dt className="font-medium">Models</dt>
+                <dd className="mt-1 wrap-anywhere text-muted-foreground">
+                  {row.account.models.length === 0 ? "Any model" : row.account.models.join(", ")}
+                </dd>
+              </div>
+            </dl>
           ) : group.unread ? (
             <UnreadCell />
           ) : (

@@ -142,7 +142,7 @@ describe("the proxy and agents", () => {
     expect(cannotChange(true, true)).toBe("Read-only from this machine")
   })
 
-  test("the proxy's label follows the stream, the same in the sidebar and Settings", () => {
+  test("the proxy's label follows the stream, the same in the masthead and Settings", () => {
     expect(shownProxy({ _tag: "Reconnecting" })).toEqual({ text: "Reconnecting…", tone: "warn" })
     expect(shownProxy({ _tag: "Connecting" })).toEqual({ text: "Connecting…", tone: "muted" })
     expect(shownProxy({ _tag: "Running", version: "0.4.0" })).toEqual({ text: "Running 0.4.0", tone: "good" })

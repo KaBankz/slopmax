@@ -309,7 +309,7 @@ export function Skeleton({ lines = 3 }: { readonly lines?: number }) {
   )
 }
 
-/** The option-key mark, sized consistently for the sidebar and gate. */
+/** The option-key mark, sized consistently for the masthead and gate. */
 export function Logo({ size = "md" }: { readonly size?: "md" | "lg" }) {
   const pixels = size === "lg" ? 36 : 20
   return <img src={mark} alt="" width={pixels} height={pixels} className="brand-mark shrink-0" />

@@ -3,11 +3,11 @@
 // serves, the add-account form's errors, and the keyboard.
 import { useBrowser } from "./support/dom.ts"
 import { afterEach, describe, expect, test } from "bun:test"
-import { Report, UpstreamFailed } from "@slopmax/client"
+import { Report, UpstreamFailed, Window } from "@slopmax/client"
 import { DateTime } from "effect"
 import { act } from "react"
 import { account, emptyReport, ownerKey } from "./support/fixtures.ts"
-import { control, draw, type Drawn, key, press, settle, shows, showsSoon, type } from "./support/render.tsx"
+import { control, draw, type Drawn, press, settle, shows, showsSoon, type } from "./support/render.tsx"
 
 useBrowser()
 
@@ -16,9 +16,6 @@ afterEach(async () => {
   await drawn?.close()
   drawn = undefined
 })
-
-/** Whether the sidebar is `expanded` or `collapsed`. */
-const sidebarState = () => document.querySelector("[data-slot=sidebar][data-state]")?.getAttribute("data-state")
 
 const web = async (at?: string) => {
   drawn = await draw({
@@ -69,10 +66,11 @@ describe("the web dashboard", () => {
     expect(shows("lab@studio.dev needs signing in again")).toBe(true)
     expect(shows("A limit reset on ana@studio.dev expires in")).toBe(true)
     expect(shows("Subscription limits")).toBe(true)
-    expect(shows("New sessions → ben@studio.dev · its quota resets soonest")).toBe(true)
-    // The sidebar has a row per provider with accounts.
-    expect(document.querySelector('[data-page="anthropic"]')?.textContent).toBe("Anthropic API1")
-    await showsSoon("Success rate")
+    expect(shows("New sessions → ben@studio.dev · a weekly or monthly limit resets within a day with quota left")).toBe(
+      true,
+    )
+    expect(control("Quota").getAttribute("aria-current")).toBe("page")
+    expect(control("Accounts").getAttribute("href")).toBe("#/accounts")
   })
 
   test("the overview shows separate weekly and 5-hour reset opportunities", async () => {
@@ -88,8 +86,9 @@ describe("the web dashboard", () => {
     expect(control("5-hour").getAttribute("aria-pressed")).toBe("true")
   })
 
-  test("the overview opens the selected date range in Requests", async () => {
-    await web()
+  test("request activity opens the selected date range in Requests", async () => {
+    await web("#/usage")
+    await press("Today")
     await showsSoon("yesterday by this hour")
     await press("7 days")
     await showsSoon("in the previous 7 days")
@@ -100,9 +99,9 @@ describe("the web dashboard", () => {
   })
 
   test("the page scrolls in its own pane, which holds what is positioned in it, so the window never scrolls too", async () => {
-    await web()
-    await showsSoon("Success rate")
-    const pane = document.querySelector("[data-slot=sidebar-inset] > .overflow-y-auto")
+    await web("#/usage")
+    await showsSoon("Monthly pace at API prices")
+    const pane = document.querySelector("[data-slot=dashboard-scroll]")
     if (pane === null) throw new Error("no scrolling pane")
     // An absolute element (sr-only text, say) is placed by its nearest positioned
     // ancestor; one outside the pane would stretch the window past it.
@@ -186,8 +185,8 @@ describe("the web dashboard", () => {
     expect(drawn?.stub.calls.some((call) => call.endpoint === "check")).toBe(true)
   })
 
-  test("the overview shows each account's last day and today's failures, a click from the Requests page", async () => {
-    await web()
+  test("performance shows account health and today's failures, with a drilldown to Requests", async () => {
+    await web("#/performance")
     await showsSoon("Account health", 5_000)
     await showsSoon("Failed today")
     await press("See all")
@@ -226,7 +225,7 @@ describe("the web dashboard", () => {
   })
 
   test("a refused key shows why under the form, not as a toast", async () => {
-    await web("#/access")
+    await web("#/accounts/add")
     await showsSoon("Add an account")
     drawn?.stub.failNext(
       "add",
@@ -254,28 +253,80 @@ describe("the web dashboard", () => {
     await showsSoon("laptop revoked.")
   })
 
-  test("sidebar links support keyboard navigation without switching pages on focus", async () => {
-    await web()
-    const current = control("Overview")
-    await key("ArrowDown", current)
-    expect(document.activeElement?.getAttribute("href")).toBe("#/claude")
-    expect(location.hash).toBe("#/overview")
+  test("dashboard destinations stay stable and highlight contextual routes", async () => {
+    await web("#/codex?account=codex-00000001")
+    const primary = document.querySelector('nav[aria-label="Dashboard"]')
+    expect([...(primary?.querySelectorAll("a") ?? [])].map((link) => link.textContent)).toEqual([
+      "Quota",
+      "Accounts",
+      "Activity",
+      "Proxy",
+    ])
+    expect(control("Accounts").getAttribute("aria-current")).toBe("location")
+    expect(control("All accounts").getAttribute("href")).toBe("#/accounts")
     await act(async () => {
-      document.activeElement?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
-      location.hash = control("Claude").getAttribute("href") ?? ""
+      location.hash = "#/accounts"
     })
-    await settle(() => control("Claude").getAttribute("aria-current") === "page", "the Claude page")
+    await showsSoon("API keys and endpoints")
+    expect(control("Accounts").getAttribute("aria-current")).toBe("page")
+    expect(control("Manage accounts for Anthropic API").getAttribute("href")).toBe("#/anthropic")
+    expect(document.querySelector('main a[href^="#/anthropic?account="]')?.textContent).toContain("Team API key")
+    expect(control("Add account").getAttribute("href")).toBe("#/accounts/add")
+    const ben = [...document.querySelectorAll("main a")].find((link) => link.textContent?.includes("ben@studio.dev"))
+    expect(ben?.textContent).toContain("19% left · Weekly")
+
+    await act(async () => {
+      location.hash = "#/requests"
+    })
+    await showsSoon("Any outcome")
+    expect(control("Activity").getAttribute("aria-current")).toBe("location")
+    expect(control("Requests").getAttribute("aria-current")).toBe("page")
   })
 
-  test("the navigation button persists the sidebar preference", async () => {
-    const { host } = await web()
-    expect(sidebarState()).toBe("expanded")
-    await press("Toggle navigation")
-    await settle(() => host.recorded.saved.at(-1)?.sidebarHidden === true, "the sidebar hidden")
-    expect(sidebarState()).toBe("collapsed")
-    await press("Toggle navigation")
-    await settle(() => host.recorded.saved.at(-1)?.sidebarHidden === false, "the sidebar shown")
-    expect(sidebarState()).toBe("expanded")
+  test("proxy status opens diagnostics and client access points to the provider form", async () => {
+    await web("#/access")
+    await showsSoon("Add a provider account")
+    expect(control("Proxy").getAttribute("aria-current")).toBe("location")
+    expect(control("Diagnostics · Running 0.4.0").getAttribute("href")).toBe("#/diagnostics")
+    expect(control("Add a provider account").getAttribute("href")).toBe("#/accounts/add")
+  })
+
+  test("Accounts includes a tight shared limit without a reported reset", async () => {
+    await web("#/accounts")
+    const now = DateTime.nowUnsafe()
+    const resetsAt = DateTime.add(now, { hours: 1 })
+    const claude = account({
+      id: "claude-00000009",
+      name: "work",
+      provider: "claude",
+      windows: [
+        Window.of("5h", 40, resetsAt),
+        Window.of("7d", 95),
+        Window.of("7d", 99, resetsAt, "Opus"),
+        Window.of("30d", 100, DateTime.subtract(now, { hours: 1 })),
+      ],
+    })
+    await act(async () => {
+      drawn?.stub.setReport(new Report({ ...emptyReport(now), accounts: [claude] }))
+    })
+    await showsSoon("5% left · Weekly")
+    expect(shows("Reset time unavailable")).toBe(true)
+  })
+
+  test("a proxy with only API accounts explains where to see activity", async () => {
+    await web()
+    const metered = account({ id: "compat-00000001", provider: "compat", name: "Local models" })
+    await act(async () => {
+      drawn?.stub.setReport(new Report({ ...emptyReport(DateTime.nowUnsafe()), accounts: [metered] }))
+    })
+    await showsSoon("No subscription quota to track")
+    expect(control("View accounts").getAttribute("href")).toBe("#/accounts")
+    expect(control("View usage").getAttribute("href")).toBe("#/usage")
+    await act(async () => {
+      location.hash = "#/accounts"
+    })
+    await showsSoon("Local models")
+    expect(shows("Billed per token")).toBe(false)
   })
 
   test("a slopmax with no accounts says how to add one", async () => {
@@ -284,7 +335,7 @@ describe("the web dashboard", () => {
       host: { key: ownerKey },
     })
     await showsSoon("No accounts yet")
-    expect(shows("None yet")).toBe(true)
+    expect(control("Accounts").getAttribute("href")).toBe("#/accounts")
   })
 })
 
@@ -300,7 +351,7 @@ describe("what the dashboard says while waiting, failing or quiet", () => {
     expect(document.querySelector("code")?.textContent).toBe("slopmax dashboard")
   })
 
-  test("while slopmax does not answer, the agents say so rather than pulse, and Settings agrees with the sidebar", async () => {
+  test("while slopmax does not answer, the agents say so rather than pulse, and Settings agrees with the masthead", async () => {
     drawn = await draw({
       stub: { key: ownerKey },
       host: { key: ownerKey },
@@ -313,7 +364,7 @@ describe("what the dashboard says while waiting, failing or quiet", () => {
     })
     await showsSoon("Status")
     expect(shows("Looking for the proxy")).toBe(false)
-    expect(control("Proxy: Reconnecting…")).toBeDefined()
+    expect(control("Diagnostics · Reconnecting…")).toBeDefined()
     expect(document.querySelector("main")?.textContent).toContain("Reconnecting…")
     await showsSoon("Running 0.4.0")
   })
@@ -328,7 +379,7 @@ describe("what the dashboard says while waiting, failing or quiet", () => {
     await act(async () => {
       drawn?.stub.setReport(new Report({ ...emptyReport(DateTime.nowUnsafe()), accounts: [fresh] }))
     })
-    await showsSoon("Limits not read yet: slopmax reads them on the first request, or press Refresh (R).")
+    await showsSoon("Limits not read yet: slopmax reads them on the first request, or press Refresh.")
     expect(shows("Subscription limits")).toBe(true)
     await act(async () => {
       location.hash = "#/claude"
@@ -358,9 +409,9 @@ describe("what the dashboard says while waiting, failing or quiet", () => {
       host: { key: ownerKey },
     })
     await showsSoon("Running 0.4.0", 5_000)
-    await press("Refresh usage")
-    expect(control("Refresh usage").hasAttribute("disabled")).toBe(true)
-    await press("Refresh usage")
+    await press("Refresh")
+    expect(control("Refresh").hasAttribute("disabled")).toBe(true)
+    await press("Refresh")
     await showsSoon("Usage and limit resets read again.")
     expect(drawn.stub.calls.filter((call) => call.endpoint === "refresh")).toHaveLength(1)
   })
@@ -369,15 +420,18 @@ describe("what the dashboard says while waiting, failing or quiet", () => {
     drawn = await draw({
       stub: { key: ownerKey, latency: "150 millis" },
       host: { key: ownerKey },
-      at: "#/access",
+      at: "#/accounts/add",
     })
-    await showsSoon("laptop", 5_000)
     // Changes wait for slopmax to answer on the event stream.
     await showsSoon("Running 0.4.0", 5_000)
     await type("Paste an API key", "sk-ant-good")
     await press("Add key")
     await showsSoon("Checking key…")
     await showsSoon("Anthropic API added.")
+    await act(async () => {
+      location.hash = "#/access"
+    })
+    await showsSoon("Create key", 5_000)
     await type("Name, such as laptop", "laptop")
     await press("Create key")
     await showsSoon("There is already a key named laptop")

@@ -120,7 +120,7 @@ describe("groups", () => {
     const metered = byProvider("anthropic")
     expect(metered?.subscription).toBe(false)
     expect(metered?.columns).toEqual([])
-    expect(metered?.rows[0]?.plan).toBe("per token")
+    expect(metered?.rows[0]?.plan).toBe("Billed per token")
   })
 
   test("give a window for one model a column after the shared ones", () => {
@@ -191,7 +191,10 @@ const limited = (id: string, name: string, minutes: number) =>
 describe("where new sessions go", () => {
   test("a pool says which account takes the next session, and why", () => {
     const claude = byProvider("claude")
-    expect(claude?.next).toEqual({ text: "New sessions → ben@studio.dev · its quota resets soonest", tone: "muted" })
+    expect(claude?.next).toEqual({
+      text: "New sessions → ben@studio.dev · a weekly or monthly limit resets within a day with quota left",
+      tone: "muted",
+    })
     expect(claude?.rows.map((row) => row.next)).toEqual([false, true, false])
   })
 

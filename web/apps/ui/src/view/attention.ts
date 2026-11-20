@@ -166,7 +166,7 @@ export const attention = (report: Report, now: DateTime.Utc, zone: DateTime.Time
   return found.toSorted((a, b) => Number(a.tone !== "bad") - Number(b.tone !== "bad"))
 }
 
-/** The worst tone among a provider's items, for the dot beside it in the sidebar. */
+/** The worst tone among a provider's items, for its account directory row. */
 export const worstTone = (items: ReadonlyArray<Attention>, provider: ProviderId): Tone | undefined => {
   const tones = items.filter((a) => a.provider === provider).map((a) => a.tone)
   return tones.includes("bad") ? "bad" : tones.includes("warn") ? "warn" : undefined

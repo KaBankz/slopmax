@@ -138,7 +138,7 @@ function RequestsTable({
 }) {
   return (
     <Card>
-      <CardContent>
+      <CardContent density="table">
         <Table>
           <TableHeader>
             <TableRow>

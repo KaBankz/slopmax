@@ -8,6 +8,21 @@ The stack is React 19, Tailwind CSS 4 and shadcn/ui's `base-nova` style, whose
 components sit on [Base UI](https://base-ui.com). Run `mise run check` from
 `web/` before you call a UI change done.
 
+## Navigation
+
+Quota is the landing page for reset deadlines, remaining subscription allowance,
+and account actions. Accounts groups providers by billing type and owns the
+add-account flow. Directory rows show the tightest shared limit and the last
+proxy request for each account. Activity groups Usage, Requests, and Performance. Proxy groups
+Settings, Coding agents, Client access, and Diagnostics. The proxy status opens
+Diagnostics directly.
+
+The same four navigation links appear in the masthead on desktop and in the
+bottom bar on phones. Provider hashes and account links retain their existing
+addresses. Route changes focus the page title or the account named in the
+link. The Accounts directory is `#/accounts` and adding credentials is
+`#/accounts/add`.
+
 ## The layers
 
 1. **The theme**, `src/index.css`: built on shadcn's `base-nova` tokens. Tokens in `:root` and `.dark`, mapped to colors in
@@ -26,9 +41,8 @@ components sit on [Base UI](https://base-ui.com). Run `mise run check` from
 
 shadcn's tokens, by shadcn's names: `background`, `foreground`, `card`,
 `popover`, `primary`, `secondary`, `muted`, `accent`, `destructive`, `border`,
-`input`, `ring`, `chart-1` … `chart-5`, and the `sidebar-*` set, each with its
-`-foreground` where shadcn has one. Sage surfaces frame violet actions in both appearances. The quota lead pairs a high-contrast
-violet surface with its own used/remaining gauge.
+`input`, `ring`, and `chart-1` … `chart-5`, each with its
+`-foreground` where shadcn has one. Warm neutral surfaces frame violet actions. The quota lead reserves amber for remaining allowance and uses dither on the portion already spent.
 `--radius` (0.625rem) sets every radius step.
 
 slopmax adds tokens shadcn has no names for: `success` and `warning`, the
@@ -99,10 +113,9 @@ Our customizations, each noted at the top of its file:
 | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `alert`    | a `warning` variant, the destructive variant's shape in the warning color                                                                                                                                                                                                                                                   |
 | `progress` | `tone` colors the fill and supports a patterned quota gauge. `marker` shows the even-spend target                                                                                                                                                                                                                           |
-| `card`     | a `flush` size for rows and a `quota` variant for the lead window                                                                                                                                                                                                                                                           |
+| `card`     | a `flush` size for rows, a `quota` variant for the lead window, and a compact content density for narrow tables                                                                                                                                                                                                             |
 | `chart`    | series colors are set in the container's `style`, not an injected `<style>` (the CSP refuses one), so a series takes `color`, not `theme`; `ChartArea` (`texture`: `dither`, `fade`), `ChartLine` and `ChartBar` (`variant`: `dither`, `solid`) draw every series in the house look; `ChartMeter` is a list row's bar in it |
 | `sonner`   | the theme comes from slopmax's Appearance setting, not next-themes                                                                                                                                                                                                                                                          |
-| `sidebar`  | no cookie: whether it is open lives in slopmax's preferences                                                                                                                                                                                                                                                                |
 
 ### Adding one
 
@@ -122,21 +135,21 @@ and carry the change over.
 
 In `src/components/`, each built from shadcn's components:
 
-| File            | What                                                                                                                                                                                                                        |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `parts.tsx`     | `Panel` (Card, flush), `Section`, `Row`, `SettingRow` (Item), `Stats` (one Card with `Spark` trends), `Empty`, `Skeleton`, `Failed` (Alert), `Loaded`, `Meter` and `SegmentedBar` (Progress), `Label`, `Dot`, `Logo`, `Kbd` |
-| `charts.tsx`    | `Columns`, `Lines`, `Hours`, `TrendChart`, `Spark`, `Share` (Chart over Recharts); `Heatmap` (a contribution graph) and `SplitBar`, which Recharts has no shape for; `Legend`, `Swatch`                                     |
-| `forecast.tsx`  | `PoolForecast` (Card, Segmented, TrendChart, figures in the CardFooter), `ResetLanes` (Card, account timeline and expandable reset times), `HealthStrip` (a status strip with a visible summary)                            |
-| `sidebar.tsx`   | the window's navigation links, persisted size and visibility, mobile drawer, and proxy state                                                                                                                                |
-| `tip.tsx`       | `Tip`, a Tooltip on one control in a line                                                                                                                                                                                   |
-| `health.tsx`    | the overview's `HealthCard` (Card, a HealthStrip per account) and `RecentFailures` (Card, CardAction to the Requests page)                                                                                                  |
-| `pick.tsx`      | `Pick`, a small Select of a few choices or "any", for filters                                                                                                                                                               |
-| `segmented.tsx` | `Segmented`, a ToggleGroup that always keeps one choice                                                                                                                                                                     |
-| `choices.tsx`   | `Choices`, a RadioGroup of choice cards (FieldLabel around a Field)                                                                                                                                                         |
-| `stepper.tsx`   | `Stepper`, less and more around a value (ButtonGroup)                                                                                                                                                                       |
-| `ask.tsx`       | the app's one confirm-or-prompt Dialog, opened with `ask(…)`                                                                                                                                                                |
-| `toasts.tsx`    | hands the toasts atom's entries to Sonner                                                                                                                                                                                   |
-| `sign-in.tsx`   | the sign-in Card above every page while a sign-in is under way                                                                                                                                                              |
+| File             | What                                                                                                                                                                                                                        |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `parts.tsx`      | `Panel` (Card, flush), `Section`, `Row`, `SettingRow` (Item), `Stats` (one Card with `Spark` trends), `Empty`, `Skeleton`, `Failed` (Alert), `Loaded`, `Meter` and `SegmentedBar` (Progress), `Label`, `Dot`, `Logo`, `Kbd` |
+| `charts.tsx`     | `Columns`, `Lines`, `Hours`, `TrendChart`, `Spark`, `Share` (Chart over Recharts); `Heatmap` (a contribution graph) and `SplitBar`, which Recharts has no shape for; `Legend`, `Swatch`                                     |
+| `forecast.tsx`   | `PoolForecast` (Card, Segmented, TrendChart, figures in the CardFooter), `ResetLanes` (Card, account timeline and expandable reset times), `HealthStrip` (a status strip with a visible summary)                            |
+| `navigation.tsx` | Masthead, contextual page links, and proxy diagnostics. Uses shadcn ButtonLink variants.                                                                                                                                    |
+| `tip.tsx`        | `Tip`, a Tooltip on one control in a line                                                                                                                                                                                   |
+| `health.tsx`     | the overview's `HealthCard` (Card, a HealthStrip per account) and `RecentFailures` (Card, CardAction to the Requests page)                                                                                                  |
+| `pick.tsx`       | `Pick`, a small Select of a few choices or "any", for filters                                                                                                                                                               |
+| `segmented.tsx`  | `Segmented`, a ToggleGroup that always keeps one choice                                                                                                                                                                     |
+| `choices.tsx`    | `Choices`, a RadioGroup of choice cards (FieldLabel around a Field)                                                                                                                                                         |
+| `stepper.tsx`    | `Stepper`, less and more around a value (ButtonGroup)                                                                                                                                                                       |
+| `ask.tsx`        | the app's one confirm-or-prompt Dialog, opened with `ask(…)`                                                                                                                                                                |
+| `toasts.tsx`     | hands the toasts atom's entries to Sonner                                                                                                                                                                                   |
+| `sign-in.tsx`    | the sign-in Card above every page while a sign-in is under way                                                                                                                                                              |
 
 A new pattern that two pages share becomes a composition here, built the same
 way. Every file opens with a comment saying what it is.

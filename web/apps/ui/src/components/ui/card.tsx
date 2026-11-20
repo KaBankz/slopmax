@@ -69,8 +69,22 @@ function CardAction({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
-function CardContent({ className, ...props }: React.ComponentProps<"div">) {
-  return <div data-slot="card-content" className={cn("px-(--card-spacing)", className)} {...props} />
+function CardContent({
+  className,
+  density = "default",
+  ...props
+}: React.ComponentProps<"div"> & { density?: "default" | "table" }) {
+  return (
+    <div
+      data-slot="card-content"
+      data-density={density}
+      className={cn(
+        "px-(--card-spacing) data-[density=table]:px-2 @sm:data-[density=table]:px-(--card-spacing)",
+        className,
+      )}
+      {...props}
+    />
+  )
 }
 
 function CardFooter({

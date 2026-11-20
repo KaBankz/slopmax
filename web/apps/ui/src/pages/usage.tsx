@@ -2,13 +2,14 @@
 // value, models, agents, machines, when you work, accounts, quota left on
 // the table)
 // and the Performance page (reliability, cache, speed, first byte).
-import { useAtomRefresh, useAtomValue } from "@effect/atom-react"
+import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
 import type { History, HistoryRange, ProviderId } from "@slopmax/client"
 import { compact, grouped, providerTitle } from "@slopmax/client/format"
 import { Option } from "effect"
 import { AsyncResult } from "effect/reactivity"
+import { ChevronRight } from "lucide-react"
 import type { ReactNode } from "react"
-import { historyAtom, machinesAtom, rangeAtom } from "../atoms.ts"
+import { go, groupsAtom, historyAtom, machinesAtom, rangeAtom, requestFilterAtom, requestLimitAtom } from "../atoms.ts"
 import {
   Columns,
   Heatmap,
@@ -21,9 +22,11 @@ import {
   SplitBar,
   Swatch,
 } from "../components/charts.tsx"
+import { HealthCard, RecentFailures } from "../components/health.tsx"
 import { Loaded, Section, Skeleton, Stats } from "../components/parts.tsx"
 import { Quiet } from "../components/quiet.tsx"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.tsx"
+import { Button } from "../components/ui/button.tsx"
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.tsx"
 import { Separator } from "../components/ui/separator.tsx"
 import {
   Table,
@@ -50,6 +53,8 @@ import {
   tokensTip,
   zeroAxis,
 } from "../view/charts.ts"
+import { Pages } from "../view/pages.ts"
+import { pageSize } from "../view/requests.ts"
 import {
   accountRows,
   agentRows,
@@ -61,6 +66,7 @@ import {
   modelRows,
   perRequest,
   performanceStats,
+  previousRequests,
   speedRows,
   tokenMix,
   usageStats,
@@ -407,6 +413,45 @@ function Machines({ range }: { readonly range: HistoryRange }) {
   )
 }
 
+function RequestActivity({ history, range }: { readonly history: History; readonly range: HistoryRange }) {
+  const setFilter = useAtomSet(requestFilterAtom)
+  const setLimit = useAtomSet(requestLimitAtom)
+  const comparison = previousRequests(history)
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          <h2>Request activity</h2>
+        </CardTitle>
+        {comparison !== undefined && <CardDescription>{comparison}</CardDescription>}
+        <CardAction>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setFilter({ span: range, outcome: "all" })
+              setLimit(pageSize)
+              go(Pages.requests)
+            }}
+          >
+            View requests
+            <ChevronRight aria-hidden data-icon="inline-end" />
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent>
+        <Legend
+          items={[
+            { ink: requestInks.answered, title: "Answered" },
+            { ink: requestInks.failed, title: "Failed" },
+          ]}
+        />
+        <RequestColumns history={history} size="sm" />
+      </CardContent>
+    </Card>
+  )
+}
+
 function UsageBody({ history, range }: { readonly history: History; readonly range: HistoryRange }) {
   const every = labelEvery(range)
   const tokensMost = Math.max(0, ...history.buckets.map((b) => b.tokens.reduce((s, n) => s + n, 0)))
@@ -441,19 +486,7 @@ function UsageBody({ history, range }: { readonly history: History; readonly ran
         />
       </ChartPanel>
       <Pair>
-        <ChartPanel
-          title="Request activity"
-          legend={
-            <Legend
-              items={[
-                { ink: requestInks.answered, title: "Answered" },
-                { ink: requestInks.failed, title: "Failed" },
-              ]}
-            />
-          }
-        >
-          <RequestColumns history={history} size="sm" />
-        </ChartPanel>
+        <RequestActivity history={history} range={range} />
         <ChartPanel title={apiPriceValue}>
           <Columns
             size="sm"
@@ -616,5 +649,16 @@ function PerformanceBody({ history, range }: { readonly history: History; readon
 }
 
 export function PerformancePage() {
-  return <WithHistory>{(history, range) => <PerformanceBody history={history} range={range} />}</WithHistory>
+  const groups = useAtomValue(groupsAtom).filter((group) => group.subscription)
+  return (
+    <>
+      <WithHistory>{(history, range) => <PerformanceBody history={history} range={range} />}</WithHistory>
+      <Section title="Request health">
+        <Pair>
+          {groups.length > 0 && <HealthCard groups={groups} />}
+          <RecentFailures />
+        </Pair>
+      </Section>
+    </>
+  )
 }

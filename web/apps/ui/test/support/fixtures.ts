@@ -123,7 +123,7 @@ export const fixtureAccounts = (now: DateTime.Utc): ReadonlyArray<AccountView> =
     email: "ben@studio.dev",
     plan: "max 5x",
     follows: "Claude Code",
-    windows: [window("5h", 18, now, 230), window("7d", 81, now, 1_560), window("7d", 22, now, 1_560, "Opus")],
+    windows: [window("5h", 18, now, 230), window("7d", 81, now, 1_320), window("7d", 22, now, 1_320, "Opus")],
     notes: [Note.cases.Follows.make({ tool: "Claude Code" }), served(342, 9_800_000)],
     lastUsed: shift(now, -47),
     served: usage(342, 9_800_000),
@@ -200,10 +200,14 @@ export const fixturePools = (now: DateTime.Utc): ReadonlyArray<PoolView> => [
   new PoolView({
     provider: "claude",
     accounts: 3,
-    windows: [poolWindow("5h", 54, now, 52, true), poolWindow("7d", 56, now, 1_560, true)],
-    scoped: [window("7d", 52, now, 1_560, "Opus")],
+    windows: [poolWindow("5h", 54, now, 52, true), poolWindow("7d", 56, now, 1_320, true)],
+    scoped: [window("7d", 52, now, 1_320, "Opus")],
     shares: { [id("claude-1a2b3c4d")]: 0.66, [id("claude-5e6f7a8b")]: 0.25, [id("claude-9c0d1e2f")]: 0.09 },
-    next: new NextView({ account: id("claude-5e6f7a8b"), reason: "resets-first", why: "its quota resets soonest" }),
+    next: new NextView({
+      account: id("claude-5e6f7a8b"),
+      reason: "week-ending",
+      why: "its week resets within the day with quota to spare",
+    }),
   }),
   new PoolView({
     provider: "codex",

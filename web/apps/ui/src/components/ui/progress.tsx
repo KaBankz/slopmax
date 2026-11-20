@@ -8,7 +8,7 @@ const indicatorVariants = cva("h-full", {
   variants: {
     tone: {
       default: "bg-primary",
-      quota: "quota-indicator bg-quota-fill",
+      quota: "quota-indicator bg-quota-used",
       warning: "bg-warning",
       destructive: "bg-destructive",
     },
@@ -45,7 +45,7 @@ function Progress({
         <div
           aria-hidden
           data-slot="progress-marker"
-          className="absolute -bottom-1 left-(--marker) h-3 w-0.5 -translate-x-1/2 rounded-full bg-muted-foreground in-data-[tone=quota]:h-7 in-data-[tone=quota]:bg-quota-foreground in-data-[tone=quota]:ring-1 in-data-[tone=quota]:ring-quota"
+          className="absolute -bottom-1 left-(--marker) h-3 w-0.5 -translate-x-1/2 rounded-full bg-muted-foreground in-data-[tone=quota]:h-5 in-data-[tone=quota]:bg-quota-foreground in-data-[tone=quota]:ring-1 in-data-[tone=quota]:ring-quota"
         />
       )}
     </ProgressPrimitive.Root>
@@ -56,7 +56,7 @@ function ProgressTrack({ className, ...props }: ProgressPrimitive.Track.Props) {
   return (
     <ProgressPrimitive.Track
       className={cn(
-        "relative flex h-1 w-full items-center overflow-x-hidden rounded-full bg-muted in-data-[tone=quota]:h-5 in-data-[tone=quota]:rounded-sm in-data-[tone=quota]:bg-quota-track",
+        "relative flex h-1 w-full items-center overflow-x-hidden rounded-full bg-muted in-data-[tone=quota]:h-3 in-data-[tone=quota]:rounded-sm in-data-[tone=quota]:bg-quota-fill",
         className,
       )}
       data-slot="progress-track"
