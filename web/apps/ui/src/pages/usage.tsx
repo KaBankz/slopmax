@@ -10,7 +10,18 @@ import { Option } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import type { ReactNode } from "react"
 import { historyAtom, machinesAtom, rangeAtom } from "../atoms.ts"
-import { Columns, Heatmap, type Ink, Legend, Lines, Share, SplitBar, Swatch } from "../components/charts.tsx"
+import {
+  Columns,
+  Heatmap,
+  type Ink,
+  Legend,
+  Lines,
+  RequestColumns,
+  requestInks,
+  Share,
+  SplitBar,
+  Swatch,
+} from "../components/charts.tsx"
 import { Loaded, Section, Skeleton, Stats } from "../components/parts.tsx"
 import { Quiet } from "../components/quiet.tsx"
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.tsx"
@@ -26,7 +37,6 @@ import {
   moneyTick,
   percentTick,
   reliabilityTip,
-  requestsTip,
   secondsTick,
   tokensTick,
   tokensTip,
@@ -36,6 +46,7 @@ import {
   accountRows,
   agentRows,
   type BarRow,
+  apiPriceValue,
   isQuiet,
   machineRows,
   modelRows,
@@ -54,7 +65,6 @@ const mixInks: ReadonlyArray<Ink> = ["chart-1", "chart-2", "chart-3", "chart-4"]
  * requests in the Requests figure's blue, API value in its orange.
  */
 const tokenInks: ReadonlyArray<Ink> = ["spark-2", "spark-3", "spark-4", "spark-1"]
-const answeredInk: Ink = "spark-3"
 /** A row no one provider owns, such as Other: grey. */
 const noInk: Ink = "chart-2"
 /** A provider's color, as the Tokens chart gives it. */
@@ -219,7 +229,7 @@ function AccountsTable({ history }: { readonly history: History }) {
               <TableHead className="w-16 text-right">Tokens</TableHead>
               <TableHead className="w-18 text-right">Requests</TableHead>
               <TableHead className="w-14 text-right">Failed</TableHead>
-              <TableHead className="w-20 text-right">API value</TableHead>
+              <TableHead className="w-20 text-right">Value at API prices</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -329,7 +339,7 @@ function LeftOnTheTable({ history }: { readonly history: History }) {
                 <TableHead className="w-30">Unused at reset</TableHead>
                 <TableHead className="w-28 text-right">Weekly windows</TableHead>
                 <TableHead className="w-16 text-right">Unused</TableHead>
-                <TableHead className="w-18 text-right">Left</TableHead>
+                <TableHead className="w-18 text-right">Unused value</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -362,7 +372,7 @@ function LeftOnTheTable({ history }: { readonly history: History }) {
         </CardContent>
       </Card>
       <p className="text-xs text-muted-foreground">
-        The share of each plan's weekly fee that resets threw away, at plan list prices or config.toml's [plan_prices].
+        Unused quota when weekly limits reset, valued using each plan's price.
       </p>
     </div>
   )
@@ -383,7 +393,6 @@ function Machines({ range }: { readonly range: HistoryRange }) {
 function UsageBody({ history, range }: { readonly history: History; readonly range: HistoryRange }) {
   const every = labelEvery(range)
   const tokensMost = Math.max(0, ...history.buckets.map((b) => b.tokens.reduce((s, n) => s + n, 0)))
-  const requestsMost = Math.max(0, ...history.buckets.map((b) => b.requests + b.failed))
   const costMost = Math.max(0, ...history.buckets.map((b) => b.cost))
   return (
     <>
@@ -413,32 +422,19 @@ function UsageBody({ history, range }: { readonly history: History; readonly ran
       </ChartPanel>
       <Pair>
         <ChartPanel
-          title="Requests"
+          title="Request activity"
           legend={
             <Legend
               items={[
-                { ink: answeredInk, title: "Answered" },
-                { ink: "bad", title: "Failed" },
+                { ink: requestInks.answered, title: "Answered" },
+                { ink: requestInks.failed, title: "Failed" },
               ]}
             />
           }
         >
-          <Columns
-            size="sm"
-            every={every}
-            scale={zeroAxis(requestsMost, 1)}
-            tick={countTick}
-            buckets={history.buckets.map((bucket) => ({
-              label: bucket.label,
-              tip: requestsTip(bucket),
-              parts: [
-                { value: bucket.requests, ink: answeredInk },
-                { value: bucket.failed, ink: "bad" },
-              ],
-            }))}
-          />
+          <RequestColumns history={history} size="sm" />
         </ChartPanel>
-        <ChartPanel title="API value">
+        <ChartPanel title={apiPriceValue}>
           <Columns
             size="sm"
             every={every}
@@ -465,14 +461,14 @@ function UsageBody({ history, range }: { readonly history: History; readonly ran
       </ChartPanel>
       <Machines range={range} />
       {range !== "today" && (
-        <ChartPanel title="When you work">
+        <ChartPanel title="Answered client requests by weekday">
           <Heatmap activity={history.activity} />
         </ChartPanel>
       )}
       <Section title="Accounts">
         <AccountsTable history={history} />
       </Section>
-      <Section title="Left on the table">
+      <Section title="Unused subscription quota">
         <LeftOnTheTable history={history} />
       </Section>
     </>
@@ -502,7 +498,7 @@ function PerformanceBody({ history, range }: { readonly history: History; readon
             <Legend
               items={[
                 { ink: "meter", title: "Saved by failover" },
-                { ink: "bad", title: "Failed" },
+                { ink: requestInks.failed, title: "Failed" },
               ]}
             />
           }
@@ -554,7 +550,7 @@ function PerformanceBody({ history, range }: { readonly history: History; readon
           )}
         </ChartPanel>
         <ChartPanel
-          title="Time to first byte"
+          title="Time to first response"
           legend={
             <Legend
               items={[

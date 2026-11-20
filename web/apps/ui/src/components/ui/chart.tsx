@@ -476,7 +476,8 @@ function DitherBar({
   stackedBarStart,
   paint,
   column,
-}: BarShape & { paint: string; column?: number | undefined }) {
+  topOfStack,
+}: BarShape & { paint: string; column?: number | undefined; topOfStack: boolean }) {
   const pointer = usePointer(payload)
   if (height <= 0) return null
   const left = snap(x)
@@ -507,20 +508,34 @@ function DitherBar({
           fill={`url(#${paint}-${band.step})`}
         />
       ))}
-      <path
-        d={topRounded(left, top - CELL / 2, right - left, 3, 2)}
-        fill={fill}
-        fillOpacity={pointer === "here" ? 1 : 0.85}
-      />
+      {topOfStack && (
+        <path
+          d={topRounded(left, top - CELL / 2, right - left, 3, 2)}
+          fill={fill}
+          fillOpacity={pointer === "here" ? 1 : 0.85}
+        />
+      )}
     </g>
   )
 }
 
-function SolidBar({ x, y, width, height, fill, payload, top }: BarShape & { top: boolean }) {
+function SolidBar({
+  x,
+  y,
+  width,
+  height,
+  fill,
+  payload,
+  top,
+  markThinTop,
+}: BarShape & { top: boolean; markThinTop: boolean }) {
   const pointer = usePointer(payload)
   if (height <= 0) return null
   return (
-    <path d={topRounded(x, y, width, height, top ? 4 : 0)} fill={fill} opacity={pointer === "elsewhere" ? 0.5 : 1} />
+    <g opacity={pointer === "elsewhere" ? 0.5 : 1}>
+      <path d={topRounded(x, y, width, height, top ? 4 : 0)} fill={fill} />
+      {markThinTop && top && height < 1 && <line x1={x} x2={x + width} y1={y} y2={y} stroke={fill} strokeWidth={2} />}
+    </g>
   )
 }
 
@@ -536,7 +551,8 @@ const stackTotal = (datum: unknown, keys: ReadonlyArray<string>) =>
  * columns not under the pointer stepping back. `top` says this series is the
  * stack's last (or stands alone), whose corners round in the `solid` look.
  * A stacked series names its stack's keys in `stack`, so the dither runs
- * over the whole column.
+ * over the whole column. A column narrower than two pattern tiles uses a
+ * solid fill. A cap keeps subpixel top segments visible in those columns.
  */
 function ChartBar({
   dataKey,
@@ -553,6 +569,7 @@ function ChartBar({
   const paint = usePaintId(`bar-${dataKey}`)
   const color = seriesColor(dataKey)
   const scale = RechartsPrimitive.useYAxisScale()
+  const above = stack?.slice(stack.indexOf(dataKey) + 1) ?? []
   const columnTop = (datum: unknown) =>
     stack === undefined || scale === undefined ? undefined : scale(stackTotal(datum, stack))
   return (
@@ -563,13 +580,14 @@ function ChartBar({
         fill={color}
         isAnimationActive={false}
         activeBar={false}
-        shape={(p: BarShape) =>
-          variant === "dither" ? (
-            <DitherBar {...p} paint={paint} column={columnTop(p.payload)} />
+        shape={(p: BarShape) => {
+          const topOfStack = variant === "dither" ? stackTotal(p.payload, above) === 0 : top
+          return variant === "dither" && p.width >= 8 * CELL ? (
+            <DitherBar {...p} paint={paint} column={columnTop(p.payload)} topOfStack={topOfStack} />
           ) : (
-            <SolidBar {...p} top={top} />
+            <SolidBar {...p} top={topOfStack} markThinTop={variant === "dither"} />
           )
-        }
+        }}
         {...(stack === undefined ? {} : { stackId: stack.join("+") })}
         {...props}
       />

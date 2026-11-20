@@ -1,7 +1,17 @@
 import { describe, expect, test } from "bun:test"
 import { Condition, LimitReset, Note, PoolView, Report, Window } from "@slopmax/client"
 import { DateTime } from "effect"
-import { across, credits, gauge, groups, slots, status, windowTitle } from "../../src/view/groups.ts"
+import {
+  across,
+  credits,
+  gauge,
+  groups,
+  nextAccountBack,
+  nextQuotaReset,
+  slots,
+  status,
+  windowTitle,
+} from "../../src/view/groups.ts"
 import { account, fixtureReport } from "../support/fixtures.ts"
 
 const now = DateTime.makeUnsafe("2026-10-31T12:00:00Z")
@@ -12,6 +22,65 @@ const report = fixtureReport(now)
 const byProvider = (provider: string) => groups(report, now, zone).find((group) => group.provider === provider)
 
 describe("groups", () => {
+  test("the next quota reset skips past windows, unused quota and accounts out of service", () => {
+    const candidates = new Report({
+      ...report,
+      accounts: [
+        account({
+          id: "claude-1",
+          name: "off",
+          provider: "claude",
+          disabled: true,
+          windows: [Window.of("5h", 10, at(2))],
+        }),
+        account({
+          id: "claude-2",
+          name: "signed out",
+          provider: "claude",
+          condition: Condition.cases.SignInNeeded.make({ error: "Expired" }),
+          windows: [Window.of("5h", 8, at(3))],
+        }),
+        account({
+          id: "codex-1",
+          name: "team",
+          provider: "codex",
+          windows: [Window.of("5h", 15, at(-1)), Window.of("7d", 0, at(5)), Window.of("7d", 90, at(45), "opus")],
+        }),
+        account({
+          id: "claude-3",
+          name: "later",
+          provider: "claude",
+          windows: [Window.of("5h", 20, at(60))],
+        }),
+      ],
+    })
+    expect(nextQuotaReset(candidates, now, zone)).toEqual({
+      provider: "codex",
+      account: "team",
+      window: "Weekly · opus",
+      countdown: "45m00s",
+      at: "12:45",
+    })
+    expect(nextQuotaReset(candidates, at(61), zone)).toBeUndefined()
+  })
+
+  test("the next account back uses the quota block's end, even when a different window resets first", () => {
+    const blocked = account({
+      id: "claude-1",
+      provider: "claude",
+      name: "blocked",
+      condition: Condition.cases.Limited.make({ until: at(60) }),
+      windows: [Window.of("5h", 30, at(15)), Window.of("7d", 100, at(60))],
+    })
+    expect(nextAccountBack([blocked], now, zone)).toEqual({
+      account: "blocked",
+      provider: "claude",
+      at: "13:00",
+      countdown: "1h00m",
+    })
+    expect(nextAccountBack([blocked], at(60), zone)).toBeUndefined()
+  })
+
   test("a subscription whose limits are not read yet is a group with no columns, marked unread", () => {
     const fresh = new Report({
       ...report,

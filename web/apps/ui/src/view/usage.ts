@@ -1,5 +1,5 @@
-// What the Usage and Performance pages, and the overview's Today and
-// per-day panels, say about a history: the figures across the top with
+// What the Usage and Performance pages and the overview say about a
+// history: the figures across the top with
 // their trend lines, the tables, and the token mix. The history is the
 // ledger's own shape (`GET /history`).
 import {
@@ -13,8 +13,8 @@ import {
   Totals,
 } from "@slopmax/client"
 import { compact, fixed, grouped, providerTitle } from "@slopmax/client/format"
-import type { SparkPoint } from "./charts.ts"
-import { count, dollars, headlineDollars, priced } from "./words.ts"
+import { cacheShare, type SparkPoint } from "./charts.ts"
+import { count, dollars, priced } from "./words.ts"
 
 /** How a figure moved since the span before. */
 export interface Change {
@@ -42,12 +42,12 @@ export interface Stat {
   readonly trend?: Trend
 }
 
-/** What the span before a range is called: `yesterday by this hour`, `the 7 days before`. */
+/** What the span before a range is called: `yesterday by this hour`, `in the previous 7 days`. */
 const before = (history: History): string =>
-  history.range === "today" ? "yesterday by this hour" : "the 7 days before"
+  history.range === "today" ? "yesterday by this hour" : "in the previous 7 days"
 
 /** The span before a range, in short. */
-const versus = (history: History): string => (history.range === "today" ? "vs yesterday" : "w/w")
+const versus = (history: History): string => (history.range === "today" ? "vs yesterday" : "vs prior 7 days")
 
 /** How `now` moved from `then`; nothing when there was nothing then to move from. */
 export const change = (now: number, then: number, said: string, when: string, against: string): Change | undefined => {
@@ -81,6 +81,12 @@ const moved = (
   return changed === undefined ? stat : { ...stat, change: changed }
 }
 
+/** Price changes need complete coverage in both periods. */
+const movedPrice = (stat: Stat, history: History): Stat =>
+  history.total.unpriced > 0 || (history.previous?.total.unpriced ?? 0) > 0
+    ? stat
+    : moved(stat, history, (total) => total.cost, dollars)
+
 /** Every token a bucket moved. */
 const bucketTokens = (bucket: HistoryBucket): number => bucket.tokens.reduce((sum, n) => sum + n, 0)
 
@@ -103,87 +109,94 @@ const trend = (
   return { series, points: first < 0 ? [] : points.slice(first, last + 1) }
 }
 
-/** The share of input read from cache, as words: `62% from cache`. */
-const cacheNote = (cached: number | undefined) =>
-  cached === undefined ? "no cache reads" : `${fixed(cached * 100, 0)}% from cache`
-
 /** Whether a history has nothing in it. */
 export const isQuiet = (history: History): boolean => history.total.requests === 0 && history.total.failed === 0
 
-/** The overview's Today panel. */
-export const todayStats = (history: History): ReadonlyArray<Stat> => [
-  moved(
+/** The estimated cost at model API rates, with any gaps in pricing made visible. */
+export const apiPriceValue = "Value at API prices"
+
+const costNote = (total: Totals): string =>
+  total.unpriced > 0
+    ? `${count(total.unpriced, "answer")} missing prices`
+    : total.requests === 0
+      ? "No answered requests"
+      : "Pay-as-you-go equivalent"
+
+export const requestTotal = (totals: Pick<Totals, "requests" | "failed">): number => totals.requests + totals.failed
+
+const successPercent = (totals: Pick<Totals, "requests" | "failed">): number | undefined => {
+  const requests = requestTotal(totals)
+  return requests === 0 ? undefined : (totals.requests / requests) * 100
+}
+
+/** Keep a recorded success or failure visible when rounding near 0% or 100%. */
+const successLabel = (value: number): string =>
+  value > 0 && value < 0.05 ? "<0.1%" : value < 100 && value >= 99.95 ? ">99.9%" : `${fixed(value, 1)}%`
+
+/** The four figures under the overview's request chart. */
+export const activityStats = (history: History): ReadonlyArray<Stat> => {
+  const { total, cached, firstByte, rescued } = history
+  const previous = history.previous?.total
+  const rate = successPercent(total)
+  const priorRate = previous === undefined ? undefined : successPercent(previous)
+  const points = rate === undefined || priorRate === undefined ? undefined : rate - priorRate
+  const rateChange: Change | undefined =
+    points === undefined || priorRate === undefined || Math.abs(points) < 0.05
+      ? undefined
+      : {
+          text: `${fixed(Math.abs(points), 1)} points`,
+          direction: points > 0 ? "up" : "down",
+          versus: versus(history),
+          tip: `${successLabel(priorRate)} ${before(history)}`,
+        }
+  const value: Stat = {
+    title: apiPriceValue,
+    value: total.requests === 0 ? "—" : priced(total.cost, total.unpriced, total.requests),
+    note: costNote(total),
+  }
+  return [
     {
-      title: "Requests",
-      value: grouped(history.total.requests),
-      note: history.total.failed === 0 ? "none failed" : `${grouped(history.total.failed)} failed`,
-      trend: trend(
-        history.buckets,
-        3,
-        (b) => b.requests,
-        (n) => count(n, "request"),
-      ),
+      title: "Success rate",
+      value: rate === undefined ? "—" : successLabel(rate),
+      note: rescued > 0 ? `Share answered (${grouped(rescued)} via failover)` : "Share answered",
+      ...(rateChange === undefined ? {} : { change: rateChange }),
     },
-    history,
-    (t) => t.requests,
-    grouped,
-  ),
-  moved(
-    {
-      title: "Tokens",
-      value: compact(history.total.tokens),
-      note: cacheNote(history.cached),
-      trend: trend(history.buckets, 2, bucketTokens, (n) => `${compact(n)} tokens`),
-    },
-    history,
-    (t) => t.input + t.output + t.cacheRead + t.cacheWrite,
-    compact,
-  ),
-  moved(
-    {
-      title: "API value",
-      value: priced(history.total.cost, history.total.unpriced, history.total.requests),
-      note: "at API prices",
-      trend: trend(
-        history.buckets,
-        1,
-        (b) => b.cost,
-        (n) => `${dollars(n)} at API prices`,
-      ),
-    },
-    history,
-    (t) => t.cost,
-    dollars,
-  ),
-  {
-    title: "Saved by failover",
-    value: grouped(history.rescued),
-    note: "answered by another account",
-    trend: trend(
-      history.buckets,
-      4,
-      (b) => b.rescued,
-      (n) => `${grouped(n)} saved by failover`,
+    moved(
+      {
+        title: "Tokens processed",
+        value: compact(total.tokens),
+        note: cacheShare(cached),
+      },
+      history,
+      (t) => t.tokens,
+      compact,
     ),
-  },
-]
+    movedPrice(value, history),
+    {
+      title: "Median wait",
+      value: firstByte === undefined ? "—" : `${fixed(firstByte / 1000, 2)} s`,
+      note: firstByte === undefined ? "No response timings" : "Time to first response",
+    },
+  ]
+}
+
+/** The corresponding request count from the preceding span, when supplied by the ledger. */
+export const previousRequests = (history: History): string | undefined =>
+  history.previous === undefined
+    ? undefined
+    : `${count(requestTotal(history.previous.total), "request")} ${before(history)}`
 
 /** The Usage page's figures. */
 export const usageStats = (history: History): ReadonlyArray<Stat> => {
   const total = history.total
   const value = priced(total.cost, total.unpriced, total.requests)
-  const valueNote =
-    history.billed > 0
-      ? `Billed to API keys ${dollars(history.billed)}`
-      : total.unpriced === 0 || total.unpriced < total.requests
-        ? "at API prices"
-        : `${count(total.unpriced, "request")} unpriced`
+  const valueNote = history.billed > 0 ? `Billed to API keys ${dollars(history.billed)}` : costNote(total)
   return [
     moved(
       {
         title: "Tokens",
         value: compact(total.tokens),
-        note: cacheNote(history.cached),
+        note: cacheShare(history.cached),
         trend: trend(history.buckets, 2, bucketTokens, (n) => `${compact(n)} tokens`),
       },
       history,
@@ -192,7 +205,7 @@ export const usageStats = (history: History): ReadonlyArray<Stat> => {
     ),
     moved(
       {
-        title: "Requests",
+        title: "Answered requests",
         value: grouped(total.requests),
         note: history.sessions > 0 ? `in ${count(history.sessions, "conversation")}` : "answered",
         trend: trend(
@@ -206,9 +219,9 @@ export const usageStats = (history: History): ReadonlyArray<Stat> => {
       (t) => t.requests,
       grouped,
     ),
-    moved(
+    movedPrice(
       {
-        title: "API value",
+        title: apiPriceValue,
         value,
         note: valueNote,
         trend: trend(
@@ -219,8 +232,6 @@ export const usageStats = (history: History): ReadonlyArray<Stat> => {
         ),
       },
       history,
-      (t) => t.cost,
-      dollars,
     ),
     monthPace(history),
   ]
@@ -236,40 +247,41 @@ export const paceDays = 6
  * same figure on 7 and 30 days.
  */
 const monthPace = (history: History): Stat => {
-  const title = "A month at this pace"
+  const title = "Monthly pace at API prices"
+  const { cost, unpriced, requests } = history.total
+  if (unpriced > 0 && unpriced >= requests) return { title, value: "—", note: "No model prices available" }
+  // Buckets only carry the known value. The range total tells us if it may be incomplete.
+  const forecast = (pace: number, basis: string): Stat => ({
+    title,
+    value: priced(pace, unpriced, requests),
+    note: unpriced === 0 ? basis : `${basis}. Known model prices only.`,
+  })
   if (history.range === "today") {
     const hours = history.buckets.length
     return hours < 3
       ? { title, value: "—", note: "after a few hours of today" }
-      : { title, value: dollars((history.total.cost / hours) * 24 * 30), note: "at today's pace" }
+      : forecast((cost / hours) * 24 * 30, "30 days at today's hourly rate")
   }
   // The window first, then from its first day of use, so a request older than the 7-day range can't stretch it.
   const window = history.buckets.slice(0, -1).slice(-paceDays)
   const first = window.findIndex((day) => day.requests + day.failed > 0)
   if (first < 0) return { title, value: "—", note: "after a whole day of use" }
   const days = window.slice(first)
-  return {
-    title,
-    value: dollars(perDay(days, (day) => day.cost) * 30),
-    note: `from the last ${count(days.length, "day")}`,
-  }
+  const basis =
+    days.length === 1 ? "30 days at the last full day's rate" : `30 days at the last ${days.length} full days' rate`
+  return forecast(perDay(days, (day) => day.cost) * 30, basis)
 }
 
 /** The Performance page's figures. */
 export const performanceStats = (history: History): ReadonlyArray<Stat> => {
   const total = history.total
-  const asked = total.requests + total.failed
+  const rate = successPercent(total)
   return [
     {
-      title: "Answered",
-      value: asked === 0 ? "—" : `${fixed((total.requests / asked) * 100, 1)}%`,
+      title: "Success rate",
+      value: rate === undefined ? "—" : successLabel(rate),
       note: total.failed === 0 ? "none failed" : `${grouped(total.failed)} failed`,
-      trend: trend(
-        history.buckets,
-        4,
-        (b) => (b.requests + b.failed === 0 ? undefined : (b.requests / (b.requests + b.failed)) * 100),
-        (n) => `${fixed(n, 1)}% answered`,
-      ),
+      trend: trend(history.buckets, 4, successPercent, (n) => `${successLabel(n)} answered`),
     },
     {
       title: "Saved by failover",
@@ -283,25 +295,20 @@ export const performanceStats = (history: History): ReadonlyArray<Stat> => {
       ),
     },
     {
-      title: "From cache",
+      title: "Input from cache",
       value: history.cached === undefined ? "—" : `${fixed(history.cached * 100, 0)}%`,
-      note: `saving ${priced(history.cacheSaved, 0, total.requests)}`,
-      trend: trend(
-        history.buckets,
-        2,
-        (b) => (b.cached === undefined ? undefined : b.cached * 100),
-        (n) => `${fixed(n, 0)}% from cache`,
-      ),
+      note: history.cached === undefined ? cacheShare(undefined) : `Saved ${dollars(history.cacheSaved)} at API prices`,
+      trend: trend(history.buckets, 2, (b) => b.cached, cacheShare),
     },
     {
-      title: "First byte",
+      title: "Median wait",
       value: history.firstByte === undefined ? "—" : `${fixed(history.firstByte / 1000, 2)} s`,
-      note: "the median wait",
+      note: history.firstByte === undefined ? "No response timings" : "Time to first response",
       trend: trend(
         history.buckets,
         1,
         (b) => (b.firstByte === undefined ? undefined : b.firstByte[0] / 1000),
-        (n) => `${fixed(n, 2)} s to the first byte`,
+        (n) => `${fixed(n, 2)} s to start responding`,
       ),
     },
   ]
@@ -311,44 +318,7 @@ export const performanceStats = (history: History): ReadonlyArray<Stat> => {
 const perDay = (span: ReadonlyArray<HistoryBucket>, pick: (day: HistoryBucket) => number): number =>
   span.reduce((sum, day) => sum + pick(day), 0) / span.length
 
-/**
- * The overview's figures a day, from a month's history: each the average of
- * the last 7 whole days (fewer, for a ledger younger than a week), how it
- * moved from the 7 days before, and its line over every whole day since
- * the first that held a request. Today is left out, as it is not over.
- * None before a whole day has passed.
- */
-export const dailyStats = (history: History): ReadonlyArray<Stat> => {
-  const whole = history.buckets.slice(0, -1)
-  const first = whole.findIndex((day) => day.requests + day.failed > 0)
-  if (first < 0) return []
-  const days = whole.slice(first)
-  const week = days.slice(-7)
-  const prior = days.length >= 14 ? days.slice(-14, -7) : []
-  const figure = (
-    title: string,
-    series: Trend["series"],
-    pick: (day: HistoryBucket) => number,
-    say: (n: number) => string,
-    note: string,
-  ): Stat => {
-    const then = prior.length === 0 ? 0 : perDay(prior, pick)
-    const changed = change(perDay(week, pick), then, `${say(then)} a day`, "the 7 days before", "w/w")
-    return {
-      title,
-      value: say(perDay(week, pick)),
-      note: week.length < 7 ? `averaged over ${count(week.length, "day")}` : note,
-      ...(changed === undefined ? {} : { change: changed }),
-      trend: trend(days, series, pick, say),
-    }
-  }
-  return [
-    figure("API value / day", 1, (day) => day.cost, headlineDollars, "at API prices"),
-    figure("Tokens / day", 2, bucketTokens, compact, ""),
-  ]
-}
-
-/** A row of a bar list: a name, how long its bar is against the largest, and its figures. */
+/** One line in a usage breakdown, with its share and the figures beside it. */
 export interface BarRow {
   readonly name: string
   /** Whose it is, for its color, when it is one provider's. */
@@ -537,19 +507,4 @@ export const speedRows = (
     speed: `${fixed(row.tokensPerSecond, 0)} tok/s`,
     fraction: row.tokensPerSecond / fastest,
   }))
-}
-
-/** An hour's tooltip on the overview's Today: `09:00` over `120.4M tokens`. */
-export const hourTip = (hour: number, tokens: number): string =>
-  `${String(hour).padStart(2, "0")}:00\n${tokens === 0 ? "No tokens" : `${compact(tokens)} tokens`}`
-
-/** Today's tokens hour by hour, all 24 hours, for the overview's small chart. */
-export const hourly = (history: History): ReadonlyArray<number> => {
-  const hours = Array.from({ length: 24 }, () => 0)
-  history.buckets.forEach((bucket, i) => {
-    const hour = /^(\d{2}):/.exec(bucket.label)?.[1]
-    const at = hour === undefined ? i : Number(hour)
-    if (at >= 0 && at < 24) hours[at] = bucket.tokens.reduce((sum, n) => sum + n, 0)
-  })
-  return hours
 }

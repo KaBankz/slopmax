@@ -64,16 +64,27 @@ describe("the web dashboard", () => {
     await showsSoon("5 of 7 accounts are ready")
     expect(shows("lab@studio.dev needs signing in again")).toBe(true)
     expect(shows("A limit reset on ana@studio.dev expires in")).toBe(true)
-    expect(shows("Subscriptions")).toBe(true)
+    expect(shows("Subscription limits")).toBe(true)
     expect(shows("New sessions → ben@studio.dev · its quota resets soonest")).toBe(true)
     // The sidebar has a row per provider with accounts.
     expect(document.querySelector('[data-page="anthropic"]')?.textContent).toBe("Anthropic API1")
-    await showsSoon("Saved by failover")
+    await showsSoon("Success rate")
+  })
+
+  test("the overview opens the selected date range in Requests", async () => {
+    await web()
+    await showsSoon("yesterday by this hour")
+    await press("7 days")
+    await showsSoon("in the previous 7 days")
+    await press("View requests")
+    await showsSoon("Any outcome")
+    expect(location.hash).toBe("#/requests")
+    expect(control("7 days").getAttribute("aria-pressed")).toBe("true")
   })
 
   test("the page scrolls in its own pane, which holds what is positioned in it, so the window never scrolls too", async () => {
     await web()
-    await showsSoon("Saved by failover")
+    await showsSoon("Success rate")
     const pane = document.querySelector("[data-slot=sidebar-inset] > .overflow-y-auto")
     if (pane === null) throw new Error("no scrolling pane")
     // An absolute element (sr-only text, say) is placed by its nearest positioned
@@ -144,6 +155,7 @@ describe("the web dashboard", () => {
   test("the overview says when a newer slopmax is out, and copies the command that updates this install", async () => {
     const { host } = await web()
     await showsSoon("slopmax 0.5.0 is out")
+    expect(document.querySelector('[data-slot="alert"] code')?.textContent).toContain("slopmax update")
     await press("Copy command")
     await showsSoon("Copied the update command.")
     expect(host.recorded.copied).toContain("slopmax update")
@@ -289,7 +301,7 @@ describe("what the dashboard says while waiting, failing or quiet", () => {
       drawn?.stub.setReport(new Report({ ...emptyReport(DateTime.nowUnsafe()), accounts: [fresh] }))
     })
     await showsSoon("Limits not read yet: slopmax reads them on the first request, or press Refresh (R).")
-    expect(shows("Subscriptions")).toBe(true)
+    expect(shows("Subscription limits")).toBe(true)
     await act(async () => {
       location.hash = "#/claude"
     })

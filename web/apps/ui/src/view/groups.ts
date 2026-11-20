@@ -212,6 +212,49 @@ export const resetsLeft = (account: AccountView, now: DateTime.Utc): number => {
   return note?._tag === "Resets" ? note.count : 0
 }
 
+/** The earliest reported end to a quota block on an enabled account. */
+export const nextAccountBack = (accounts: ReadonlyArray<AccountView>, now: DateTime.Utc, zone: DateTime.TimeZone) => {
+  let next: { account: AccountView; at: DateTime.Utc } | undefined
+  for (const account of accounts) {
+    if (account.disabled || account.condition._tag !== "Limited") continue
+    const at = account.condition.until
+    if (DateTime.isGreaterThan(at, now) && (next === undefined || DateTime.isLessThan(at, next.at))) {
+      next = { account, at }
+    }
+  }
+  return next === undefined
+    ? undefined
+    : {
+        account: next.account.name,
+        provider: next.account.provider,
+        countdown: until(next.at, now),
+        at: clock(next.at, now, zone),
+      }
+}
+
+/** The earliest upcoming reset for a window with used quota on a serving account. */
+export const nextQuotaReset = (report: Report, now: DateTime.Utc, zone: DateTime.TimeZone) => {
+  let next: { account: AccountView; at: DateTime.Utc; slot: Slot } | undefined
+  for (const account of report.accounts.filter(serving)) {
+    for (const window of account.windows) {
+      if (usedAt(window, now) <= 0) continue
+      const at = upcomingReset(window, now)
+      if (Option.isSome(at) && (next === undefined || DateTime.isLessThan(at.value, next.at))) {
+        next = { account, at: at.value, slot: window }
+      }
+    }
+  }
+  return next === undefined
+    ? undefined
+    : {
+        account: next.account.name,
+        provider: next.account.provider,
+        window: windowTitle(next.slot),
+        countdown: until(next.at, now),
+        at: clock(next.at, now, zone),
+      }
+}
+
 /** A window as a bar, with its reset and its pace. */
 export const gauge = (window: Window, now: DateTime.Utc, zone: DateTime.TimeZone, withPace = true): Gauge => {
   const used = usedAt(window, now)

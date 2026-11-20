@@ -1,20 +1,20 @@
 import { describe, expect, test } from "bun:test"
-import { History, HistoryBucket, NamedTotals, Summary, SummaryRow, Totals } from "@slopmax/client"
+import { History, HistoryBucket, NamedTotals, PreviousTotals, Summary, SummaryRow, Totals } from "@slopmax/client"
 import { DateTime } from "effect"
 import {
   accountRows,
+  activityStats,
   agentProvider,
   change,
-  dailyStats,
-  hourly,
   isQuiet,
   machineRows,
   modelProvider,
   modelRows,
   perRequest,
   performanceStats,
+  previousRequests,
+  requestTotal,
   speedRows,
-  todayStats,
   tokenMix,
   usageStats,
 } from "../../src/view/usage.ts"
@@ -40,15 +40,40 @@ const history = (fields: Partial<ConstructorParameters<typeof History>[0]>) =>
   new History({ ...quietHistory("7d"), ...fields })
 
 describe("the figures across the top", () => {
-  test("the overview's today: requests, tokens, value and what failover saved", () => {
-    const today = history({ range: "today", total: totals(908, 34_500_000, 21.7, 0, 12), rescued: 36, cached: 0.86 })
-    expect(todayStats(today).map(({ title, value, note }) => ({ title, value, note }))).toEqual([
-      { title: "Requests", value: "908", note: "12 failed" },
-      { title: "Tokens", value: "34.5M", note: "86% from cache" },
-      { title: "API value", value: "$21.70", note: "at API prices" },
-      { title: "Saved by failover", value: "36", note: "answered by another account" },
+  test("the overview counts all requests and explains success, cache, estimated cost and response time", () => {
+    const today = history({
+      range: "today",
+      total: totals(908, 34_500_000, 21.7, 0, 12),
+      rescued: 36,
+      cached: 0.86,
+      firstByte: 840,
+    })
+    expect(requestTotal(today.total)).toBe(920)
+    expect(activityStats(today)).toEqual([
+      { title: "Success rate", value: "98.7%", note: "Share answered (36 via failover)" },
+      { title: "Tokens processed", value: "34.5M", note: "86% of input from cache" },
+      { title: "Value at API prices", value: "$21.70", note: "Pay-as-you-go equivalent" },
+      { title: "Median wait", value: "0.84 s", note: "Time to first response" },
     ])
-    expect(todayStats(quietHistory("today"))[0]?.note).toBe("none failed")
+    expect(activityStats(quietHistory("today")).map((stat) => stat.value)).toEqual(["—", "0", "—", "—"])
+    const failures = history({ total: totals(0, 0, 0, 0, 4) })
+    expect(activityStats(failures)[0]?.value).toBe("0.0%")
+    expect(activityStats(failures)[2]?.value).toBe("—")
+    expect(activityStats(history({ total: totals(4, 1000, 5, 2) }))[2]).toMatchObject({
+      value: "$5.00+",
+      note: "2 answers missing prices",
+    })
+  })
+
+  test("period comparisons convey the direction and retain successes or failures near the rounding limits", () => {
+    const previous = new PreviousTotals({ total: totals(90, 1000, 8, 0, 10), rescued: 0, sessions: 0 })
+    const [success, tokens, value, wait] = activityStats(history({ total: totals(9_999, 1250, 6, 0, 1), previous }))
+    expect(success).toMatchObject({ value: ">99.9%", change: { direction: "up", text: "10.0 points" } })
+    expect(tokens?.change).toMatchObject({ direction: "up", text: "25.0%" })
+    expect(value?.change).toMatchObject({ direction: "down", text: "25.0%" })
+    expect(wait?.change).toBeUndefined()
+    expect(performanceStats(history({ total: totals(1, 2, 0, 0, 9_999) }))[0]?.value).toBe("<0.1%")
+    expect(activityStats(history({ total: totals(9, 12, 4, 2), previous }))[2]?.change).toBeUndefined()
   })
 
   test("the usage page: conversations, what keys billed, and a month at this pace", () => {
@@ -68,10 +93,10 @@ describe("the figures across the top", () => {
       ],
     })
     expect(usageStats(week).map((stat) => [stat.value, stat.note])).toEqual([
-      ["240.7M", "no cache reads"],
+      ["240.7M", "No cache data"],
       ["6,334", "in 244 conversations"],
       ["$152.04", "Billed to API keys $3.49"],
-      ["$900.00", "from the last 3 days"],
+      ["$900.00", "30 days at the last 3 full days' rate"],
     ])
     // The same pace on a month's range, which holds the same days.
     expect(usageStats(history({ ...week, range: "30d" }))[3]?.value).toBe("$900.00")
@@ -81,7 +106,7 @@ describe("the figures across the top", () => {
       total: totals(10, 1_000, 6),
       buckets: Array.from({ length: 6 }, (_, i) => bucket(`0${i}:00`, 1, 0)),
     })
-    expect(usageStats(today)[3]).toMatchObject({ value: "$720.00", note: "at today's pace" })
+    expect(usageStats(today)[3]).toMatchObject({ value: "$720.00", note: "30 days at today's hourly rate" })
     // A full week reads the same on 7 days (six whole days besides today) as on 30 (which holds a seventh before them).
     const days = [10, 20, 30, 40, 50, 60].map((cost, i) => bucket(`Nov ${i + 11}`, 9, 0, undefined, cost))
     const full7 = history({ buckets: [...days, bucket("Nov 17", 1, 0, undefined, 5)] })
@@ -89,20 +114,42 @@ describe("the figures across the top", () => {
       range: "30d",
       buckets: [bucket("Nov 10", 9, 0, undefined, 999), ...days, bucket("Nov 17", 1, 0, undefined, 5)],
     })
-    expect(usageStats(full7)[3]).toMatchObject({ value: "$1,050", note: "from the last 6 days" })
-    expect(usageStats(full30)[3]).toMatchObject({ value: "$1,050", note: "from the last 6 days" })
+    expect(usageStats(full7)[3]).toMatchObject({ value: "$1,050", note: "30 days at the last 6 full days' rate" })
+    expect(usageStats(full30)[3]).toMatchObject({ value: "$1,050", note: "30 days at the last 6 full days' rate" })
     // A request older than the 7-day range, then idle days: 30 days reads as 7 do.
     const sparse = history({ ...week, range: "30d", buckets: [bucket("Nov 6", 9, 0, undefined, 999), ...week.buckets] })
-    expect(usageStats(sparse)[3]).toMatchObject({ value: "$900.00", note: "from the last 3 days" })
+    expect(usageStats(sparse)[3]).toMatchObject({ value: "$900.00", note: "30 days at the last 3 full days' rate" })
     const unpriced = history({ range: "30d", total: totals(4, 1_000, 0, 4) })
     expect(
       usageStats(unpriced)
         .map((stat) => [stat.value, stat.note])
         .slice(2),
     ).toEqual([
-      ["—", "4 requests unpriced"],
-      ["—", "after a whole day of use"],
+      ["—", "4 answers missing prices"],
+      ["—", "No model prices available"],
     ])
+  })
+
+  test("the monthly pace marks partial pricing and withholds a projection without model prices", () => {
+    const buckets = [bucket("Nov 15", 4, 0, undefined, 30), bucket("Nov 16", 1, 0)]
+    const previous = new PreviousTotals({ total: totals(4, 900, 24), rescued: 0, sessions: 0 })
+    const partial = history({ buckets, total: totals(5, 1_000, 30, 3), billed: 3.49, previous })
+    expect(usageStats(partial)[2]).toMatchObject({
+      value: "$30.00+",
+      note: "Billed to API keys $3.49",
+    })
+    expect(usageStats(partial)[2]?.change).toBeUndefined()
+    expect(usageStats(history({ ...partial, billed: 0 }))[2]?.note).toBe("3 answers missing prices")
+    const previousPartial = new PreviousTotals({ ...previous, total: totals(4, 900, 24, 1) })
+    expect(
+      usageStats(history({ ...partial, total: totals(5, 1_000, 30), previous: previousPartial }))[2]?.change,
+    ).toBeUndefined()
+    expect(usageStats(partial)[3]).toMatchObject({
+      value: "$900.00+",
+      note: "30 days at the last full day's rate. Known model prices only.",
+    })
+    const unknown = history({ buckets, total: totals(5, 1_000, 0, 5) })
+    expect(usageStats(unknown)[3]).toMatchObject({ value: "—", note: "No model prices available" })
   })
 
   test("the performance page: how many were answered, cache and first byte", () => {
@@ -116,8 +163,8 @@ describe("the figures across the top", () => {
     expect(performanceStats(week).map((stat) => [stat.value, stat.note])).toEqual([
       ["99.8%", "2 failed"],
       ["9", "answered by another account"],
-      ["86%", "saving $364.90"],
-      ["0.84 s", "the median wait"],
+      ["86%", "Saved $364.90 at API prices"],
+      ["0.84 s", "Time to first response"],
     ])
     expect(performanceStats(quietHistory("7d")).map((stat) => stat.value)).toEqual(["—", "0", "—", "—"])
   })
@@ -192,13 +239,13 @@ describe("tables and parts", () => {
     })
   })
 
-  test("today's tokens fill all twenty-four hours", () => {
+  test("the comparison counts failed requests and identifies the preceding span", () => {
     const today = fixtureHistory("today", now)
-    const hours = hourly(today)
-    expect(hours.length).toBe(24)
-    // The hours still to come have nothing in them.
-    expect(hours.slice(today.buckets.length).every((n) => n === 0)).toBe(true)
-    expect(hours.slice(0, today.buckets.length).some((n) => n > 0)).toBe(true)
+    const yesterday = today.previous?.total ?? Totals.zero
+    expect(previousRequests(today)).toMatch(/requests yesterday by this hour$/)
+    expect(previousRequests(today)).toContain((yesterday.requests + yesterday.failed).toLocaleString("en-US"))
+    expect(previousRequests(fixtureHistory("7d", now))).toMatch(/in the previous 7 days$/)
+    expect(previousRequests(fixtureHistory("30d", now))).toBeUndefined()
     expect(isQuiet(quietHistory("today"))).toBe(true)
     expect(isQuiet(today)).toBe(false)
   })
@@ -248,8 +295,8 @@ describe("changes since the span before", () => {
     const lastWeek = fixtureHistory("7d", DateTime.makeUnsafe("2026-11-16T12:00:00Z"))
     const [tokens, requests, value, month] = usageStats(lastWeek)
     expect(tokens?.change?.direction).toBe("up")
-    expect(requests?.change?.tip).toContain("the 7 days before")
-    expect(requests?.change?.versus).toBe("w/w")
+    expect(requests?.change?.tip).toContain("in the previous 7 days")
+    expect(requests?.change?.versus).toBe("vs prior 7 days")
     expect(usageStats(fixtureHistory("today", DateTime.makeUnsafe("2026-11-16T12:00:00Z")))[0]?.change?.versus).toBe(
       "vs yesterday",
     )
@@ -282,51 +329,5 @@ describe("trend lines", () => {
     )
     expect(answered?.trend?.points.map((p) => p.value)).toEqual([90, undefined, 100])
     expect(cache?.trend?.points.map((p) => p.label)).toEqual(["Nov 11", "Nov 12", "Nov 13"])
-  })
-})
-
-/** A month's history with a day each of [API value, tokens]. */
-const month = (days: ReadonlyArray<readonly [number, number]>) =>
-  history({
-    range: "30d",
-    buckets: days.map(([cost, tokens], i) => bucket(`Nov ${i + 1}`, tokens > 0 ? 1 : 0, 0, undefined, cost, tokens)),
-  })
-
-describe("the overview's figures a day", () => {
-  test("the last 7 whole days' average, against the 7 before, today left out", () => {
-    const days: Array<readonly [number, number]> = [
-      ...Array.from({ length: 10 }, () => [0, 0] as const),
-      ...Array.from({ length: 7 }, () => [8_200_000, 25e12] as const),
-      ...Array.from({ length: 7 }, () => [10_190_000, 31.7e12] as const),
-      [1, 1],
-    ]
-    const [value, tokens] = dailyStats(month(days))
-    expect(value).toMatchObject({ title: "API value / day", value: "$10.19M", note: "at API prices" })
-    expect(value?.change).toMatchObject({ text: "24.3%", direction: "up", versus: "w/w" })
-    expect(value?.change?.tip).toBe("$8.20M a day the 7 days before")
-    expect(tokens).toMatchObject({ title: "Tokens / day", value: "31.7T", note: "" })
-    // From the first day that held a request, to yesterday.
-    expect(tokens?.trend?.points.map((p) => p.label)).toEqual(days.slice(10, -1).map((_, i) => `Nov ${i + 11}`))
-  })
-
-  test("a young ledger: no change before two weeks, the days it has, none before a whole one", () => {
-    const [value] = dailyStats(
-      month([
-        [0, 0],
-        [3, 10],
-        [5, 20],
-        [1, 1],
-      ]),
-    )
-    expect(value).toMatchObject({ value: "$4.00", note: "averaged over 2 days" })
-    expect(value?.change).toBeUndefined()
-    expect(
-      dailyStats(
-        month([
-          [0, 0],
-          [2, 5],
-        ]),
-      ),
-    ).toEqual([])
   })
 })
