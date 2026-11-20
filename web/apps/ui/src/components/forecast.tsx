@@ -104,9 +104,10 @@ export function ResetLanes({ lanes }: { readonly lanes: Lanes }) {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="flex flex-col gap-1.5">
+        {/* The names' column is as wide in the day row, the lanes and the legend, so the days line up over the lanes. */}
+        <div className="flex flex-col gap-1.5 [--names:6rem] @lg:[--names:10rem]">
           <div className="flex items-end gap-3">
-            <span className="w-36 shrink-0" />
+            <span className="w-(--names) shrink-0" />
             <div className="relative h-4 flex-1 text-xs text-muted-foreground">
               {lanes.days.map((day) => (
                 <span
@@ -121,7 +122,7 @@ export function ResetLanes({ lanes }: { readonly lanes: Lanes }) {
           </div>
           {lanes.lanes.map((lane) => (
             <div key={lane.id} className="flex items-center gap-3">
-              <span className="flex w-40 shrink-0 text-sm">
+              <span className="flex w-(--names) shrink-0 text-sm">
                 <AccountName name={lane.name} />
               </span>
               <div className="relative h-7 flex-1 rounded-md bg-muted/60">
@@ -146,15 +147,18 @@ export function ResetLanes({ lanes }: { readonly lanes: Lanes }) {
               </div>
             </div>
           ))}
-          <div className="flex items-center gap-4 pt-1 pl-39 text-xs text-muted-foreground">
-            <span className="inline-flex items-center gap-1.5">
-              <span aria-hidden className="size-2.5 rounded-full bg-primary" />
-              Weekly reset
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span aria-hidden className="size-2 rounded-full bg-muted-foreground" />
-              5-hour reset
-            </span>
+          <div className="flex gap-3 pt-1 text-xs text-muted-foreground">
+            <span className="w-(--names) shrink-0" />
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                <span aria-hidden className="size-2.5 rounded-full bg-primary" />
+                Weekly reset
+              </span>
+              <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                <span aria-hidden className="size-2 rounded-full bg-muted-foreground" />
+                5-hour reset
+              </span>
+            </div>
           </div>
         </div>
       </CardContent>

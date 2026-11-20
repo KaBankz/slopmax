@@ -133,7 +133,7 @@ function ItemDescription({ className, ...props }: React.ComponentProps<"p">) {
     <p
       data-slot="item-description"
       className={cn(
-        "line-clamp-2 text-left text-sm leading-normal font-normal text-muted-foreground group-data-[size=xs]/item:text-xs [&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary",
+        "text-left text-sm leading-normal font-normal text-muted-foreground group-data-[size=xs]/item:text-xs [&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary",
         className,
       )}
       {...props}
@@ -142,7 +142,13 @@ function ItemDescription({ className, ...props }: React.ComponentProps<"p">) {
 }
 
 function ItemActions({ className, ...props }: React.ComponentProps<"div">) {
-  return <div data-slot="item-actions" className={cn("flex items-center gap-2", className)} {...props} />
+  return (
+    <div
+      data-slot="item-actions"
+      className={cn("flex max-w-full flex-wrap items-center gap-2", className)}
+      {...props}
+    />
+  )
 }
 
 function ItemHeader({ className, ...props }: React.ComponentProps<"div">) {

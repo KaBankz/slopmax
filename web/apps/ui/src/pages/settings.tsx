@@ -88,7 +88,7 @@ function ProxySection({ listen }: { readonly listen: string | undefined }) {
           <Label tone={status.tone} text={status.text} raw />
         </SettingRow>
         <SettingRow title="Address for agents" detail="Where an agent sends its requests.">
-          <InputGroup className="w-64">
+          <InputGroup className="w-72 max-w-full">
             <InputGroupInput readOnly aria-label="Address for agents" value={address} />
             <InputGroupAddon align="inline-end">
               <InputGroupButton onClick={() => copyText({ text: address, said: `Copied ${address}` })}>
