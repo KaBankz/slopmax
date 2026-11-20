@@ -1,5 +1,14 @@
 import { describe, expect, test } from "bun:test"
-import { History, HistoryBucket, NamedTotals, PreviousTotals, Summary, SummaryRow, Totals } from "@slopmax/client"
+import {
+  History,
+  HistoryBucket,
+  LeftAccount,
+  NamedTotals,
+  PreviousTotals,
+  Summary,
+  SummaryRow,
+  Totals,
+} from "@slopmax/client"
 import { DateTime } from "effect"
 import {
   accountRows,
@@ -7,6 +16,7 @@ import {
   agentProvider,
   change,
   isQuiet,
+  leftAccountValue,
   machineRows,
   modelProvider,
   modelRows,
@@ -38,6 +48,14 @@ const bucket = (label: string, requests: number, failed: number, cached?: number
 
 const history = (fields: Partial<ConstructorParameters<typeof History>[0]>) =>
   new History({ ...quietHistory("7d"), ...fields })
+
+test("unused value separates a configured zero price, spent quota, and an unknown price", () => {
+  const row = { name: "work", provider: "claude", windows: 1, unused: 40, dollars: 0 } as const
+  expect(leftAccountValue(new LeftAccount({ ...row, unpriced: 0 }), 1)).toBe("$0.00")
+  expect(leftAccountValue(new LeftAccount({ ...row, unpriced: 1 }), 1)).toBe("—")
+  expect(leftAccountValue(new LeftAccount({ ...row, unused: 0 }), 1)).toBe("$0.00")
+  expect(leftAccountValue(new LeftAccount(row), 1)).toBe("—")
+})
 
 describe("the figures across the top", () => {
   test("the overview counts all requests and explains success, cache, estimated cost and response time", () => {
@@ -95,7 +113,7 @@ describe("the figures across the top", () => {
     expect(usageStats(week).map((stat) => [stat.value, stat.note])).toEqual([
       ["240.7M", "No cache data"],
       ["6,334", "in 244 conversations"],
-      ["$152.04", "Billed to API keys $3.49"],
+      ["$152.04", "Estimated API-key spend $3.49"],
       ["$900.00", "30 days at the last 3 full days' rate"],
     ])
     // The same pace on a month's range, which holds the same days.
@@ -136,7 +154,7 @@ describe("the figures across the top", () => {
     const partial = history({ buckets, total: totals(5, 1_000, 30, 3), billed: 3.49, previous })
     expect(usageStats(partial)[2]).toMatchObject({
       value: "$30.00+",
-      note: "Billed to API keys $3.49",
+      note: "Estimated API-key spend $3.49",
     })
     expect(usageStats(partial)[2]?.change).toBeUndefined()
     expect(usageStats(history({ ...partial, billed: 0 }))[2]?.note).toBe("3 answers missing prices")

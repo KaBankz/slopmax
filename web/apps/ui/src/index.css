@@ -1,20 +1,29 @@
-/*
- * shadcn/ui's design system, as `shadcn init -b base -p nova` writes it: its
- * tokens in `:root` and `.dark`, mapped to colors in `@theme inline`, on
- * Tailwind's own scales. slopmax adds tokens shadcn has no names for:
- * `success` and `warning`, and `spark-1` … `spark-4`, the figures' trend lines.
- * `.dark` on <html> switches the theme, set by the app from the system or
- * from the Appearance setting. See DESIGN.md.
- */
 @import "tailwindcss" source(none);
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @source "./";
 
+/* Slopmax's display face ships with the dashboard for offline and tailnet use. */
+@font-face {
+  font-family: "Bricolage Grotesque";
+  src: url("./bricolage-grotesque-latin.woff2") format("woff2");
+  font-weight: 400 800;
+  font-display: swap;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --font-heading: var(--font-sans);
+  --font-heading: "Bricolage Grotesque", var(--font-sans);
+  --color-quota: var(--quota);
+  --color-quota-foreground: var(--quota-foreground);
+  --color-quota-muted: var(--quota-muted);
+  --color-quota-track: var(--quota-track);
+  --color-quota-fill: var(--quota-fill);
+  --text-display: clamp(1.875rem, 1.6rem + 1vw, 2.375rem);
+  --text-display--line-height: 1.02;
+  --text-quota-number: clamp(4.25rem, 2.5rem + 5vw, 7rem);
+  --text-quota-number--line-height: 0.9;
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
@@ -67,88 +76,96 @@
 }
 
 :root {
-  --background: #f4f6fa;
-  --foreground: #1a263c;
-  --card: oklch(1 0 0);
-  --card-foreground: #1a263c;
-  --popover: oklch(1 0 0);
-  --popover-foreground: #1a263c;
-  --primary: #283b59;
+  color-scheme: light;
+  --background: #f1f3ed;
+  --foreground: #212a22;
+  --card: #fbfcf8;
+  --card-foreground: var(--foreground);
+  --popover: #ffffff;
+  --popover-foreground: var(--foreground);
+  --primary: #423773;
   --primary-foreground: #ffffff;
-  --secondary: #e9eef7;
-  --secondary-foreground: #2c4166;
-  --muted: #edf1f7;
-  --muted-foreground: #526177;
-  --accent: #e9eff9;
-  --accent-foreground: #27477d;
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: #dce3ee;
-  --input: #ccd6e5;
-  --ring: #5577bf;
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
+  --secondary: #e7e1f4;
+  --secondary-foreground: #3a305d;
+  --muted: #e7ebe1;
+  --muted-foreground: #536054;
+  --accent: #e8e3f2;
+  --accent-foreground: #362b5e;
+  --destructive: #a52f38;
+  --border: #d6dcd0;
+  --input: #8c9889;
+  --ring: #6651b0;
+  --chart-1: #a1aaa1;
+  --chart-2: #657366;
+  --chart-3: #49475e;
+  --chart-4: #58634d;
+  --chart-5: #32382d;
   --radius: 0.625rem;
-  --sidebar: #ecf0f7;
-  --sidebar-foreground: #24344e;
-  --sidebar-primary: #283b59;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #dde7f7;
-  --sidebar-accent-foreground: #263f6e;
-  --sidebar-border: #d6dfed;
-  --sidebar-ring: #5577bf;
-
-  --success: oklch(0.527 0.154 150.069);
-  --warning: oklch(0.555 0.163 48.998);
-
-  --spark-1: oklch(0.646 0.175 45);
-  --spark-2: oklch(0.6 0.17 5);
-  --spark-3: #3d68cb;
-  --spark-4: oklch(0.6 0.12 175);
+  --sidebar: #e9ede4;
+  --sidebar-foreground: #343d34;
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: #dfd8f0;
+  --sidebar-accent-foreground: #302650;
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+  --success: #32704e;
+  --warning: #8c471c;
+  --spark-1: #a55025;
+  --spark-2: #903e68;
+  --spark-3: #57429b;
+  --spark-4: #277067;
+  --quota: #332952;
+  --quota-foreground: #faf6ff;
+  --quota-muted: #e2d7f4;
+  --quota-track: #695c87;
+  --quota-fill: #d6c4ff;
 }
 
 .dark {
-  --background: #101725;
-  --foreground: #edf2fc;
-  --card: #192335;
-  --card-foreground: #edf2fc;
-  --popover: #222e43;
-  --popover-foreground: #edf2fc;
-  --primary: #cedcf3;
-  --primary-foreground: #15223c;
-  --secondary: #283850;
-  --secondary-foreground: #e4edff;
-  --muted: #243249;
-  --muted-foreground: #b0bed4;
-  --accent: #2b3d5b;
-  --accent-foreground: #e7efff;
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: #34445d;
-  --input: #435572;
-  --ring: #89acf6;
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: #8193b2;
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: #151e2e;
-  --sidebar-foreground: #e4edff;
-  --sidebar-primary: #cedcf3;
-  --sidebar-primary-foreground: #15223c;
-  --sidebar-accent: #283a58;
-  --sidebar-accent-foreground: #e2edff;
-  --sidebar-border: #2e3c53;
-  --sidebar-ring: #89acf6;
-
-  --success: oklch(0.723 0.219 149.579);
-  --warning: oklch(0.769 0.188 70.08);
-
-  --spark-1: oklch(0.77 0.135 52);
-  --spark-2: oklch(0.73 0.13 5);
-  --spark-3: #8ab1ff;
-  --spark-4: oklch(0.78 0.11 175);
+  color-scheme: dark;
+  --background: #181d1a;
+  --foreground: #eef1e8;
+  --card: #222922;
+  --card-foreground: var(--foreground);
+  --popover: #2b332c;
+  --popover-foreground: var(--foreground);
+  --primary: #dbcaff;
+  --primary-foreground: #26203e;
+  --secondary: #363047;
+  --secondary-foreground: #e9dfff;
+  --muted: #303a31;
+  --muted-foreground: #b8c4b8;
+  --accent: #3e3456;
+  --accent-foreground: #eee4ff;
+  --destructive: #ff9ca2;
+  --border: #3d493f;
+  --input: #7a8b7c;
+  --ring: #b49aef;
+  --chart-1: #bbc4b6;
+  --chart-2: #8f9c8b;
+  --chart-3: #c0b1de;
+  --chart-4: #91a282;
+  --chart-5: #ad957e;
+  --sidebar: #1d241e;
+  --sidebar-foreground: #dce6d9;
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: #3d3352;
+  --sidebar-accent-foreground: #f0e7ff;
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+  --success: #93dab0;
+  --warning: #f0b682;
+  --spark-1: #eeab7f;
+  --spark-2: #e9a2c8;
+  --spark-3: #bca5f5;
+  --spark-4: #82d3c6;
+  --quota: #34294b;
+  --quota-foreground: #f4ebff;
+  --quota-muted: #d7cbe9;
+  --quota-track: #71618b;
+  --quota-fill: #cfbaf8;
 }
 
 @layer base {
@@ -156,7 +173,7 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
   }
   html {
     @apply font-sans;
@@ -166,4 +183,29 @@
   #root {
     @apply h-full;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@layer components {
+  .quota-indicator {
+    background-image: radial-gradient(circle at 1px 1px, var(--quota) 0.8px, transparent 1px);
+    background-size: 4px 4px;
+  }
+}
+
+@utility pool-columns {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+}
+
+@utility brand-mark {
+  filter: hue-rotate(32deg) saturate(0.72);
 }

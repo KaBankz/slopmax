@@ -249,13 +249,13 @@ export const liveDetail = (
   return summary === undefined || summary === "" ? "" : `${capitalize(summary)}.`
 }
 
-/** What weekly resets threw away over a range, in a line. */
+/** What weekly and monthly resets left unused over a range, in a line. */
 export const leftLine = (windows: number, unused: number): string =>
   windows === 0
-    ? "No weekly window reset in this range"
+    ? "No weekly or monthly resets were recorded in this range."
     : windows === 1
-      ? `1 weekly window · ${fixed(unused, 0)}% unused`
-      : `${windows} weekly windows · ${fixed(unused, 0)}% unused on average across them`
+      ? `1 recorded reset · ${fixed(unused, 0)}% unused`
+      : `${windows} recorded resets · ${fixed(unused, 0)}% unused on average across them`
 
 /** How a pool reads its accounts as one. */
 export const poolBasis = (weighted: boolean): string => (weighted ? "weighted by plan" : "averaged")
@@ -278,7 +278,12 @@ export const poolBarTip = (accounts: number, weighted: boolean): string =>
     ? `The pool's use across ${accounts} accounts${weighted ? ", weighted by plan" : ""}`
     : segmentsTip(weighted)
 
-const levelTones: { readonly [K in Level]: Tone } = { ok: "good", info: "muted", warn: "warn", fail: "bad" }
+const levelTones: { readonly [K in Level]: Tone } = {
+  ok: "good",
+  info: "muted",
+  warn: "warn",
+  fail: "bad",
+}
 
 /** How a doctor finding is colored. */
 export const levelTone = (level: Level): Tone => levelTones[level]
@@ -329,7 +334,10 @@ export const importText = (result: ImportResult): { readonly text: string; reado
   const saved = result.outcomes.filter((outcome) => outcome._tag === "Saved").length
   const found = result.outcomes.length
   if (found === 0) {
-    return { text: "No logins found. Sign in with Claude Code or Codex first, or use Sign in above.", error: false }
+    return {
+      text: "No logins found. Sign in with Claude Code or Codex first, or use Sign in above.",
+      error: false,
+    }
   }
   const accounts = saved === 1 ? "1 account" : `${saved} accounts`
   if (saved === found) return { text: `Imported ${accounts}.`, error: false }

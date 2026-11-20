@@ -6,6 +6,7 @@ import {
   agentFacts,
   type History,
   type HistoryBucket,
+  type LeftAccount,
   matchesAny,
   providerFacts,
   type ProviderId,
@@ -186,11 +187,17 @@ export const previousRequests = (history: History): string | undefined =>
     ? undefined
     : `${count(requestTotal(history.previous.total), "request")} ${before(history)}`
 
+/** The known fee share for one account, with older ledgers using their range-wide price coverage. */
+export const leftAccountValue = (account: LeftAccount, unpriced: number): string => {
+  const noKnownPrice = account.unpriced === undefined ? unpriced > 0 : account.unpriced === account.windows
+  return account.unused > 0 && account.dollars === 0 && noKnownPrice ? "—" : dollars(account.dollars)
+}
+
 /** The Usage page's figures. */
 export const usageStats = (history: History): ReadonlyArray<Stat> => {
   const total = history.total
   const value = priced(total.cost, total.unpriced, total.requests)
-  const valueNote = history.billed > 0 ? `Billed to API keys ${dollars(history.billed)}` : costNote(total)
+  const valueNote = history.billed > 0 ? `Estimated API-key spend ${dollars(history.billed)}` : costNote(total)
   return [
     moved(
       {

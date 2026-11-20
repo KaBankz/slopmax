@@ -28,10 +28,9 @@ import {
 import { useAsk } from "../components/ask.tsx"
 import { Failed, Loaded, Panel, Section, SettingRow, Skeleton } from "../components/parts.tsx"
 import { Segmented } from "../components/segmented.tsx"
-import { Tip } from "../components/tip.tsx"
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert.tsx"
 import { Button } from "../components/ui/button.tsx"
-import { Field, FieldError, FieldLabel, FieldTitle } from "../components/ui/field.tsx"
+import { Field, FieldDescription, FieldError, FieldLabel, FieldTitle } from "../components/ui/field.tsx"
 import { Input } from "../components/ui/input.tsx"
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "../components/ui/input-group.tsx"
 import { Item, ItemActions, ItemContent, ItemDescription, ItemFooter, ItemTitle } from "../components/ui/item.tsx"
@@ -44,7 +43,10 @@ import { failureText, patterns, sentenceCase } from "../view/words.ts"
 type KeyProvider = "anthropic" | "openai" | "xai"
 const keyProviders: ReadonlyArray<KeyProvider> = ["anthropic", "openai", "xai"]
 
-const dialects: ReadonlyArray<{ readonly value: Dialect; readonly title: string }> = [
+const dialects: ReadonlyArray<{
+  readonly value: Dialect
+  readonly title: string
+}> = [
   { value: "chat", title: "Chat completions" },
   { value: "responses", title: "Responses" },
   { value: "messages", title: "Messages" },
@@ -87,7 +89,10 @@ function KeyRow({ disabled }: { readonly disabled: boolean }) {
               label="Provider"
               value={provider}
               onChange={setProvider}
-              options={keyProviders.map((id) => ({ value: id, title: providerFacts[id].title }))}
+              options={keyProviders.map((id) => ({
+                value: id,
+                title: providerFacts[id].title,
+              }))}
             />
             <Input
               type="password"
@@ -127,9 +132,19 @@ function Line({
       data-invalid={invalid || undefined}
       className="grid grid-cols-1 @md:grid-cols-[6rem_minmax(0,1fr)]"
     >
-      <FieldLabel htmlFor={htmlFor}>{label}</FieldLabel>
+      <FieldLabel htmlFor={htmlFor} className="@md:min-h-8 @md:self-start">
+        {label}
+      </FieldLabel>
       {children}
     </Field>
+  )
+}
+
+function ModelPatternHelp({ id }: { readonly id: string }) {
+  return (
+    <FieldDescription id={id}>
+      Separate model patterns with commas, for example <code className="font-mono">gpt-*, claude-haiku-*</code>.
+    </FieldDescription>
   )
 }
 
@@ -195,12 +210,16 @@ function EndpointRow({ disabled }: { readonly disabled: boolean }) {
               <Segmented label="API" value={dialect} onChange={setDialect} options={dialects} />
             </Field>
             <Line label="Models" htmlFor={`${id}-models`}>
-              <Input
-                id={`${id}-models`}
-                placeholder="Models it serves, as patterns (any if empty)"
-                value={models}
-                onChange={(e) => setModels(e.currentTarget.value)}
-              />
+              <div className="flex min-w-0 flex-col gap-1">
+                <Input
+                  id={`${id}-models`}
+                  aria-describedby={`${id}-models-help`}
+                  placeholder="Any model"
+                  value={models}
+                  onChange={(e) => setModels(e.currentTarget.value)}
+                />
+                <ModelPatternHelp id={`${id}-models-help`} />
+              </div>
             </Line>
             <Line label="Key" htmlFor={`${id}-key`} invalid={refused !== undefined}>
               <Input
@@ -412,9 +431,10 @@ function ClientKeys() {
                 }}
               />
               <Input
-                aria-label="Models it may use, as patterns (any if empty)"
+                aria-label="Models it may use"
+                aria-describedby={`${errorId}-models-help`}
                 className="min-w-40 flex-1"
-                placeholder="Models it may use, as patterns (any if empty)"
+                placeholder="Any model"
                 value={models}
                 onChange={(e) => setModels(e.currentTarget.value)}
               />
@@ -422,6 +442,7 @@ function ClientKeys() {
                 {busy ? "Creating…" : "Create key"}
               </Button>
             </Field>
+            <ModelPatternHelp id={`${errorId}-models-help`} />
             {refused !== undefined && <FieldError id={errorId}>{sentenceCase(refused)}</FieldError>}
           </form>
         </Panel>
@@ -438,13 +459,14 @@ function ClientKeys() {
 function Copyable({ text, label }: { readonly text: string; readonly label: string }) {
   const copyText = useAtomSet(copy)
   return (
-    <span className="flex min-w-0 items-center gap-1">
-      <code className="truncate rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs select-all">{text}</code>
-      <Tip content={label}>
-        <Button variant="ghost" size="icon-sm" aria-label={label} onClick={() => copyText({ text })}>
-          <Copy />
-        </Button>
-      </Tip>
+    <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+      <code className="min-w-0 rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs wrap-anywhere select-all">
+        {text}
+      </code>
+      <Button variant="ghost" size="sm" aria-label={label} onClick={() => copyText({ text })}>
+        <Copy aria-hidden />
+        Copy
+      </Button>
     </span>
   )
 }
@@ -513,9 +535,6 @@ function OtherMachines() {
 export function AccessPage() {
   return (
     <>
-      <p className="max-w-prose text-muted-foreground">
-        The accounts slopmax sends requests to, and the keys other machines and tools reach it with.
-      </p>
       <AddAccount />
       <ClientKeys />
       <OtherMachines />

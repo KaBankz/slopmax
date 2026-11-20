@@ -354,6 +354,7 @@ pub fn history(
                     windows: a.windows,
                     unused: a.unused,
                     dollars: a.dollars,
+                    unpriced: Some(a.unpriced),
                 })
                 .collect(),
         },

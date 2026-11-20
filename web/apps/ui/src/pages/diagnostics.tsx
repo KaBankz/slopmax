@@ -7,7 +7,6 @@ import { Copy, RefreshCw } from "lucide-react"
 import { Fragment } from "react"
 import { copy, doctorAtom, readOnlyAtom } from "../atoms.ts"
 import { Dot, Empty, Failed, Panel } from "../components/parts.tsx"
-import { Tip } from "../components/tip.tsx"
 import { Button } from "../components/ui/button.tsx"
 import { Item, ItemActions, ItemContent, ItemMedia } from "../components/ui/item.tsx"
 import { Separator } from "../components/ui/separator.tsx"
@@ -17,7 +16,11 @@ import { failureText, levelTone, sentenceCase } from "../view/words.ts"
 function Findings({ sections }: { readonly sections: ReadonlyArray<DoctorSection> }) {
   const copyText = useAtomSet(copy)
   const rows = sections.flatMap((section) =>
-    section.findings.map((finding, i) => ({ section: i === 0 ? section.title : "", key: section.title, finding })),
+    section.findings.map((finding, i) => ({
+      section: i === 0 ? section.title : "",
+      key: section.title,
+      finding,
+    })),
   )
   return (
     <Panel>
@@ -25,24 +28,27 @@ function Findings({ sections }: { readonly sections: ReadonlyArray<DoctorSection
         <Fragment key={`${key}-${finding.text}`}>
           {n > 0 && <Separator />}
           <Item className="items-start">
-            <span className="w-30 shrink-0 text-xs/5 text-muted-foreground">{section}</span>
+            <span className="basis-full text-xs/5 text-muted-foreground sm:w-30 sm:shrink-0 sm:basis-auto">
+              {section}
+            </span>
             <ItemMedia className="h-5">
               <Dot tone={levelTone(finding.level)} />
             </ItemMedia>
             <ItemContent>{sentenceCase(finding.text.replaceAll("`", ""))}</ItemContent>
             {finding.fix !== undefined && (
-              <ItemActions className="shrink-0">
-                <code className="rounded-sm border bg-muted px-1.5 py-0.5 font-mono text-xs">{finding.fix}</code>
-                <Tip content="Copy the command">
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Copy the command"
-                    onClick={() => copyText({ text: finding.fix ?? "" })}
-                  >
-                    <Copy />
-                  </Button>
-                </Tip>
+              <ItemActions className="min-w-0 flex-wrap">
+                <code className="rounded-sm border bg-muted px-1.5 py-0.5 font-mono text-xs wrap-anywhere">
+                  {finding.fix}
+                </code>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Copy the command"
+                  onClick={() => copyText({ text: finding.fix ?? "" })}
+                >
+                  <Copy aria-hidden />
+                  Copy
+                </Button>
               </ItemActions>
             )}
           </Item>
@@ -68,12 +74,7 @@ export function DiagnosticsPage() {
   ) : (
     checking
   )
-  return (
-    <>
-      <p className="max-w-prose text-muted-foreground">The checks slopmax doctor runs, with what to do about each.</p>
-      {body}
-    </>
-  )
+  return body
 }
 
 export function DiagnosticsTools() {

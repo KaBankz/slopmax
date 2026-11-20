@@ -37,16 +37,19 @@ export function Gate() {
   }
   const command = <code className="font-mono">slopmax dashboard</code>
   return (
-    <main className="flex h-full items-center justify-center bg-sidebar p-6">
-      <form onSubmit={submit} className="w-96 max-w-full animate-in fade-in slide-in-from-top-1">
+    <main className="flex min-h-full items-center justify-center bg-background p-5">
+      <form onSubmit={submit} className="w-full max-w-md">
         <Card>
           <CardHeader>
-            <Logo size="lg" />
+            <div className="mb-3 flex items-center gap-2.5">
+              <Logo size="lg" />
+              <span className="font-heading text-xl font-bold tracking-tight">slopmax</span>
+            </div>
             <CardTitle>
-              <h1>Open the slopmax dashboard</h1>
+              <h1 className="text-2xl tracking-tight">Open the slopmax dashboard</h1>
             </CardTitle>
             <CardDescription>
-              Run {command} to open it with its key, or paste the owner key from config.toml.
+              Run {command} to open it with its key, or enter the owner key from config.toml.
             </CardDescription>
           </CardHeader>
           <CardContent>

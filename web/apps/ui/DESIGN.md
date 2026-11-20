@@ -1,8 +1,7 @@
 # Design
 
 The slopmax UI is built on [shadcn/ui](https://ui.shadcn.com): its design
-system, its components, and its conventions, with as little of our own as we
-can manage. It is the web dashboard, served by the daemon at `/slopmax/`;
+system, its components, and its conventions, with shared Slopmax variants for quota, chart texture, spacing, and focus. It is the web dashboard, served by the daemon at `/slopmax/`;
 `src/host.ts` holds what it needs from the browser.
 
 The stack is React 19, Tailwind CSS 4 and shadcn/ui's `base-nova` style, whose
@@ -11,8 +10,7 @@ components sit on [Base UI](https://base-ui.com). Run `mise run check` from
 
 ## The layers
 
-1. **The theme**, `src/index.css`: shadcn's own, as `shadcn init -b base -p nova`
-   writes it. Tokens in `:root` and `.dark`, mapped to colors in
+1. **The theme**, `src/index.css`: built on shadcn's `base-nova` tokens. Tokens in `:root` and `.dark`, mapped to colors in
    `@theme inline`, on Tailwind's default type, spacing and radius scales, with
    `tw-animate-css` and `shadcn/tailwind.css` imported.
 2. **shadcn's components**, `src/components/ui/`: added with the CLI and kept
@@ -29,7 +27,8 @@ components sit on [Base UI](https://base-ui.com). Run `mise run check` from
 shadcn's tokens, by shadcn's names: `background`, `foreground`, `card`,
 `popover`, `primary`, `secondary`, `muted`, `accent`, `destructive`, `border`,
 `input`, `ring`, `chart-1` … `chart-5`, and the `sidebar-*` set, each with its
-`-foreground` where shadcn has one. The surfaces and action colors use a cool slate palette in light and dark themes.
+`-foreground` where shadcn has one. Sage surfaces frame violet actions in both appearances. The quota lead pairs a high-contrast
+violet surface with its own used/remaining gauge.
 `--radius` (0.625rem) sets every radius step.
 
 slopmax adds tokens shadcn has no names for: `success` and `warning`, the
@@ -56,18 +55,27 @@ use a solid fill, with a small cap for a nonzero top segment below one pixel.
 A curve is smooth and 2px over
 its fill. A list row's bar is `ChartMeter`, the same dither on its side over
 a dotted track, fading over the track's length so short bars stay solid. Dither marks historical
-measurements and usage breakdowns. Current quota and its warning or failure
-tones use solid `Meter` fills, and categorical status grids use solid cells.
+measurements and usage breakdowns. Account row gauges and categorical status grids use solid fills. On Overview, the
+featured account's gauge stipples the used segment so it reads against the remaining track.
 
 Type, spacing, radius, shadows and motion are Tailwind's and shadcn's: `text-sm`
 is body text, `text-xs` secondary text, `text-base` and up for headings;
 spacing on Tailwind's 4px steps; enter and exit motion from `tw-animate-css`
-(`animate-in fade-in slide-in-from-top-1`). The font is the system's sans, so
-the page ships no font files.
+(`animate-in fade-in slide-in-from-top-1`). The system sans handles controls and body text. Bricolage Grotesque gives headings and
+the lead quota figure a distinct scale. Its Latin subset and OFL ship with the app.
 
-To change the look, change the theme's values, never the components. A theme
-from shadcn's theme pages pastes straight over `:root` and `.dark`; keep
-`success` and `warning` and check they still read against its background.
+Change shared colors in the theme and component behavior in the relevant shadcn primitive.
+Check both themes for contrast and focus when changing a token.
+
+### Quota
+
+Overview leads with the next eligible shared window and its reset queue. Keep
+weekly and monthly windows together in the long-window selection and show 5-hour
+windows separately. The pace to finish is the remaining percentage points
+divided by the hours until the reported reset. The gauge marks even pace,
+and matched reset reminders supply estimates of the unused plan fee. Usage shows historical subscription
+value from completed resets alongside its price basis. Provider pages show
+pool forecasts, model caps, account controls, and short-window constraints.
 
 ### State
 
@@ -90,8 +98,8 @@ Our customizations, each noted at the top of its file:
 | Component  | Change                                                                                                                                                                                                                                                                                                                      |
 | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `alert`    | a `warning` variant, the destructive variant's shape in the warning color                                                                                                                                                                                                                                                   |
-| `progress` | `tone` (`default`, `warning`, `destructive`) colors the fill; `marker` draws a tick where an even spend would have reached                                                                                                                                                                                                  |
-| `card`     | a `flush` size, no padding or gap, for a panel of rows edge to edge                                                                                                                                                                                                                                                         |
+| `progress` | `tone` colors the fill and supports a patterned quota gauge. `marker` shows the even-spend target                                                                                                                                                                                                                           |
+| `card`     | a `flush` size for rows and a `quota` variant for the lead window                                                                                                                                                                                                                                                           |
 | `chart`    | series colors are set in the container's `style`, not an injected `<style>` (the CSP refuses one), so a series takes `color`, not `theme`; `ChartArea` (`texture`: `dither`, `fade`), `ChartLine` and `ChartBar` (`variant`: `dither`, `solid`) draw every series in the house look; `ChartMeter` is a list row's bar in it |
 | `sonner`   | the theme comes from slopmax's Appearance setting, not next-themes                                                                                                                                                                                                                                                          |
 | `sidebar`  | no cookie: whether it is open lives in slopmax's preferences                                                                                                                                                                                                                                                                |
@@ -114,21 +122,21 @@ and carry the change over.
 
 In `src/components/`, each built from shadcn's components:
 
-| File            | What                                                                                                                                                                                                                                      |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `parts.tsx`     | `Panel` (Card, flush), `Section`, `Row`, `SettingRow` (Item), `Stat`/`Stats` (Card, a `Spark`; `lg` for headlines), `Empty`, `Skeleton`, `Failed` (Alert), `Loaded`, `Meter` and `SegmentedBar` (Progress), `Label`, `Dot`, `Logo`, `Kbd` |
-| `charts.tsx`    | `Columns`, `Lines`, `Hours`, `TrendChart`, `Spark`, `Share` (Chart over Recharts); `Heatmap` (a contribution graph) and `SplitBar`, which Recharts has no shape for; `Legend`, `Swatch`                                                   |
-| `forecast.tsx`  | `PoolForecast` (Card, Segmented, TrendChart, figures in the CardFooter), `ResetLanes` (Card, Tooltip marks on a lane per account), `HealthStrip` (a Tooltip over an account's half hours)                                                 |
-| `sidebar.tsx`   | the window's Sidebar: SidebarProvider sized from the preferences, a draggable edge, the pages, the proxy's state at its foot                                                                                                              |
-| `tip.tsx`       | `Tip`, a Tooltip on one control in a line                                                                                                                                                                                                 |
-| `health.tsx`    | the overview's `HealthCard` (Card, a HealthStrip per account) and `RecentFailures` (Card, CardAction to the Requests page)                                                                                                                |
-| `pick.tsx`      | `Pick`, a small Select of a few choices or "any", for filters                                                                                                                                                                             |
-| `segmented.tsx` | `Segmented`, a ToggleGroup that always keeps one choice                                                                                                                                                                                   |
-| `choices.tsx`   | `Choices`, a RadioGroup of choice cards (FieldLabel around a Field)                                                                                                                                                                       |
-| `stepper.tsx`   | `Stepper`, less and more around a value (ButtonGroup)                                                                                                                                                                                     |
-| `ask.tsx`       | the app's one confirm-or-prompt Dialog, opened with `ask(…)`                                                                                                                                                                              |
-| `toasts.tsx`    | hands the toasts atom's entries to Sonner                                                                                                                                                                                                 |
-| `sign-in.tsx`   | the sign-in Card above every page while a sign-in is under way                                                                                                                                                                            |
+| File            | What                                                                                                                                                                                                                        |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `parts.tsx`     | `Panel` (Card, flush), `Section`, `Row`, `SettingRow` (Item), `Stats` (one Card with `Spark` trends), `Empty`, `Skeleton`, `Failed` (Alert), `Loaded`, `Meter` and `SegmentedBar` (Progress), `Label`, `Dot`, `Logo`, `Kbd` |
+| `charts.tsx`    | `Columns`, `Lines`, `Hours`, `TrendChart`, `Spark`, `Share` (Chart over Recharts); `Heatmap` (a contribution graph) and `SplitBar`, which Recharts has no shape for; `Legend`, `Swatch`                                     |
+| `forecast.tsx`  | `PoolForecast` (Card, Segmented, TrendChart, figures in the CardFooter), `ResetLanes` (Card, account timeline and expandable reset times), `HealthStrip` (a status strip with a visible summary)                            |
+| `sidebar.tsx`   | the window's navigation links, persisted size and visibility, mobile drawer, and proxy state                                                                                                                                |
+| `tip.tsx`       | `Tip`, a Tooltip on one control in a line                                                                                                                                                                                   |
+| `health.tsx`    | the overview's `HealthCard` (Card, a HealthStrip per account) and `RecentFailures` (Card, CardAction to the Requests page)                                                                                                  |
+| `pick.tsx`      | `Pick`, a small Select of a few choices or "any", for filters                                                                                                                                                               |
+| `segmented.tsx` | `Segmented`, a ToggleGroup that always keeps one choice                                                                                                                                                                     |
+| `choices.tsx`   | `Choices`, a RadioGroup of choice cards (FieldLabel around a Field)                                                                                                                                                         |
+| `stepper.tsx`   | `Stepper`, less and more around a value (ButtonGroup)                                                                                                                                                                       |
+| `ask.tsx`       | the app's one confirm-or-prompt Dialog, opened with `ask(…)`                                                                                                                                                                |
+| `toasts.tsx`    | hands the toasts atom's entries to Sonner                                                                                                                                                                                   |
+| `sign-in.tsx`   | the sign-in Card above every page while a sign-in is under way                                                                                                                                                              |
 
 A new pattern that two pages share becomes a composition here, built the same
 way. Every file opens with a comment saying what it is.

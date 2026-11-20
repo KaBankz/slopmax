@@ -76,9 +76,9 @@ describe("small words", () => {
   })
 
   test("what resets left on the table reads as a line", () => {
-    expect(leftLine(0, 0)).toBe("No weekly window reset in this range")
-    expect(leftLine(1, 37.5)).toBe("1 weekly window · 38% unused")
-    expect(leftLine(3, 22.5)).toBe("3 weekly windows · 22% unused on average across them")
+    expect(leftLine(0, 0)).toBe("No weekly or monthly resets were recorded in this range.")
+    expect(leftLine(1, 37.5)).toBe("1 recorded reset · 38% unused")
+    expect(leftLine(3, 22.5)).toBe("3 recorded resets · 22% unused on average across them")
   })
 
   test("when the report was made reads coarsely", () => {
@@ -180,7 +180,10 @@ describe("the pool's bar and failures", () => {
   test("a request that never reached slopmax, or an error it did not explain, says so without the address", () => {
     const request = HttpClientRequest.post("http://127.0.0.1:7567/slopmax/api/accounts/abc/pin")
     const transport = new HttpClientError.HttpClientError({
-      reason: new HttpClientError.TransportError({ request, description: "Failed to fetch" }),
+      reason: new HttpClientError.TransportError({
+        request,
+        description: "Failed to fetch",
+      }),
     })
     expect(failureText(Cause.fail(transport))).toBe(
       "slopmax is not answering. Is it running? Start it with slopmax proxy start.",

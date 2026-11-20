@@ -1,7 +1,4 @@
-// The sidebar, on shadcn/ui's Sidebar: every page in order, a row per
-// provider with accounts, and at its foot how the proxy stands. The arrow
-// keys move through the pages while the list has focus; its edge drags to
-// resize it, and dragging it far left hides it.
+// Dashboard navigation and the proxy connection in the shared shadcn sidebar.
 import { useAtomSet, useAtomValue } from "@effect/atom-react"
 import type { ProviderId, Tone } from "@slopmax/client"
 import { Option } from "effect"
@@ -20,15 +17,27 @@ import {
 import {
   createContext,
   type KeyboardEvent,
+  type MouseEvent,
   type PointerEvent,
   type ReactNode,
   useContext,
   useRef,
   useState,
 } from "react"
-import { attentionAtom, go, pageAtom, prefsAtom, proxyStatusAtom, savePrefs, shownReportAtom } from "../atoms.ts"
+import { attentionAtom, pageAtom, prefsAtom, proxyStatusAtom, savePrefs, shownReportAtom } from "../atoms.ts"
 import { worstTone } from "../view/attention.ts"
-import { clampWidth, dragSidebar, movePage, type Page, pageOrder, Pages, pageTitle, samePage } from "../view/pages.ts"
+import {
+  clampWidth,
+  dragSidebar,
+  movePage,
+  type Page,
+  pageHash,
+  pageOrder,
+  Pages,
+  pageTitle,
+  samePage,
+  sidebarWidth,
+} from "../view/pages.ts"
 import { Dot, Logo } from "./parts.tsx"
 import {
   Sidebar as SidebarRoot,
@@ -44,6 +53,7 @@ import {
   SidebarMenuItem,
   SidebarMenuSkeleton,
   SidebarProvider,
+  useSidebar,
 } from "./ui/sidebar.tsx"
 
 const icons: { readonly [K in Page["_tag"]]: LucideIcon } = {
@@ -68,8 +78,8 @@ function Row({
 }: {
   readonly page: Page
   readonly current: Page
-  readonly trailing?: { readonly tone: Tone } | { readonly count: number }
-  readonly onSelect: (page: Page) => void
+  readonly trailing?: { readonly count: number; readonly tone?: Tone }
+  readonly onSelect: (event: MouseEvent<HTMLElement>) => void
 }) {
   const Icon = pageIcon(page)
   const selected = samePage(page, current)
@@ -78,16 +88,21 @@ function Row({
       <SidebarMenuButton
         isActive={selected}
         aria-current={selected ? "page" : undefined}
-        tabIndex={selected ? 0 : -1}
-        onPointerDown={() => onSelect(page)}
-        onClick={() => onSelect(page)}
+        render={<a href={pageHash(page)} />}
+        onClick={onSelect}
       >
-        <Icon aria-hidden />
+        {page._tag !== "Provider" && <Icon aria-hidden />}
         <span>{pageTitle(page)}</span>
       </SidebarMenuButton>
       {trailing !== undefined && (
         <SidebarMenuBadge>
-          {"tone" in trailing ? <Dot tone={trailing.tone} /> : <span className="tabular-nums">{trailing.count}</span>}
+          {trailing.tone !== undefined && (
+            <>
+              <Dot tone={trailing.tone} />
+              <span className="sr-only">Needs attention</span>
+            </>
+          )}
+          <span className="tabular-nums">{trailing.count}</span>
         </SidebarMenuBadge>
       )}
     </SidebarMenuItem>
@@ -106,12 +121,23 @@ function Group({ label, children }: { readonly label?: string; readonly children
 }
 
 /** How the proxy stands, at the sidebar's foot; it opens Settings. */
-function ProxyFoot({ address }: { readonly address: string }) {
+function ProxyFoot({
+  address,
+  onSelect,
+}: {
+  readonly address: string
+  readonly onSelect: (event: MouseEvent<HTMLElement>) => void
+}) {
   const label = useAtomValue(proxyStatusAtom)
   return (
     <SidebarMenu>
       <SidebarMenuItem>
-        <SidebarMenuButton size="lg" aria-label={`Proxy: ${label.text}`} onClick={() => go(Pages.settings)}>
+        <SidebarMenuButton
+          size="lg"
+          aria-label={`Proxy: ${label.text}`}
+          render={<a href={pageHash(Pages.settings)} />}
+          onClick={onSelect}
+        >
           <Dot tone={label.tone === "accent" ? "muted" : label.tone} />
           <span className="flex min-w-0 flex-col">
             <span className="truncate font-medium">{label.text}</span>
@@ -159,23 +185,25 @@ export function Sidebar({ address }: { readonly address: string }) {
   const { width, setDragged } = useContext(DragContext)
   const list = useRef<HTMLDivElement>(null)
   const order = pageOrder(report)
+  const { setOpenMobile } = useSidebar()
   const providers = order.flatMap((page) => (page._tag === "Provider" ? [page] : []))
 
-  const select = (page: Page) => {
-    if (!samePage(page, current)) go(page)
+  const select = (event: MouseEvent<HTMLElement>) => {
+    if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) setOpenMobile(false)
   }
   const onKey = (event: KeyboardEvent) => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return
+    const active = event.target instanceof HTMLElement ? event.target.closest<HTMLAnchorElement>("a") : null
+    const here = order.find((page) => pageHash(page) === active?.hash)
+    if (here === undefined) return
     event.preventDefault()
-    const next = movePage(order, current, event.key === "ArrowDown" ? 1 : -1)
-    select(next)
-    const key = next._tag === "Provider" ? next.provider : next._tag
-    list.current?.querySelector<HTMLElement>(`[data-page="${key}"] [data-sidebar="menu-button"]`)?.focus()
+    const next = movePage(order, here, event.key === "ArrowDown" ? 1 : -1)
+    list.current?.querySelector<HTMLElement>(`a[href="${pageHash(next)}"]`)?.focus()
   }
   const trailing = (provider: ProviderId) => {
     const tone = worstTone(items, provider)
-    if (tone !== undefined) return { tone }
-    return { count: report?.accounts.filter((a) => a.provider === provider).length ?? 0 }
+    const count = report?.accounts.filter((account) => account.provider === provider).length ?? 0
+    return { count, ...(tone === undefined ? {} : { tone }) }
   }
 
   // Dragging the edge: the pointer's x sets the width; far enough left hides the sidebar.
@@ -187,6 +215,7 @@ export function Sidebar({ address }: { readonly address: string }) {
     const end = () => {
       edge.removeEventListener("pointermove", move)
       edge.removeEventListener("pointerup", end)
+      edge.removeEventListener("lostpointercapture", end)
       setDragged(undefined)
       save({ sidebarWidth: last.width, sidebarHidden: last.hidden })
     }
@@ -198,17 +227,18 @@ export function Sidebar({ address }: { readonly address: string }) {
     }
     edge.addEventListener("pointermove", move)
     edge.addEventListener("pointerup", end)
+    edge.addEventListener("lostpointercapture", end)
   }
 
   return (
     <SidebarRoot aria-label="Sidebar">
       <SidebarHeader>
-        <div className="flex h-8 items-center gap-2 px-2">
+        <div className="flex h-12 items-center gap-2.5 px-2">
           <Logo />
-          <span className="truncate text-sm font-semibold">slopmax</span>
+          <span className="truncate font-heading text-xl font-bold tracking-tight">slopmax</span>
         </div>
       </SidebarHeader>
-      <SidebarContent ref={list} onKeyDown={onKey}>
+      <SidebarContent ref={list} id="dashboard-navigation" role="navigation" aria-label="Dashboard" onKeyDown={onKey}>
         <Group>
           <Row page={Pages.overview} current={current} onSelect={select} />
         </Group>
@@ -238,7 +268,7 @@ export function Sidebar({ address }: { readonly address: string }) {
           <Row page={Pages.performance} current={current} onSelect={select} />
           <Row page={Pages.requests} current={current} onSelect={select} />
         </Group>
-        <Group label="Setup">
+        <Group label="Manage">
           <Row page={Pages.agents} current={current} onSelect={select} />
           <Row page={Pages.access} current={current} onSelect={select} />
           <Row page={Pages.diagnostics} current={current} onSelect={select} />
@@ -246,12 +276,26 @@ export function Sidebar({ address }: { readonly address: string }) {
         </Group>
       </SidebarContent>
       <SidebarFooter>
-        <ProxyFoot address={address} />
+        <ProxyFoot address={address} onSelect={select} />
       </SidebarFooter>
       <div
-        aria-hidden
+        role="separator"
+        aria-label="Resize navigation"
+        aria-controls="dashboard-navigation"
+        aria-orientation="vertical"
+        aria-valuemin={sidebarWidth.least}
+        aria-valuemax={sidebarWidth.most}
+        aria-valuenow={width}
+        tabIndex={0}
         onPointerDown={startDrag}
-        className="absolute inset-y-0 -right-1 z-20 hidden w-2 cursor-col-resize md:block"
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
+          event.preventDefault()
+          save({
+            sidebarWidth: clampWidth(width + (event.key === "ArrowLeft" ? -10 : 10)),
+          })
+        }}
+        className="absolute inset-y-0 -right-1 z-20 hidden w-2 cursor-col-resize focus-visible:rounded-full focus-visible:outline-2 focus-visible:outline-ring md:block"
       />
     </SidebarRoot>
   )

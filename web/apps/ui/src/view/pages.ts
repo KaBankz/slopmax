@@ -6,7 +6,7 @@ import { Result } from "effect"
 
 export type Page =
   | { readonly _tag: "Overview" }
-  | { readonly _tag: "Provider"; readonly provider: ProviderId }
+  | { readonly _tag: "Provider"; readonly provider: ProviderId; readonly account?: string }
   | { readonly _tag: "Usage" }
   | { readonly _tag: "Performance" }
   | { readonly _tag: "Requests" }
@@ -17,7 +17,9 @@ export type Page =
 
 type Simple = Exclude<Page["_tag"], "Provider">
 
-const simple = <T extends Simple>(tag: T): { readonly _tag: T } => ({ _tag: tag })
+const simple = <T extends Simple>(tag: T): { readonly _tag: T } => ({
+  _tag: tag,
+})
 
 export const Pages = {
   overview: simple("Overview"),
@@ -28,7 +30,11 @@ export const Pages = {
   access: simple("Access"),
   diagnostics: simple("Diagnostics"),
   settings: simple("Settings"),
-  provider: (provider: ProviderId): Page => ({ _tag: "Provider", provider }),
+  provider: (provider: ProviderId, account?: string): Page => ({
+    _tag: "Provider",
+    provider,
+    ...(account === undefined ? {} : { account }),
+  }),
 } as const
 
 /** The providers that have accounts, in registry order: one sidebar row each. */
@@ -38,7 +44,7 @@ const providersWithAccounts = (report: Report | undefined): ReadonlyArray<Provid
 /** Every page in sidebar order. */
 export const pageOrder = (report: Report | undefined): ReadonlyArray<Page> => [
   Pages.overview,
-  ...providersWithAccounts(report).map(Pages.provider),
+  ...providersWithAccounts(report).map((provider) => Pages.provider(provider)),
   Pages.usage,
   Pages.performance,
   Pages.requests,
@@ -61,15 +67,47 @@ export const movePage = (order: ReadonlyArray<Page>, current: Page, by: -1 | 1):
 export const pageTitle = (page: Page): string =>
   page._tag === "Provider" ? providerFacts[page.provider].title : page._tag
 
+/** What users can find here, in the shared page header. */
+export const pageDescription = (page: Page): string => {
+  switch (page._tag) {
+    case "Overview":
+      return "Find quota you can use before it resets."
+    case "Provider":
+      return providerFacts[page.provider].billing === "subscription"
+        ? "Account limits, routing, and upcoming resets."
+        : "Manage accounts and the models they serve."
+    case "Usage":
+      return "Track usage and review what went unused at reset."
+    case "Performance":
+      return "Explore response times, cache use, and reliability."
+    case "Requests":
+      return "Follow live traffic or inspect recorded requests."
+    case "Agents":
+      return "Connect coding agents to the proxy or restore their previous settings."
+    case "Access":
+      return "Add accounts and manage access for other machines."
+    case "Diagnostics":
+      return "Check the proxy and its connection to your agents."
+    case "Settings":
+      return "Manage routing, limit resets, notifications, and appearance."
+  }
+}
+
 /** The page as the address's fragment: `#/overview`, `#/claude`. */
 export const pageHash = (page: Page): string =>
-  page._tag === "Provider" ? `#/${page.provider}` : `#/${page._tag.toLowerCase()}`
+  page._tag === "Provider"
+    ? `#/${page.provider}${page.account === undefined ? "" : `?account=${encodeURIComponent(page.account)}`}`
+    : `#/${page._tag.toLowerCase()}`
 
 /** The page the address's fragment names; the overview when it names none. */
 export const parsePage = (hash: string): Page => {
-  const name = hash.replace(/^#\/?/, "").split(/[?&]/)[0] ?? ""
+  const [path, query] = hash.replace(/^#\/?/, "").split("?", 2)
+  const name = path?.split("&", 1)[0] ?? ""
   const provider = parseProviderId(name)
-  if (Result.isSuccess(provider)) return Pages.provider(provider.success)
+  if (Result.isSuccess(provider)) {
+    const account = new URLSearchParams(query).get("account")
+    return Pages.provider(provider.success, account || undefined)
+  }
   const found = Object.values(Pages).find(
     (page): page is { readonly _tag: Simple } => typeof page !== "function" && page._tag.toLowerCase() === name,
   )
@@ -109,5 +147,8 @@ export const keyFromHash = (hash: string): { readonly key?: string; readonly res
   if (found === undefined) return { rest: hash }
   const others = parts.filter((part) => part !== found)
   const key = decodeURIComponent(found.slice("key=".length)).trim()
-  return { ...(key === "" ? {} : { key }), rest: others.length === 0 ? "" : `#${others.join("&")}` }
+  return {
+    ...(key === "" ? {} : { key }),
+    rest: others.length === 0 ? "" : `#${others.join("&")}`,
+  }
 }

@@ -10,16 +10,15 @@ import { AsyncResult } from "effect/reactivity"
 import type { LucideIcon } from "lucide-react"
 import { CircleAlert } from "lucide-react"
 import type { ReactNode } from "react"
-import appIcon from "../icon-128.png"
 import mark from "../logo.svg"
 import type { Overview } from "../view/groups.ts"
-import type { Change, Stat as StatView, Trend } from "../view/usage.ts"
+import type { Change, Stat as StatView } from "../view/usage.ts"
 import { failureText, poolBarTip, segmentsShown, sentence, sentenceCase } from "../view/words.ts"
 import { Spark } from "./charts.tsx"
 import { Tip } from "./tip.tsx"
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert.tsx"
 import { Button } from "./ui/button.tsx"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card.tsx"
+import { Card } from "./ui/card.tsx"
 import { Empty as EmptyRoot, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "./ui/empty.tsx"
 import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "./ui/item.tsx"
 import { Progress } from "./ui/progress.tsx"
@@ -55,12 +54,14 @@ const labelVariants = cva("inline-flex min-w-0 items-center gap-1.5", {
   },
 })
 
-const labelText = cva("", { variants: { wrap: { true: "min-w-0", false: "truncate" } } })
+const labelText = cva("", {
+  variants: { wrap: { true: "min-w-0", false: "truncate" } },
+})
 
 /**
  * Words in a tone: good ones after a green dot, warnings and failures in
  * their color with a dot. One line, cut short where there is no room,
- * unless `wrap` lets it run on (and shows the whole of it on hover either way).
+ * unless `wrap` lets it run on.
  */
 export function Label({
   tone,
@@ -76,7 +77,7 @@ export function Label({
   const dotted = tone === "good" || tone === "warn" || tone === "bad"
   const words = raw ? text : sentence(text)
   return (
-    <span className={labelVariants({ tone })} title={words}>
+    <span className={labelVariants({ tone })}>
       {dotted && <Dot tone={tone} />}
       <span className={labelText({ wrap })}>{words}</span>
     </span>
@@ -100,6 +101,7 @@ export function Meter({
 }) {
   return (
     <Progress
+      aria-hidden
       value={Math.min(100, Math.max(0, fraction * 100))}
       tone={meterTone(tone)}
       marker={marker === undefined ? undefined : marker * 100}
@@ -119,31 +121,29 @@ const segmentVariants = cva("min-w-1 grow-(--weight) basis-0", {
  */
 export function SegmentedBar({ window, weighted }: { readonly window: Overview; readonly weighted: boolean }) {
   const segments = window.shares
-  const tip = poolBarTip(segments.length, weighted)
+  const label = poolBarTip(segments.length, weighted)
   if (segments.length > segmentsShown) {
     return (
-      <Tip content={tip}>
-        <div className="w-full py-1">
-          <Meter fraction={window.gauge.fraction} tone={window.gauge.tone} />
-        </div>
-      </Tip>
+      <div role="img" aria-label={label} className="w-full py-1">
+        <Meter fraction={window.gauge.fraction} tone={window.gauge.tone} />
+      </div>
     )
   }
   const total = segments.reduce((sum, s) => sum + s.weight, 0)
   return (
-    <Tip content={tip}>
-      <div className="flex w-full items-center gap-1 py-1">
-        {segments.map((segment) => (
-          <div
-            key={segment.id}
-            className={segmentVariants({ idle: segment.idle })}
-            style={{ "--weight": String(total > 0 ? Math.max(0.0001, segment.weight / total) : 1) }}
-          >
-            <Meter fraction={segment.fraction} tone={segment.tone} />
-          </div>
-        ))}
-      </div>
-    </Tip>
+    <div role="img" aria-label={label} className="flex w-full items-center gap-1 py-1">
+      {segments.map((segment) => (
+        <div
+          key={segment.id}
+          className={segmentVariants({ idle: segment.idle })}
+          style={{
+            "--weight": String(total > 0 ? Math.max(0.0001, segment.weight / total) : 1),
+          }}
+        >
+          <Meter fraction={segment.fraction} tone={segment.tone} />
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -164,8 +164,8 @@ export function Section({
 }) {
   return (
     <section className="flex min-w-0 flex-col gap-3">
-      <div className="flex min-h-8 items-center justify-between gap-3">
-        <h2 className="font-heading text-base font-medium">{title}</h2>
+      <div className="flex min-h-8 flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <h2 className="font-heading text-xl font-semibold tracking-tight">{title}</h2>
         {trailing}
       </div>
       {children}
@@ -192,7 +192,7 @@ export function SettingRow({
     <div className="border-t first:border-t-0">
       <Item>
         {/* At least this wide, so in a narrow window the controls take the next line rather than squeeze the words. */}
-        <ItemContent className="min-w-56">
+        <ItemContent className="min-w-0 basis-48">
           <ItemTitle>{title}</ItemTitle>
           {detail !== undefined && <ItemDescription>{detail}</ItemDescription>}
         </ItemContent>
@@ -237,76 +237,30 @@ export function StatChange({ change }: { readonly change: Change }) {
 
 const sparkInks = ["spark-1", "spark-2", "spark-3", "spark-4"] as const
 
-/**
- * A figure in a Card: its caption, the number, how it moved since the span
- * before, its note, and its trend line beneath. `lg` is a headline.
- */
-export function Stat({
-  title,
-  value,
-  note,
-  change,
-  trend,
-  size = "md",
-}: {
-  readonly title: string
-  readonly value: string
-  readonly note: string
-  readonly change?: Change | undefined
-  readonly trend?: Trend | undefined
-  readonly size?: "md" | "lg"
-}) {
+/** A group of comparable figures on a single surface, with their dithered trends. */
+export function Stats({ stats }: { readonly stats: ReadonlyArray<StatView> }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardDescription>
-          <span className="text-xs font-medium">{title}</span>
-        </CardDescription>
-        {size === "lg" ? (
-          <CardTitle className="text-5xl font-normal tracking-tight tabular-nums @4xl:text-6xl">{value}</CardTitle>
-        ) : (
-          <CardTitle className="text-3xl font-normal tracking-tight tabular-nums">{value}</CardTitle>
-        )}
-      </CardHeader>
-      <CardContent className="flex flex-1 flex-col">
-        <div className="flex flex-1 flex-col justify-between gap-3">
-          <div className={size === "lg" ? "flex flex-col gap-1 text-sm" : "flex flex-col gap-1 text-xs"}>
-            {change !== undefined && (
-              <p>
-                <StatChange change={change} />
-              </p>
-            )}
-            <p className="text-muted-foreground">{note}</p>
+    <Panel>
+      <dl className="grid grid-cols-1 gap-px bg-border @lg:grid-cols-2 @4xl:grid-cols-4">
+        {stats.map(({ title, value, note, change, trend }) => (
+          <div key={title} className="flex min-w-0 flex-col gap-2.5 bg-card p-5 sm:p-6">
+            <dt className="text-sm font-medium text-muted-foreground">{title}</dt>
+            <dd className="font-heading text-3xl leading-none font-semibold tracking-tight tabular-nums">{value}</dd>
+            <dd className="flex flex-1 flex-col justify-between gap-3 text-xs">
+              <div className="space-y-1">
+                {change !== undefined && (
+                  <p>
+                    <StatChange change={change} />
+                  </p>
+                )}
+                <p className="text-muted-foreground">{note}</p>
+              </div>
+              {trend !== undefined && <Spark points={trend.points} ink={sparkInks[trend.series - 1] ?? "meter"} />}
+            </dd>
           </div>
-          {trend !== undefined && (
-            <Spark points={trend.points} ink={sparkInks[trend.series - 1] ?? "meter"} size={size} />
-          )}
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
-/** Figures side by side, a Card each: four to a row, or two headlines. */
-export function Stats({
-  stats,
-  size = "md",
-}: {
-  readonly stats: ReadonlyArray<StatView>
-  readonly size?: "md" | "lg"
-}) {
-  return (
-    <div
-      className={
-        size === "lg"
-          ? "grid grid-cols-1 gap-4 @2xl:grid-cols-2"
-          : "grid grid-cols-1 gap-4 @xl:grid-cols-2 @4xl:grid-cols-4"
-      }
-    >
-      {stats.map((stat) => (
-        <Stat key={stat.title} {...stat} size={size} />
-      ))}
-    </div>
+        ))}
+      </dl>
+    </Panel>
   )
 }
 
@@ -355,14 +309,10 @@ export function Skeleton({ lines = 3 }: { readonly lines?: number }) {
   )
 }
 
-/**
- * slopmax's logo: the Option key (⌥), traffic switched to another account.
- * The small size uses the flat mark, which stays crisp at 20 px; the large
- * one is the icon itself. Both come from assets/icon (`bun assets/icon/build.ts derive`).
- */
+/** The option-key mark, sized consistently for the sidebar and gate. */
 export function Logo({ size = "md" }: { readonly size?: "md" | "lg" }) {
-  if (size === "lg") return <img src={appIcon} alt="" width={40} height={40} className="size-10" />
-  return <img src={mark} alt="" width={20} height={20} className="size-5" />
+  const pixels = size === "lg" ? 36 : 20
+  return <img src={mark} alt="" width={pixels} height={pixels} className="brand-mark shrink-0" />
 }
 
 /** What went wrong reading something, with a way to try again: a destructive Alert. */

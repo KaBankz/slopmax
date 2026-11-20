@@ -40,7 +40,10 @@ import {
   strategyTitle,
 } from "../view/words.ts"
 
-const appearances: ReadonlyArray<{ readonly value: Appearance; readonly title: string }> = [
+const appearances: ReadonlyArray<{
+  readonly value: Appearance
+  readonly title: string
+}> = [
   { value: "system", title: "System" },
   { value: "light", title: "Light" },
   { value: "dark", title: "Dark" },
@@ -50,9 +53,9 @@ function AppearanceSection() {
   const prefs = useAtomValue(prefsAtom)
   const save = useAtomSet(savePrefs)
   return (
-    <Section title="Appearance">
+    <Section title="On this browser">
       <Panel>
-        <SettingRow title="Theme" detail="Follow the system, or keep to light or dark.">
+        <SettingRow title="Theme" detail="Choose the dashboard theme for this browser.">
           <Segmented
             label="Theme"
             value={prefs.appearance}
@@ -109,10 +112,10 @@ function NotificationsSection() {
   const test = useAtomSet(testNotifications)
   const detail = "When a limit reset is about to lapse unredeemed, or a week is about to reset with quota to spare."
   return (
-    <Section title="Notifications">
+    <Section title="Quota reminders">
       <Panel>
         <SettingRow
-          title="Notify me"
+          title="Browser notifications"
           detail={
             permission === "unsupported"
               ? "This browser cannot show notifications."
@@ -238,8 +241,6 @@ export function SettingsPage() {
   const waiting = cannotChange(useAtomValue(unansweredAtom), readOnly)
   return (
     <>
-      <AppearanceSection />
-      <ProxySection listen={listen} />
       {waiting === undefined ? (
         // Running, or still finding out: the settings show as soon as the proxy answers for them.
         <LiveSections />
@@ -253,6 +254,8 @@ export function SettingsPage() {
           }
         />
       )}
+      <AppearanceSection />
+      <ProxySection listen={listen} />
     </>
   )
 }

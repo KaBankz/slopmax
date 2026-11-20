@@ -1,3 +1,4 @@
+// Slopmax's choice rows use the same spacing as settings and account rows.
 import * as React from "react"
 import { mergeProps } from "@base-ui/react/merge-props"
 import { useRender } from "@base-ui/react/use-render"
@@ -32,6 +33,8 @@ const itemVariants = cva(
         default: "border-transparent",
         outline: "border-border",
         muted: "border-transparent bg-muted/50",
+        choice:
+          "cursor-pointer rounded-none border-transparent hover:bg-muted/55 has-[>[data-checked]]:bg-accent/50 has-[[data-slot=radio-group-item]:focus-visible]:outline-2 has-[[data-slot=radio-group-item]:focus-visible]:-outline-offset-2 has-[[data-slot=radio-group-item]:focus-visible]:outline-ring",
       },
       size: {
         default: "gap-2.5 px-3 py-2.5",

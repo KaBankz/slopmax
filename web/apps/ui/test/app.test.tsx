@@ -21,7 +21,11 @@ afterEach(async () => {
 const sidebarState = () => document.querySelector("[data-slot=sidebar][data-state]")?.getAttribute("data-state")
 
 const web = async (at?: string) => {
-  drawn = await draw({ stub: { key: ownerKey }, host: { key: ownerKey }, ...(at === undefined ? {} : { at }) })
+  drawn = await draw({
+    stub: { key: ownerKey },
+    host: { key: ownerKey },
+    ...(at === undefined ? {} : { at }),
+  })
   await showsSoon("Running 0.4.0")
   return drawn
 }
@@ -69,6 +73,19 @@ describe("the web dashboard", () => {
     // The sidebar has a row per provider with accounts.
     expect(document.querySelector('[data-page="anthropic"]')?.textContent).toBe("Anthropic API1")
     await showsSoon("Success rate")
+  })
+
+  test("the overview shows separate weekly and 5-hour reset opportunities", async () => {
+    await web()
+    await showsSoon("Next reset with quota left")
+    expect(shows("45%")).toBe(true)
+    expect(shows("Pace to use it all")).toBe(true)
+    expect(shows("Est. value if unused")).toBe(true)
+    expect(shows("$20.77")).toBe(true)
+    expect(control("5-hour").getAttribute("aria-description")).toMatch(/^Next reset in/)
+    await press("5-hour")
+    await showsSoon("38%")
+    expect(control("5-hour").getAttribute("aria-pressed")).toBe("true")
   })
 
   test("the overview opens the selected date range in Requests", async () => {
@@ -182,7 +199,7 @@ describe("the web dashboard", () => {
     await web("#/codex")
     await showsSoon("2 limit resets")
     // A signed-out account offers its sign-in on its own row.
-    expect(() => control("Sign in to lab@studio.dev again")).not.toThrow()
+    expect(() => control("Sign in again to lab@studio.dev")).not.toThrow()
     await press("2 limit resets on ana@studio.dev")
     await showsSoon("Each one resets this account's 5-hour and weekly windows at once.")
     expect(shows("Expires in")).toBe(true)
@@ -211,7 +228,12 @@ describe("the web dashboard", () => {
   test("a refused key shows why under the form, not as a toast", async () => {
     await web("#/access")
     await showsSoon("Add an account")
-    drawn?.stub.failNext("add", new UpstreamFailed({ message: "the key was refused: 401 invalid x-api-key" }))
+    drawn?.stub.failNext(
+      "add",
+      new UpstreamFailed({
+        message: "the key was refused: 401 invalid x-api-key",
+      }),
+    )
     await type("Paste an API key", "sk-ant-wrong")
     await press("Add key")
     await settle(() => document.querySelector("[role=alert]") !== null, "the refusal")
@@ -232,34 +254,35 @@ describe("the web dashboard", () => {
     await showsSoon("laptop revoked.")
   })
 
-  test("a digit opens the page at that place in the sidebar, and the arrows move through them", async () => {
+  test("sidebar links support keyboard navigation without switching pages on focus", async () => {
     await web()
-    await key("3")
-    await settle(() => location.hash === "#/codex", "the ChatGPT page")
-    await settle(
-      () =>
-        document.querySelector("[aria-current=page]")?.closest("[data-page]")?.getAttribute("data-page") === "codex",
-      "the row",
-    )
-    await key("ArrowDown", document.querySelector("[aria-current=page]") ?? window)
-    await settle(() => location.hash === "#/anthropic", "the next page")
-    await key(",")
-    await settle(() => location.hash === "#/settings", "settings")
+    const current = control("Overview")
+    await key("ArrowDown", current)
+    expect(document.activeElement?.getAttribute("href")).toBe("#/claude")
+    expect(location.hash).toBe("#/overview")
+    await act(async () => {
+      document.activeElement?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      location.hash = control("Claude").getAttribute("href") ?? ""
+    })
+    await settle(() => control("Claude").getAttribute("aria-current") === "page", "the Claude page")
   })
 
-  test("\\ hides and shows the sidebar as its button does, and the page keeps that for next time", async () => {
+  test("the navigation button persists the sidebar preference", async () => {
     const { host } = await web()
     expect(sidebarState()).toBe("expanded")
-    await key("\\")
+    await press("Toggle navigation")
     await settle(() => host.recorded.saved.at(-1)?.sidebarHidden === true, "the sidebar hidden")
     expect(sidebarState()).toBe("collapsed")
-    await press("Toggle Sidebar")
+    await press("Toggle navigation")
     await settle(() => host.recorded.saved.at(-1)?.sidebarHidden === false, "the sidebar shown")
     expect(sidebarState()).toBe("expanded")
   })
 
   test("a slopmax with no accounts says how to add one", async () => {
-    drawn = await draw({ stub: { key: ownerKey, scenario: "empty" }, host: { key: ownerKey } })
+    drawn = await draw({
+      stub: { key: ownerKey, scenario: "empty" },
+      host: { key: ownerKey },
+    })
     await showsSoon("No accounts yet")
     expect(shows("None yet")).toBe(true)
   })
@@ -290,13 +313,18 @@ describe("what the dashboard says while waiting, failing or quiet", () => {
     })
     await showsSoon("Status")
     expect(shows("Looking for the proxy")).toBe(false)
-    expect(document.querySelectorAll("[title='Reconnecting…']").length).toBeGreaterThan(0)
+    expect(control("Proxy: Reconnecting…")).toBeDefined()
+    expect(document.querySelector("main")?.textContent).toContain("Reconnecting…")
     await showsSoon("Running 0.4.0")
   })
 
   test("a new sign-in shows under Subscriptions before its limits are read", async () => {
     await web()
-    const fresh = account({ id: "claude-00000009", provider: "claude", name: "new@studio.dev" })
+    const fresh = account({
+      id: "claude-00000009",
+      provider: "claude",
+      name: "new@studio.dev",
+    })
     await act(async () => {
       drawn?.stub.setReport(new Report({ ...emptyReport(DateTime.nowUnsafe()), accounts: [fresh] }))
     })
@@ -310,8 +338,12 @@ describe("what the dashboard says while waiting, failing or quiet", () => {
   })
 
   test("an empty activity page points to the Agents page", async () => {
-    drawn = await draw({ stub: { key: ownerKey, scenario: "empty" }, host: { key: ownerKey }, at: "#/usage" })
-    await showsSoon("Nothing in this range")
+    drawn = await draw({
+      stub: { key: ownerKey, scenario: "empty" },
+      host: { key: ownerKey },
+      at: "#/usage",
+    })
+    await showsSoon("No requests recorded in this range")
     await press("Connect an agent")
     await settle(() => location.hash === "#/agents", "the Agents page")
     // Installed agents first; a connected one says so once.
@@ -321,17 +353,24 @@ describe("what the dashboard says while waiting, failing or quiet", () => {
   })
 
   test("a refresh spins and cannot be pressed again until it is answered", async () => {
-    drawn = await draw({ stub: { key: ownerKey, latency: "150 millis" }, host: { key: ownerKey } })
+    drawn = await draw({
+      stub: { key: ownerKey, latency: "150 millis" },
+      host: { key: ownerKey },
+    })
     await showsSoon("Running 0.4.0", 5_000)
     await press("Refresh usage")
-    expect(control("Reading usage again…").hasAttribute("disabled")).toBe(true)
-    await key("r")
+    expect(control("Refresh usage").hasAttribute("disabled")).toBe(true)
+    await press("Refresh usage")
     await showsSoon("Usage and limit resets read again.")
     expect(drawn.stub.calls.filter((call) => call.endpoint === "refresh")).toHaveLength(1)
   })
 
   test("adding a key says it is being checked, and a taken key name keeps what was typed", async () => {
-    drawn = await draw({ stub: { key: ownerKey, latency: "150 millis" }, host: { key: ownerKey }, at: "#/access" })
+    drawn = await draw({
+      stub: { key: ownerKey, latency: "150 millis" },
+      host: { key: ownerKey },
+      at: "#/access",
+    })
     await showsSoon("laptop", 5_000)
     // Changes wait for slopmax to answer on the event stream.
     await showsSoon("Running 0.4.0", 5_000)
@@ -352,7 +391,7 @@ describe("what the dashboard says while waiting, failing or quiet", () => {
     await showsSoon("Across 3 accounts, weighted by plan")
     await press("More for ana@studio.dev")
     await settle(() => document.querySelector("[role=menuitem]") !== null, "the menu")
-    await press("Set priority…")
+    await press("Priority (0)…")
     await showsSoon("Higher tiers are used first")
     await type("Priority", "high")
     await press("Save")

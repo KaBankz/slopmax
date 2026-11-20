@@ -1,7 +1,7 @@
 // Request outcomes, routing readiness, and subscription limits at a glance.
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
 import { type History, type HistoryRange, type Report, SubscriptionId } from "@slopmax/client"
-import { grouped, providerTitle } from "@slopmax/client/format"
+import { grouped } from "@slopmax/client/format"
 import { DateTime, Duration, Option, Schema } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import { ArrowUpCircle, ChevronRight, Plus, Radio, Users } from "lucide-react"
@@ -29,6 +29,7 @@ import {
 import { Legend, RequestColumns, requestInks } from "../components/charts.tsx"
 import { HealthCard, RecentFailures } from "../components/health.tsx"
 import { Dot, Empty, Label, Loaded, Panel, Section, SegmentedBar, Skeleton, StatChange } from "../components/parts.tsx"
+import { QuotaBoard } from "../components/quota-board.tsx"
 import { Quiet } from "../components/quiet.tsx"
 import { Segmented } from "../components/segmented.tsx"
 import { Alert, AlertTitle } from "../components/ui/alert.tsx"
@@ -37,7 +38,7 @@ import { Button } from "../components/ui/button.tsx"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "../components/ui/card.tsx"
 import { Item, ItemActions, ItemContent, ItemHeader, ItemMedia, ItemTitle } from "../components/ui/item.tsx"
 import { type Attention, standing } from "../view/attention.ts"
-import { type Group, nextAccountBack, nextQuotaReset, resetsLeft } from "../view/groups.ts"
+import { type Group, nextAccountBack, resetsLeft } from "../view/groups.ts"
 import { Pages } from "../view/pages.ts"
 import { pageSize } from "../view/requests.ts"
 import { activityStats, isQuiet, previousRequests, requestTotal } from "../view/usage.ts"
@@ -78,7 +79,12 @@ function UpdateBanner({ report }: { readonly report: Report }) {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => copyText({ text: update.command, said: "Copied the update command." })}
+            onClick={() =>
+              copyText({
+                text: update.command,
+                said: "Copied the update command.",
+              })
+            }
           >
             Copy command
           </Button>
@@ -88,7 +94,7 @@ function UpdateBanner({ report }: { readonly report: Report }) {
   )
 }
 
-function Standing({ report, providers }: { readonly report: Report; readonly providers: ReadonlyArray<Group> }) {
+function Standing({ report }: { readonly report: Report }) {
   const now = useAtomValue(nowAtom)
   const settings = useAtomValue(settingsAtom)
   const stand = standing(report)
@@ -99,6 +105,7 @@ function Standing({ report, providers }: { readonly report: Report; readonly pro
     }),
   )
   const age = Duration.toSeconds(DateTime.distance(report.generatedAt, now))
+  const back = nextAccountBack(report.accounts, now, zone)
   const banked = report.accounts.reduce((sum, account) => sum + resetsLeft(account, now), 0)
   return (
     <Card className="min-w-0">
@@ -115,18 +122,7 @@ function Standing({ report, providers }: { readonly report: Report; readonly pro
           </p>
           {stand.detail !== undefined && <p className="text-sm text-muted-foreground">{stand.detail}</p>}
           {banked > 0 && <p className="text-sm text-muted-foreground">{resetCount(banked)} held</p>}
-          {providers.length > 0 && (
-            <ul className="mt-2 divide-y" aria-label="Accounts ready by provider">
-              {providers.map((group) => (
-                <li key={group.provider} className="flex justify-between gap-2 py-1.5 text-xs">
-                  <span className="font-medium">{group.title}</span>
-                  <span className="text-muted-foreground tabular-nums">
-                    {group.enabled === 0 ? "All turned off" : `${group.ready} of ${group.enabled} ready`}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
+          {back !== undefined && <p className="text-sm text-muted-foreground">Next account back in {back.countdown}</p>}
         </div>
       </CardContent>
       <CardFooter className="mt-auto">
@@ -143,49 +139,6 @@ function Standing({ report, providers }: { readonly report: Report; readonly pro
           <span className="text-xs text-muted-foreground">{updated(age)}</span>
         </div>
       </CardFooter>
-    </Card>
-  )
-}
-
-function Capacity({ report }: { readonly report: Report }) {
-  const now = useAtomValue(nowAtom)
-  const back = nextAccountBack(report.accounts, now, zone)
-  const reset = back === undefined ? nextQuotaReset(report, now, zone) : undefined
-  const next = back ?? reset
-  return (
-    <Card className="min-w-0">
-      <CardHeader>
-        <CardTitle>
-          <h2>{back === undefined ? "Next quota reset" : "Next account back"}</h2>
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        {next === undefined ? (
-          <p className="text-muted-foreground">No upcoming reset reported.</p>
-        ) : (
-          <div className="flex flex-col gap-1">
-            <p className="text-2xl leading-tight font-semibold tracking-tight tabular-nums">In {next.countdown}</p>
-            <p className="text-sm text-muted-foreground">
-              {reset === undefined ? `Quota block ends ${next.at}` : `${reset.window} quota resets ${next.at}`}
-            </p>
-          </div>
-        )}
-      </CardContent>
-      {next !== undefined && (
-        <CardFooter className="mt-auto">
-          <Button
-            variant="ghost"
-            size="xs"
-            className="w-fit max-w-full justify-start"
-            onClick={() => go(Pages.provider(next.provider))}
-          >
-            <span className="truncate" title={next.account}>
-              {providerTitle(next.provider)} / {next.account}
-            </span>
-            <ChevronRight aria-hidden data-icon="inline-end" />
-          </Button>
-        </CardFooter>
-      )}
     </Card>
   )
 }
@@ -209,8 +162,10 @@ function AttentionRow({ item }: { readonly item: Attention }) {
   const start = useAtomSet(signIn)
   const openCredits = useAtomSet(openCreditsAtom)
   const canChange = useAtomValue(canChangeAtom)
-  const show = () => go(Pages.provider(item.provider))
+  const show = () => go(Pages.provider(item.provider, item.account))
   const provider = item.provider
+  const report = Option.getOrUndefined(useAtomValue(shownReportAtom))
+  const name = report?.accounts.find((account) => account.id === item.account)?.name
   return (
     <div className="border-t first:border-t-0">
       <Item className="flex-nowrap">
@@ -222,19 +177,26 @@ function AttentionRow({ item }: { readonly item: Attention }) {
         </ItemContent>
         <ItemActions>
           {item.remedy === "sign-in" && isSubscription(provider) ? (
-            <Button variant="outline" size="sm" disabled={!canChange} onClick={() => start({ provider })}>
-              Sign in…
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!canChange}
+              aria-label={name === undefined ? undefined : `Sign in again to ${name}`}
+              onClick={() => start({ provider })}
+            >
+              Sign in again
             </Button>
           ) : item.remedy === "redeem" ? (
             <Button
               variant="outline"
               size="sm"
+              aria-label={name === undefined ? undefined : `Redeem reset for ${name}`}
               onClick={() => {
                 openCredits(Option.some(item.account))
                 show()
               }}
             >
-              Redeem…
+              Redeem reset
             </Button>
           ) : (
             <Button variant="outline" size="sm" onClick={show}>
@@ -330,7 +292,10 @@ function Metered({ group }: { readonly group: Group }) {
   )
 }
 
-const activityRanges = ranges.map((value) => ({ value, title: rangeTitle(value) }))
+const activityRanges = ranges.map((value) => ({
+  value,
+  title: rangeTitle(value),
+}))
 
 function ActivityPlot({ history }: { readonly history: History }) {
   const { total, range } = history
@@ -353,8 +318,14 @@ function ActivityPlot({ history }: { readonly history: History }) {
             </div>
             <Legend
               items={[
-                { ink: requestInks.answered, title: `${grouped(total.requests)} answered` },
-                { ink: requestInks.failed, title: `${grouped(total.failed)} failed` },
+                {
+                  ink: requestInks.answered,
+                  title: `${grouped(total.requests)} answered`,
+                },
+                {
+                  ink: requestInks.failed,
+                  title: `${grouped(total.failed)} failed`,
+                },
               ]}
             />
           </div>
@@ -446,7 +417,7 @@ export function OverviewPage() {
       <Empty
         icon={Users}
         title="No accounts yet"
-        detail="Sign in, import your agents' logins, or add an API key, with Add account above."
+        detail="Sign in, import an agent login, or add an API key to get started."
       >
         <Button onClick={() => go(Pages.access)}>
           <Plus />
@@ -460,14 +431,7 @@ export function OverviewPage() {
   const metered = all.filter((group) => !group.subscription)
   return (
     <>
-      <UpdateBanner report={report} />
-      <div className="grid grid-cols-1 gap-4 @4xl:grid-cols-3">
-        <RequestActivity />
-        <div className="grid min-w-0 content-start gap-4 @xl:grid-cols-2 @4xl:grid-cols-1 @4xl:grid-rows-[auto_1fr]">
-          <Standing report={report} providers={all} />
-          {pools.length > 0 && <Capacity report={report} />}
-        </div>
-      </div>
+      {pools.length > 0 && <QuotaBoard report={report} />}
       {items.length > 0 && (
         <Section
           title="Needs attention"
@@ -495,6 +459,10 @@ export function OverviewPage() {
           </div>
         </Section>
       )}
+      <div className="grid grid-cols-1 gap-3 @4xl:grid-cols-3">
+        <RequestActivity />
+        <Standing report={report} />
+      </div>
       <Section title="Request health">
         <div className="grid grid-cols-1 items-start gap-4 @4xl:grid-cols-2">
           {pools.length > 0 && <HealthCard groups={pools} />}
@@ -510,6 +478,7 @@ export function OverviewPage() {
           </Panel>
         </Section>
       )}
+      <UpdateBanner report={report} />
     </>
   )
 }

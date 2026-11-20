@@ -381,7 +381,10 @@ export const groupsAtom = Atom.make((get): ReadonlyArray<Group> =>
 
 /** What wants a look in the shown report, likewise once a second. */
 export const attentionAtom = Atom.make((get): ReadonlyArray<Attention> =>
-  Option.match(get(shownReportAtom), { onNone: () => [], onSome: (report) => attention(report, get(nowAtom), zone) }),
+  Option.match(get(shownReportAtom), {
+    onNone: () => [],
+    onSome: (report) => attention(report, get(nowAtom), zone).filter((item) => item.kind !== "quota-unused"),
+  }),
 )
 
 // --- Queries ------------------------------------------------------------------------------

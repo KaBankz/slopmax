@@ -14,6 +14,7 @@ import path from "node:path"
 import { outdir as defaultOutdir } from "./src/index.ts"
 
 const root = import.meta.dir
+const displayFont = "bricolage-grotesque-latin.woff2"
 
 const tailwind = (minify: boolean): BunPlugin => ({
   name: "tailwind",
@@ -51,6 +52,8 @@ export const build = async (options: BuildOptions = {}): Promise<ReadonlyArray<{
     minify,
     target: "browser",
     publicPath: "./",
+    // The daemon permits font files from its own origin. Emit one instead of a CSS data URL.
+    external: ["*.woff2"],
     naming: { entry: "[name].[ext]", chunk: "[name]-[hash].[ext]", asset: "[name]-[hash].[ext]" },
     define: { "process.env.NODE_ENV": JSON.stringify(minify ? "production" : "development") },
     plugins: [tailwind(minify)],
@@ -59,7 +62,11 @@ export const build = async (options: BuildOptions = {}): Promise<ReadonlyArray<{
     for (const message of result.logs) console.error(message)
     throw new Error("the UI did not build")
   }
-  const written = result.outputs.map((output) => output.path)
+  const fontFile = path.join(outdir, displayFont)
+  await Bun.write(fontFile, Bun.file(path.join(root, "src", "fonts", displayFont)))
+  const fontLicense = path.join(outdir, "bricolage-grotesque-OFL.txt")
+  await Bun.write(fontLicense, Bun.file(path.join(root, "src", "fonts", "OFL.txt")))
+  const written = [...result.outputs.map((output) => output.path), fontFile, fontLicense]
   if (options.compress ?? true) {
     for (const file of written) {
       await Bun.write(`${file}.gz`, Bun.gzipSync(await Bun.file(file).bytes(), { level: 9 }))

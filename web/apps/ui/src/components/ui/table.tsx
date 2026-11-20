@@ -65,10 +65,21 @@ function TableCell({ className, ...props }: React.ComponentProps<"td">) {
   )
 }
 
+/** Align numbers consistently across ledger and request tables. */
+function TableNumber({ className, muted = false, ...props }: React.ComponentProps<"span"> & { muted?: boolean }) {
+  return (
+    <span
+      data-slot="table-number"
+      className={cn("block text-right tabular-nums", muted && "text-muted-foreground", className)}
+      {...props}
+    />
+  )
+}
+
 function TableCaption({ className, ...props }: React.ComponentProps<"caption">) {
   return (
     <caption data-slot="table-caption" className={cn("mt-4 text-sm text-muted-foreground", className)} {...props} />
   )
 }
 
-export { Table, TableHeader, TableBody, TableFooter, TableHead, TableRow, TableCell, TableCaption }
+export { Table, TableHeader, TableBody, TableFooter, TableHead, TableRow, TableCell, TableNumber, TableCaption }
