@@ -255,6 +255,7 @@ pub fn agent_title(agent: Sender) -> &'static str {
     match agent {
         Sender::ClaudeCode => "Claude Code",
         Sender::Codex => "Codex",
+        Sender::GrokBuild => "Grok Build",
         Sender::Slopmax => "slopmax",
     }
 }

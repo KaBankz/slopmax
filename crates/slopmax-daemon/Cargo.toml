@@ -30,6 +30,8 @@ libc.workspace = true
 [dev-dependencies]
 # Gzipped answers, as Anthropic sends them.
 flate2.workspace = true
+# Request bodies zstd-compressed, as Grok Build sends them.
+ruzstd.workspace = true
 # Paused time, for timeouts tested without waiting them out.
 tokio = { workspace = true, features = ["test-util"] }
 # The client the CLI reaches the daemon with.

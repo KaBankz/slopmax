@@ -13,6 +13,7 @@ use http::{Method, StatusCode};
 use serde_json::{Value, json};
 use slopmax_core::account::{Account, Endpoint, Store, Tokens};
 use slopmax_core::config::{Config, Strategy};
+use slopmax_core::ledger;
 use slopmax_core::net::body;
 use slopmax_core::net::server::{self, Request, Response};
 use slopmax_core::net::{Client, Origins};
@@ -32,6 +33,7 @@ struct Seen {
     authorization: String,
     /// What Grok Build says it is, which slopmax passes on.
     token_auth: String,
+    content_encoding: String,
     body: Bytes,
 }
 
@@ -88,10 +90,17 @@ async fn mock(log: Log, request: Request) -> Response {
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default()
         .to_owned();
+    let content_encoding = parts
+        .headers
+        .get("content-encoding")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
     log.lock().unwrap().push(Seen {
         path: parts.uri.path().to_owned(),
         authorization: authorization.clone(),
         token_auth,
+        content_encoding: content_encoding.clone(),
         body: body.clone(),
     });
     let sse = "text/event-stream";
@@ -143,6 +152,19 @@ async fn mock(log: Log, request: Request) -> Response {
         ),
         // xAI's CLI chat proxy: one SuperGrok account has spent its month.
         (Method::POST, "/v1/responses", "Bearer grok-ok") => reply(200, sse, CODEX_STREAM),
+        // Refuses reasoning another account sealed, read through any
+        // compression, as xAI does.
+        (Method::POST, "/v1/responses", "Bearer grok-sealed") => {
+            let plain = match content_encoding.as_str() {
+                "zstd" => unzstd(&body),
+                _ => body.to_vec(),
+            };
+            if String::from_utf8_lossy(&plain).contains("encrypted_content") {
+                reply(400, json, r#"{"error":"invalid encrypted content"}"#)
+            } else {
+                reply(200, sse, CODEX_STREAM)
+            }
+        }
         (Method::POST, "/v1/responses", "Bearer grok-spent") => reply(
             429,
             json,
@@ -702,6 +724,92 @@ async fn grok_build(
 }
 
 const GROK_BUILD: &str = "grok-shell/1.0.77 (linux; x86_64)";
+
+fn unzstd(bytes: &[u8]) -> Vec<u8> {
+    use std::io::Read;
+    let mut out = Vec::new();
+    ruzstd::decoding::StreamingDecoder::new(bytes)
+        .unwrap()
+        .read_to_end(&mut out)
+        .unwrap();
+    out
+}
+
+/// A Grok Build request with its body zstd-compressed, as Grok Build sends
+/// its model turns once xAI's settings say the API takes them so.
+async fn grok_build_compressed(h: &Harness, body: &str) -> (StatusCode, String, Vec<u8>) {
+    let zstd = ruzstd::encoding::compress_to_vec(
+        body.as_bytes(),
+        ruzstd::encoding::CompressionLevel::Fastest,
+    );
+    let response = Client::builder()
+        .build()
+        .post(format!("{}/grok/v1/responses", h.proxy))
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("user-agent", GROK_BUILD)
+        .header("x-grok-conv-group-id", "group-1")
+        .header("content-type", "application/json")
+        .header("content-encoding", "zstd")
+        .body(zstd.clone())
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    (status, response.text().await.unwrap(), zstd)
+}
+
+#[tokio::test]
+async fn compressed_grok_build_turns_are_read_and_sent_on_as_they_came() {
+    let h = harness(
+        |_| vec![oauth(ProviderId::Grok, "ok", "grok-ok", "r", 1000)],
+        false,
+    )
+    .await;
+    let (status, body, zstd) = grok_build_compressed(&h, GROK_BODY).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let sent = h.seen("/v1/responses").pop().unwrap();
+    assert_eq!(sent.content_encoding, "zstd");
+    assert_eq!(sent.body, zstd, "the body goes on byte for byte");
+    // The ledger knows the model, so the request is named and priced.
+    let usage = h.dir.join("usage");
+    let mut entries = Vec::new();
+    for _ in 0..50 {
+        entries = ledger::read(&usage, Timestamp::UNIX_EPOCH);
+        if !entries.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let entry = entries.first().expect("the turn is recorded");
+    assert_eq!(entry.model.as_deref(), Some("grok-4.7"));
+    assert_eq!(entry.agent.as_deref(), Some("grok"));
+    assert_eq!(entry.session.as_deref(), Some("group-1"));
+}
+
+#[tokio::test]
+async fn a_compressed_body_slopmax_edits_goes_on_plain() {
+    let h = harness(
+        |_| vec![oauth(ProviderId::Grok, "ok", "grok-sealed", "r", 1000)],
+        false,
+    )
+    .await;
+    let sealed = r#"{"model":"grok-4.7","input":[{"type":"reasoning","encrypted_content":"from-another-account","summary":[]},{"type":"message","role":"user","content":"hi"}],"stream":true}"#;
+    let (status, body, zstd) = grok_build_compressed(&h, sealed).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let tried = h.seen("/v1/responses");
+    assert_eq!(tried.len(), 2, "refused once, then sent without the state");
+    assert_eq!(
+        (tried[0].content_encoding.as_str(), &tried[0].body[..]),
+        ("zstd", &zstd[..])
+    );
+    assert_eq!(
+        tried[1].content_encoding, "",
+        "an edited body is plain JSON"
+    );
+    let resent: Value = serde_json::from_slice(&tried[1].body).unwrap();
+    assert_eq!(resent["model"], "grok-4.7");
+    assert!(resent["input"][0].get("encrypted_content").is_none());
+}
 
 #[tokio::test]
 async fn grok_build_moves_past_a_spent_supergrok_account() {

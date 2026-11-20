@@ -3,7 +3,7 @@
 // it, filtered by account, model, agent and how they went, with the totals of what matched. A row opens its
 // request in a sheet; what is listed exports as CSV.
 import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react"
-import { type HistoryRange, type RequestPage, RequestRow } from "@slopmax/client"
+import { type HistoryRange, type RequestPage, RequestRow, requestSenders } from "@slopmax/client"
 import { grouped } from "@slopmax/client/format"
 import { cva } from "class-variance-authority"
 import { Option } from "effect"
@@ -307,7 +307,7 @@ function LiveRequests() {
   const facets = {
     accounts: [...new Set(feedRows.flatMap((r) => r.record.account ?? []))].toSorted(),
     models: [...new Set(feedRows.flatMap((r) => r.record.model ?? []))].toSorted(),
-    agents: (["claude-code", "codex", "slopmax"] as const).filter((a) => feedRows.some((r) => r.record.agent === a)),
+    agents: requestSenders.filter((a) => feedRows.some((r) => r.record.agent === a)),
   }
   return (
     <div className="flex flex-col gap-3">

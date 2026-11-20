@@ -508,8 +508,8 @@ impl Index {
         use slopmax_api::ledger::{RequestOutcome, Sender};
         let mut tally = crate::browse::Tally::default();
         let mut priced: HashMap<Arc<str>, Option<Pricing>, Fast> = HashMap::default();
-        let (mut accounts, mut models, mut agents) = (BTreeSet::new(), BTreeSet::new(), [false; 3]);
-        const SENDERS: [Sender; 3] = [Sender::ClaudeCode, Sender::Codex, Sender::Slopmax];
+        let (mut accounts, mut models) = (BTreeSet::new(), BTreeSet::new());
+        let mut agents = [false; Sender::ALL.len()];
         for (&hour, span) in self.hours.range(hour_of(since)..).rev() {
             let mut matched = 0;
             for (cell, sums) in &span.cells {
@@ -520,7 +520,7 @@ impl Index {
                 if let Some(model) = &cell.model {
                     models.insert(model.clone());
                 }
-                if let Some(i) = SENDERS.iter().position(|s| Some(*s) == sender) {
+                if let Some(i) = Sender::ALL.iter().position(|s| Some(*s) == sender) {
                     agents[i] = true;
                 }
                 if !query.takes_one(&cell.account, cell.model.as_deref(), sender) {
@@ -569,7 +569,7 @@ impl Index {
         tally.facets = slopmax_api::ledger::RequestFacets {
             accounts: accounts.into_iter().map(|a| a.to_string()).collect(),
             models: models.into_iter().map(|m| m.to_string()).collect(),
-            agents: SENDERS
+            agents: Sender::ALL
                 .into_iter()
                 .zip(agents)
                 .filter_map(|(s, seen)| seen.then_some(s))

@@ -247,7 +247,7 @@ pub fn page(
     page.facets = RequestFacets {
         accounts: accounts.into_iter().map(str::to_owned).collect(),
         models: models.into_iter().map(str::to_owned).collect(),
-        agents: [Sender::ClaudeCode, Sender::Codex, Sender::Slopmax]
+        agents: Sender::ALL
             .into_iter()
             .filter(|a| agents.contains(&(*a as u8)))
             .collect(),
