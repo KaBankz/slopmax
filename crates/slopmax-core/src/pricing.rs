@@ -87,6 +87,17 @@ const OPENAI: &[(&str, f64, f64, f64)] = &[
     ("gpt-5.6-luna", 0.20, 1.20, 0.02),
 ];
 
+/// xAI API list prices as of 2026-11-20, for the models Grok Build runs.
+/// xAI caches prompts on its own and bills no cache writes.
+const XAI: &[(&str, f64, f64, f64)] = &[
+    // (model, input, output, cache read)
+    ("grok-4.7", 2.0, 6.0, 0.50),
+    ("grok-4.6", 2.0, 6.0, 0.50),
+    ("grok-4.5", 2.0, 6.0, 0.30),
+    ("grok-4.3", 1.25, 2.50, 0.20),
+    ("grok-build-0.1", 1.0, 2.0, 0.20),
+];
+
 /// The models priced by prompt length, as of 2026-11-18: a request whose
 /// prompt is over `over` tokens pays these prices on all of its tokens,
 /// output included. A prompt counts all of the request's input tokens,
@@ -95,7 +106,8 @@ const OPENAI: &[(&str, f64, f64, f64)] = &[
 /// priced the same up to their full context window. OpenAI's cost twice
 /// as much input and half as much again output past 272K input tokens,
 /// which count cached input and cache writes, as OpenAI counts an input
-/// token as one of input, cached input or cache write.
+/// token as one of input, cached input or cache write. xAI's cost twice as
+/// much from 200K prompt tokens on.
 const LONG: &[(&str, u64, f64, f64, f64)] = &[
     // (model, over, input, output, cache read)
     ("claude-haiku-5-5", 100_000, 0.50, 2.50, 0.05),
@@ -109,6 +121,11 @@ const LONG: &[(&str, u64, f64, f64, f64)] = &[
     ("gpt-5.6-sol", 272_000, 8.0, 30.0, 0.80),
     ("gpt-5.6-terra", 272_000, 4.0, 18.0, 0.40),
     ("gpt-5.6-luna", 272_000, 0.40, 1.80, 0.04),
+    ("grok-4.7", 199_999, 4.0, 12.0, 1.0),
+    ("grok-4.6", 199_999, 4.0, 12.0, 1.0),
+    ("grok-4.5", 199_999, 4.0, 12.0, 0.60),
+    ("grok-4.3", 199_999, 2.50, 5.0, 0.40),
+    ("grok-build-0.1", 199_999, 2.0, 4.0, 0.40),
 ];
 
 /// Subscription list prices in US dollars a month, by provider and the
@@ -196,6 +213,7 @@ pub fn price(model: &str, custom: &BTreeMap<String, Custom>) -> Option<Pricing> 
     let base = CLAUDE
         .iter()
         .chain(OPENAI)
+        .chain(XAI)
         .find(|(id, ..)| is_model(model, id))
         .map(|&(_, input, output, cache_read)| listed(input, output, cache_read))?;
     let long = LONG.iter().find(|(id, ..)| is_model(model, id)).map(
@@ -379,6 +397,37 @@ mod tests {
     }
 
     #[test]
+    fn grok_models_cost_twice_as_much_from_200k_prompt_tokens() {
+        let grok = price("grok-4.7", &BTreeMap::new()).unwrap();
+        assert!(close(
+            grok.cost(1_000, 2_000, 198_999, 0),
+            (1_000. * 2. + 2_000. * 6. + 198_999. * 0.50) / 1e6
+        ));
+        // From exactly 200K on, every token pays double.
+        assert!(close(
+            grok.cost(1_001, 2_000, 198_999, 0),
+            (1_001. * 4. + 2_000. * 12. + 198_999. * 1.0) / 1e6
+        ));
+        assert!(is_long("grok-4.6", 200_000));
+        assert!(!is_long("grok-4.6", 199_999));
+        for &(model, ..) in XAI {
+            let p = price(model, &BTreeMap::new()).unwrap();
+            let long = p
+                .long
+                .unwrap_or_else(|| panic!("{model} has no long price"));
+            for (short, long) in [
+                (p.base.input, long.price.input),
+                (p.base.output, long.price.output),
+                (p.base.cache_read, long.price.cache_read),
+            ] {
+                assert!(close(long, short * 2.), "{model}");
+            }
+        }
+        // Grok 4.7 Fast is another model, priced only inside Grok Build.
+        assert_eq!(price("grok-4.7-fast", &BTreeMap::new()), None);
+    }
+
+    #[test]
     fn other_claude_models_cost_the_same_at_any_length() {
         for &(model, ..) in CLAUDE.iter().filter(|(m, ..)| *m != "claude-haiku-5-5") {
             let p = price(model, &BTreeMap::new()).unwrap();
@@ -470,8 +519,8 @@ mod tests {
         assert_eq!(list("gpt-6-luna").unwrap().output, 0.50);
     }
 
-    /// The models both providers listed on 2026-11-18, at that day's
-    /// list prices: (model, input, output, cache read).
+    /// The models each provider listed (xAI's on 2026-11-20, the others on
+    /// 2026-11-18), at that day's list prices: (model, input, output, cache read).
     #[test]
     fn prices_every_listed_model() {
         let listed = [
@@ -489,6 +538,11 @@ mod tests {
             ("gpt-5.6-sol", 4.0, 20.0, 0.40),
             ("gpt-5.6-terra", 2.0, 12.0, 0.20),
             ("gpt-5.6-luna", 0.20, 1.20, 0.02),
+            ("grok-4.7", 2.0, 6.0, 0.50),
+            ("grok-4.6", 2.0, 6.0, 0.50),
+            ("grok-4.5", 2.0, 6.0, 0.30),
+            ("grok-4.3", 1.25, 2.50, 0.20),
+            ("grok-build-0.1", 1.0, 2.0, 0.20),
         ];
         for (model, input, output, cache_read) in listed {
             let p = list(model).unwrap_or_else(|| panic!("{model} is unpriced"));

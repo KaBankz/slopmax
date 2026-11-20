@@ -7,7 +7,7 @@ mise install       # Rust and Bun, at the versions mise.toml pins
 mise run check     # rustfmt, clippy with warnings denied, and the tests
 mise run web       # the web UI: format, types, lint, tests, and the contract fixtures
 mise run msrv      # builds with the minimum supported Rust (1.91)
-mise run budget    # at most 130 crates and a 12 MiB binary
+mise run budget    # at most 131 crates and a 12 MiB binary
 mise run bench     # the latency, throughput, memory, and startup slopmax adds
 mise run ui        # build the web UI the binary embeds
 mise run build     # optimized release binary

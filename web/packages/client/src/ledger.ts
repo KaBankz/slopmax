@@ -41,6 +41,9 @@ export class Usage extends Schema.Class<Usage>("Usage")({
 export const RequestSender = Schema.Union([AgentId, Schema.Literal("slopmax")])
 export type RequestSender = typeof RequestSender.Type
 
+/** Every sender, in the order lists show them. */
+export const requestSenders: ReadonlyArray<RequestSender> = [...AgentId.literals, "slopmax"]
+
 export const LedgerRecord = Schema.TaggedUnion({
   /** A request slopmax answered, whatever the outcome. */
   Request: {

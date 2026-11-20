@@ -65,7 +65,10 @@ struct Inbound {
     started: Instant,
     target: Target,
     parts: Parts,
+    /// The body as slopmax reads it: decompressed, when it came compressed.
     body: Bytes,
+    /// The compressed body as it came, sent on unedited.
+    sent: Option<Bytes>,
     /// Whether the body is plain JSON slopmax may inspect and edit.
     json: bool,
     agent: Option<&'static dyn Agent>,
@@ -81,11 +84,16 @@ struct Inbound {
 }
 
 impl Inbound {
-    fn new(target: Target, parts: Parts, body: Bytes, machine: Option<String>) -> Self {
-        let encoded = parts
-            .headers
-            .get("content-encoding")
-            .is_some_and(|v| v.as_bytes() != b"identity");
+    /// `body` is the request's as slopmax reads it, and `sent` the
+    /// compressed one it came as, if slopmax could decompress it.
+    fn new(
+        target: Target,
+        parts: Parts,
+        body: Bytes,
+        sent: Option<Bytes>,
+        machine: Option<String>,
+    ) -> Self {
+        let encoded = sent.is_none() && content_encoding(&parts.headers).is_some();
         // Framing only: a full parse of a long conversation costs more than
         // everything else slopmax does with it. The scans below are exact on
         // valid JSON and harmless on anything else, which the provider
@@ -103,6 +111,7 @@ impl Inbound {
             target,
             parts,
             body,
+            sent,
             json,
             agent,
             session,
@@ -162,9 +171,9 @@ impl Inbound {
     /// tool too), leaving out the advisor results the account cannot read
     /// (`readable` says which it can), and dropping state bound to another
     /// account when the session moved.
-    fn body(&self, step: &Step, strip_state: bool, readable: impl Fn(&str) -> bool) -> Bytes {
+    fn body(&self, step: &Step, strip_state: bool, readable: impl Fn(&str) -> bool) -> Sent {
         if !self.json {
-            return self.body.clone();
+            return self.as_sent();
         }
         let mut body = Cow::Borrowed(&self.body[..]);
         if let Some(asked) = self.model.as_deref().filter(|m| *m != step.model) {
@@ -187,8 +196,16 @@ impl Inbound {
             body = Cow::Owned(rebound);
         }
         match body {
-            Cow::Borrowed(_) => self.body.clone(),
-            Cow::Owned(edited) => edited.into(),
+            Cow::Borrowed(_) => self.as_sent(),
+            Cow::Owned(edited) => Sent::Plain(edited.into()),
+        }
+    }
+
+    /// The body as the agent sent it.
+    fn as_sent(&self) -> Sent {
+        match &self.sent {
+            Some(compressed) => Sent::AsItCame(compressed.clone()),
+            None => Sent::AsItCame(self.body.clone()),
         }
     }
 
@@ -452,7 +469,8 @@ pub(super) async fn forward(app: Arc<App>, target: Target, request: Request, who
         }
     };
     let Who { label, key: client } = who;
-    let inbound = Inbound::new(target, parts, body, label);
+    let (body, sent) = decompressed(&parts.headers, body).await;
+    let inbound = Inbound::new(target, parts, body, sent, label);
     if let Some(key) = client.as_ref().filter(|k| !k.models.is_empty()) {
         // A key held to some models must have its model read exactly.
         let model = inbound
@@ -878,6 +896,40 @@ fn lane(speaks: &[Dialect], client: Dialect) -> Option<Dialect> {
         .find(|d| translate::can_translate(client, *d))
 }
 
+/// The body to send upstream.
+enum Sent {
+    /// As the agent sent it, compressed or not.
+    AsItCame(Bytes),
+    /// Edited, as plain JSON.
+    Plain(Bytes),
+}
+
+/// A request's `content-encoding`, unless it says `identity`.
+fn content_encoding(headers: &HeaderMap) -> Option<&[u8]> {
+    headers
+        .get(http::header::CONTENT_ENCODING)
+        .map(HeaderValue::as_bytes)
+        .filter(|v| *v != b"identity")
+}
+
+/// A compressed body decompressed, so slopmax can read it: `(body, sent)`,
+/// where `sent` is the compressed body when `body` came from it. A body
+/// slopmax cannot decompress stays as it came, unread.
+async fn decompressed(headers: &HeaderMap, body: Bytes) -> (Bytes, Option<Bytes>) {
+    let Some(encoding) = content_encoding(headers).map(<[u8]>::to_vec) else {
+        return (body, None);
+    };
+    let compressed = body.clone();
+    let plain = offload(body.len(), move || {
+        crate::wire::sse::decompress(&encoding, &compressed, MAX_BODY)
+    })
+    .await;
+    match plain {
+        Some(plain) => (plain.into(), Some(body)),
+        None => (body, None),
+    }
+}
+
 /// A request ready to go upstream.
 struct Outbound {
     url: String,
@@ -914,10 +966,18 @@ async fn outbound(
     let base = provider.api(account).trim_end_matches('/');
     let Some(upstream) = lane else {
         let advisors = app.advisors.lock().unwrap_or_else(|p| p.into_inner());
-        let body = inbound.body(step, stripped, |call| advisors.readable(call, &account.id));
+        let mut headers = provider.headers(&inbound.parts.headers, account, moved);
+        let body = match inbound.body(step, stripped, |call| advisors.readable(call, &account.id)) {
+            Sent::AsItCame(body) => body,
+            // An edited body goes as plain JSON, whatever it came as.
+            Sent::Plain(body) => {
+                headers.remove(http::header::CONTENT_ENCODING);
+                body
+            }
+        };
         return Ok(Outbound {
             url: [base, inbound.target.path.as_str()].concat(),
-            headers: provider.headers(&inbound.parts.headers, account, moved),
+            headers,
             body,
         });
     };

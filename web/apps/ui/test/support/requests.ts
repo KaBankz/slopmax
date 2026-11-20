@@ -11,6 +11,7 @@ import {
   RequestPage,
   RequestRow,
   type RequestSender,
+  requestSenders,
   Usage,
 } from "@slopmax/client"
 import { DateTime } from "effect"
@@ -137,9 +138,7 @@ export const fixtureRequestPage = (
     facets: new RequestFacets({
       accounts: [...new Set(inRange.flatMap((kept) => kept.row.record.account ?? []))].toSorted(),
       models: [...new Set(inRange.flatMap((kept) => kept.row.record.model ?? []))].toSorted(),
-      agents: (["claude-code", "codex", "slopmax"] as const).filter((agent) =>
-        inRange.some((kept) => kept.row.record.agent === agent),
-      ),
+      agents: requestSenders.filter((agent) => inRange.some((kept) => kept.row.record.agent === agent)),
     }),
   })
 }

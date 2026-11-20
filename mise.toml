@@ -49,14 +49,14 @@ tools = { rust = "1.91" }
 run = "cargo check --all-targets --all-features --locked"
 
 [tasks.budget]
-description = "Hold the binary's dependencies to 130 crates and the binary to 12 MiB"
+description = "Hold the binary's dependencies to 131 crates and the binary to 12 MiB"
 run = '''
 host=$(rustc -vV | sed -n 's/host: //p')
 # Third-party crates only: slopmax's own (path) crates are left out.
 crates=$(cargo tree --locked --color never -e normal --target "$host" --prefix none -p slopmax | sed 's/ (\*)//' | grep -v ' (/' | sort -u)
 count=$(printf '%s\n' "$crates" | wc -l | tr -d ' ')
-echo "$count crates for $host (budget 130)"
-[ "$count" -le 130 ] || { printf '%s\n' "$crates"; exit 1; }
+echo "$count crates for $host (budget 131)"
+[ "$count" -le 131 ] || { printf '%s\n' "$crates"; exit 1; }
 cargo build --release --locked -p slopmax
 bytes=$(wc -c < target/release/slopmax | tr -d ' ')
 # 12 MiB. v0.3.0 measured 6.52 MB and the typed API added 0.39 MB (the 7 MiB
@@ -72,8 +72,10 @@ bytes=$(wc -c < target/release/slopmax | tr -d ' ')
 # took it to 10.27 MB. The terminal UI (ratatui, crossterm, tachyonfx and
 # terminal-colorsaurus: 56 crates, most of them ratatui's layout solver,
 # derive and string helpers and tachyonfx's builder macros) took it to
-# 11.83 MB, past 11 MiB: raised to 12 MiB, and the crates to 130. Raising
-# either needs the reason in the commit.
+# 11.83 MB, past 11 MiB: raised to 12 MiB, and the crates to 130. Reading
+# the request bodies Grok Build sends zstd-compressed took one more crate,
+# ruzstd, a pure-Rust decoder: 131. Raising either needs the reason in the
+# commit.
 echo "$bytes bytes (budget 12582912)"
 [ "$bytes" -le 12582912 ]
 '''

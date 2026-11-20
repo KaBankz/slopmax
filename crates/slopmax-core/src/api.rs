@@ -234,6 +234,7 @@ pub fn sender(agent: &str) -> Option<api::ledger::Sender> {
     match agent {
         "claude" | "claude-code" => Some(Sender::ClaudeCode),
         "codex" => Some(Sender::Codex),
+        "grok" | "grok-build" => Some(Sender::GrokBuild),
         "slopmax" => Some(Sender::Slopmax),
         _ => None,
     }

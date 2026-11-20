@@ -4,6 +4,15 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Fixed
+
+- Grok Build's requests show their model and cost. Once xAI's settings say its API takes compressed requests, Grok Build sends each model turn zstd-compressed, which slopmax couldn't read, so nearly every turn was recorded without a model, and so without a price. slopmax now reads compressed request bodies and still sends them on as they came. A body it has to change, such as one carrying reasoning another Grok account sealed after a failover, goes on as plain JSON. Requests already recorded keep their missing model.
+- The Requests page names Grok Build. It listed its requests as "Other", and its Agent filter didn't offer Grok Build.
+
+### Added
+
+- xAI's API prices for the Grok models Grok Build runs (Grok 4.7, 4.6, 4.5, 4.3 and Grok Build 0.1), doubled from 200K prompt tokens as xAI bills them, so Grok usage has an API value like Claude's and ChatGPT's.
+
 ## [0.18.3] - 2026-11-20
 
 ### Fixed

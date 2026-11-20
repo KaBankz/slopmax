@@ -252,6 +252,27 @@ pub fn inflate_raw(data: &[u8], limit: usize) -> Option<Vec<u8>> {
     miniz_oxide::inflate::decompress_to_vec_with_limit(data, limit).ok()
 }
 
+/// A whole zstd frame decompressed, or `None` if it does not decompress or
+/// comes to more than `limit` bytes.
+pub fn unzstd(bytes: &[u8], limit: usize) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let decoder = ruzstd::decoding::StreamingDecoder::new(bytes).ok()?;
+    let mut out = Vec::new();
+    decoder.take(limit as u64 + 1).read_to_end(&mut out).ok()?;
+    (out.len() <= limit).then_some(out)
+}
+
+/// A request body decompressed as its `content-encoding` says, or `None`
+/// for an encoding slopmax does not read or a body that does not
+/// decompress to at most `limit` bytes.
+pub fn decompress(encoding: &[u8], bytes: &[u8], limit: usize) -> Option<Vec<u8>> {
+    match encoding {
+        b"zstd" => unzstd(bytes, limit),
+        b"gzip" | b"x-gzip" => gunzip(bytes, limit),
+        _ => None,
+    }
+}
+
 /// How far a gzip header (RFC 1952) has been read.
 #[derive(Debug, PartialEq, Eq)]
 enum GzipHeader {
@@ -669,6 +690,39 @@ mod tests {
             gzip_header(b"\x1f\x8b\x08\x08\x00\x00\x00\x00\x00\xffname"),
             GzipHeader::Partial
         );
+    }
+
+    /// Grok Build sends its model requests zstd-compressed once xAI's
+    /// settings say the API takes them so.
+    #[test]
+    fn compressed_request_bodies_are_read_up_to_a_limit() {
+        let json = br#"{"input":[{"role":"user","content":"hi"}],"model":"grok-4.7"}"#;
+        let zstd = ruzstd::encoding::compress_to_vec(
+            &json[..],
+            ruzstd::encoding::CompressionLevel::Fastest,
+        );
+        assert_eq!(&zstd[..4], b"\x28\xb5\x2f\xfd");
+        assert_eq!(
+            decompress(b"zstd", &zstd, 1 << 20).as_deref(),
+            Some(&json[..])
+        );
+        assert_eq!(
+            decompress(b"zstd", &zstd, json.len()).as_deref(),
+            Some(&json[..])
+        );
+        assert_eq!(decompress(b"zstd", &zstd, json.len() - 1), None);
+        assert_eq!(decompress(b"zstd", &zstd[..zstd.len() / 2], 1 << 20), None);
+        assert_eq!(decompress(b"zstd", json, 1 << 20), None);
+
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(json).unwrap();
+        let gzip = e.finish().unwrap();
+        assert_eq!(
+            decompress(b"gzip", &gzip, 1 << 20).as_deref(),
+            Some(&json[..])
+        );
+        // Encodings slopmax does not read are left alone.
+        assert_eq!(decompress(b"br", &gzip, 1 << 20), None);
     }
 
     #[test]

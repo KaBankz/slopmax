@@ -12,7 +12,18 @@ use crate::{Instant, Provider};
 pub enum Sender {
     ClaudeCode,
     Codex,
+    GrokBuild,
     Slopmax,
+}
+
+impl Sender {
+    /// Every sender, in the order lists show them.
+    pub const ALL: [Self; 4] = [
+        Self::ClaudeCode,
+        Self::Codex,
+        Self::GrokBuild,
+        Self::Slopmax,
+    ];
 }
 
 /// How a request reached the provider.
