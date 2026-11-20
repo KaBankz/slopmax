@@ -6,6 +6,7 @@
 //! tailscaled names; it is then assigned an account by the [`Pool`] and
 //! forwarded upstream with that account's credentials.
 
+mod advisors;
 mod api;
 mod forward;
 mod hub;
@@ -88,6 +89,8 @@ pub struct App {
     quota_written: Mutex<HashMap<ProviderId, crate::quota::Sample>>,
     /// Reasoning state kept between turns of translated conversations.
     replay: Mutex<transcode::Replay>,
+    /// Which account made each of Claude's advisor calls.
+    advisors: Mutex<advisors::Advisors>,
     /// Each account's model list, and when it was read.
     catalogs: Mutex<HashMap<String, (Instant, Vec<String>)>>,
     /// When each account was last warmed.
@@ -202,6 +205,7 @@ impl App {
             quota: Default::default(),
             quota_written: Default::default(),
             replay: Default::default(),
+            advisors: Default::default(),
             catalogs: Default::default(),
             warmed: Default::default(),
             config_text: Mutex::new(config_text),

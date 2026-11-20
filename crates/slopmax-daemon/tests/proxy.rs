@@ -95,6 +95,9 @@ async fn mock(log: Log, mut request: Request) -> Response {
     });
     let headers = &parts.headers;
     match (parts.method, parts.uri.path()) {
+        (Method::POST, "/v1/messages") if advising(headers).is_some() => {
+            mock_advisor(&log, headers, &body)
+        }
         (Method::POST, "/v1/messages") => mock_claude(headers),
         (Method::POST, "/codex/responses") => mock_codex(&log, headers),
         (Method::GET, "/wham/rate-limit-reset-credits") => mock_credits(headers),
@@ -444,6 +447,49 @@ fn mock_claude(headers: &HeaderMap) -> Response {
             r#"{"type":"error","error":{"type":"authentication_error"}}"#,
         ),
     }
+}
+
+/// Which advising account a token belongs to: `tok-adv-<who>`.
+fn advising(headers: &HeaderMap) -> Option<String> {
+    let token = headers.get("authorization")?.to_str().ok()?;
+    token.strip_prefix("Bearer tok-adv-").map(str::to_owned)
+}
+
+/// Claude with Claude Code's advisor: every answer calls it, with an id
+/// that names the account (`srvtoolu_<who>_<n>`), and a request carrying a
+/// result another account made is refused, as Claude refuses it.
+fn mock_advisor(log: &Log, headers: &HeaderMap, body: &[u8]) -> Response {
+    let who = advising(headers).unwrap();
+    let request: Value = serde_json::from_slice(body).unwrap();
+    let results = request["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| m["content"].as_array())
+        .flatten()
+        .filter(|b| b["type"] == "advisor_tool_result")
+        .filter_map(|b| b["tool_use_id"].as_str());
+    let own = format!("srvtoolu_{who}_");
+    if results.into_iter().any(|id| !id.starts_with(&own)) {
+        return reply(
+            StatusCode::BAD_REQUEST,
+            &[],
+            r#"{"type":"error","error":{"type":"invalid_request_error","message":"Advisor tool result content could not be processed."}}"#,
+        );
+    }
+    // Numbered by the requests before this one.
+    let call = format!("{own}{}", log.lock().unwrap().len() - 1);
+    let start = json!({"type": "content_block_start", "index": 0, "content_block": {
+        "type": "server_tool_use", "id": call, "name": "advisor", "input": {}}});
+    reply(
+        StatusCode::OK,
+        &[("content-type", "text/event-stream".to_owned())],
+        format!(
+            "event: message_start\ndata: {}\n\nevent: content_block_start\ndata: {start}\n\nevent: message_delta\ndata: {}\n\n",
+            json!({"type": "message_start", "message": {"usage": {"input_tokens": 3}}}),
+            json!({"type": "message_delta", "usage": {"output_tokens": 2}}),
+        ),
+    )
 }
 
 fn mock_codex(log: &Log, headers: &HeaderMap) -> Response {
@@ -1650,6 +1696,95 @@ async fn claudes_advisor_asks_for_the_model_routing_chose() {
         assert_eq!(sent["tools"][1]["model"], "claude-opus-5-5", "{asked}");
         assert_eq!(sent["tools"][1]["defer_loading"], true, "{asked}");
     }
+}
+
+/// Claude Code's request for a conversation that called the advisor once
+/// per earlier turn, with these calls' ids.
+fn advised(h: &Harness, calls: &[&str]) -> RequestBuilder {
+    let mut messages = vec![json!({"role": "user", "content": "plan it"})];
+    for call in calls {
+        messages.push(json!({"role": "assistant", "content": [
+            {"type": "server_tool_use", "id": call, "name": "advisor", "input": {}},
+            {"type": "advisor_tool_result", "tool_use_id": call,
+             "content": {"type": "advisor_redacted_result", "encrypted_content": "sealed"}},
+            {"type": "text", "text": format!("after {call}")},
+        ]}));
+        messages.push(json!({"role": "user", "content": "go on"}));
+    }
+    let mut body: Value = serde_json::from_str(CLAUDE_BODY).unwrap();
+    body["messages"] = Value::Array(messages);
+    body["tools"] =
+        json!([{"type": "advisor_20260301", "name": "advisor", "model": "claude-opus-5-5"}]);
+    claude_request(h).body(body.to_string())
+}
+
+/// The ids of the advisor results a request upstream carried.
+fn advisor_results(seen: &Seen) -> Vec<String> {
+    let body: Value = serde_json::from_slice(&seen.body).unwrap();
+    let blocks = body["messages"].as_array().unwrap().iter();
+    blocks
+        .filter_map(|m| m["content"].as_array())
+        .flatten()
+        .filter(|b| b["type"] == "advisor_tool_result")
+        .map(|b| b["tool_use_id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn advisor_results_stay_with_the_account_that_made_them() {
+    let h = harness(ProviderId::Claude, &["tok-adv-a", "tok-adv-b"]).await;
+    let turn = |calls: &'static [&'static str]| {
+        let request = advised(&h, calls);
+        async move {
+            let response = request.send().await.unwrap();
+            let status = response.status();
+            (status, response.text().await.unwrap())
+        }
+    };
+    let upstream = || h.log.lock().unwrap().clone();
+
+    // Account a answers and calls the advisor.
+    let (status, text) = turn(&[]).await;
+    assert_eq!(status, 200, "{text}");
+    assert!(text.contains("srvtoolu_a_0"), "{text}");
+
+    // a is spent, so the conversation moves to b, which cannot read a's
+    // result: it goes without it, and b makes a call of its own.
+    h.app.pool.block(
+        &h.ids[0],
+        Timestamp::now() + SignedDuration::from_hours(1),
+        None,
+        "test",
+    );
+    let (status, text) = turn(&["srvtoolu_a_0"]).await;
+    assert_eq!(status, 200, "{text}");
+    assert!(text.contains("srvtoolu_b_1"), "{text}");
+    assert_eq!(upstream().len(), 2);
+    assert!(advisor_results(&upstream()[1]).is_empty());
+
+    // The turn after, still on b: a's result is left out before sending,
+    // so nothing is refused, and b's own stays.
+    let (status, text) = turn(&["srvtoolu_a_0", "srvtoolu_b_1"]).await;
+    assert_eq!(status, 200, "{text}");
+    let seen = upstream();
+    assert_eq!(seen.len(), 3, "one request, not refused first");
+    assert_eq!(seen[2].headers["authorization"], "Bearer tok-adv-b");
+    assert_eq!(advisor_results(&seen[2]), ["srvtoolu_b_1"]);
+    let sent: Value = serde_json::from_slice(&seen[2].body).unwrap();
+    assert_eq!(
+        sent["messages"][1]["content"],
+        json!([{"type": "text", "text": "after srvtoolu_a_0"}])
+    );
+
+    // A result slopmax never saw made (from before a restart) goes as is;
+    // when Claude refuses it, the request goes again without any.
+    let (status, text) = turn(&["srvtoolu_a_9", "srvtoolu_b_1"]).await;
+    assert_eq!(status, 200, "{text}");
+    let seen = upstream();
+    assert_eq!(seen.len(), 5, "refused once, then sent without");
+    assert_eq!(advisor_results(&seen[3]), ["srvtoolu_a_9", "srvtoolu_b_1"]);
+    assert!(advisor_results(&seen[4]).is_empty());
+    assert_eq!(seen[4].headers["authorization"], "Bearer tok-adv-b");
 }
 
 /// An API-key account.

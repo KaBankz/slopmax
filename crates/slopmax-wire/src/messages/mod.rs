@@ -58,6 +58,102 @@ pub fn rename_advisor(body: &[u8], from: &str, to: &str) -> Option<Vec<u8>> {
     out
 }
 
+/// The name of Claude Code's advisor, a server tool.
+const ADVISOR: &str = "advisor";
+
+/// What stands in for an assistant turn left with nothing to say once its
+/// advisor blocks are dropped (Claude refuses an empty one); Claude Code
+/// writes the same.
+const ADVISED: &[u8] = br#"{"type":"text","text":"[Advisor response]"}"#;
+
+/// The id of the advisor call a content block holds: Claude's call itself
+/// (a `server_tool_use` named `advisor`) or the result it gave.
+fn advisor_block(block: &[u8]) -> Option<String> {
+    let field = |key| rawjson::find_str(block, &[Seg::Key(key)]);
+    match field("type")?.as_str() {
+        "server_tool_use" if field("name").as_deref() == Some(ADVISOR) => field("id"),
+        "advisor_tool_result" => field("tool_use_id"),
+        _ => None,
+    }
+}
+
+/// Whether a content block says nothing a reader would see.
+fn says_nothing(block: &[u8]) -> bool {
+    let field = |key| rawjson::find_str(block, &[Seg::Key(key)]);
+    match field("type").as_deref() {
+        Some("thinking" | "redacted_thinking") => true,
+        Some("text") => field("text").is_none_or(|text| text.trim().is_empty()),
+        _ => false,
+    }
+}
+
+/// `body` without the advisor calls (and their results) whose ids `keep`
+/// turns down, or `None` when it holds none. Claude seals an advisor's
+/// result to the account that made the call and refuses it from any other
+/// ("Advisor tool result content could not be processed"), so a
+/// conversation that moves to another account must leave the old one's
+/// behind. Claude Code drops them all itself after that refusal, at the
+/// cost of a failed request and of every advisor result after it.
+pub fn strip_advisor(body: &[u8], keep: impl Fn(&str) -> bool) -> Option<Vec<u8>> {
+    let messages = rawjson::find(body, &[Seg::Key("messages")])?;
+    memchr::memmem::find(&body[messages], b"\"advisor")?;
+    let mut out = None::<Vec<u8>>;
+    // Last to first, so the ranges still ahead stay where they are.
+    for message in rawjson::elements(body, &[Seg::Key("messages")])
+        .into_iter()
+        .rev()
+    {
+        let turn = &body[message.clone()];
+        if rawjson::find_str(turn, &[Seg::Key("role")]).as_deref() != Some("assistant") {
+            continue;
+        }
+        let blocks = rawjson::elements(turn, &[Seg::Key("content")]);
+        let kept: Vec<&[u8]> = blocks
+            .iter()
+            .map(|block| &turn[block.clone()])
+            .filter(|block| advisor_block(block).is_none_or(|id| keep(&id)))
+            .collect();
+        if kept.len() == blocks.len() {
+            continue;
+        }
+        let mut content = b"[".to_vec();
+        for (i, block) in kept.iter().enumerate() {
+            if i > 0 {
+                content.push(b',');
+            }
+            content.extend_from_slice(block);
+        }
+        if kept.iter().all(|block| says_nothing(block)) {
+            if !kept.is_empty() {
+                content.push(b',');
+            }
+            content.extend_from_slice(ADVISED);
+        }
+        content.push(b']');
+        let Some(at) = rawjson::find(turn, &[Seg::Key("content")]) else {
+            continue;
+        };
+        let at = message.start + at.start..message.start + at.end;
+        out = Some(rawjson::splice(
+            out.as_deref().unwrap_or(body),
+            at,
+            &content,
+        ));
+    }
+    out
+}
+
+/// Whether a 400 is Claude refusing advisor results, as it does those
+/// another account made. Claude Code reads the same two messages.
+pub fn rejects_advisor(body: &[u8]) -> bool {
+    [
+        &b"Advisor tool result content could not be processed"[..],
+        b"found in advisor_tool_result blocks",
+    ]
+    .iter()
+    .any(|needle| memchr::memmem::find(body, needle).is_some())
+}
+
 /// The fields of a stream event [`observe`] reads, borrowed: everything
 /// else is skipped without allocating.
 #[derive(serde::Deserialize)]
@@ -68,6 +164,30 @@ struct Event<'a> {
     usage: Option<Counts>,
     #[serde(borrow)]
     error: Option<Error<'a>>,
+    #[serde(borrow)]
+    content_block: Option<Block<'a>>,
+    /// A whole `message`'s blocks.
+    #[serde(borrow)]
+    content: Option<Vec<Block<'a>>>,
+}
+
+#[derive(serde::Deserialize)]
+struct Block<'a> {
+    #[serde(rename = "type", borrow)]
+    kind: Option<std::borrow::Cow<'a, str>>,
+    #[serde(borrow)]
+    name: Option<std::borrow::Cow<'a, str>>,
+    #[serde(borrow)]
+    id: Option<std::borrow::Cow<'a, str>>,
+}
+
+impl Block<'_> {
+    /// The id of Claude's call to the advisor this block starts, if it does.
+    fn advisor(&self) -> Option<&str> {
+        let call = self.kind.as_deref() == Some("server_tool_use")
+            && self.name.as_deref() == Some(ADVISOR);
+        self.id.as_deref().filter(|_| call)
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -97,7 +217,18 @@ pub fn observe_raw(data: &[u8], outcome: &mut Outcome) -> bool {
     };
     let usage = match &*event.kind {
         "message_start" => event.message.and_then(|m| m.usage),
-        "message_delta" | "message" => event.usage,
+        "message_delta" => event.usage,
+        "message" => {
+            let blocks = event.content.iter().flatten();
+            let calls = blocks.filter_map(Block::advisor).map(str::to_owned);
+            outcome.advisors.extend(calls);
+            event.usage
+        }
+        "content_block_start" => {
+            let call = event.content_block.as_ref().and_then(Block::advisor);
+            outcome.advisors.extend(call.map(str::to_owned));
+            None
+        }
         "error" => {
             let kind = event.error.and_then(|e| e.kind);
             outcome.exhausted |= kind.as_deref() == Some("rate_limit_error");
@@ -126,10 +257,29 @@ pub fn observe_raw(data: &[u8], outcome: &mut Outcome) -> bool {
 
 /// `message_start` and `message_delta` carry usage (as does a whole
 /// `message` from a non-streaming request); an `error` event of type
-/// `rate_limit_error` means the quota ran out mid-stream.
+/// `rate_limit_error` means the quota ran out mid-stream; a block that
+/// starts a call to the advisor (alone, or in a whole `message`) names it.
 pub fn observe(event: &Value, outcome: &mut Outcome) {
+    let advisor = |block: &Value| {
+        let call = block.get("type").and_then(Value::as_str) == Some("server_tool_use")
+            && block.get("name").and_then(Value::as_str) == Some(ADVISOR);
+        let id = block.get("id").and_then(Value::as_str).filter(|_| call);
+        id.map(str::to_owned)
+    };
     let usage = match event.get("type").and_then(Value::as_str) {
-        Some("message") => event.get("usage"),
+        Some("message") => {
+            let blocks = event.get("content").and_then(Value::as_array);
+            outcome
+                .advisors
+                .extend(blocks.into_iter().flatten().filter_map(advisor));
+            event.get("usage")
+        }
+        Some("content_block_start") => {
+            outcome
+                .advisors
+                .extend(event.get("content_block").and_then(advisor));
+            None
+        }
         Some("message_start") => event.pointer("/message/usage"),
         Some("message_delta") => event.get("usage"),
         Some("error") => {
@@ -160,6 +310,79 @@ pub fn observe(event: &Value, outcome: &mut Outcome) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A conversation as Claude Code sends it after two advisor calls:
+    /// `mine` beside text, then `theirs` alone in a turn with thinking.
+    const ADVISED_TWICE: &[u8] = br#"{"model":"claude-opus-5-5","messages":[{"role":"user","content":"plan it"},{"role":"assistant","content":[{"type":"server_tool_use","id":"srvtoolu_mine","name":"advisor","input":{}},{"type":"advisor_tool_result","tool_use_id":"srvtoolu_mine","content":{"type":"advisor_redacted_result","encrypted_content":"AAA"}},{"type":"text","text":"Plan: one."}]},{"role":"user","content":[{"type":"text","text":"go on"}]},{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"sig"},{"type":"server_tool_use","id":"srvtoolu_theirs","name":"advisor","input":{}},{"type":"advisor_tool_result","tool_use_id":"srvtoolu_theirs","content":{"type":"advisor_redacted_result","encrypted_content":"BBB"}}]},{"role":"user","content":"and?"}],"tools":[{"type":"advisor_20260301","name":"advisor","model":"claude-opus-5-5"}]}"#;
+
+    #[test]
+    fn advisor_blocks_another_account_made_are_dropped() {
+        let stripped = strip_advisor(ADVISED_TWICE, |id| id == "srvtoolu_mine").unwrap();
+        let stripped: Value = serde_json::from_slice(&stripped).unwrap();
+        let mut sent: Value = serde_json::from_slice(ADVISED_TWICE).unwrap();
+        // Only the second assistant turn changes: its thinking stays, and
+        // with nothing else left it gets Claude Code's placeholder.
+        sent["messages"][3]["content"] = json!([
+            {"type": "thinking", "thinking": "", "signature": "sig"},
+            {"type": "text", "text": "[Advisor response]"},
+        ]);
+        assert_eq!(stripped, sent);
+    }
+
+    #[test]
+    fn every_advisor_block_can_be_dropped() {
+        let stripped = strip_advisor(ADVISED_TWICE, |_| false).unwrap();
+        let stripped: Value = serde_json::from_slice(&stripped).unwrap();
+        assert_eq!(
+            stripped["messages"][1]["content"],
+            json!([{"type": "text", "text": "Plan: one."}])
+        );
+        assert_eq!(
+            stripped["messages"][3]["content"][1]["text"],
+            "[Advisor response]"
+        );
+        // The advisor tool itself stays offered.
+        assert_eq!(stripped["tools"][0]["name"], "advisor");
+        let only = br#"{"messages":[{"role":"assistant","content":[{"type":"server_tool_use","id":"a","name":"advisor","input":{}}]}]}"#;
+        assert_eq!(
+            strip_advisor(only, |_| false).unwrap(),
+            br#"{"messages":[{"role":"assistant","content":[{"type":"text","text":"[Advisor response]"}]}]}"#
+        );
+    }
+
+    #[test]
+    fn bodies_without_foreign_advisor_blocks_are_left_alone() {
+        assert_eq!(strip_advisor(ADVISED_TWICE, |_| true), None);
+        let plain = br#"{"messages":[{"role":"user","content":"the advisor said"},{"role":"assistant","content":[{"type":"server_tool_use","id":"w","name":"web_search","input":{}}]}],"tools":[{"type":"advisor_20260301","name":"advisor"}]}"#;
+        assert_eq!(strip_advisor(plain, |_| false), None);
+        assert_eq!(strip_advisor(b"{}", |_| false), None);
+    }
+
+    #[test]
+    fn claude_refusing_advisor_results_is_recognised() {
+        let refused = br#"{"type":"error","error":{"type":"invalid_request_error","message":"Advisor tool result content could not be processed."}}"#;
+        assert!(rejects_advisor(refused));
+        assert!(!rejects_advisor(
+            br#"{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long"}}"#
+        ));
+    }
+
+    #[test]
+    fn advisor_calls_are_read_from_answers() {
+        let start = br#"{"type":"content_block_start","index":1,"content_block":{"type":"server_tool_use","id":"srvtoolu_1","name":"advisor","input":{}}}"#;
+        let search = br#"{"type":"content_block_start","index":2,"content_block":{"type":"server_tool_use","id":"srvtoolu_2","name":"web_search","input":{}}}"#;
+        let text = br#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#;
+        let whole = br#"{"type":"message","content":[{"type":"text","text":"x"},{"type":"server_tool_use","id":"srvtoolu_3","name":"advisor","input":{}}],"usage":{"input_tokens":5}}"#;
+        let mut typed = Outcome::default();
+        let mut by_value = Outcome::default();
+        for event in [&start[..], search, text, whole] {
+            assert!(observe_raw(event, &mut typed));
+            observe(&serde_json::from_slice(event).unwrap(), &mut by_value);
+        }
+        assert_eq!(typed.advisors, ["srvtoolu_1", "srvtoolu_3"]);
+        assert_eq!(typed, by_value);
+        assert_eq!(typed.usage.input_tokens, 5);
+    }
 
     #[test]
     fn advisor_tools_follow_a_renamed_model() {

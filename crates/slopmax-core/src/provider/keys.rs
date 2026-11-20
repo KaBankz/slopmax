@@ -12,7 +12,7 @@ use crate::account::{Account, Tokens};
 use crate::auth::{LoginOptions, Prompt};
 use crate::net::Client;
 use crate::time::{SignedDuration, Timestamp};
-use crate::wire::Dialect;
+use crate::wire::{Dialect, messages};
 use crate::{limits, log};
 
 /// How a key is presented.
@@ -165,7 +165,21 @@ impl Provider for KeyProvider {
         _model: Option<&str>,
         now: Timestamp,
     ) -> Verdict {
+        if self.id == ProviderId::Anthropic
+            && status == StatusCode::BAD_REQUEST
+            && messages::rejects_advisor(body)
+        {
+            return Verdict::StaleState;
+        }
         metered_verdict(status, headers, body, now)
+    }
+
+    /// Anthropic seals advisor results to the key that asked, as it does
+    /// for Claude accounts.
+    fn rebind(&self, body: &[u8]) -> Option<Vec<u8>> {
+        (self.id == ProviderId::Anthropic)
+            .then(|| messages::strip_advisor(body, |_| false))
+            .flatten()
     }
 }
 
@@ -346,6 +360,16 @@ mod tests {
     #[test]
     fn verdicts_tell_funds_from_rate_limits() {
         let now = Timestamp::from_second(1_000).unwrap();
+        let sealed = br#"{"type":"error","error":{"type":"invalid_request_error","message":"Advisor tool result content could not be processed."}}"#;
+        let none = HeaderMap::new();
+        assert_eq!(
+            ANTHROPIC.verdict(StatusCode::BAD_REQUEST, &none, sealed, None, now),
+            Verdict::StaleState
+        );
+        assert_eq!(
+            XAI.verdict(StatusCode::BAD_REQUEST, &none, sealed, None, now),
+            Verdict::Final
+        );
         let mut headers = HeaderMap::new();
         headers.insert("retry-after", HeaderValue::from_static("20"));
         let verdict = |status: u16, body: &str| {

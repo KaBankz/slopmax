@@ -4,6 +4,10 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Fixed
+
+- Claude Code's advisor keeps working when a conversation moves to another Claude account. Claude seals each advisor result to the account that asked for it and refuses it from any other ("Advisor tool result content could not be processed"), so the first turn after a failover was refused, and Claude Code went on without any of the conversation's advice, even what the new account gave later. slopmax now remembers which account made each advisor call and leaves out only the results the new account can't read, before sending. If Claude still refuses one, after a restart for instance, slopmax sends the turn again without them itself, and Claude Code doesn't see the error. Anthropic API keys get the same treatment.
+
 ## [0.18.1] - 2026-11-19
 
 ### Fixed

@@ -15,7 +15,7 @@ use crate::auth::{Grant, LoginOptions, Prompt, RefreshError};
 use crate::limits::{Limits, PoolWindow};
 use crate::net::Client;
 use crate::time::{SignedDuration, Timestamp};
-use crate::wire::Dialect;
+use crate::wire::{Dialect, messages};
 
 /// Anthropic's API: Messages, the OAuth profile, usage, and limit resets.
 pub const API: &str = "https://api.anthropic.com";
@@ -85,6 +85,10 @@ impl Provider for Claude {
         wire::upstream_headers(client, account.bearer())
     }
 
+    fn rebind(&self, body: &[u8]) -> Option<Vec<u8>> {
+        messages::strip_advisor(body, |_| false)
+    }
+
     fn limits(&self, headers: &HeaderMap, now: Timestamp) -> Option<Limits> {
         limits::from_headers(headers, now)
     }
@@ -114,6 +118,7 @@ impl Provider for Claude {
                 Verdict::Final
             }
             StatusCode::TOO_MANY_REQUESTS => limits::refusal(headers, model, now).into(),
+            StatusCode::BAD_REQUEST if messages::rejects_advisor(body) => Verdict::StaleState,
             _ => Verdict::of_status(status),
         }
     }
@@ -237,6 +242,19 @@ mod tests {
     }
 
     #[test]
+    fn a_moved_conversation_leaves_its_advisor_results_behind() {
+        let body = br#"{"messages":[{"role":"assistant","content":[{"type":"server_tool_use","id":"s1","name":"advisor","input":{}},{"type":"advisor_tool_result","tool_use_id":"s1","content":{"type":"advisor_redacted_result","encrypted_content":"x"}},{"type":"text","text":"ok"}]}]}"#;
+        assert_eq!(
+            Claude.rebind(body).unwrap(),
+            br#"{"messages":[{"role":"assistant","content":[{"type":"text","text":"ok"}]}]}"#
+        );
+        assert_eq!(
+            super::super::keys::ANTHROPIC.rebind(body),
+            Claude.rebind(body)
+        );
+    }
+
+    #[test]
     fn verdicts_tell_spent_windows_from_fast_mode_and_auth() {
         let now = Timestamp::from_second(1_000).unwrap();
         let none = HeaderMap::new();
@@ -267,6 +285,12 @@ mod tests {
         assert_eq!(
             Claude.verdict(StatusCode::BAD_REQUEST, &none, b"", None, now),
             Verdict::Final
+        );
+        // An advisor result another account made: retried without them.
+        let sealed = br#"{"type":"error","error":{"type":"invalid_request_error","message":"Advisor tool result content could not be processed."}}"#;
+        assert_eq!(
+            Claude.verdict(StatusCode::BAD_REQUEST, &none, sealed, None, now),
+            Verdict::StaleState
         );
     }
 

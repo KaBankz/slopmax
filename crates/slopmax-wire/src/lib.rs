@@ -76,6 +76,9 @@ pub struct Outcome {
     pub usage: Usage,
     /// An in-stream error that means the account's quota is spent.
     pub exhausted: bool,
+    /// The ids of the advisor calls Claude made in the answer. Claude takes
+    /// an advisor's result back only from the account that made the call.
+    pub advisors: Vec<String>,
 }
 
 impl Dialect {

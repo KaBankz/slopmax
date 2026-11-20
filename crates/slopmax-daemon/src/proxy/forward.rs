@@ -159,9 +159,10 @@ impl Inbound {
 
     /// The body to send for `step`: as the agent sent it, except for asking
     /// for the step's model when routing renamed it (in Claude's advisor
-    /// tool too), and dropping state bound to another account when the
-    /// session moved.
-    fn body(&self, step: &Step, strip_state: bool) -> Bytes {
+    /// tool too), leaving out the advisor results the account cannot read
+    /// (`readable` says which it can), and dropping state bound to another
+    /// account when the session moved.
+    fn body(&self, step: &Step, strip_state: bool, readable: impl Fn(&str) -> bool) -> Bytes {
         if !self.json {
             return self.body.clone();
         }
@@ -176,6 +177,11 @@ impl Inbound {
             {
                 body = Cow::Owned(renamed);
             }
+        }
+        if self.target.dialect == Dialect::Messages
+            && let Some(kept) = messages::strip_advisor(&body, readable)
+        {
+            body = Cow::Owned(kept);
         }
         if strip_state && let Some(rebound) = step.provider.get().rebind(&body) {
             body = Cow::Owned(rebound);
@@ -907,10 +913,12 @@ async fn outbound(
     let provider = step.provider.get();
     let base = provider.api(account).trim_end_matches('/');
     let Some(upstream) = lane else {
+        let advisors = app.advisors.lock().unwrap_or_else(|p| p.into_inner());
+        let body = inbound.body(step, stripped, |call| advisors.readable(call, &account.id));
         return Ok(Outbound {
             url: [base, inbound.target.path.as_str()].concat(),
             headers: provider.headers(&inbound.parts.headers, account, moved),
-            body: inbound.body(step, stripped),
+            body,
         });
     };
     let decoded = inbound.decode().await?;

@@ -67,6 +67,12 @@ impl Settle {
         status: StatusCode,
     ) {
         let Self { app, served } = self;
+        if !outcome.advisors.is_empty() {
+            let mut advisors = app.advisors.lock().unwrap_or_else(|p| p.into_inner());
+            for call in outcome.advisors {
+                advisors.remember(call, &served.id);
+            }
+        }
         app.pool.add_usage(&served.id, &outcome.usage);
         if outcome.exhausted {
             let until = Timestamp::now() + DEFAULT_BLOCK;

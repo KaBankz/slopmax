@@ -87,7 +87,8 @@ slopmax-core/src/
   limits.rs     usage windows and refusals, shared by the provider parsers
   proxy/        mod.rs (App, the handler, keys), forward.rs (the failover loop), relay.rs
                 and start.rs (the streamed body, its taps and holds), transcode.rs
-                (translated streams), socket.rs (Codex's WebSockets), models.rs
+                (translated streams), advisors.rs (who made each Claude advisor call),
+                socket.rs (Codex's WebSockets), models.rs
                 (/v1/models), api.rs (/slopmax/api), ui.rs (the web UI at /slopmax/),
                 hub.rs (CLIProxyAPI's management calls for quota tools), tailnet.rs
                 (tailnet identity: the ingress strip, who is calling and with what
@@ -127,7 +128,7 @@ slopmax-common/src/ time.rs, log.rs, ids.rs, human.rs: small in-house replacemen
 3. **`forward::Inbound`** buffers the body (so it can be replayed on another account) and reads the agent, the session, and the model from it.
 4. **`route::plan`** turns the model into `Step`s: each provider with an account that serves the model, subscriptions first, then paid overflow, selectors, aliases, and fallbacks. It drops accounts that may not serve this client (`agent_only`) or that speak a format it cannot be translated into.
 5. **`Pool::pick`** chooses an account for each step: the session's own account if it can still serve (unless affinity is off for the proxy or, by `x-slopmax-affinity`, the request), else the `slopmax account use` pin, else the strategy within the top priority tier. The session's last account is remembered either way, so a move is known and account-bound state dropped.
-6. **`forward::attempt`** refreshes the token if due, then builds the outbound request. If the account speaks the client's format it is the client's own request with the credential swapped (`Provider::headers`, `Provider::rebind` when the session moved). If not, `wire::translate` decodes it into the common form and encodes it for the account's API (`Provider::shape` adds last touches).
+6. **`forward::attempt`** refreshes the token if due, then builds the outbound request. If the account speaks the client's format it is the client's own request with the credential swapped (`Provider::headers`, `Provider::rebind` when the session moved), less any Claude advisor results another account made (`proxy/advisors.rs`, filled from the answers' taps). If not, `wire::translate` decodes it into the common form and encodes it for the account's API (`Provider::shape` adds last touches).
 7. **The answer.** Rate-limit headers update the account's windows (`Provider::limits`). A refusal is classified by `Provider::verdict` into a `Verdict` (exhausted, throttled, unauthorized, stale state, or final), which decides whether to block the account and try the next. For Codex the first moments of the stream are held (`proxy/start.rs`) to catch refusals inside a 200.
 8. **Streaming back.** `proxy/sse.rs`'s `Tapped` watches the stream for token usage and records the request in the ledger when it ends. A translated answer also passes through `proxy/transcode.rs`, which reads the upstream's events and writes the client's.
 

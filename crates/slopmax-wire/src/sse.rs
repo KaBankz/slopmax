@@ -92,12 +92,16 @@ pub fn kind(data: &[u8]) -> Option<&[u8]> {
 
 impl Dialect {
     /// Whether an event of `kind` can carry what [`Dialect::observe`] reads:
-    /// usage, or a refusal. Deltas cannot.
+    /// usage, a refusal, or the start of an advisor call. Deltas cannot.
     pub fn observes(self, kind: &[u8]) -> bool {
         match self {
             Self::Messages => matches!(
                 kind,
-                b"message_start" | b"message_delta" | b"message" | b"error"
+                b"message_start"
+                    | b"message_delta"
+                    | b"message"
+                    | b"error"
+                    | b"content_block_start"
             ),
             Self::Responses => matches!(
                 kind,
