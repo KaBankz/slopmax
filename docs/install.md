@@ -55,7 +55,7 @@ The image has no Tailscale; see [Other machines](hub.md#over-tailscale) to share
 `slopmax update` installs the newest release the way slopmax was installed, then moves the running proxy to it:
 
 - **The install script:** it downloads the release, checks its SHA-256, and replaces `slopmax` where it is.
-- **mise:** it runs `mise upgrade`. A version pinned in your global mise config is moved to the new one; a pin in a project's config is left to you.
+- **mise:** it runs `mise upgrade`. A version pinned in your global mise config is moved to the new one; a pin in a project's config is left to you. It has mise fetch its list of versions fresh and install the newest release even when it's under mise's minimum release age, which holds releases back a day by default; for that one run only.
 - **Homebrew, cargo, or Nix:** it prints the command that updates it.
 
 On Linux and macOS, the proxy changes over without dropping anything. The running proxy starts the new binary with its listening socket, and once the new one serves, it stops taking connections and finishes the requests it has, streams and Codex's turns included. New connections go to the new proxy from the first moment, so agents are never refused or cut off. It also follows an update you make another way, such as `mise upgrade` or re-running the install script: within a minute of a newer slopmax being installed, the proxy moves to it. A proxy older than 0.11 can't hand over its socket, so moving from one restarts it once. Windows can't hand a socket over either: there `slopmax update` stops the proxy, and the login service (`slopmaxw.exe`, from `slopmax proxy install`) starts it again at once on the new binary. Without the login service, run `slopmax proxy start` afterwards.

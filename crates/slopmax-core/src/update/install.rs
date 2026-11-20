@@ -226,11 +226,19 @@ fn same_file(a: &Path, b: &Path) -> bool {
 /// Runs mise to install the newest release for `request`, its progress on
 /// the terminal: `mise upgrade` keeps to what the config asks, so a pinned
 /// version is moved with `--bump`, which rewrites the pin.
+///
+/// `slopmax update` has already found the newest release, so mise is told
+/// to see it too: its list of versions is fetched fresh rather than read
+/// from a cache up to an hour old, and its minimum release age (a day by
+/// default) doesn't hold back a release made today.
 pub fn mise_upgrade(tool: &str, bump: bool) -> anyhow::Result<()> {
     use anyhow::Context;
     let mise = mise().context("mise installed slopmax, but the mise program can't be found")?;
     let mut command = Command::new(&mise);
-    command.arg("upgrade");
+    command
+        .env("MISE_FETCH_REMOTE_VERSIONS_CACHE", "0")
+        .env("MISE_MINIMUM_RELEASE_AGE", "0s")
+        .arg("upgrade");
     if bump {
         command.arg("--bump");
     }
