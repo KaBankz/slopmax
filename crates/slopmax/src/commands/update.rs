@@ -134,9 +134,7 @@ fn with_mise(
         .context("mise doesn't say where it installed slopmax")?;
     match update::binary_version(&now) {
         Some(version) if version > ours => Ok(now),
-        Some(version) => bail!(
-            "mise still runs slopmax {version}; a minimum release age in mise's settings may hold {latest} back"
-        ),
+        Some(version) => bail!("mise still runs slopmax {version}, not {latest}"),
         None => bail!(
             "the slopmax mise installed at {} doesn't run",
             now.display()

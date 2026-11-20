@@ -4,6 +4,10 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Fixed
+
+- `slopmax update` installs a release made today when mise installed slopmax. mise held a release back for a day by default (its minimum release age) and could read the list of versions from a cache up to an hour old, so `slopmax update` said a new version was out and then failed to install it. It now has mise fetch the list fresh and take the newest release whatever its age; mise's settings are left as they are.
+
 ## [0.19.0] - 2026-11-20
 
 ### Added
