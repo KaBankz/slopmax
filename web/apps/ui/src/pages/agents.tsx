@@ -8,7 +8,7 @@ import { Button } from "../components/ui/button.tsx"
 import { agentLine, agentsInOrder, cannotChange } from "../view/live.ts"
 import { readOnlyShort } from "../view/tailnet.ts"
 
-export function AgentsPage() {
+export function CodingAgents() {
   const agents = useAtomValue(agentsAtom)
   const again = useAtomRefresh(agentsAtom)
   const canChange = useAtomValue(canChangeAtom)

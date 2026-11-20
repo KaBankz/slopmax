@@ -156,16 +156,24 @@ export function Panel({ children }: { readonly children: ReactNode }) {
 export function Section({
   title,
   trailing,
+  headingId,
   children,
 }: {
   readonly title: string
   readonly trailing?: ReactNode
+  readonly headingId?: string
   readonly children: ReactNode
 }) {
   return (
-    <section className="flex min-w-0 flex-col gap-3">
+    <section aria-labelledby={headingId} className="flex min-w-0 flex-col gap-3">
       <div className="flex min-h-8 flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <h2 className="font-heading text-xl font-semibold tracking-tight">{title}</h2>
+        <h2
+          id={headingId}
+          tabIndex={headingId === undefined ? undefined : -1}
+          className="scroll-mt-5 rounded-sm font-heading text-xl font-semibold tracking-tight focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        >
+          {title}
+        </h2>
         {trailing}
       </div>
       {children}

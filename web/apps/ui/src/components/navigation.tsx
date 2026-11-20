@@ -1,85 +1,201 @@
-// Dashboard destinations, contextual links, and the live proxy state.
-import { useAtomValue } from "@effect/atom-react"
-import { ArrowLeft, ChartNoAxesCombined, Gauge, SlidersHorizontal, UsersRound } from "lucide-react"
-import { proxyStatusAtom } from "../atoms.ts"
-import { destinationOf, destinations, type Page, pageHash, Pages } from "../view/pages.ts"
+// The dashboard rail and the links local to a workspace.
+import { useAtomSet, useAtomValue } from "@effect/atom-react"
+import { ArrowLeft, ChartNoAxesCombined, ChevronRight, Gauge, List, Plug, Settings, UsersRound } from "lucide-react"
+import { createContext, type MouseEvent, type PointerEvent, type ReactNode, useContext, useRef, useState } from "react"
+import { prefsAtom, proxyStatusAtom, savePrefs } from "../atoms.ts"
+import { type ConnectionSection, destinationOf, navigationGroups, type Page, pageHash, Pages } from "../view/pages.ts"
 import { Dot, Logo } from "./parts.tsx"
 import { ButtonLink } from "./ui/button.tsx"
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  useSidebar,
+} from "./ui/sidebar.tsx"
 
-const destinationIcons = { quota: Gauge, accounts: UsersRound, activity: ChartNoAxesCombined, proxy: SlidersHorizontal }
+const icons = {
+  quota: Gauge,
+  accounts: UsersRound,
+  analytics: ChartNoAxesCombined,
+  requests: List,
+  connections: Plug,
+  settings: Settings,
+}
 
-const activityPages = [
-  { page: Pages.usage, label: "Usage" },
-  { page: Pages.requests, label: "Requests" },
-  { page: Pages.performance, label: "Performance" },
-]
-const proxyPages = [
-  { page: Pages.settings, label: "Settings" },
-  { page: Pages.agents, label: "Agents" },
-  { page: Pages.access, label: "Access" },
-  { page: Pages.diagnostics, label: "Diagnostics" },
-]
+const sidebarBounds = { min: 192, max: 304 }
 
-function ProxyStatus() {
-  const status = useAtomValue(proxyStatusAtom)
-  const compactStatus = status.tone === "good" ? "Running" : status.text
+function followsLink(event: MouseEvent<HTMLElement>): boolean {
+  return !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
+}
+
+export function focusConnectionSection(section: ConnectionSection): boolean {
+  const heading = document.getElementById(`connection-${section}`)
+  if (heading === null) return false
+  heading.scrollIntoView({ block: "start" })
+  heading.focus({ preventScroll: true })
+  return true
+}
+
+const clampWidth = (width: number) => Math.max(sidebarBounds.min, Math.min(sidebarBounds.max, width))
+const WidthContext = createContext({ width: 224, previewWidth: (_width: number | undefined) => {} })
+
+export function SidebarFrame({ children }: { readonly children: ReactNode }) {
+  const prefs = useAtomValue(prefsAtom)
+  const save = useAtomSet(savePrefs)
+  const [dragged, previewWidth] = useState<number>()
+  const width = clampWidth(dragged ?? prefs.sidebarWidth)
   return (
-    <ButtonLink
-      href={pageHash(Pages.diagnostics)}
-      variant="proxyStatus"
-      size="sm"
-      aria-label={`Diagnostics · ${status.text}`}
-      className="justify-self-end"
+    <SidebarProvider
+      open={!prefs.sidebarHidden}
+      data-resizing={dragged !== undefined || undefined}
+      onOpenChange={(open) => {
+        if (!open && document.activeElement?.closest('[data-slot="sidebar-container"]')) {
+          document.querySelector<HTMLElement>('[data-slot="sidebar-trigger"]')?.focus()
+        }
+        save({ sidebarHidden: !open })
+      }}
+      style={{ "--sidebar-width": `${width}px` }}
+      className="h-full min-h-0"
     >
-      <Dot tone={status.tone} />
-      Diagnostics
-      <span className="hidden lg:inline">· {status.text}</span>
-      <span className="hidden xs:inline md:hidden">· {compactStatus}</span>
-    </ButtonLink>
+      <WidthContext.Provider value={{ width, previewWidth }}>{children}</WidthContext.Provider>
+    </SidebarProvider>
   )
 }
 
-export function Masthead({ page }: { readonly page: Page }) {
-  const current = destinationOf(page)
+function ResizeHandle() {
+  const { width, previewWidth } = useContext(WidthContext)
+  const save = useAtomSet(savePrefs)
+  const start = (event: PointerEvent<HTMLDivElement>) => {
+    const handle = event.currentTarget
+    handle.setPointerCapture(event.pointerId)
+    const origin = event.clientX
+    let candidate = width
+    const move = (pointer: globalThis.PointerEvent) => {
+      candidate = clampWidth(width + pointer.clientX - origin)
+      previewWidth(candidate)
+    }
+    const finish = () => {
+      handle.removeEventListener("pointermove", move)
+      previewWidth(undefined)
+      if (candidate !== width) save({ sidebarWidth: candidate })
+    }
+    handle.addEventListener("pointermove", move)
+    handle.addEventListener("lostpointercapture", finish, { once: true })
+  }
   return (
-    <header className="z-10 shrink-0 border-b bg-card">
-      <div className="mx-auto grid max-w-7xl grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 min-h-12 px-4 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:gap-x-3 sm:px-6 lg:gap-x-6 lg:px-8">
+    <div
+      role="separator"
+      aria-label="Resize navigation"
+      aria-orientation="vertical"
+      aria-valuemin={sidebarBounds.min}
+      aria-valuemax={sidebarBounds.max}
+      aria-valuenow={width}
+      tabIndex={0}
+      onPointerDown={start}
+      onKeyDown={(event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
+        event.preventDefault()
+        save({ sidebarWidth: clampWidth(width + (event.key === "ArrowLeft" ? -8 : 8)) })
+      }}
+      className="absolute inset-y-0 -right-1 z-20 hidden w-2 cursor-col-resize touch-none focus-visible:outline-2 focus-visible:outline-ring md:block"
+    />
+  )
+}
+
+export function DashboardSidebar({ page }: { readonly page: Page }) {
+  const active = destinationOf(page)
+  const status = useAtomValue(proxyStatusAtom)
+  const { openMobile, setOpenMobile } = useSidebar()
+  const closingForNavigation = useRef(false)
+  const follow = (event: MouseEvent<HTMLElement>) => {
+    if (!openMobile || !followsLink(event)) return
+    closingForNavigation.current = true
+    setOpenMobile(false)
+  }
+  return (
+    <Sidebar
+      mobileFinalFocus={() => {
+        const selector = closingForNavigation.current ? "#dashboard-title" : '[data-slot="sidebar-trigger"]'
+        closingForNavigation.current = false
+        return document.querySelector<HTMLElement>(selector) ?? false
+      }}
+    >
+      <SidebarHeader>
         <a
           href={pageHash(Pages.overview)}
-          className="flex w-fit items-center gap-2 rounded-md py-1.5 font-heading text-2xl leading-none font-bold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          onClick={follow}
+          className="mx-1 flex h-12 w-fit items-center gap-2.5 rounded-md px-2 font-heading text-xl font-bold tracking-tight focus-visible:outline-2 focus-visible:outline-ring"
           aria-label="slopmax home"
         >
           <Logo />
           slopmax
         </a>
-        <nav
-          aria-label="Dashboard"
-          className="fixed inset-x-0 bottom-0 grid grid-cols-4 border-t bg-card pb-(--dashboard-safe-bottom) md:static md:flex md:gap-1 md:border-0 md:pb-0"
-        >
-          {destinations.map(({ id, label, page: target }) => {
-            const Icon = destinationIcons[id]
-            return (
-              <ButtonLink
-                key={id}
-                href={pageHash(target)}
-                aria-current={page._tag === target._tag ? "page" : current === id ? "location" : undefined}
-                variant="destination"
-                size="navigation"
+      </SidebarHeader>
+      <SidebarContent aria-label="Dashboard">
+        {navigationGroups.map(({ label, entries }) => (
+          <SidebarGroup key={label}>
+            <SidebarGroupLabel>{label}</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {entries.map(({ id, label: title, page: target }) => {
+                  const Icon = icons[id]
+                  const current = pageHash(page) === pageHash(target)
+                  return (
+                    <SidebarMenuItem key={id}>
+                      <SidebarMenuButton
+                        isActive={active === id}
+                        aria-current={current ? "page" : active === id ? "location" : undefined}
+                        render={<a href={pageHash(target)} />}
+                        onClick={follow}
+                      >
+                        <Icon aria-hidden />
+                        <span>{title}</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  )
+                })}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        ))}
+      </SidebarContent>
+      <SidebarFooter>
+        <div className="border-t px-1 pt-2">
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                size="lg"
+                isActive={active === "diagnostics"}
+                aria-current={active === "diagnostics" ? "page" : undefined}
+                aria-label={`Diagnostics · ${status.text}`}
+                render={<a href={pageHash(Pages.diagnostics)} />}
+                onClick={follow}
               >
-                <Icon aria-hidden />
-                {label}
-              </ButtonLink>
-            )
-          })}
-        </nav>
-        <ProxyStatus />
-      </div>
-    </header>
+                <Dot tone={status.tone} />
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span>Diagnostics</span>
+                  <span className="truncate text-xs text-muted-foreground tabular-nums">{status.text}</span>
+                </span>
+                <ChevronRight aria-hidden />
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </div>
+      </SidebarFooter>
+      <ResizeHandle />
+    </Sidebar>
   )
 }
 
 export function SectionNavigation({ page }: { readonly page: Page }) {
-  const section = destinationOf(page)
   if (page._tag === "Provider" || page._tag === "AddAccount") {
     return (
       <ButtonLink href={pageHash(Pages.accounts)} variant="link" size="sm" className="w-fit">
@@ -88,21 +204,58 @@ export function SectionNavigation({ page }: { readonly page: Page }) {
       </ButtonLink>
     )
   }
-  if (section !== "activity" && section !== "proxy") return null
-  const links = section === "activity" ? activityPages : proxyPages
+  const destination = destinationOf(page)
+  if (destination !== "quota" && destination !== "analytics" && destination !== "connections") return null
+  const links =
+    destination === "quota"
+      ? [
+          { page: Pages.overview, label: "Upcoming resets" },
+          { page: Pages.quotaHistory, label: "Past resets" },
+        ]
+      : destination === "analytics"
+        ? [
+            { page: Pages.usage, label: "Usage" },
+            { page: Pages.performance, label: "Performance" },
+          ]
+        : [
+            { page: Pages.connections("agents"), label: "Coding agents" },
+            { page: Pages.connections("clients"), label: "Client keys" },
+          ]
+  const current = page._tag === "Connections" ? pageHash(Pages.connections(page.section ?? "agents")) : pageHash(page)
   return (
-    <nav aria-label={section === "activity" ? "Activity" : "Proxy"} className="flex flex-wrap gap-x-1 gap-y-0.5">
-      {links.map(({ page: target, label }) => (
-        <ButtonLink
-          key={target._tag}
-          href={pageHash(target)}
-          aria-current={page._tag === target._tag ? "page" : undefined}
-          variant="section"
-          size="section"
-        >
-          {label}
-        </ButtonLink>
-      ))}
+    <nav
+      aria-label={
+        destination === "connections"
+          ? "Connections sections"
+          : `${destination === "quota" ? "Quota" : "Analytics"} views`
+      }
+      className="flex flex-wrap gap-x-1 gap-y-0.5"
+    >
+      {links.map(({ page: target, label }) => {
+        const href = pageHash(target)
+        return (
+          <ButtonLink
+            key={href}
+            href={href}
+            onClick={(event) => {
+              if (
+                target._tag === "Connections" &&
+                target.section !== undefined &&
+                location.hash === href &&
+                followsLink(event)
+              ) {
+                event.preventDefault()
+                focusConnectionSection(target.section)
+              }
+            }}
+            aria-current={href === current ? (destination === "connections" ? "location" : "page") : undefined}
+            variant="section"
+            size="section"
+          >
+            {label}
+          </ButtonLink>
+        )
+      })}
     </nav>
   )
 }

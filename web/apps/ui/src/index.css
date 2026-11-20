@@ -14,8 +14,13 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --breakpoint-xs: 24rem;
   --font-heading: "Bricolage Grotesque", var(--font-sans);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--border);
+  --color-sidebar-ring: var(--ring);
   --color-quota: var(--quota);
   --color-quota-foreground: var(--quota-foreground);
   --color-quota-muted: var(--quota-muted);
@@ -71,7 +76,10 @@
 
 :root {
   color-scheme: light;
-  --dashboard-safe-bottom: env(safe-area-inset-bottom);
+  --sidebar: #ebe7e0;
+  --sidebar-foreground: #3c3540;
+  --sidebar-accent: #e1d9eb;
+  --sidebar-accent-foreground: #342952;
   --background: #f5f3ee;
   --foreground: #24232a;
   --card: #fffdf9;
@@ -112,6 +120,10 @@
 
 .dark {
   color-scheme: dark;
+  --sidebar: #211e29;
+  --sidebar-foreground: #e9e0ef;
+  --sidebar-accent: #3d334c;
+  --sidebar-accent-foreground: #f1e8ff;
   --background: #191820;
   --foreground: #f3edf5;
   --card: #23222b;

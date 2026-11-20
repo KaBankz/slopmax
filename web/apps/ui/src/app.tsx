@@ -25,23 +25,23 @@ import {
 } from "./atoms.ts"
 import { AskHost } from "./components/ask.tsx"
 import { Segmented } from "./components/segmented.tsx"
-import { Masthead, SectionNavigation } from "./components/navigation.tsx"
+import { DashboardSidebar, focusConnectionSection, SectionNavigation, SidebarFrame } from "./components/navigation.tsx"
 import { SignInCard } from "./components/sign-in.tsx"
 import { Toasts } from "./components/toasts.tsx"
 import { Alert, AlertDescription, AlertTitle } from "./components/ui/alert.tsx"
 import { Button, ButtonLink } from "./components/ui/button.tsx"
+import { SidebarInset, SidebarTrigger } from "./components/ui/sidebar.tsx"
 import { TooltipProvider } from "./components/ui/tooltip.tsx"
-import { AccessPage } from "./pages/access.tsx"
 import { AccountsPage } from "./pages/accounts.tsx"
 import { AddAccountPage } from "./pages/add-account.tsx"
-import { AgentsPage } from "./pages/agents.tsx"
+import { ConnectionsPage } from "./pages/connections.tsx"
 import { DiagnosticsPage, DiagnosticsTools } from "./pages/diagnostics.tsx"
 import { Gate } from "./pages/gate.tsx"
 import { OverviewPage } from "./pages/overview.tsx"
 import { ProviderPage } from "./pages/provider.tsx"
 import { RequestsPage } from "./pages/requests.tsx"
 import { SettingsPage } from "./pages/settings.tsx"
-import { PerformancePage, UsagePage } from "./pages/usage.tsx"
+import { AnalyticsPage, QuotaHistoryPage } from "./pages/usage.tsx"
 import { keyFromHash, type Page, pageDescription, pageHash, Pages, pageTitle } from "./view/pages.ts"
 import { adminCommand, onTheHub } from "./view/tailnet.ts"
 import { rangeTitle, ranges } from "./view/words.ts"
@@ -101,6 +101,7 @@ function Tools({ page }: { readonly page: Page }) {
       )
     case "Usage":
     case "Performance":
+    case "QuotaHistory":
       return (
         <Segmented
           label="Range"
@@ -120,8 +121,7 @@ function Tools({ page }: { readonly page: Page }) {
         </Button>
       )
     case "AddAccount":
-    case "Agents":
-    case "Access":
+    case "Connections":
     case "Settings":
       return null
   }
@@ -137,16 +137,15 @@ function PageBody({ page }: { readonly page: Page }) {
       return <AddAccountPage />
     case "Provider":
       return <ProviderPage provider={page.provider} account={page.account} />
+    case "QuotaHistory":
+      return <QuotaHistoryPage />
     case "Usage":
-      return <UsagePage />
     case "Performance":
-      return <PerformancePage />
+      return <AnalyticsPage performance={page._tag === "Performance"} />
     case "Requests":
       return <RequestsPage />
-    case "Agents":
-      return <AgentsPage />
-    case "Access":
-      return <AccessPage />
+    case "Connections":
+      return <ConnectionsPage />
     case "Diagnostics":
       return <DiagnosticsPage />
     case "Settings":
@@ -207,19 +206,20 @@ function Window() {
   const heading = useRef<HTMLHeadingElement>(null)
   const previousPage = useRef(page)
   useEffect(() => {
-    if (previousPage.current === page) return
+    const section = page._tag === "Connections" ? page.section : undefined
+    if (previousPage.current === page && section === undefined) return
     previousPage.current = page
     if (pane.current !== null) pane.current.scrollTop = 0
     // Give the focused account row the first chance to receive focus on a deep link.
     const frame = requestAnimationFrame(() => {
       const accountLink = page._tag === "Provider" && page.account !== undefined
       if (accountLink && pane.current?.contains(document.activeElement)) return
-      heading.current?.focus({ preventScroll: true })
+      if (section === undefined || !focusConnectionSection(section)) heading.current?.focus({ preventScroll: true })
     })
     return () => cancelAnimationFrame(frame)
   }, [page])
   return (
-    <div className="flex h-full min-h-0 flex-col pb-(--dashboard-dock) [--dashboard-dock:calc(3.5rem+var(--dashboard-safe-bottom))] md:[--dashboard-dock:0px]">
+    <SidebarFrame>
       <a
         href="#dashboard-title"
         className="sr-only z-50 rounded-md bg-card px-4 py-2 font-medium focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:outline-2 focus:outline-ring"
@@ -230,13 +230,13 @@ function Window() {
       >
         Skip to main content
       </a>
-      <Masthead page={page} />
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col" aria-labelledby="dashboard-title">
-        <div ref={pane} data-slot="dashboard-scroll" className="relative min-h-0 flex-1 overflow-y-auto">
-          <div className="@container mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 pt-5 pb-8 sm:gap-7 sm:px-6 sm:pt-8 lg:px-8">
-            <div className="flex flex-col gap-3">
-              <SectionNavigation page={page} />
-              <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-3">
+      <DashboardSidebar page={page} />
+      <SidebarInset className="min-h-0 min-w-0" aria-labelledby="dashboard-title">
+        <header className="shrink-0 border-b">
+          <div className="mx-auto flex w-full max-w-7xl flex-col gap-3 px-4 py-3 sm:px-6 sm:py-4 lg:px-8">
+            <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-3">
+              <div className="flex min-w-0 items-start gap-2 sm:gap-3">
+                <SidebarTrigger className="-ml-1" />
                 <div className="min-w-0">
                   <h1
                     ref={heading}
@@ -253,21 +253,26 @@ function Window() {
                     {pageDescription(page)}
                   </p>
                 </div>
-                <div className="flex min-w-0 flex-wrap items-center gap-2 empty:hidden">
-                  <Tools page={page} />
-                </div>
+              </div>
+              <div className="flex min-w-0 flex-wrap items-center gap-2 empty:hidden">
+                <Tools page={page} />
               </div>
             </div>
+            <SectionNavigation page={page} />
+          </div>
+        </header>
+        <div ref={pane} data-slot="dashboard-scroll" className="relative min-h-0 flex-1 overflow-y-auto">
+          <div className="@container mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 pt-5 pb-8 sm:gap-7 sm:px-6 sm:pt-6 lg:px-8">
             <ReadOnlyBanner />
             <UnansweredBanner />
             <SignInCard />
             <PageBody page={page} />
           </div>
         </div>
-      </main>
+      </SidebarInset>
       <Toasts />
       <AskHost />
-    </div>
+    </SidebarFrame>
   )
 }
 

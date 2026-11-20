@@ -4,18 +4,20 @@ import { Result } from "effect"
 
 export type Page =
   | { readonly _tag: "Overview" }
+  | { readonly _tag: "QuotaHistory" }
   | { readonly _tag: "Accounts" }
   | { readonly _tag: "AddAccount" }
   | { readonly _tag: "Provider"; readonly provider: ProviderId; readonly account?: string }
   | { readonly _tag: "Usage" }
   | { readonly _tag: "Performance" }
   | { readonly _tag: "Requests" }
-  | { readonly _tag: "Agents" }
-  | { readonly _tag: "Access" }
+  | { readonly _tag: "Connections"; readonly section?: ConnectionSection }
   | { readonly _tag: "Diagnostics" }
   | { readonly _tag: "Settings" }
 
-type Simple = Exclude<Page["_tag"], "Provider">
+export type ConnectionSection = "agents" | "clients"
+
+type Simple = Exclude<Page["_tag"], "Provider" | "Connections">
 
 const simple = <T extends Simple>(tag: T): { readonly _tag: T } => ({
   _tag: tag,
@@ -23,13 +25,16 @@ const simple = <T extends Simple>(tag: T): { readonly _tag: T } => ({
 
 export const Pages = {
   overview: simple("Overview"),
+  quotaHistory: simple("QuotaHistory"),
   accounts: simple("Accounts"),
   addAccount: simple("AddAccount"),
   usage: simple("Usage"),
   performance: simple("Performance"),
   requests: simple("Requests"),
-  agents: simple("Agents"),
-  access: simple("Access"),
+  connections: (section?: ConnectionSection): Extract<Page, { readonly _tag: "Connections" }> => ({
+    _tag: "Connections",
+    ...(section === undefined ? {} : { section }),
+  }),
   diagnostics: simple("Diagnostics"),
   settings: simple("Settings"),
   provider: (provider: ProviderId, account?: string): Page => ({
@@ -39,51 +44,67 @@ export const Pages = {
   }),
 } as const
 
-export const destinations = [
-  { id: "quota", label: "Quota", page: Pages.overview },
-  { id: "accounts", label: "Accounts", page: Pages.accounts },
-  { id: "activity", label: "Activity", page: Pages.usage },
-  { id: "proxy", label: "Proxy", page: Pages.settings },
+export const navigationGroups = [
+  {
+    label: "Workspace",
+    entries: [
+      { id: "quota", label: "Quota", page: Pages.overview },
+      { id: "accounts", label: "Accounts", page: Pages.accounts },
+    ],
+  },
+  {
+    label: "Activity",
+    entries: [
+      { id: "analytics", label: "Analytics", page: Pages.usage },
+      { id: "requests", label: "Requests", page: Pages.requests },
+    ],
+  },
+  {
+    label: "Proxy",
+    entries: [
+      { id: "connections", label: "Connections", page: Pages.connections() },
+      { id: "settings", label: "Settings", page: Pages.settings },
+    ],
+  },
 ] as const
 
-export type Destination = (typeof destinations)[number]["id"]
+export type Destination = (typeof navigationGroups)[number]["entries"][number]["id"] | "diagnostics"
 
 export const destinationOf = (page: Page): Destination => {
   switch (page._tag) {
     case "Overview":
+    case "QuotaHistory":
       return "quota"
     case "Accounts":
     case "AddAccount":
     case "Provider":
       return "accounts"
     case "Usage":
-    case "Requests":
     case "Performance":
-      return "activity"
+      return "analytics"
+    case "Requests":
+      return "requests"
+    case "Connections":
+      return "connections"
     case "Settings":
-    case "Agents":
-    case "Access":
+      return "settings"
     case "Diagnostics":
-      return "proxy"
+      return "diagnostics"
   }
 }
 
 export const pageTitle = (page: Page): string => {
   switch (page._tag) {
     case "Overview":
+    case "QuotaHistory":
       return "Quota"
     case "Provider":
       return providerFacts[page.provider].title
     case "AddAccount":
       return "Add an account"
     case "Usage":
-      return "Activity"
-    case "Settings":
-      return "Proxy"
-    case "Agents":
-      return "Coding agents"
-    case "Access":
-      return "Client access"
+    case "Performance":
+      return "Analytics"
     default:
       return page._tag
   }
@@ -94,6 +115,8 @@ export const pageDescription = (page: Page): string => {
   switch (page._tag) {
     case "Overview":
       return "Find quota you can use before it resets."
+    case "QuotaHistory":
+      return "See unused allowance and its estimated share of subscription fees."
     case "Accounts":
       return "Compare readiness, last proxy use, and each account’s tightest shared limit."
     case "AddAccount":
@@ -103,15 +126,13 @@ export const pageDescription = (page: Page): string => {
         ? "Account limits, routing, and upcoming resets."
         : "Manage accounts and the models they serve."
     case "Usage":
-      return "Track usage and review what went unused at reset."
+      return "Track requests, tokens, and estimated costs through your proxy."
     case "Performance":
       return "Explore response times, cache use, and reliability."
     case "Requests":
       return "Follow live traffic or inspect recorded requests."
-    case "Agents":
-      return "Connect coding agents to the proxy or restore their previous settings."
-    case "Access":
-      return "Manage client keys and connect other machines to the proxy."
+    case "Connections":
+      return "Connect coding agents and manage access from other machines."
     case "Diagnostics":
       return "Check the proxy and its connection to your agents."
     case "Settings":
@@ -120,17 +141,31 @@ export const pageDescription = (page: Page): string => {
 }
 
 /** The page as the address's fragment: `#/overview`, `#/claude`. */
-export const pageHash = (page: Page): string =>
-  page._tag === "Provider"
-    ? `#/${page.provider}${page.account === undefined ? "" : `?account=${encodeURIComponent(page.account)}`}`
-    : page._tag === "AddAccount"
-      ? "#/accounts/add"
-      : `#/${page._tag.toLowerCase()}`
+export const pageHash = (page: Page): string => {
+  switch (page._tag) {
+    case "Provider":
+      return `#/${page.provider}${page.account === undefined ? "" : `?account=${encodeURIComponent(page.account)}`}`
+    case "Connections":
+      return `#/connections${page.section === undefined ? "" : `?section=${page.section}`}`
+    case "AddAccount":
+      return "#/accounts/add"
+    case "QuotaHistory":
+      return "#/quota/history"
+    default:
+      return `#/${page._tag.toLowerCase()}`
+  }
+}
 
 /** The page the address's fragment names; the overview when it names none. */
 export const parsePage = (hash: string): Page => {
   const [path, query] = hash.replace(/^#\/?/, "").split("?", 2)
   const name = path?.split("&", 1)[0] ?? ""
+  if (name === "agents") return Pages.connections("agents")
+  if (name === "access") return Pages.connections("clients")
+  if (name === "connections") {
+    const section = new URLSearchParams(query).get("section")
+    return Pages.connections(section === "agents" || section === "clients" ? section : undefined)
+  }
   const provider = parseProviderId(name)
   if (Result.isSuccess(provider)) {
     const account = new URLSearchParams(query).get("account")

@@ -35,14 +35,5 @@ export function Toasts() {
       shown.current.delete(id)
     }
   }, [toasts, dismiss])
-  return (
-    <Toaster
-      theme={prefs.appearance}
-      position="bottom-right"
-      offset={{ bottom: "calc(1.5rem + var(--dashboard-dock, 0px))" }}
-      mobileOffset={{ bottom: "calc(1rem + var(--dashboard-dock, 0px))" }}
-      closeButton
-      visibleToasts={toastLimit}
-    />
-  )
+  return <Toaster theme={prefs.appearance} position="bottom-right" closeButton visibleToasts={toastLimit} />
 }

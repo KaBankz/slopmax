@@ -105,7 +105,7 @@ function ClientKeys() {
     })
   }
   return (
-    <Section title="Client keys">
+    <Section title="Client keys" headingId="connection-clients">
       <div className="flex flex-col gap-2">
         <NewKeyWell />
         <Panel>
@@ -265,7 +265,7 @@ function OtherMachines() {
   )
 }
 
-export function AccessPage() {
+export function ClientAccess() {
   return (
     <>
       <ClientKeys />

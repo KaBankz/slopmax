@@ -44,6 +44,8 @@ export type Appearance = typeof Appearance.Type
  * preference.
  */
 export class UiPrefs extends Schema.Class<UiPrefs>("UiPrefs")({
+  sidebarWidth: Schema.Finite.pipe(withDefault(224)),
+  sidebarHidden: Schema.Boolean.pipe(withDefault(false)),
   appearance: Appearance.pipe(withDefault("system")),
   /** Whether email addresses are masked wherever they show, for screen sharing. */
   hideEmails: Schema.Boolean.pipe(withDefault(false)),

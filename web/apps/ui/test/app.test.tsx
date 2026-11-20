@@ -259,8 +259,10 @@ describe("the web dashboard", () => {
     expect([...(primary?.querySelectorAll("a") ?? [])].map((link) => link.textContent)).toEqual([
       "Quota",
       "Accounts",
-      "Activity",
-      "Proxy",
+      "Analytics",
+      "Requests",
+      "Connections",
+      "Settings",
     ])
     expect(control("Accounts").getAttribute("aria-current")).toBe("location")
     expect(control("All accounts").getAttribute("href")).toBe("#/accounts")
@@ -279,16 +281,30 @@ describe("the web dashboard", () => {
       location.hash = "#/requests"
     })
     await showsSoon("Any outcome")
-    expect(control("Activity").getAttribute("aria-current")).toBe("location")
     expect(control("Requests").getAttribute("aria-current")).toBe("page")
   })
 
   test("proxy status opens diagnostics and client access points to the provider form", async () => {
     await web("#/access")
     await showsSoon("Add a provider account")
-    expect(control("Proxy").getAttribute("aria-current")).toBe("location")
+    expect(control("Connections").getAttribute("aria-current")).toBe("location")
     expect(control("Diagnostics · Running 0.4.0").getAttribute("href")).toBe("#/diagnostics")
     expect(control("Add a provider account").getAttribute("href")).toBe("#/accounts/add")
+  })
+
+  test("past resets live under quota and share the date range with analytics", async () => {
+    await web("#/quota/history")
+    await showsSoon("Unused subscription quota")
+    expect(control("Quota").getAttribute("aria-current")).toBe("location")
+    expect(control("Past resets").getAttribute("aria-current")).toBe("page")
+    await press("30 days")
+    await act(async () => {
+      location.hash = "#/usage"
+    })
+    await showsSoon("Answered requests")
+    expect(control("Analytics").getAttribute("aria-current")).toBe("page")
+    expect(control("30 days").getAttribute("aria-pressed")).toBe("true")
+    expect(shows("Unused subscription quota")).toBe(false)
   })
 
   test("Accounts includes a tight shared limit without a reported reset", async () => {
@@ -388,7 +404,7 @@ describe("what the dashboard says while waiting, failing or quiet", () => {
     expect(shows("Limits not read yet")).toBe(true)
   })
 
-  test("an empty activity page points to the Agents page", async () => {
+  test("empty analytics links to coding agents inside Connections", async () => {
     drawn = await draw({
       stub: { key: ownerKey, scenario: "empty" },
       host: { key: ownerKey },
@@ -396,7 +412,7 @@ describe("what the dashboard says while waiting, failing or quiet", () => {
     })
     await showsSoon("No requests recorded in this range")
     await press("Connect an agent")
-    await settle(() => location.hash === "#/agents", "the Agents page")
+    await settle(() => location.hash === "#/connections?section=agents", "coding agents in Connections")
     // Installed agents first; a connected one says so once.
     await showsSoon("Not connected")
     expect(shows("Goes through slopmax")).toBe(false)

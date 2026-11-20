@@ -16,9 +16,6 @@ const buttonVariants = cva(
           "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
-        destination:
-          "relative rounded-none text-muted-foreground hover:text-foreground aria-[current]:font-semibold aria-[current]:text-primary aria-[current]:after:absolute aria-[current]:after:inset-x-1 aria-[current]:after:top-0 md:aria-[current]:after:top-auto md:aria-[current]:after:bottom-0 aria-[current]:after:h-0.5 aria-[current]:after:bg-primary after:rounded-t-sm",
-        proxyStatus: "text-muted-foreground tabular-nums hover:bg-muted hover:text-foreground",
         section:
           "justify-start text-muted-foreground hover:bg-muted hover:text-foreground aria-[current]:bg-accent aria-[current]:font-semibold aria-[current]:text-accent-foreground",
         ghost:
@@ -30,7 +27,6 @@ const buttonVariants = cva(
       size: {
         pageAction: "h-11 gap-2 px-3.5 sm:h-9",
         section: "h-11 px-1.5 text-xs sm:h-9 sm:px-3.5 sm:text-sm",
-        navigation: "h-14 flex-col gap-1 px-1.5 text-xs md:h-[3.75rem] md:flex-row md:gap-1.5 md:px-3.5 md:text-sm",
         default: "h-9 gap-2 px-3.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
         xs: "h-6 gap-1 rounded-[min(var(--radius-md),10px)] px-2 text-xs in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
         sm: "h-8 gap-1.5 rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5",

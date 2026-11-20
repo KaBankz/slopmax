@@ -189,7 +189,7 @@ export function QuotaBoard({ report }: { readonly report: Report }) {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <ButtonLink variant="link" size="sm" href={pageHash(Pages.usage)}>
+            <ButtonLink variant="link" size="sm" href={pageHash(Pages.quotaHistory)}>
               Review past resets
               <ChevronRight aria-hidden data-icon="inline-end" />
             </ButtonLink>
@@ -235,7 +235,7 @@ export function QuotaBoard({ report }: { readonly report: Report }) {
               </CardContent>
             )}
             <CardFooter density="compact">
-              <ButtonLink variant="link" size="sm" href={pageHash(Pages.usage)}>
+              <ButtonLink variant="link" size="sm" href={pageHash(Pages.quotaHistory)}>
                 Review past resets
                 <ChevronRight aria-hidden data-icon="inline-end" />
               </ButtonLink>

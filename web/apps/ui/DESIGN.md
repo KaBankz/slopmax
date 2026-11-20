@@ -10,18 +10,20 @@ components sit on [Base UI](https://base-ui.com). Run `mise run check` from
 
 ## Navigation
 
-Quota is the landing page for reset deadlines, remaining subscription allowance,
-and account actions. Accounts groups providers by billing type and owns the
-add-account flow. Directory rows show the tightest shared limit and the last
-proxy request for each account. Activity groups Usage, Requests, and Performance. Proxy groups
-Settings, Coding agents, Client access, and Diagnostics. The proxy status opens
-Diagnostics directly.
+The sidebar shows Quota and Accounts under Workspace, Analytics and Requests
+under Activity, and Connections and Settings under Proxy. It opens as a drawer
+on small screens. Desktop width and visibility are saved in UI preferences.
+The live status in the footer opens Diagnostics.
 
-The same four navigation links appear in the masthead on desktop and in the
-bottom bar on phones. Provider hashes and account links retain their existing
-addresses. Route changes focus the page title or the account named in the
-link. The Accounts directory is `#/accounts` and adding credentials is
-`#/accounts/add`.
+Quota has upcoming and past resets. Past resets shows the estimated unused
+share of subscription fees. Accounts groups providers by billing type and
+owns the add-account flow. Analytics shares a date range across Usage and
+Performance. Connections brings coding agents, client keys, and other machines
+onto one page.
+
+Provider and account bookmarks retain their existing addresses. The older
+Agents and Access links jump to the relevant section in Connections. Route
+changes focus the destination heading, section, or linked account.
 
 ## The layers
 

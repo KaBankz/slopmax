@@ -120,10 +120,10 @@ function Pair({ children }: { readonly children: ReactNode }) {
 /** The history for the chosen range, with its empty and loading states. */
 function WithHistory({
   children,
-  showUnused = false,
+  allowEmpty = false,
 }: {
   readonly children: (history: History, range: HistoryRange) => ReactNode
-  readonly showUnused?: boolean
+  readonly allowEmpty?: boolean
 }) {
   const range = useAtomValue(rangeAtom)
   const history = useAtomValue(historyAtom(range))
@@ -144,7 +144,7 @@ function WithHistory({
         // A history for another range is not shown while this one is read.
         found.range !== range ? (
           <Skeleton lines={6} />
-        ) : isQuiet(found) && !showUnused ? (
+        ) : isQuiet(found) && !allowEmpty ? (
           <Quiet title={range === "today" ? "Nothing yet today" : "Nothing in this range"} />
         ) : (
           children(found, range)
@@ -525,20 +525,13 @@ function UsageBody({ history, range }: { readonly history: History; readonly ran
   )
 }
 
-export function UsagePage() {
+export function QuotaHistoryPage() {
   return (
-    <WithHistory showUnused>
-      {(history, range) => (
-        <>
-          <Section title="Unused subscription quota">
-            <LeftOnTheTable history={history} />
-          </Section>
-          {isQuiet(history) ? (
-            <Quiet title="No requests recorded in this range" />
-          ) : (
-            <UsageBody history={history} range={range} />
-          )}
-        </>
+    <WithHistory allowEmpty>
+      {(history) => (
+        <Section title="Unused subscription quota">
+          <LeftOnTheTable history={history} />
+        </Section>
       )}
     </WithHistory>
   )
@@ -648,17 +641,33 @@ function PerformanceBody({ history, range }: { readonly history: History; readon
   )
 }
 
-export function PerformancePage() {
+function PerformanceHealth() {
   const groups = useAtomValue(groupsAtom).filter((group) => group.subscription)
   return (
+    <Section title="Request health">
+      <Pair>
+        {groups.length > 0 && <HealthCard groups={groups} />}
+        <RecentFailures />
+      </Pair>
+    </Section>
+  )
+}
+
+export function AnalyticsPage({ performance }: { readonly performance: boolean }) {
+  return (
     <>
-      <WithHistory>{(history, range) => <PerformanceBody history={history} range={range} />}</WithHistory>
-      <Section title="Request health">
-        <Pair>
-          {groups.length > 0 && <HealthCard groups={groups} />}
-          <RecentFailures />
-        </Pair>
-      </Section>
+      <WithHistory allowEmpty={!performance}>
+        {(history, range) =>
+          performance ? (
+            <PerformanceBody history={history} range={range} />
+          ) : isQuiet(history) ? (
+            <Quiet title="No requests recorded in this range" />
+          ) : (
+            <UsageBody history={history} range={range} />
+          )
+        }
+      </WithHistory>
+      {performance && <PerformanceHealth />}
     </>
   )
 }
