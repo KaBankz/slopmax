@@ -8,6 +8,9 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 - The install script no longer stops at once with `line 39: target?: unbound variable`. Some shells, macOS's `/bin/sh` among them, read the `…` after `$target` as part of the variable's name; the script now braces that name and is plain ASCII.
 - `mise run install` builds the web UI first, so a slopmax installed from a checkout has its dashboard.
+- The dashboard scrolls in one place. Hidden screen-reader text could stretch the window past the page, so a second scrollbar moved the whole window, header and all.
+- The dashboard fits narrow windows: the Access page's buttons and forms, the settings rows, the Overview's subscriptions, and the Usage page's lists wrap instead of running off their cards, and descriptions show in full rather than cut at two lines.
+- A subscription's Resets ahead lines its day labels up over the lanes, and gives the lanes more room in a narrow window.
 
 ### Changed
 

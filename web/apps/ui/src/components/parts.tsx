@@ -191,7 +191,8 @@ export function SettingRow({
   return (
     <div className="border-t first:border-t-0">
       <Item>
-        <ItemContent>
+        {/* At least this wide, so in a narrow window the controls take the next line rather than squeeze the words. */}
+        <ItemContent className="min-w-56">
           <ItemTitle>{title}</ItemTitle>
           {detail !== undefined && <ItemDescription>{detail}</ItemDescription>}
         </ItemContent>

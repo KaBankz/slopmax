@@ -192,7 +192,7 @@ function PoolBlock({ group }: { readonly group: Group }) {
           </span>
           <ChevronRight aria-hidden className="size-4 text-muted-foreground" />
         </ItemHeader>
-        <ItemContent className="basis-full">
+        <ItemContent className="min-w-0 basis-full">
           <span className="flex flex-col gap-2.5 pl-3.5">
             {group.overview.map((window) => (
               // Narrow, the reset line takes a line of its own beneath the bar.
@@ -210,7 +210,7 @@ function PoolBlock({ group }: { readonly group: Group }) {
             {group.unread && <span className="text-xs text-muted-foreground">{limitsNotRead(pollOff)}</span>}
             {group.credits !== undefined && <span className="text-xs text-muted-foreground">{group.credits}</span>}
             <span className="text-xs">
-              <Label tone={group.next.tone} text={group.next.text} raw />
+              <Label tone={group.next.tone} text={group.next.text} raw wrap />
             </span>
           </span>
         </ItemContent>

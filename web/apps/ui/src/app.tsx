@@ -270,7 +270,7 @@ function Window() {
             </div>
           </div>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="relative min-h-0 flex-1 overflow-y-auto">
           <div className="@container mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 md:p-6">
             <ReadOnlyBanner />
             <UnansweredBanner />

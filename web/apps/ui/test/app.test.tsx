@@ -71,6 +71,24 @@ describe("the web dashboard", () => {
     await showsSoon("Saved by failover")
   })
 
+  test("the page scrolls in its own pane, which holds what is positioned in it, so the window never scrolls too", async () => {
+    await web()
+    await showsSoon("Saved by failover")
+    const pane = document.querySelector("[data-slot=sidebar-inset] > .overflow-y-auto")
+    if (pane === null) throw new Error("no scrolling pane")
+    // An absolute element (sr-only text, say) is placed by its nearest positioned
+    // ancestor; one outside the pane would stretch the window past it.
+    const positioned = /(^|\s)(relative|absolute|fixed|sticky)(\s|$)/
+    const holder = (element: Element) => {
+      let at = element.parentElement
+      while (at !== null && !positioned.test(at.className)) at = at.parentElement
+      return at
+    }
+    const hidden = [...pane.querySelectorAll(".sr-only")]
+    expect(hidden.length).toBeGreaterThan(0)
+    expect(hidden.filter((e) => !pane.contains(holder(e))).map((e) => e.textContent)).toEqual([])
+  })
+
   test("a provider page lists its accounts, and the account menu pins one", async () => {
     await web("#/claude")
     await showsSoon("Across 3 accounts, weighted by plan")

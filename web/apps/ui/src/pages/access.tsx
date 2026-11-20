@@ -73,7 +73,7 @@ function KeyRow({ disabled }: { readonly disabled: boolean }) {
   return (
     <div className="border-t first:border-t-0">
       <Item>
-        <ItemContent>
+        <ItemContent className="min-w-56">
           <ItemTitle>API key</ItemTitle>
           {refused === undefined ? (
             <ItemDescription>A key bills by the token; slopmax spends subscriptions first.</ItemDescription>
@@ -82,7 +82,7 @@ function KeyRow({ disabled }: { readonly disabled: boolean }) {
           )}
         </ItemContent>
         <ItemActions>
-          <form onSubmit={submit} className="flex items-center gap-2">
+          <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
             <Segmented
               label="Provider"
               value={provider}
@@ -93,7 +93,7 @@ function KeyRow({ disabled }: { readonly disabled: boolean }) {
               type="password"
               aria-label="Paste an API key"
               placeholder="Paste an API key"
-              className="w-56"
+              className="w-56 max-w-full"
               value={key}
               aria-invalid={refused !== undefined || undefined}
               aria-describedby={refused === undefined ? undefined : errorId}
@@ -122,7 +122,11 @@ function Line({
   readonly children: ReactNode
 }) {
   return (
-    <Field orientation="horizontal" data-invalid={invalid || undefined} className="grid grid-cols-[6rem_1fr]">
+    <Field
+      orientation="horizontal"
+      data-invalid={invalid || undefined}
+      className="grid grid-cols-1 @md:grid-cols-[6rem_minmax(0,1fr)]"
+    >
       <FieldLabel htmlFor={htmlFor}>{label}</FieldLabel>
       {children}
     </Field>
@@ -186,7 +190,7 @@ function EndpointRow({ disabled }: { readonly disabled: boolean }) {
                 onChange={(e) => setUrl(e.currentTarget.value)}
               />
             </Line>
-            <Field orientation="horizontal" className="grid grid-cols-[6rem_1fr]">
+            <Field orientation="horizontal" className="grid grid-cols-1 @md:grid-cols-[6rem_minmax(0,1fr)]">
               <FieldTitle>API</FieldTitle>
               <Segmented label="API" value={dialect} onChange={setDialect} options={dialects} />
             </Field>
@@ -394,11 +398,11 @@ function ClientKeys() {
             </Loaded>
           )}
           <form onSubmit={submit} className="flex flex-col gap-2 border-t px-3 py-2.5">
-            <Field orientation="horizontal">
+            <Field orientation="horizontal" className="flex-wrap">
               <Input
                 aria-label="Name, such as laptop"
                 placeholder="Name, such as laptop"
-                className="w-50 shrink-0"
+                className="w-50 max-w-full shrink-0"
                 value={name}
                 aria-invalid={refused !== undefined || undefined}
                 aria-describedby={refused === undefined ? undefined : errorId}
@@ -409,6 +413,7 @@ function ClientKeys() {
               />
               <Input
                 aria-label="Models it may use, as patterns (any if empty)"
+                className="min-w-40 flex-1"
                 placeholder="Models it may use, as patterns (any if empty)"
                 value={models}
                 onChange={(e) => setModels(e.currentTarget.value)}

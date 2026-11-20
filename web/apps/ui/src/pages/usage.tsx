@@ -136,11 +136,18 @@ function Bars({
   return (
     <div className="@container flex flex-col gap-2.5">
       {rows.map((row) => (
-        <div key={row.name} className="flex items-center gap-3 text-xs">
-          <span className={mono ? "w-24 shrink-0 truncate font-mono text-xs @sm:w-40" : "w-28 shrink-0 truncate"}>
+        // In a narrow card the bar takes a line of its own under the figures, so they stay inside it.
+        <div key={row.name} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs @md:flex-nowrap">
+          <span
+            className={
+              mono
+                ? "min-w-0 flex-1 truncate font-mono text-xs @md:w-40 @md:flex-none"
+                : "min-w-0 flex-1 truncate @md:w-28 @md:flex-none"
+            }
+          >
             {row.name}
           </span>
-          <span className="min-w-0 flex-1">
+          <span className="order-last basis-full @md:order-none @md:min-w-0 @md:flex-1 @md:basis-auto">
             <Share fraction={row.fraction} ink={providerInk(providers, row.provider)} />
           </span>
           <span className="w-14 shrink-0 text-right tabular-nums">{row.tokens}</span>
@@ -318,7 +325,7 @@ function LeftOnTheTable({ history }: { readonly history: History }) {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-full">Account</TableHead>
+                <TableHead className="w-full min-w-40">Account</TableHead>
                 <TableHead className="w-30">Unused at reset</TableHead>
                 <TableHead className="w-28 text-right">Weekly windows</TableHead>
                 <TableHead className="w-16 text-right">Unused</TableHead>
