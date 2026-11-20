@@ -208,11 +208,17 @@ export function SettingRow({
  */
 export function AccountName({ name }: { readonly name: string }) {
   const parts = /^(.*\S)\s+(\([^()]*\))$/.exec(name)
-  if (parts === null) return <span className="min-w-0 truncate">{name}</span>
+  if (parts === null)
+    return (
+      <span className="min-w-0 truncate" title={name}>
+        {name}
+      </span>
+    )
+  // The label shrinks only once the address is gone, and even then stays inside the column.
   return (
-    <span className="flex min-w-0">
+    <span className="flex min-w-0" title={name}>
       <span className="truncate">{parts[1]}</span>
-      <span className="shrink-0 whitespace-pre"> {parts[2]}</span>
+      <span className="max-w-full shrink-0 overflow-hidden text-ellipsis whitespace-pre"> {parts[2]}</span>
     </span>
   )
 }
