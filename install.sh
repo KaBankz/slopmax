@@ -36,7 +36,7 @@ command -v curl >/dev/null || fail "curl is required"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-say "Downloading slopmax for $target…"
+say "Downloading slopmax for ${target}..."
 curl -fsSL "$base/$archive" -o "$tmp/$archive" || fail "could not download $base/$archive"
 sums="slopmax-$target.sha256"
 curl -fsSL "$base/$sums" -o "$tmp/$sums" || fail "could not download $base/$sums to check the download"

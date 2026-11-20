@@ -140,8 +140,24 @@ description = "Measure the latency, throughput, memory, and startup slopmax adds
 tools = { oha = "1.16", jq = "1.8", hyperfine = "1.20" }
 run = "scripts/bench.sh"
 
+[tasks.install-script]
+description = "Lint install.sh as POSIX sh, then install the latest release with it into a scratch directory"
+tools = { shellcheck = "0.11.0" }
+# Plain ASCII: macOS's /bin/sh (bash 3.2) under a UTF-8 locale reads a
+# multibyte character right after `$name` as part of the name.
+run = '''
+shellcheck -s sh install.sh
+if LC_ALL=C grep -n '[^ -~	]' install.sh; then echo "install.sh must be plain ASCII" >&2; exit 1; fi
+dir=$(mktemp -d)
+trap 'rm -rf "$dir"' EXIT
+LC_ALL=en_US.UTF-8 SLOPMAX_INSTALL_DIR="$dir" /bin/sh install.sh
+"$dir/slopmax" --version
+'''
+
 [tasks.install]
-description = "Install slopmax into ~/.cargo/bin"
+description = "Install slopmax, with its web UI, into ~/.cargo/bin"
+# Without the UI, the binary's dashboard is a page saying how to build it.
+depends = ["ui"]
 run = "cargo install --path crates/slopmax --locked"
 
 [tasks.demo]
