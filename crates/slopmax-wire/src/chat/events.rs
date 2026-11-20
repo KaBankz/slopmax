@@ -89,6 +89,12 @@ impl Events {
             }
             _ => {}
         }
+        // A model that declines says why under `refusal`, not `content`.
+        if let Some(Value::String(refusal)) = delta.get("refusal")
+            && !refusal.is_empty()
+        {
+            out.push(Event::Text(refusal.clone()));
+        }
         let calls = delta.get("tool_calls").and_then(Value::as_array);
         for (position, call) in calls.into_iter().flatten().enumerate() {
             let index = call
@@ -255,6 +261,32 @@ mod tests {
 
     fn chunk(delta: Value, finish: Option<&str>) -> Value {
         json!({"object": "chat.completion.chunk", "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]})
+    }
+
+    #[test]
+    fn refusals_are_said_as_text() {
+        let mut events = Events::new(HashSet::new());
+        let mut out = Vec::new();
+        for c in [
+            chunk(
+                json!({"role": "assistant", "content": null, "refusal": ""}),
+                None,
+            ),
+            chunk(json!({"refusal": "I can't"}), None),
+            chunk(json!({"refusal": " help."}), Some("stop")),
+        ] {
+            events.feed(&c, &mut out);
+        }
+        assert_eq!(
+            out,
+            [Event::Text("I can't".into()), Event::Text(" help.".into())]
+        );
+        // A whole message says it once.
+        let mut events = Events::new(HashSet::new());
+        let mut out = Vec::new();
+        let whole = json!({"choices": [{"message": {"role": "assistant", "content": null, "refusal": "No."}, "finish_reason": "stop"}]});
+        events.feed(&whole, &mut out);
+        assert_eq!(out, [Event::Text("No.".into())]);
     }
 
     #[test]

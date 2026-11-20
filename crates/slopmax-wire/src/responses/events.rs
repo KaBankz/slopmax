@@ -38,7 +38,8 @@ impl Events {
             .and_then(Value::as_str)
             .unwrap_or_default()
         {
-            "response.output_text.delta" => {
+            // A model that declines says why in a refusal: text to the client.
+            "response.output_text.delta" | "response.refusal.delta" => {
                 let id = text("item_id");
                 self.text_from(&id, out);
                 self.streamed.insert(id);
@@ -156,13 +157,21 @@ pub fn whole(response: &Value) -> Vec<Event> {
     out
 }
 
+/// A message's text, its refusals included.
 fn message_text(item: &Value) -> String {
     item.get("content")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .filter_map(part_text)
         .collect()
+}
+
+/// A message part's text: what it says, or for a refusal why it declines.
+fn part_text(part: &Value) -> Option<&str> {
+    let refusal = part.get("type").and_then(Value::as_str) == Some("refusal");
+    let said = refusal.then(|| part.get("refusal")).flatten();
+    said.or_else(|| part.get("text"))?.as_str()
 }
 
 fn done(response: &Value) -> Event {
@@ -257,6 +266,33 @@ mod tests {
             })
             .collect();
         assert_eq!(text, "Checking first.\n\nDone.After.\n\nWhole.");
+    }
+
+    #[test]
+    fn refusals_are_said_as_text() {
+        let text = |events: Vec<Event>| -> String {
+            events
+                .iter()
+                .filter_map(|e| match e {
+                    Event::Text(t) => Some(t.as_str()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let streamed = read(&[
+            json!({"type": "response.content_part.added", "item_id": "m1", "part": {"type": "refusal", "refusal": ""}}),
+            json!({"type": "response.refusal.delta", "item_id": "m1", "delta": "I can't help"}),
+            json!({"type": "response.refusal.delta", "item_id": "m1", "delta": " with that."}),
+            json!({"type": "response.output_item.done", "item": {"type": "message", "id": "m1", "content": [{"type": "refusal", "refusal": "I can't help with that."}]}}),
+            json!({"type": "response.completed", "response": {}}),
+        ]);
+        assert_eq!(text(streamed), "I can't help with that.");
+        // Unstreamed, whole in the item.
+        let whole = read(&[
+            json!({"type": "response.output_item.done", "item": {"type": "message", "id": "m1", "content": [{"type": "output_text", "text": "No: "}, {"type": "refusal", "refusal": "not that."}]}}),
+            json!({"type": "response.completed", "response": {}}),
+        ]);
+        assert_eq!(text(whole), "No: not that.");
     }
 
     #[test]
