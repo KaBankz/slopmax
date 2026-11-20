@@ -4,6 +4,15 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Fixed
+
+- The install script no longer stops at once with `line 39: target?: unbound variable`. Some shells, macOS's `/bin/sh` among them, read the `…` after `$target` as part of the variable's name; the script now braces that name and is plain ASCII.
+- `mise run install` builds the web UI first, so a slopmax installed from a checkout has its dashboard.
+
+### Changed
+
+- The README is shorter: what slopmax does and why, how to install it, and how it compares. The details live in [docs/](docs/).
+
 ## [0.18.2] - 2026-11-20
 
 ### Fixed
