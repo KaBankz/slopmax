@@ -919,8 +919,10 @@ async fn decompressed(headers: &HeaderMap, body: Bytes) -> (Bytes, Option<Bytes>
     let Some(encoding) = content_encoding(headers).map(<[u8]>::to_vec) else {
         return (body, None);
     };
+    // Always on the blocking pool: a small compressed body can expand to
+    // megabytes, so its size says nothing about the work.
     let compressed = body.clone();
-    let plain = offload(body.len(), move || {
+    let plain = crate::blocking::run(move || {
         crate::wire::sse::decompress(&encoding, &compressed, MAX_BODY)
     })
     .await;
