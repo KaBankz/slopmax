@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.18.3] - 2026-11-20
+
 ### Fixed
 
 - The install script no longer stops at once with `line 39: target?: unbound variable`. Some shells, macOS's `/bin/sh` among them, read the `…` after `$target` as part of the variable's name; the script now braces that name and is plain ASCII.
