@@ -150,11 +150,11 @@ const successChange = (history: History, rate: number | undefined): Change | und
       }
 }
 
-/** The corresponding request count from the preceding span, when supplied by the ledger. */
+/** The answered requests in the preceding span, when supplied by the ledger. */
 export const previousRequests = (history: History): string | undefined =>
   history.previous === undefined
     ? undefined
-    : `${count(requestTotal(history.previous.total), "request")} ${before(history)}`
+    : `For comparison, ${count(history.previous.total.requests, "answered request")} ${before(history)}`
 
 /** The known fee share for one account, with older ledgers using their range-wide price coverage. */
 export const leftAccountValue = (account: LeftAccount, unpriced: number): string => {

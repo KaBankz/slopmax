@@ -222,20 +222,27 @@ describe("the web dashboard", () => {
 
   test("the settings page draws each live setting the API serves, and a switch changes it", async () => {
     await web("#/settings")
+    await showsSoon("Overflow to API keys")
+    expect(shows("Reset first")).toBe(true)
+    expect(() => control("More Session timeout")).toThrow()
+    expect(shows("Round robin")).toBe(false)
+    expect(shows("Configure delivery in config.toml.")).toBe(true)
+    expect(() => control("Send a test notice")).toThrow()
+    await press("Change strategy")
+    await showsSoon("Round robin")
+    await press("Fill first")
+    await settle(() => drawn?.stub.calls.some((call) => call.endpoint === "change") === true, "the routing change")
+    expect(drawn?.stub.calls.find((call) => call.endpoint === "change")?.payload).toEqual({ strategy: "fill-first" })
+    await press("View settings")
     await showsSoon("Session timeout")
-    for (const title of [
-      "Warm ChatGPT windows",
-      "Overflow to API keys",
-      "Usage polling",
-      "Refresh sign-ins",
-      "Codex WebSockets",
-    ]) {
+    for (const title of ["Warm ChatGPT windows", "Usage polling", "Refresh sign-ins", "Codex WebSockets"]) {
       expect(shows(title)).toBe(true)
     }
-    expect(shows("Reset first")).toBe(true)
     await press("Warm ChatGPT windows")
     await showsSoon("Idle ChatGPT windows start as they reset.")
-    expect(drawn?.stub.calls.find((call) => call.endpoint === "change")?.payload).toEqual({ warmWindows: true })
+    expect(drawn?.stub.calls.filter((call) => call.endpoint === "change").at(-1)?.payload).toEqual({
+      warmWindows: true,
+    })
     await press("More Session timeout")
     await showsSoon("A session keeps its account through 2 h idle.")
   })

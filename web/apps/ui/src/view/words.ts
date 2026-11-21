@@ -154,15 +154,15 @@ export const routing = (settings: Pick<Settings, "strategy"> & Partial<Pick<Sett
     ? strategyTitle(settings.strategy)
     : `${strategyTitle(settings.strategy)} · ${settings.sessionAffinity ? "sessions keep their account" : "sessions move between accounts"}`
 
-export const affinityDetail =
-  "Keep a conversation on the account it started on, so its prompt cache stays warm. Off, the strategy places every request."
+export const affinityDetail = "Reuse the account’s prompt cache throughout a session."
 
-export const affinityHeader = "A request can ask otherwise with the x-slopmax-affinity header, set to on or off."
+export const affinityHeader =
+  "To override session affinity for a request, set the x-slopmax-affinity header to on or off."
 
 /** How long before a limit reset expires slopmax redeems it, when it does. */
 export const redeemLeadHours = 3
 
-export const redeemExpiringDetail = `Redeem it ${redeemLeadHours} hours before, if the account has quota to reset.`
+export const redeemExpiringDetail = `Redeem a reset ${redeemLeadHours} hours before it expires if the account has quota to reset.`
 
 export const redeemExhaustedDetail = "Redeem one so the pool keeps serving, rather than wait for a reset."
 

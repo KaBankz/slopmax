@@ -136,7 +136,7 @@ export const pageDescription = (page: Page): string => {
     case "Diagnostics":
       return "Check the proxy and its connection to your agents."
     case "Settings":
-      return "Manage routing, limit resets, notifications, and appearance."
+      return "Proxy and browser preferences."
   }
 }
 

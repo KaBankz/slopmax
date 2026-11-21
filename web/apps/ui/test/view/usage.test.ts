@@ -233,12 +233,13 @@ describe("tables and parts", () => {
     })
   })
 
-  test("the comparison counts failed requests and identifies the preceding span", () => {
+  test("the comparison matches the answered requests metric for the preceding span", () => {
     const today = fixtureHistory("today", now)
     const yesterday = today.previous?.total ?? Totals.zero
-    expect(previousRequests(today)).toMatch(/requests yesterday by this hour$/)
-    expect(previousRequests(today)).toContain((yesterday.requests + yesterday.failed).toLocaleString("en-US"))
-    expect(previousRequests(fixtureHistory("7d", now))).toMatch(/in the previous 7 days$/)
+    expect(previousRequests(today)).toBe(
+      `For comparison, ${yesterday.requests.toLocaleString("en-US")} answered requests yesterday by this hour`,
+    )
+    expect(previousRequests(fixtureHistory("7d", now))).toMatch(/^For comparison, .* in the previous 7 days$/)
     expect(previousRequests(fixtureHistory("30d", now))).toBeUndefined()
     expect(isQuiet(quietHistory("today"))).toBe(true)
     expect(isQuiet(today)).toBe(false)

@@ -84,6 +84,11 @@ describe("opened over the tailnet without a key", () => {
     await showsSoon("Agents on this machine use the hub")
     location.hash = "#/settings"
     await showsSoon("changed on the hub, or from a machine that may manage it")
+    await showsSoon("Routing strategy")
+    expect(inPage("Change strategy")).toBeUndefined()
+    expect(shows("Last reported")).toBe(false)
+    page.stub.endStreams()
+    await showsSoon("Last reported")
     location.hash = "#/diagnostics"
     await showsSoon("Run slopmax doctor on the hub")
     location.hash = "#/claude"
@@ -94,7 +99,7 @@ describe("opened over the tailnet without a key", () => {
 
   test("an admin machine opens it with nothing held back", async () => {
     const page = await fromTailnet({ health: overTailnet("admin") }, "#/settings")
-    await showsSoon("Session timeout")
+    await showsSoon("Overflow to API keys")
     expect(shows("Read-only from this machine")).toBe(false)
     expect(shows("Open the slopmax dashboard")).toBe(false)
     expect(page.stub.calls.some((call) => call.endpoint === "settings")).toBe(true)

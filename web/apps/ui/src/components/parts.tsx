@@ -199,10 +199,12 @@ export function Row({ children }: { readonly children: ReactNode }) {
 export function SettingRow({
   title,
   detail,
+  detailId,
   children,
 }: {
   readonly title: string
   readonly detail?: ReactNode
+  readonly detailId?: string
   readonly children?: ReactNode
 }) {
   return (
@@ -211,7 +213,7 @@ export function SettingRow({
         {/* At least this wide, so in a narrow window the controls take the next line rather than squeeze the words. */}
         <ItemContent className="min-w-0 basis-48">
           <ItemTitle>{title}</ItemTitle>
-          {detail !== undefined && <ItemDescription>{detail}</ItemDescription>}
+          {detail !== undefined && <ItemDescription id={detailId}>{detail}</ItemDescription>}
         </ItemContent>
         {children !== undefined && <ItemActions>{children}</ItemActions>}
       </Item>

@@ -7,14 +7,20 @@ import { Option, Schema } from "effect"
 import { liveDetail, minutes, pollSteps, sessionSteps, step } from "./words.ts"
 
 /** The live settings shown in their own sections, not under Advanced. */
-const namedElsewhere: ReadonlyArray<LiveKey> = ["strategy", "sessionAffinity", "redeemExpiring", "redeemWhenExhausted"]
+const namedElsewhere: ReadonlyArray<LiveKey> = [
+  "strategy",
+  "sessionAffinity",
+  "paidOverflow",
+  "redeemExpiring",
+  "redeemWhenExhausted",
+]
 
 const titles: { readonly [K in LiveKey]: string } = {
   strategy: "Strategy",
   sessionAffinity: "Session affinity",
   sessionMinutes: "Session timeout",
-  redeemExpiring: "When one would expire unused",
-  redeemWhenExhausted: "When every account is spent",
+  redeemExpiring: "Redeem expiring resets",
+  redeemWhenExhausted: "Redeem when all accounts are limited",
   warmWindows: "Warm ChatGPT windows",
   paidOverflow: "Overflow to API keys",
   pollMinutes: "Usage polling",
