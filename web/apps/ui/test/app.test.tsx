@@ -86,6 +86,22 @@ describe("the web dashboard", () => {
     expect(control("5-hour").getAttribute("aria-pressed")).toBe("true")
   })
 
+  test("usage figures switch a single chart and keep their selection across ranges", async () => {
+    await web("#/usage")
+    await showsSoon("Usage over time")
+    expect(document.getElementById("usage-trend")?.getAttribute("aria-label")).toBe("Tokens")
+    const value = [...document.querySelectorAll<HTMLButtonElement>('button[aria-controls="usage-trend"]')].find(
+      (button) => button.textContent?.startsWith("Value at API prices"),
+    )
+    expect(value).toBeDefined()
+    await act(async () => value?.click())
+    expect(value?.getAttribute("aria-pressed")).toBe("true")
+    expect(document.getElementById("usage-trend")?.getAttribute("aria-label")).toBe("Value at API prices")
+    await press("Today")
+    await showsSoon("yesterday by this hour")
+    expect(document.getElementById("usage-trend")?.getAttribute("aria-label")).toBe("Value at API prices")
+  })
+
   test("request activity opens the selected date range in Requests", async () => {
     await web("#/usage")
     await press("Today")

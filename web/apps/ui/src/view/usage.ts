@@ -163,7 +163,7 @@ export const leftAccountValue = (account: LeftAccount, unpriced: number): string
 }
 
 /** The Usage page's figures. */
-export const usageStats = (history: History): ReadonlyArray<Stat> => {
+export const usageStats = (history: History): readonly [Stat, Stat, Stat, Stat] => {
   const total = history.total
   const value = priced(total.cost, total.unpriced, total.requests)
   const valueNote = history.billed > 0 ? `Estimated API-key spend ${dollars(history.billed)}` : costNote(total)

@@ -8,7 +8,7 @@ import { compact, grouped, providerTitle } from "@slopmax/client/format"
 import { Option } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import { ChevronRight } from "lucide-react"
-import type { ReactNode } from "react"
+import { type ReactNode, useState } from "react"
 import { go, groupsAtom, historyAtom, machinesAtom, rangeAtom, requestFilterAtom, requestLimitAtom } from "../atoms.ts"
 import {
   Columns,
@@ -23,10 +23,10 @@ import {
   Swatch,
 } from "../components/charts.tsx"
 import { HealthCard, RecentFailures } from "../components/health.tsx"
-import { Loaded, Section, Skeleton, Stats } from "../components/parts.tsx"
+import { Loaded, Section, Skeleton, StatChange, Stats } from "../components/parts.tsx"
 import { Quiet } from "../components/quiet.tsx"
 import { Button } from "../components/ui/button.tsx"
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.tsx"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.tsx"
 import { Separator } from "../components/ui/separator.tsx"
 import {
   Table,
@@ -59,7 +59,6 @@ import {
   accountRows,
   agentRows,
   type BarRow,
-  apiPriceValue,
   isQuiet,
   leftAccountValue,
   machineRows,
@@ -68,6 +67,7 @@ import {
   performanceStats,
   previousRequests,
   speedRows,
+  type Stat,
   tokenMix,
   usageStats,
 } from "../view/usage.ts"
@@ -413,20 +413,50 @@ function Machines({ range }: { readonly range: HistoryRange }) {
   )
 }
 
-function RequestActivity({ history, range }: { readonly history: History; readonly range: HistoryRange }) {
+const usageMetrics = ["tokens", "requests", "value"] as const
+type UsageMetric = (typeof usageMetrics)[number]
+
+function MetricReadout({ stat }: { readonly stat: Stat }) {
+  return (
+    <>
+      <span className="text-xs font-medium text-muted-foreground sm:text-sm">{stat.title}</span>
+      <span className="font-heading text-2xl leading-none font-semibold tracking-tight tabular-nums @lg:text-3xl">
+        {stat.value}
+      </span>
+    </>
+  )
+}
+
+function UsageTrend({
+  history,
+  range,
+  metric,
+  select,
+}: {
+  readonly history: History
+  readonly range: HistoryRange
+  readonly metric: UsageMetric
+  readonly select: (metric: UsageMetric) => void
+}) {
   const setFilter = useAtomSet(requestFilterAtom)
   const setLimit = useAtomSet(requestLimitAtom)
+  const [tokens, requests, value, pace] = usageStats(history)
+  const figures = { tokens, requests, value }
+  const selected = figures[metric]
   const comparison = previousRequests(history)
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>
-          <h2>Request activity</h2>
-        </CardTitle>
-        {comparison !== undefined && <CardDescription>{comparison}</CardDescription>}
-        <CardAction>
+    <Card size="flush">
+      <CardHeader className="my-4">
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+          <div>
+            <CardTitle>
+              <h2>Usage over time</h2>
+            </CardTitle>
+            {comparison !== undefined && <CardDescription>{comparison}</CardDescription>}
+          </div>
           <Button
-            variant="ghost"
+            variant="outline"
             size="sm"
             onClick={() => {
               setFilter({ span: range, outcome: "all" })
@@ -437,70 +467,109 @@ function RequestActivity({ history, range }: { readonly history: History; readon
             View requests
             <ChevronRight aria-hidden data-icon="inline-end" />
           </Button>
-        </CardAction>
+        </div>
       </CardHeader>
-      <CardContent>
-        <Legend
-          items={[
-            { ink: requestInks.answered, title: "Answered" },
-            { ink: requestInks.failed, title: "Failed" },
-          ]}
-        />
-        <RequestColumns history={history} size="sm" />
+      <div
+        className="grid grid-cols-2 gap-px border-y bg-border @3xl:grid-cols-4"
+        role="group"
+        aria-label="Usage chart metric"
+      >
+        {usageMetrics.map((key) => (
+          <Button
+            key={key}
+            variant="metric"
+            size="metric"
+            aria-pressed={key === metric}
+            aria-controls="usage-trend"
+            onClick={() => select(key)}
+          >
+            <MetricReadout stat={figures[key]} />
+          </Button>
+        ))}
+        <div className="flex min-w-0 flex-col gap-2 bg-card p-4 sm:px-6">
+          <MetricReadout stat={pace} />
+          <span className="text-xs text-muted-foreground">{pace.note}</span>
+        </div>
+      </div>
+      <CardContent className="my-4 sm:my-5">
+        <section id="usage-trend" aria-label={selected.title} className="flex min-w-0 flex-col gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+            <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+              {selected.change !== undefined && <StatChange change={selected.change} />}
+              <span className="text-muted-foreground">{selected.note}</span>
+            </div>
+            {metric === "tokens" && (
+              <Legend
+                items={history.providers.map((provider, i) => ({
+                  ink: tokenInks[i] ?? "meter",
+                  title: providerTitle(provider),
+                }))}
+              />
+            )}
+            {metric === "requests" && (
+              <Legend
+                items={[
+                  { ink: requestInks.answered, title: "Answered" },
+                  { ink: requestInks.failed, title: "Failed" },
+                ]}
+              />
+            )}
+          </div>
+          <UsagePlot history={history} metric={metric} />
+        </section>
       </CardContent>
     </Card>
   )
 }
 
-function UsageBody({ history, range }: { readonly history: History; readonly range: HistoryRange }) {
-  const every = labelEvery(range)
-  const tokensMost = Math.max(0, ...history.buckets.map((b) => b.tokens.reduce((s, n) => s + n, 0)))
-  const costMost = Math.max(0, ...history.buckets.map((b) => b.cost))
+function UsagePlot({ history, metric }: { readonly history: History; readonly metric: UsageMetric }) {
+  if (metric === "requests") return <RequestColumns history={history} size="lg" />
+  if (metric === "value") {
+    const most = Math.max(0, ...history.buckets.map((bucket) => bucket.cost))
+    return (
+      <Columns
+        size="lg"
+        every={labelEvery(history.range)}
+        scale={zeroAxis(most, 0.01)}
+        tick={moneyTick}
+        buckets={history.buckets.map((bucket) => ({
+          label: bucket.label,
+          tip: costTip(bucket),
+          parts: [{ value: bucket.cost, ink: valueInk }],
+        }))}
+      />
+    )
+  }
+  const most = Math.max(0, ...history.buckets.map((bucket) => bucket.tokens.reduce((sum, n) => sum + n, 0)))
+  return (
+    <Columns
+      size="lg"
+      every={labelEvery(history.range)}
+      scale={zeroAxis(most, 1)}
+      tick={tokensTick}
+      buckets={history.buckets.map((bucket) => ({
+        label: bucket.label,
+        tip: tokensTip(history, bucket),
+        parts: bucket.tokens.map((value, i) => ({ value, ink: tokenInks[i] ?? "meter" })),
+      }))}
+    />
+  )
+}
+
+function UsageBody({
+  history,
+  range,
+  metric,
+  select,
+}: {
+  readonly history: History
+  readonly range: HistoryRange
+  readonly metric: UsageMetric
+  readonly select: (metric: UsageMetric) => void
+}) {
   return (
     <>
-      <Stats stats={usageStats(history)} />
-      <ChartPanel
-        title="Tokens"
-        legend={
-          <Legend
-            items={history.providers.map((provider, i) => ({
-              ink: tokenInks[i] ?? "meter",
-              title: providerTitle(provider),
-            }))}
-          />
-        }
-      >
-        <Columns
-          size="lg"
-          every={every}
-          scale={zeroAxis(tokensMost, 1)}
-          tick={tokensTick}
-          buckets={history.buckets.map((bucket) => ({
-            label: bucket.label,
-            tip: tokensTip(history, bucket),
-            parts: bucket.tokens.map((value, i) => ({
-              value,
-              ink: tokenInks[i] ?? "meter",
-            })),
-          }))}
-        />
-      </ChartPanel>
-      <Pair>
-        <RequestActivity history={history} range={range} />
-        <ChartPanel title={apiPriceValue}>
-          <Columns
-            size="sm"
-            every={every}
-            scale={zeroAxis(costMost, 0.01)}
-            tick={moneyTick}
-            buckets={history.buckets.map((bucket) => ({
-              label: bucket.label,
-              tip: costTip(bucket),
-              parts: [{ value: bucket.cost, ink: valueInk }],
-            }))}
-          />
-        </ChartPanel>
-      </Pair>
+      <UsageTrend history={history} range={range} metric={metric} select={select} />
       <Pair>
         <ChartPanel title="Models">
           <Bars rows={modelRows(history)} providers={history.providers} mono />
@@ -654,6 +723,7 @@ function PerformanceHealth() {
 }
 
 export function AnalyticsPage({ performance }: { readonly performance: boolean }) {
+  const [metric, select] = useState<UsageMetric>("tokens")
   return (
     <>
       <WithHistory allowEmpty={!performance}>
@@ -663,7 +733,7 @@ export function AnalyticsPage({ performance }: { readonly performance: boolean }
           ) : isQuiet(history) ? (
             <Quiet title="No requests recorded in this range" />
           ) : (
-            <UsageBody history={history} range={range} />
+            <UsageBody history={history} range={range} metric={metric} select={select} />
           )
         }
       </WithHistory>

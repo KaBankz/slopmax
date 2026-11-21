@@ -18,7 +18,9 @@ The live status in the footer opens Diagnostics.
 Quota has upcoming and past resets. Past resets shows the estimated unused
 share of subscription fees. Accounts groups providers by billing type and
 owns the add-account flow. Analytics shares a date range across Usage and
-Performance. Connections brings coding agents, client keys, and other machines
+Performance. In Usage, tokens, answered requests and value at API prices
+switch the chart from a shared row of figures. The monthly pace stays visible
+as a projection. Connections brings coding agents, client keys, and other machines
 onto one page.
 
 Provider and account bookmarks retain their existing addresses. The older
