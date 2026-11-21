@@ -46,10 +46,11 @@ changes focus the destination heading, section, or linked account.
 shadcn's tokens, by shadcn's names: `background`, `foreground`, `card`,
 `popover`, `primary`, `secondary`, `muted`, `accent`, `destructive`, `border`,
 `input`, `ring`, and `chart-1` … `chart-5`, each with its
-`-foreground` where shadcn has one. Blue-gray surfaces frame navy actions.
-The active sidebar link uses a small dither accent alongside its label. Quota
-meters use dither for used allowance and solid mint for remaining allowance.
-The reset queue and account directory use the same encoding as the lead card.
+`-foreground` where shadcn has one. Gray-green surfaces frame teal actions.
+The active sidebar link and Analytics metric use dither accents. Quota meters
+use dither for used allowance and solid mint for remaining allowance on the
+reset schedule and account directory. Provider meters keep their quota
+warning colors and use the same texture on the used portion.
 `--radius` (0.625rem) sets every radius step.
 
 slopmax adds tokens shadcn has no names for: `success` and `warning`, the
@@ -76,9 +77,8 @@ use a solid fill, with a small cap for a nonzero top segment below one pixel.
 A curve is smooth and 2px over
 its fill. A list row's bar is `ChartMeter`, the same dither on its side over
 a dotted track, fading over the track's length so short bars stay solid. Dither marks historical
-measurements and usage breakdowns. Provider-page gauges and categorical
-status grids use solid fills. The reset schedule and account directory
-stipple the used segment so it reads against the remaining track.
+measurements and usage breakdowns, including the token mix and legend
+swatches. Status dots and the activity heatmap use solid fills.
 
 Type, spacing, radius, shadows and motion are Tailwind's and shadcn's: `text-sm`
 is body text, `text-xs` secondary text, `text-base` and up for headings;

@@ -102,6 +102,7 @@ export function Meter({
   return (
     <Progress
       aria-hidden
+      dither
       value={Math.min(100, Math.max(0, fraction * 100))}
       tone={meterTone(tone)}
       marker={marker === undefined ? undefined : marker * 100}
@@ -320,7 +321,7 @@ export function Skeleton({ lines = 3 }: { readonly lines?: number }) {
 /** The option-key mark, sized consistently for the masthead and gate. */
 export function Logo({ size = "md" }: { readonly size?: "md" | "lg" }) {
   const pixels = size === "lg" ? 36 : 20
-  return <img src={mark} alt="" width={pixels} height={pixels} className="brand-mark shrink-0" />
+  return <img src={mark} alt="" width={pixels} height={pixels} className="shrink-0" />
 }
 
 /** What went wrong reading something, with a way to try again: a destructive Alert. */

@@ -19,7 +19,7 @@ const buttonVariants = cva(
         section:
           "justify-start text-muted-foreground hover:bg-muted hover:text-foreground aria-[current]:bg-accent aria-[current]:font-semibold aria-[current]:text-accent-foreground",
         metric:
-          "relative flex-col items-start justify-start rounded-none border-0 bg-card text-left whitespace-normal hover:bg-muted/50 aria-pressed:bg-accent/65 aria-pressed:after:absolute aria-pressed:after:inset-x-0 aria-pressed:after:bottom-0 aria-pressed:after:h-0.5 aria-pressed:after:bg-primary focus-visible:z-10 focus-visible:ring-ring focus-visible:ring-inset",
+          "relative flex-col items-start justify-start rounded-none border-0 bg-card text-left whitespace-normal hover:bg-muted/50 aria-pressed:bg-accent/65 aria-pressed:after:absolute aria-pressed:after:inset-x-0 aria-pressed:after:bottom-0 aria-pressed:after:h-1 aria-pressed:after:bg-primary aria-pressed:after:measurement-dither focus-visible:z-10 focus-visible:ring-ring focus-visible:ring-inset",
         ghost:
           "hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50",
         destructive:

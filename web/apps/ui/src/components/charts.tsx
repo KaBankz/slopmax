@@ -496,7 +496,7 @@ export function SplitBar({
         .map((part) => (
           <div
             key={part.title}
-            className={`min-w-1 grow-(--share) basis-0 ${fill({ ink: part.ink })}`}
+            className={`measurement-dither min-w-1 grow-(--share) basis-0 ${fill({ ink: part.ink })}`}
             style={{ "--share": String(part.share) }}
           />
         ))}
@@ -509,7 +509,7 @@ export function Share({ fraction, ink }: { readonly fraction: number; readonly i
   return <ChartMeter value={fraction} color={color(ink)} />
 }
 
-/** A swatch of a series' color. */
+/** A swatch of a series' color and texture. */
 export function Swatch({ ink }: { readonly ink: Ink }) {
-  return <span aria-hidden className={`inline-block size-2.5 shrink-0 rounded-xs ${fill({ ink })}`} />
+  return <span aria-hidden className={`measurement-dither inline-block size-3 shrink-0 rounded-xs ${fill({ ink })}`} />
 }

@@ -23,9 +23,12 @@ function Progress({
   value,
   tone,
   marker,
+  dither,
   ...props
 }: ProgressPrimitive.Root.Props &
   VariantProps<typeof indicatorVariants> & {
+    /** Texture for a measurement that also uses a status color. */
+    dither?: boolean | undefined
     /** Where the tick sits, 0 to 100. */
     marker?: number | undefined
   }) {
@@ -35,12 +38,13 @@ function Progress({
       data-slot="progress"
       className={cn("relative flex flex-wrap gap-3", className)}
       data-tone={tone}
+      data-dither={dither || undefined}
       style={marker === undefined ? undefined : { "--marker": `${Math.min(100, Math.max(0, marker))}%` }}
       {...props}
     >
       {children}
       <ProgressTrack>
-        <ProgressIndicator className={indicatorVariants({ tone })} />
+        <ProgressIndicator className={cn(indicatorVariants({ tone }), dither && "measurement-dither")} />
       </ProgressTrack>
       {marker !== undefined && (
         <div
@@ -57,7 +61,7 @@ function ProgressTrack({ className, ...props }: ProgressPrimitive.Track.Props) {
   return (
     <ProgressPrimitive.Track
       className={cn(
-        "relative flex h-1 w-full items-center overflow-x-hidden rounded-full bg-muted in-data-[tone=quota]:h-3 in-data-[tone=quota]:rounded-sm in-data-[tone=quota]:bg-quota-fill in-data-[tone=allowance]:h-1.5 in-data-[tone=allowance]:rounded-sm in-data-[tone=allowance]:bg-allowance-fill",
+        "relative flex h-1 w-full items-center overflow-x-hidden rounded-full bg-muted in-data-[dither]:h-1.5 in-data-[dither]:rounded-sm in-data-[tone=quota]:h-3 in-data-[tone=quota]:rounded-sm in-data-[tone=quota]:bg-quota-fill in-data-[tone=allowance]:h-1.5 in-data-[tone=allowance]:rounded-sm in-data-[tone=allowance]:bg-allowance-fill",
         className,
       )}
       data-slot="progress-track"
