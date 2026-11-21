@@ -108,7 +108,7 @@ function ProviderCard({
             {attention !== undefined && <Label tone={attention} text="Needs attention" />}
           </span>
           {group.subscription && (
-            <span className="mt-1 block text-xs">
+            <span className="mt-1 block text-xs @3xl:min-h-8">
               <Label tone={group.next.tone} text={group.next.text} raw wrap />
             </span>
           )}
@@ -157,17 +157,23 @@ export function AccountsPage() {
   const subscriptions = providers(true)
   const metered = providers(false)
   return (
-    <div className="grid items-start gap-6 @4xl:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
+    <>
       <Section title="Subscriptions">
         {subscriptions.length > 0 ? (
-          subscriptions
+          <div className="grid items-start gap-4 @3xl:grid-cols-2 @3xl:has-[>:only-child]:grid-cols-1">
+            {subscriptions}
+          </div>
         ) : (
           <p className="text-sm text-muted-foreground">No subscription accounts connected.</p>
         )}
       </Section>
       <Section title="API keys and endpoints">
-        {metered.length > 0 ? metered : <p className="text-sm text-muted-foreground">No metered accounts connected.</p>}
+        {metered.length > 0 ? (
+          <div className="grid items-start gap-4 @3xl:grid-cols-2 @3xl:has-[>:only-child]:grid-cols-1">{metered}</div>
+        ) : (
+          <p className="text-sm text-muted-foreground">No metered accounts connected.</p>
+        )}
       </Section>
-    </div>
+    </>
   )
 }

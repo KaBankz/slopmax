@@ -44,9 +44,9 @@ changes focus the destination heading, section, or linked account.
 shadcn's tokens, by shadcn's names: `background`, `foreground`, `card`,
 `popover`, `primary`, `secondary`, `muted`, `accent`, `destructive`, `border`,
 `input`, `ring`, and `chart-1` … `chart-5`, each with its
-`-foreground` where shadcn has one. Warm neutral surfaces frame violet actions.
+`-foreground` where shadcn has one. Blue-gray surfaces frame navy actions.
 The active sidebar link uses a small dither accent alongside its label. Quota
-meters use dither for used allowance and solid amber for remaining allowance.
+meters use dither for used allowance and solid mint for remaining allowance.
 The reset queue and account directory use the same encoding as the lead card.
 `--radius` (0.625rem) sets every radius step.
 
@@ -74,8 +74,9 @@ use a solid fill, with a small cap for a nonzero top segment below one pixel.
 A curve is smooth and 2px over
 its fill. A list row's bar is `ChartMeter`, the same dither on its side over
 a dotted track, fading over the track's length so short bars stay solid. Dither marks historical
-measurements and usage breakdowns. Account row gauges and categorical status grids use solid fills. On Overview, the
-featured account's gauge stipples the used segment so it reads against the remaining track.
+measurements and usage breakdowns. Provider-page gauges and categorical
+status grids use solid fills. The reset schedule and account directory
+stipple the used segment so it reads against the remaining track.
 
 Type, spacing, radius, shadows and motion are Tailwind's and shadcn's: `text-sm`
 is body text, `text-xs` secondary text, `text-base` and up for headings;
@@ -88,7 +89,9 @@ Check both themes for contrast and focus when changing a token.
 
 ### Quota
 
-Overview leads with the next eligible shared window and its reset queue. Keep
+Overview presents the next eligible shared window and later resets in a
+single schedule. On wide screens the account, quota and reset columns align
+across the schedule. Keep
 weekly and monthly windows together in the long-window selection and show 5-hour
 windows separately. The pace to finish is the remaining percentage points
 divided by the hours until the reported reset. The gauge marks even pace,

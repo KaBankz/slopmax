@@ -182,7 +182,9 @@ export function DashboardSidebar({ page }: { readonly page: Page }) {
                 <Dot tone={status.tone} />
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span>Diagnostics</span>
-                  <span className="truncate text-xs text-muted-foreground tabular-nums">{status.text}</span>
+                  <span className="truncate text-xs text-muted-foreground tabular-nums group-data-[active]/menu-button:text-sidebar-accent-foreground">
+                    {status.text}
+                  </span>
                 </span>
                 <ChevronRight aria-hidden />
               </SidebarMenuButton>
