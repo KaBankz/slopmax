@@ -233,7 +233,7 @@ function Window() {
       <DashboardSidebar page={page} />
       <SidebarInset className="min-h-0 min-w-0" aria-labelledby="dashboard-title">
         <header className="shrink-0 border-b">
-          <div className="mx-auto flex w-full max-w-7xl flex-col gap-3 px-4 py-3 sm:px-6 sm:py-4 lg:px-8">
+          <div className="workspace-width flex flex-col gap-3 py-3.5 sm:py-4">
             <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-3">
               <div className="flex min-w-0 items-start gap-2 sm:gap-3">
                 <SidebarTrigger className="-ml-1" />
@@ -248,7 +248,7 @@ function Window() {
                   </h1>
                   <p
                     data-compact={page._tag === "Overview" || undefined}
-                    className="mt-1.5 text-sm text-muted-foreground data-compact:hidden sm:data-compact:block"
+                    className="mt-1.5 max-w-prose text-sm text-muted-foreground data-compact:hidden sm:data-compact:block"
                   >
                     {pageDescription(page)}
                   </p>
@@ -262,7 +262,7 @@ function Window() {
           </div>
         </header>
         <div ref={pane} data-slot="dashboard-scroll" className="relative min-h-0 flex-1 overflow-y-auto">
-          <div className="@container mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 pt-5 pb-8 sm:gap-7 sm:px-6 sm:pt-6 lg:px-8">
+          <div className="workspace-width @container flex flex-col gap-6 pt-5 pb-8 sm:gap-8 sm:pt-6 sm:pb-10">
             <ReadOnlyBanner />
             <UnansweredBanner />
             <SignInCard />

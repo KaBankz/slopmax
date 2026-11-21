@@ -105,7 +105,7 @@ function ClientKeys() {
     })
   }
   return (
-    <Section title="Client keys" headingId="connection-clients">
+    <Section title="Client keys" layout="split" headingId="connection-clients">
       <div className="flex flex-col gap-2">
         <NewKeyWell />
         <Panel>
@@ -149,7 +149,7 @@ function ClientKeys() {
               )}
             </Loaded>
           )}
-          <form onSubmit={submit} className="flex flex-col gap-2 border-t px-3 py-2.5">
+          <form onSubmit={submit} className="flex flex-col gap-3 border-t px-4 py-3 sm:px-5">
             <Field orientation="horizontal" className="flex-wrap">
               <Input
                 aria-label="Name, such as laptop"
@@ -218,7 +218,7 @@ function OtherMachines() {
   if (Option.isNone(view)) {
     if (AsyncResult.isFailure(result)) {
       return (
-        <Section title="Other machines">
+        <Section title="Other machines" layout="split">
           <Failed title="Could not read the tailnet" detail={failureText(result.cause)} onRetry={again} />
         </Section>
       )
@@ -227,7 +227,7 @@ function OtherMachines() {
   }
   const card = machinesCard(view.value)
   return (
-    <Section title="Other machines">
+    <Section title="Other machines" layout="split">
       <div className="flex flex-col gap-2">
         {card.problem !== undefined && (
           <Alert variant="destructive">

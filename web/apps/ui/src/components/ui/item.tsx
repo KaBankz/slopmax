@@ -40,6 +40,7 @@ const itemVariants = cva(
       },
       size: {
         default: "gap-2.5 px-3 py-2.5",
+        row: "gap-3 px-4 py-3 sm:px-5",
         sm: "gap-2.5 px-3 py-2.5",
         xs: "gap-2 px-2.5 py-2 in-data-[slot=dropdown-menu-content]:p-0",
       },
@@ -150,7 +151,10 @@ function ItemActions({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="item-actions"
-      className={cn("flex max-w-full flex-wrap items-center gap-2", className)}
+      className={cn(
+        "flex max-w-full flex-wrap items-center gap-2 @max-xs:group-data-[variant=directory]/item:gap-1",
+        className,
+      )}
       {...props}
     />
   )

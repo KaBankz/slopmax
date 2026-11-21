@@ -9,7 +9,7 @@ import { Option } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import type { LucideIcon } from "lucide-react"
 import { CircleAlert } from "lucide-react"
-import type { ReactNode } from "react"
+import { type ReactNode, useId } from "react"
 import mark from "../logo.svg"
 import type { Overview } from "../view/groups.ts"
 import type { Change, Stat as StatView } from "../view/usage.ts"
@@ -158,18 +158,26 @@ export function Section({
   title,
   trailing,
   headingId,
+  layout = "stacked",
   children,
 }: {
   readonly title: string
   readonly trailing?: ReactNode
   readonly headingId?: string
+  readonly layout?: "stacked" | "split"
   readonly children: ReactNode
 }) {
+  const generatedHeading = useId()
+  const id = headingId ?? generatedHeading
   return (
-    <section aria-labelledby={headingId} className="flex min-w-0 flex-col gap-3">
+    <section
+      aria-labelledby={id}
+      data-layout={layout}
+      className="flex min-w-0 flex-col gap-3 @4xl:data-[layout=split]:grid @4xl:data-[layout=split]:grid-cols-[minmax(10rem,1fr)_minmax(0,3.5fr)] @4xl:data-[layout=split]:items-start @4xl:data-[layout=split]:gap-x-8"
+    >
       <div className="flex min-h-8 flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <h2
-          id={headingId}
+          id={id}
           tabIndex={headingId === undefined ? undefined : -1}
           className="scroll-mt-5 rounded-sm font-heading text-xl font-semibold tracking-tight focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
         >
@@ -177,7 +185,7 @@ export function Section({
         </h2>
         {trailing}
       </div>
-      {children}
+      {layout === "split" ? <div className="min-w-0">{children}</div> : children}
     </section>
   )
 }
@@ -199,7 +207,7 @@ export function SettingRow({
 }) {
   return (
     <div className="border-t first:border-t-0">
-      <Item>
+      <Item size="row">
         {/* At least this wide, so in a narrow window the controls take the next line rather than squeeze the words. */}
         <ItemContent className="min-w-0 basis-48">
           <ItemTitle>{title}</ItemTitle>

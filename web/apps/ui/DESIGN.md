@@ -46,7 +46,7 @@ changes focus the destination heading, section, or linked account.
 shadcn's tokens, by shadcn's names: `background`, `foreground`, `card`,
 `popover`, `primary`, `secondary`, `muted`, `accent`, `destructive`, `border`,
 `input`, `ring`, and `chart-1` … `chart-5`, each with its
-`-foreground` where shadcn has one. Gray-green surfaces frame teal actions.
+`-foreground` where shadcn has one. Blue-gray surfaces frame navy actions.
 The active sidebar link and Analytics metric use dither accents. Quota meters
 use dither for used allowance and solid mint for remaining allowance on the
 reset schedule and account directory. Provider meters keep their quota
@@ -80,11 +80,15 @@ a dotted track, fading over the track's length so short bars stay solid. Dither 
 measurements and usage breakdowns, including the token mix and legend
 swatches. Status dots and the activity heatmap use solid fills.
 
-Type, spacing, radius, shadows and motion are Tailwind's and shadcn's: `text-sm`
-is body text, `text-xs` secondary text, `text-base` and up for headings;
-spacing on Tailwind's 4px steps; enter and exit motion from `tw-animate-css`
-(`animate-in fade-in slide-in-from-top-1`). The system sans handles controls and body text. Bricolage Grotesque gives headings and
-the lead quota figure a distinct scale. Its Latin subset and OFL ship with the app.
+Geist handles controls and body text. Bricolage Grotesque gives headings and
+key figures a distinct shape. Both Latin subsets and their OFL licenses ship
+with the app. Other scripts fall back to the system font. Body text is 14 px,
+secondary text is 13 px, and numeric columns use tabular figures.
+
+The header and main pane share the same responsive gutters. Charts and
+ledger tables use the full workspace. Setup, Connections, Settings and
+Diagnostics place section headings beside their controls on wide screens
+and stack them on narrow ones.
 
 Change shared colors in the theme and component behavior in the relevant shadcn primitive.
 Check both themes for contrast and focus when changing a token.

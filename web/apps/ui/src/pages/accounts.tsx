@@ -52,9 +52,13 @@ function AccountRow({
         </ItemContent>
         <ItemActions className="justify-end">
           {window !== undefined && (
-            <div className="text-right text-xs tabular-nums">
+            <div className="text-right text-xs tabular-nums @max-xs:max-w-24">
               <p className="font-medium">
-                {quotaPercent(100 - window.used)} left · {spanTitle(window.span)}
+                {quotaPercent(100 - window.used)} left
+                <span className="whitespace-nowrap @max-xs:block">
+                  <span className="@max-xs:hidden"> · </span>
+                  {spanTitle(window.span)}
+                </span>
               </p>
               <Progress aria-hidden value={window.used} tone="allowance" className="mt-1 mb-1.5" />
               <p

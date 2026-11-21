@@ -11,6 +11,14 @@
   font-display: swap;
 }
 
+/* A Latin subset for controls, labels and tables. Other scripts use the system font. */
+@font-face {
+  font-family: "Geist";
+  src: url("./geist-latin.woff2") format("woff2");
+  font-weight: 400 700;
+  font-display: swap;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
@@ -29,11 +37,14 @@
   --color-quota-used: var(--quota-used);
   --color-allowance-fill: var(--allowance-fill);
   --color-allowance-used: var(--allowance-used);
-  --text-display: clamp(1.875rem, 1.6rem + 1vw, 2.375rem);
-  --text-display--line-height: 1.02;
+  --text-display: clamp(1.75rem, 1.5rem + 0.75vw, 2.125rem);
+  --text-display--line-height: 1.1;
   --text-quota-number: clamp(3.25rem, 2.75rem + 1.5vw, 4rem);
   --text-quota-number--line-height: 0.9;
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --text-xs: 0.8125rem;
+  --text-xs--line-height: 1.125rem;
+  --text-sm--line-height: 1.3125rem;
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --color-chart-5: var(--chart-5);
   --color-chart-4: var(--chart-4);
   --color-chart-3: var(--chart-3);
@@ -78,28 +89,28 @@
 
 :root {
   color-scheme: light;
-  --sidebar: #e6ecec;
-  --sidebar-foreground: #2e4545;
-  --sidebar-accent: #cedfdb;
-  --sidebar-accent-foreground: #1c4b46;
-  --background: #f1f4f3;
-  --foreground: #203431;
-  --card: #fcfdfb;
+  --sidebar: #e0e9f1;
+  --sidebar-foreground: #243c54;
+  --sidebar-accent: #c9deef;
+  --sidebar-accent-foreground: #163e64;
+  --background: #eff3f7;
+  --foreground: #152b3d;
+  --card: #fcfdff;
   --card-foreground: var(--foreground);
   --popover: #ffffff;
   --popover-foreground: var(--foreground);
-  --primary: #205e56;
+  --primary: #22517c;
   --primary-foreground: #ffffff;
-  --secondary: #d9e8e2;
-  --secondary-foreground: #214c46;
-  --muted: #e5ece8;
-  --muted-foreground: #4a615c;
-  --accent: #d9e8e2;
-  --accent-foreground: #204b44;
+  --secondary: #d9e8f6;
+  --secondary-foreground: #1b4870;
+  --muted: #e3ebf3;
+  --muted-foreground: #4f6375;
+  --accent: #d6e6f3;
+  --accent-foreground: #1c496d;
   --destructive: #a52f38;
-  --border: #d0dcd6;
-  --input: #758b83;
-  --ring: #28776a;
+  --border: #cedbe6;
+  --input: #76899c;
+  --ring: #3378a0;
   --chart-1: #71869f;
   --chart-2: #405e78;
   --chart-3: #456c68;
@@ -112,41 +123,41 @@
   --spark-2: #903e68;
   --spark-3: #285e9e;
   --spark-4: #147061;
-  --quota: #193b38;
-  --quota-foreground: #f2faf5;
-  --quota-muted: #cce4dd;
-  --quota-track: #5a7a73;
-  --quota-fill: #a8ead4;
-  --quota-used: #8ba89f;
-  --allowance-fill: #67bdab;
-  --allowance-used: #8ba99c;
-  --allowance-dither: #325548;
+  --quota: #15344c;
+  --quota-foreground: #f1f8ff;
+  --quota-muted: #c8dce9;
+  --quota-track: #57728a;
+  --quota-fill: #94e2cf;
+  --quota-used: #819fb6;
+  --allowance-fill: #53b6a4;
+  --allowance-used: #7395ae;
+  --allowance-dither: #284c68;
 }
 
 .dark {
   color-scheme: dark;
-  --sidebar: #12201f;
-  --sidebar-foreground: #d9ebe5;
-  --sidebar-accent: #263e38;
-  --sidebar-accent-foreground: #d9f3e9;
-  --background: #172422;
-  --foreground: #eaf4ef;
-  --card: #1c2d2a;
+  --sidebar: #101b27;
+  --sidebar-foreground: #dceaf5;
+  --sidebar-accent: #223c53;
+  --sidebar-accent-foreground: #d7edff;
+  --background: #15212d;
+  --foreground: #e7f1f9;
+  --card: #1c2a39;
   --card-foreground: var(--foreground);
-  --popover: #233632;
+  --popover: #223244;
   --popover-foreground: var(--foreground);
-  --primary: #a6e4d1;
-  --primary-foreground: #193830;
-  --secondary: #2a413b;
-  --secondary-foreground: #d6eee5;
-  --muted: #293e39;
-  --muted-foreground: #b6cec4;
-  --accent: #2b483f;
-  --accent-foreground: #dcf5ec;
+  --primary: #a6d5f8;
+  --primary-foreground: #142b43;
+  --secondary: #253d53;
+  --secondary-foreground: #d2e9fb;
+  --muted: #253748;
+  --muted-foreground: #b1c6d7;
+  --accent: #28435e;
+  --accent-foreground: #d7edff;
   --destructive: #ff9ca2;
-  --border: #3b514a;
-  --input: #819c91;
-  --ring: #82cdb7;
+  --border: #374c60;
+  --input: #7b92a8;
+  --ring: #89c4ed;
   --chart-1: #a8bacb;
   --chart-2: #87a7c2;
   --chart-3: #aad4cb;
@@ -158,15 +169,15 @@
   --spark-2: #e9a2c8;
   --spark-3: #9dc8ff;
   --spark-4: #8adac9;
-  --quota: #23443d;
-  --quota-foreground: #f0faf5;
-  --quota-muted: #cce6dc;
-  --quota-track: #6a8a7d;
-  --quota-fill: #aaead5;
-  --quota-used: #91afa1;
-  --allowance-fill: #76cdb9;
-  --allowance-used: #819f93;
-  --allowance-dither: #354f46;
+  --quota: #1d3a50;
+  --quota-foreground: #f0f8ff;
+  --quota-muted: #c6ddea;
+  --quota-track: #59768e;
+  --quota-fill: #9ce7d4;
+  --quota-used: #8ba7bc;
+  --allowance-fill: #6ac9b6;
+  --allowance-used: #6f91aa;
+  --allowance-dither: #2b4a61;
 }
 
 @layer base {
@@ -227,6 +238,13 @@
     pointer-events: none;
     content: "";
   }
+}
+
+@utility workspace-width {
+  width: 100%;
+  max-width: var(--container-7xl);
+  margin-inline: auto;
+  padding-inline: clamp(1rem, 2.5vw, 2rem);
 }
 
 @utility reset-columns {

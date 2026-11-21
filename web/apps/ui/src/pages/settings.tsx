@@ -53,7 +53,7 @@ function AppearanceSection() {
   const prefs = useAtomValue(prefsAtom)
   const save = useAtomSet(savePrefs)
   return (
-    <Section title="On this browser">
+    <Section title="On this browser" layout="split">
       <Panel>
         <SettingRow title="Theme" detail="Choose the dashboard theme for this browser.">
           <Segmented
@@ -85,7 +85,7 @@ function ProxySection({ listen }: { readonly listen: string | undefined }) {
     listen === undefined ? Option.match(host, { onNone: () => "", onSome: (h) => h.origin }) : `http://${listen}`
   const status = useAtomValue(proxyStatusAtom)
   return (
-    <Section title="Proxy">
+    <Section title="Proxy" layout="split">
       <Panel>
         <SettingRow title="Status" detail="slopmax serves your agents while it runs.">
           <Label tone={status.tone} text={status.text} raw />
@@ -112,7 +112,7 @@ function NotificationsSection() {
   const test = useAtomSet(testNotifications)
   const detail = "When a limit reset is about to lapse unredeemed, or a week is about to reset with quota to spare."
   return (
-    <Section title="Quota reminders">
+    <Section title="Quota reminders" layout="split">
       <Panel>
         <SettingRow
           title="Browser notifications"
@@ -160,7 +160,7 @@ function LiveSections() {
                 <AlertTitle>{restart}</AlertTitle>
               </Alert>
             )}
-            <Section title="Routing">
+            <Section title="Routing" layout="split">
               <div className="flex flex-col gap-2">
                 <Panel>
                   <Choices
@@ -185,7 +185,7 @@ function LiveSections() {
                 <p className="text-xs text-muted-foreground">{affinityHeader}</p>
               </div>
             </Section>
-            <Section title="Limit resets">
+            <Section title="Limit resets" layout="split">
               <Panel>
                 <SettingRow title="When one would expire unused" detail={redeemExpiringDetail}>
                   <Switch
@@ -204,7 +204,7 @@ function LiveSections() {
               </Panel>
             </Section>
             <NotificationsSection />
-            <Section title="Advanced">
+            <Section title="Advanced" layout="split">
               <div className="flex flex-col gap-2">
                 <Panel>
                   {advancedRows(view).map((row) => (

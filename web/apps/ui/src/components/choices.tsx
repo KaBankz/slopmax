@@ -34,7 +34,7 @@ export function Choices<T extends string>({ label, value, options, onChange, dis
     >
       {options.map((option) => (
         <div key={option.value} className="border-t first:border-t-0">
-          <Item variant="choice" render={<label htmlFor={`${id}-${option.value}`} />}>
+          <Item variant="choice" size="row" render={<label htmlFor={`${id}-${option.value}`} />}>
             <ItemContent>
               <ItemTitle>
                 {option.title}

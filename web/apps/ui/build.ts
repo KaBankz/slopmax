@@ -14,7 +14,12 @@ import path from "node:path"
 import { outdir as defaultOutdir } from "./src/index.ts"
 
 const root = import.meta.dir
-const displayFont = "bricolage-grotesque-latin.woff2"
+const fontAssets = [
+  ["bricolage-grotesque-latin.woff2", "bricolage-grotesque-latin.woff2"],
+  ["OFL.txt", "bricolage-grotesque-OFL.txt"],
+  ["geist-latin.woff2", "geist-latin.woff2"],
+  ["geist-OFL.txt", "geist-OFL.txt"],
+] as const
 
 const tailwind = (minify: boolean): BunPlugin => ({
   name: "tailwind",
@@ -62,11 +67,14 @@ export const build = async (options: BuildOptions = {}): Promise<ReadonlyArray<{
     for (const message of result.logs) console.error(message)
     throw new Error("the UI did not build")
   }
-  const fontFile = path.join(outdir, displayFont)
-  await Bun.write(fontFile, Bun.file(path.join(root, "src", "fonts", displayFont)))
-  const fontLicense = path.join(outdir, "bricolage-grotesque-OFL.txt")
-  await Bun.write(fontLicense, Bun.file(path.join(root, "src", "fonts", "OFL.txt")))
-  const written = [...result.outputs.map((output) => output.path), fontFile, fontLicense]
+  const fonts = await Promise.all(
+    fontAssets.map(async ([source, name]) => {
+      const destination = path.join(outdir, name)
+      await Bun.write(destination, Bun.file(path.join(root, "src", "fonts", source)))
+      return destination
+    }),
+  )
+  const written = [...result.outputs.map((output) => output.path), ...fonts]
   if (options.compress ?? true) {
     for (const file of written) {
       await Bun.write(`${file}.gz`, Bun.gzipSync(await Bun.file(file).bytes(), { level: 9 }))

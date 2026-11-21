@@ -6,7 +6,7 @@ import { CodingAgents } from "./agents.tsx"
 export function ConnectionsPage() {
   return (
     <>
-      <Section title="Coding agents" headingId="connection-agents">
+      <Section title="Coding agents" layout="split" headingId="connection-agents">
         <CodingAgents />
       </Section>
       <ClientAccess />

@@ -137,73 +137,81 @@ function RequestsTable({
   readonly onOpen: (row: RequestRow) => void
 }) {
   return (
-    <Card>
-      <CardContent density="table">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-28">Time</TableHead>
-              <TableHead className="hidden w-24 @3xl:table-cell">Agent</TableHead>
-              <TableHead className="hidden w-40 @2xl:table-cell">Model</TableHead>
-              <TableHead className="w-full">Account</TableHead>
-              <TableHead className="w-12 text-right">Status</TableHead>
-              <TableHead className="hidden w-14 text-right @lg:table-cell">Tokens</TableHead>
-              <TableHead className="hidden w-16 text-right @3xl:table-cell">Cost</TableHead>
-              <TableHead className="hidden w-28 text-right @2xl:table-cell">First byte · total</TableHead>
-              <TableHead className="w-8">
-                <span className="sr-only">Details</span>
-              </TableHead>
+    <Card size="flush">
+      <Table aria-label="Request log">
+        <TableHeader>
+          <TableRow>
+            <TableHead className="hidden w-24 @sm:table-cell">Time</TableHead>
+            <TableHead className="hidden w-24 @3xl:table-cell">Agent</TableHead>
+            <TableHead className="hidden w-40 @2xl:table-cell">Model</TableHead>
+            <TableHead className="w-full">
+              <span className="@2xl:hidden">Request</span>
+              <span className="hidden @2xl:inline">Account</span>
+            </TableHead>
+            <TableHead className="w-12 text-right">Status</TableHead>
+            <TableHead className="hidden w-14 text-right @lg:table-cell">Tokens</TableHead>
+            <TableHead className="hidden w-16 text-right @3xl:table-cell">Cost</TableHead>
+            <TableHead className="hidden w-28 text-right @2xl:table-cell">First byte · total</TableHead>
+            <TableHead className="w-8">
+              <span className="sr-only">Details</span>
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {views.map(({ view, row }) => (
+            <TableRow key={view.key} onClick={() => onOpen(row)}>
+              <TableCell className="hidden @sm:table-cell">
+                <div className="text-muted-foreground tabular-nums">{view.time}</div>
+              </TableCell>
+              <TableCell className="hidden @3xl:table-cell">
+                <div className="max-w-24 truncate">{view.who}</div>
+              </TableCell>
+              <TableCell className="hidden @2xl:table-cell">
+                <div className="max-w-40 truncate font-mono text-xs">{view.model}</div>
+              </TableCell>
+              <TableCell>
+                <div className="max-w-0 min-w-full whitespace-normal wrap-anywhere">
+                  <p className="font-medium @2xl:hidden">{view.model}</p>
+                  <p className="flex flex-wrap gap-x-2 text-muted-foreground @2xl:font-medium @2xl:text-foreground">
+                    <span className="min-w-0">{view.account}</span>
+                    <span className="text-xs tabular-nums @sm:hidden">{view.time}</span>
+                  </p>
+                  {view.notes.length > 0 && (
+                    <p className="mt-0.5 text-xs text-muted-foreground">{view.notes.join(" · ")}</p>
+                  )}
+                </div>
+              </TableCell>
+              <TableCell>
+                <div className="flex justify-end tabular-nums">
+                  <Label tone={view.failed ? "bad" : "muted"} text={view.status} raw />
+                </div>
+              </TableCell>
+              <TableCell className="hidden @lg:table-cell">
+                <TableNumber>{view.tokens}</TableNumber>
+              </TableCell>
+              <TableCell className="hidden @3xl:table-cell">
+                <TableNumber muted>{view.cost}</TableNumber>
+              </TableCell>
+              <TableCell className="hidden @2xl:table-cell">
+                <TableNumber muted>{view.took}</TableNumber>
+              </TableCell>
+              <TableCell>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={`Details of the request at ${view.time}`}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onOpen(row)
+                  }}
+                >
+                  <ChevronRight />
+                </Button>
+              </TableCell>
             </TableRow>
-          </TableHeader>
-          <TableBody>
-            {views.map(({ view, row }) => (
-              <TableRow key={view.key} onClick={() => onOpen(row)}>
-                <TableCell>
-                  <div className="text-muted-foreground tabular-nums">{view.time}</div>
-                </TableCell>
-                <TableCell className="hidden @3xl:table-cell">
-                  <div className="max-w-24 truncate">{view.who}</div>
-                </TableCell>
-                <TableCell className="hidden @2xl:table-cell">
-                  <div className="max-w-40 truncate font-mono text-xs">{view.model}</div>
-                </TableCell>
-                <TableCell>
-                  <div className="max-w-0 min-w-full whitespace-normal text-muted-foreground wrap-anywhere">
-                    {[view.account, ...view.notes].join(" · ")}
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <div className="flex justify-end tabular-nums">
-                    <Label tone={view.failed ? "bad" : "muted"} text={view.status} raw />
-                  </div>
-                </TableCell>
-                <TableCell className="hidden @lg:table-cell">
-                  <TableNumber>{view.tokens}</TableNumber>
-                </TableCell>
-                <TableCell className="hidden @3xl:table-cell">
-                  <TableNumber muted>{view.cost}</TableNumber>
-                </TableCell>
-                <TableCell className="hidden @2xl:table-cell">
-                  <TableNumber muted>{view.took}</TableNumber>
-                </TableCell>
-                <TableCell>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={`Details of the request at ${view.time}`}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      onOpen(row)
-                    }}
-                  >
-                    <ChevronRight />
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </CardContent>
+          ))}
+        </TableBody>
+      </Table>
     </Card>
   )
 }

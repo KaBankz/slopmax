@@ -5,12 +5,12 @@ import { Exit } from "effect"
 import { type FormEvent, type ReactNode, useId, useState } from "react"
 import { addAccount, canChangeAtom, importLogins, signIn } from "../atoms.ts"
 import { ModelPatternHelp } from "../components/model-pattern-help.tsx"
-import { Panel, SettingRow } from "../components/parts.tsx"
+import { Panel, Section, SettingRow } from "../components/parts.tsx"
 import { Segmented } from "../components/segmented.tsx"
 import { Button } from "../components/ui/button.tsx"
 import { Field, FieldError, FieldLabel, FieldTitle } from "../components/ui/field.tsx"
 import { Input } from "../components/ui/input.tsx"
-import { Item, ItemActions, ItemContent, ItemDescription, ItemFooter, ItemTitle } from "../components/ui/item.tsx"
+import { Item, ItemContent, ItemDescription, ItemFooter, ItemTitle } from "../components/ui/item.tsx"
 import { failureText, patterns, sentenceCase } from "../view/words.ts"
 
 type KeyProvider = "anthropic" | "openai" | "xai"
@@ -47,7 +47,7 @@ function KeyRow({ disabled }: { readonly disabled: boolean }) {
   // with the form that asked rather than as a toast.
   return (
     <div className="border-t first:border-t-0">
-      <Item>
+      <Item size="row">
         <ItemContent className="min-w-56">
           <ItemTitle>API key</ItemTitle>
           {refused === undefined ? (
@@ -56,8 +56,8 @@ function KeyRow({ disabled }: { readonly disabled: boolean }) {
             <FieldError id={errorId}>{sentenceCase(refused)}</FieldError>
           )}
         </ItemContent>
-        <ItemActions>
-          <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
+        <ItemFooter>
+          <form onSubmit={submit} className="flex w-full flex-wrap items-center gap-2">
             <Segmented
               label="Provider"
               value={provider}
@@ -71,7 +71,7 @@ function KeyRow({ disabled }: { readonly disabled: boolean }) {
               type="password"
               aria-label="Paste an API key"
               placeholder="Paste an API key"
-              className="w-56 max-w-full"
+              className="min-w-40 flex-1"
               value={key}
               aria-invalid={refused !== undefined || undefined}
               aria-describedby={refused === undefined ? undefined : errorId}
@@ -81,7 +81,7 @@ function KeyRow({ disabled }: { readonly disabled: boolean }) {
               {busy ? "Checking key…" : "Add key"}
             </Button>
           </form>
-        </ItemActions>
+        </ItemFooter>
       </Item>
     </div>
   )
@@ -105,7 +105,7 @@ function Line({
       data-invalid={invalid || undefined}
       className="grid grid-cols-1 @md:grid-cols-[6rem_minmax(0,1fr)]"
     >
-      <FieldLabel htmlFor={htmlFor} className="@md:min-h-8 @md:self-start">
+      <FieldLabel htmlFor={htmlFor} className="@md:min-h-9 @md:self-start">
         {label}
       </FieldLabel>
       {children}
@@ -151,7 +151,7 @@ function EndpointRow({ disabled }: { readonly disabled: boolean }) {
   }
   return (
     <div className="border-t first:border-t-0">
-      <Item>
+      <Item size="row">
         <ItemContent>
           <ItemTitle>Compatible endpoint</ItemTitle>
           <ItemDescription>
@@ -232,31 +232,39 @@ export function AddAccountPage() {
     void importAll().then(() => setImporting(false))
   }
   return (
-    <Panel>
-      <SettingRow
-        title="Sign in"
-        detail="With your browser, as the agent's own sign-in does. Grok signs in with a code."
-      >
-        <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "claude" })}>
-          Claude
-        </Button>
-        <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "codex" })}>
-          ChatGPT
-        </Button>
-        <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "codex", device: true })}>
-          ChatGPT with a code
-        </Button>
-        <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "grok", device: true })}>
-          Grok
-        </Button>
-      </SettingRow>
-      <SettingRow title="Import" detail="Reuse logins from Claude Code, Codex, or CLIProxyAPI.">
-        <Button variant="outline" disabled={!canChange || importing} onClick={runImport}>
-          {importing ? "Importing…" : "Import"}
-        </Button>
-      </SettingRow>
-      <KeyRow disabled={!canChange} />
-      <EndpointRow disabled={!canChange} />
-    </Panel>
+    <>
+      <Section title="Subscriptions" layout="split">
+        <Panel>
+          <SettingRow
+            title="Sign in"
+            detail="With your browser, as the agent's own sign-in does. Grok signs in with a code."
+          >
+            <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "claude" })}>
+              Claude
+            </Button>
+            <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "codex" })}>
+              ChatGPT
+            </Button>
+            <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "codex", device: true })}>
+              ChatGPT with a code
+            </Button>
+            <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "grok", device: true })}>
+              Grok
+            </Button>
+          </SettingRow>
+          <SettingRow title="Import" detail="Reuse logins from Claude Code, Codex, or CLIProxyAPI.">
+            <Button variant="outline" disabled={!canChange || importing} onClick={runImport}>
+              {importing ? "Importing…" : "Import"}
+            </Button>
+          </SettingRow>
+        </Panel>
+      </Section>
+      <Section title="API keys and endpoints" layout="split">
+        <Panel>
+          <KeyRow disabled={!canChange} />
+          <EndpointRow disabled={!canChange} />
+        </Panel>
+      </Section>
+    </>
   )
 }
