@@ -221,20 +221,37 @@ describe("the web dashboard", () => {
   })
 
   test("the settings page draws each live setting the API serves, and a switch changes it", async () => {
-    await web("#/settings")
-    await showsSoon("Overflow to API keys")
+    drawn = await draw({ stub: { key: ownerKey }, host: { key: ownerKey, permission: "denied" }, at: "#/settings" })
+    await showsSoon("Paid API fallback")
+    const fallbackDetail = document.getElementById(control("Paid API fallback").getAttribute("aria-describedby") ?? "")
+    expect(fallbackDetail?.textContent).toContain("incur charges")
+    expect(fallbackDetail?.textContent).toContain("names its API provider or no subscription matches")
+    expect(shows("Proxy switches and steppers autosave to config.toml. Strategy saves on Apply.")).toBe(true)
+    expect(shows("Expiring resets and unused weekly quota.")).toBe(true)
+    expect(shows("Blocked")).toBe(true)
+    expect(() => control("Notify me")).toThrow()
     expect(shows("Reset first")).toBe(true)
-    expect(() => control("More Session timeout")).toThrow()
+    expect(() => control("Increase session timeout")).toThrow()
     expect(shows("Round robin")).toBe(false)
-    expect(shows("Configure delivery in config.toml.")).toBe(true)
-    expect(() => control("Send a test notice")).toThrow()
+    expect(shows("Configure delivery under [notify] in config.toml.")).toBe(true)
+    expect(() => control("Send a test notification")).toThrow()
     await press("Change strategy")
     await showsSoon("Round robin")
+    expect(control("Reset first").getAttribute("aria-describedby")).toContain("-current")
+    expect(control("Fill first").getAttribute("aria-describedby")).toContain("-default")
     await press("Fill first")
+    expect(drawn?.stub.calls.some((call) => call.endpoint === "change")).toBe(false)
+    await press("Cancel")
+    await press("Change strategy")
+    expect(control("Apply strategy").hasAttribute("disabled")).toBe(true)
+    await press("Fill first")
+    await press("Apply strategy")
     await settle(() => drawn?.stub.calls.some((call) => call.endpoint === "change") === true, "the routing change")
     expect(drawn?.stub.calls.find((call) => call.endpoint === "change")?.payload).toEqual({ strategy: "fill-first" })
-    await press("View settings")
+    await press("Advanced proxy settings")
     await showsSoon("Session timeout")
+    const interval = control("Increase polling interval").getAttribute("aria-describedby") ?? ""
+    expect(document.getElementById(interval)?.textContent).toBe("Current value 5 min")
     for (const title of ["Warm ChatGPT windows", "Usage polling", "Refresh sign-ins", "Codex WebSockets"]) {
       expect(shows(title)).toBe(true)
     }
@@ -243,7 +260,7 @@ describe("the web dashboard", () => {
     expect(drawn?.stub.calls.filter((call) => call.endpoint === "change").at(-1)?.payload).toEqual({
       warmWindows: true,
     })
-    await press("More Session timeout")
+    await press("Increase session timeout")
     await showsSoon("A session keeps its account through 2 h idle.")
   })
 

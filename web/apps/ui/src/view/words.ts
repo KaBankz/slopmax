@@ -154,17 +154,22 @@ export const routing = (settings: Pick<Settings, "strategy"> & Partial<Pick<Sett
     ? strategyTitle(settings.strategy)
     : `${strategyTitle(settings.strategy)} · ${settings.sessionAffinity ? "sessions keep their account" : "sessions move between accounts"}`
 
-export const affinityDetail = "Reuse the account’s prompt cache throughout a session."
+export const affinityDetail = "Reuse the account and its prompt cache throughout a session."
 
-export const affinityHeader =
-  "To override session affinity for a request, set the x-slopmax-affinity header to on or off."
+export const affinityHeader = "x-slopmax-affinity"
+
+export const paidFallbackOn = "API keys can take over for a limited subscription pool and incur charges."
+
+export const paidFallbackOff =
+  "With fallback off, keys still work when a request names its API provider or no subscription matches."
 
 /** How long before a limit reset expires slopmax redeems it, when it does. */
 export const redeemLeadHours = 3
 
-export const redeemExpiringDetail = `Redeem a reset ${redeemLeadHours} hours before it expires if the account has quota to reset.`
+export const redeemExpiringDetail = `Use a limit reset ${redeemLeadHours} hours before expiry if the account has usage to reset.`
 
-export const redeemExhaustedDetail = "Redeem one so the pool keeps serving, rather than wait for a reset."
+export const redeemExhaustedDetail =
+  "Use a limit reset to keep serving requests when every account in a pool is limited."
 
 /** When slopmax redeems a provider's limit resets by itself, if it does. */
 export const autoRedeem = (
@@ -172,12 +177,12 @@ export const autoRedeem = (
   provider: string,
 ): string | undefined => {
   if (settings.redeemWhenExhausted && settings.redeemExpiring) {
-    return `slopmax redeems one by itself when every ${provider} account is spent, and ${redeemLeadHours} hours before one would expire unused.`
+    return `slopmax redeems a reset when every ${provider} account is limited. It also redeems ${redeemLeadHours} hours before expiry if the account has usage to reset.`
   }
   if (settings.redeemExpiring) {
-    return `slopmax redeems one by itself ${redeemLeadHours} hours before it would expire unused, if the account has quota to reset.`
+    return `slopmax redeems a reset ${redeemLeadHours} hours before expiry if the account has usage to reset.`
   }
-  if (settings.redeemWhenExhausted) return `slopmax redeems one by itself when every ${provider} account is spent.`
+  if (settings.redeemWhenExhausted) return `slopmax redeems a reset when every ${provider} account is limited.`
   return undefined
 }
 
@@ -211,8 +216,8 @@ export const settingChanged = (patch: LivePatch): string | undefined => {
   }
   if (patch.redeemWhenExhausted !== undefined) {
     return patch.redeemWhenExhausted
-      ? "A limit reset is redeemed once every account is spent."
-      : "Once every account is spent, the pool waits for a reset."
+      ? "A limit reset is redeemed when every account in a pool is limited."
+      : "Automatic redemption when a pool is limited is off."
   }
   if (patch.sessionMinutes !== undefined)
     return `A session keeps its account through ${minutes(patch.sessionMinutes)} idle.`
@@ -222,9 +227,7 @@ export const settingChanged = (patch: LivePatch): string | undefined => {
       : "Idle windows wait for their first request."
   }
   if (patch.paidOverflow !== undefined) {
-    return patch.paidOverflow
-      ? "API keys take over once subscriptions are limited."
-      : "API keys serve a subscription's models only when asked for by name."
+    return patch.paidOverflow ? paidFallbackOn : paidFallbackOff
   }
   if (patch.pollMinutes !== undefined) {
     return patch.pollMinutes === 0

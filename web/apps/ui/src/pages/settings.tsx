@@ -2,11 +2,11 @@
 // find an account, limit resets, notifications, and the rest of the live
 // settings, each saved to config.toml and applied at once.
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
-import { type LiveKey, type NotifySettings, type SettingsView, strategySummaries } from "@slopmax/client"
+import { type LiveKey, type NotifySettings, type SettingsView, type Strategy, strategySummaries } from "@slopmax/client"
 import { Option } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import { ChevronDown, Copy, TriangleAlert } from "lucide-react"
-import { useId } from "react"
+import { type ReactNode, useId, useState } from "react"
 import { hostAtom } from "../api.ts"
 import {
   askNotifications,
@@ -30,7 +30,18 @@ import { Stepper } from "../components/stepper.tsx"
 import { Alert, AlertTitle } from "../components/ui/alert.tsx"
 import { Button } from "../components/ui/button.tsx"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible.tsx"
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "../components/ui/dialog.tsx"
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "../components/ui/input-group.tsx"
+import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from "../components/ui/item.tsx"
 import { Switch } from "../components/ui/switch.tsx"
 import type { Appearance } from "../host.ts"
 import { dateTime } from "../view/asks.ts"
@@ -39,6 +50,8 @@ import { advancedRows, livePatch, restartLine } from "../view/settings.ts"
 import {
   affinityDetail,
   affinityHeader,
+  paidFallbackOff,
+  paidFallbackOn,
   redeemExhaustedDetail,
   redeemExpiringDetail,
   strategyDetail,
@@ -67,7 +80,7 @@ function ToggleSetting({
 }) {
   const detailId = useId()
   return (
-    <SettingRow title={title} detail={detail} detailId={detailId}>
+    <SettingRow title={title} detail={detail} detailId={detailId} layout="fullDetail">
       <Switch aria-label={title} aria-describedby={detailId} checked={checked} onCheckedChange={onChange} />
     </SettingRow>
   )
@@ -79,7 +92,7 @@ function AppearanceSection() {
   return (
     <Section title="On this browser">
       <Panel>
-        <SettingRow title="Theme">
+        <SettingRow title="Theme" layout="inline">
           <Segmented
             label="Theme"
             value={prefs.appearance}
@@ -105,14 +118,14 @@ function ProxySection({ listen }: { readonly listen: string | undefined }) {
     listen === undefined ? Option.match(host, { onNone: () => "", onSome: (h) => h.origin }) : `http://${listen}`
   const status = useAtomValue(proxyStatusAtom)
   return (
-    <Section title="Proxy">
+    <Section title="Proxy connection">
       <Panel>
         <SettingRow title="Status">
           <Label tone={status.tone} text={status.text} raw />
         </SettingRow>
-        <SettingRow title="Address for agents" detail="Where an agent sends its requests.">
+        <SettingRow title="Proxy address">
           <InputGroup className="w-72 max-w-full">
-            <InputGroupInput readOnly aria-label="Address for agents" value={address} />
+            <InputGroupInput readOnly aria-label="Proxy address" value={address} />
             <InputGroupAddon align="inline-end">
               <InputGroupButton onClick={() => copyText({ text: address, said: `Copied ${address}` })}>
                 <Copy />
@@ -126,47 +139,149 @@ function ProxySection({ listen }: { readonly listen: string | undefined }) {
   )
 }
 
-function NotificationsSection({ notify }: { readonly notify: NotifySettings }) {
+function ReminderRows({ notify }: { readonly notify: NotifySettings }) {
   const permission = AsyncResult.getOrElse(useAtomValue(permissionAtom), () => "unsupported" as const)
   const ask = useAtomSet(askNotifications)
   const test = useAtomSet(testNotifications)
-  const detail = "Get a reminder before a limit reset expires or a week ends with quota left."
   const destinations = [
-    notify.webhook === undefined ? undefined : "Webhook",
-    notify.command === undefined ? undefined : "Command",
+    notify.webhook === undefined ? undefined : "webhook",
+    notify.command === undefined ? undefined : "command",
   ].filter(Boolean)
   return (
-    <Section title="Quota reminders">
-      <Panel>
+    <>
+      <SettingRow
+        title="Browser notifications"
+        layout="fullDetail"
+        detail={
+          <>
+            Expiring resets and unused weekly quota.
+            {permission === "denied" && (
+              <span className="block">Allow notifications in your browser’s site settings.</span>
+            )}
+          </>
+        }
+      >
+        {permission === "granted" ? (
+          <Label tone="good" text="On in this browser" raw />
+        ) : permission === "default" ? (
+          <Button variant="outline" onClick={() => ask()}>
+            Notify me
+          </Button>
+        ) : permission === "denied" ? (
+          <Label tone="warn" text="Blocked" raw />
+        ) : (
+          <Label tone="muted" text="Not supported" raw />
+        )}
+      </SettingRow>
+      {destinations.length === 0 ? (
         <SettingRow
-          title="Browser notifications"
+          title="Webhook or command"
           detail={
-            permission === "unsupported"
-              ? "This browser cannot show notifications."
-              : permission === "denied"
-                ? "Notifications are blocked. Allow them in your browser’s site settings."
-                : detail
+            <>
+              Configure delivery under <code className="font-mono">[notify]</code> in{" "}
+              <code className="font-mono">config.toml</code>.
+            </>
+          }
+        />
+      ) : (
+        <SettingRow
+          title="Webhook or command"
+          detail={
+            <>
+              Configured in <code className="font-mono">config.toml</code> ({destinations.join(" and ")}).
+            </>
           }
         >
-          {permission === "granted" ? (
-            <Label tone="good" text="On in this browser" raw />
-          ) : permission === "default" ? (
-            <Button variant="outline" onClick={() => ask()}>
-              Notify me
-            </Button>
-          ) : undefined}
+          <Button variant="outline" onClick={() => test()}>
+            Send a test notification
+          </Button>
         </SettingRow>
-        {destinations.length === 0 ? (
-          <SettingRow title="Webhook and command" detail="Configure delivery in config.toml." />
-        ) : (
-          <SettingRow title="Webhook and command" detail={`${destinations.join(" and ")} configured in config.toml.`}>
-            <Button variant="outline" onClick={() => test()}>
-              Send a test notice
-            </Button>
-          </SettingRow>
-        )}
-      </Panel>
-    </Section>
+      )}
+    </>
+  )
+}
+
+function StrategySummary({
+  strategy,
+  summary,
+  action,
+  reportedAt,
+}: {
+  readonly strategy: Strategy
+  readonly summary: string
+  readonly action?: ReactNode
+  readonly reportedAt?: string | undefined
+}) {
+  return (
+    <Item size="row" variant={action === undefined ? "default" : "setting-summary"}>
+      <ItemContent className="min-w-0 basis-32">
+        <span className="text-xs font-medium text-muted-foreground">Routing strategy</span>
+        <ItemTitle>{strategyTitle(strategy)}</ItemTitle>
+      </ItemContent>
+      {action !== undefined && <ItemActions>{action}</ItemActions>}
+      <ItemDescription className="basis-full">
+        {strategyDetail(summary)}
+        {reportedAt !== undefined && <span className="mt-1 block text-xs">Last reported {reportedAt}</span>}
+      </ItemDescription>
+    </Item>
+  )
+}
+
+function StrategySetting({ view }: { readonly view: SettingsView }) {
+  const change = useAtomSet(changeSettings)
+  const [draft, setDraft] = useState<Strategy>()
+  const active = view.settings.strategy
+  const summary = view.strategies.find(({ id }) => id === active)?.summary ?? strategySummaries[active]
+  return (
+    <Dialog open={draft !== undefined} onOpenChange={(open) => setDraft(open ? active : undefined)}>
+      <StrategySummary
+        strategy={active}
+        summary={summary}
+        action={
+          <DialogTrigger render={<Button variant="outline" size="pageAction" />} aria-label="Change strategy">
+            Change
+          </DialogTrigger>
+        }
+      />
+      <DialogContent showCloseButton={false} size="wide">
+        <DialogHeader>
+          <DialogTitle>Change routing strategy</DialogTitle>
+          <DialogDescription>How the proxy picks accounts.</DialogDescription>
+        </DialogHeader>
+        <div className="min-h-0 overflow-y-auto">
+          <Panel>
+            <Choices
+              label="Routing strategy"
+              value={draft ?? active}
+              onChange={setDraft}
+              options={view.strategies.map(({ id, summary: detail }) => ({
+                value: id,
+                title: strategyTitle(id),
+                detail: strategyDetail(detail),
+                tags: [
+                  ...(id === active ? ["current" as const] : []),
+                  ...(id === "fill-first" ? ["default" as const] : []),
+                ],
+              }))}
+            />
+          </Panel>
+        </div>
+        <DialogFooter>
+          <DialogClose render={<Button variant="outline" size="pageAction" />}>Cancel</DialogClose>
+          <Button
+            size="pageAction"
+            disabled={draft === undefined || draft === active}
+            onClick={() => {
+              if (draft === undefined || draft === active) return
+              change({ strategy: draft })
+              setDraft(undefined)
+            }}
+          >
+            Apply strategy
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -179,8 +294,6 @@ function LiveSections() {
       {(view) => {
         const s = view.settings
         const restart = restartLine(view)
-        const currentStrategy = view.strategies.find(({ id }) => id === s.strategy)
-        const strategySummary = currentStrategy?.summary ?? strategySummaries[s.strategy]
         return (
           <>
             {restart !== undefined && (
@@ -191,37 +304,7 @@ function LiveSections() {
             )}
             <Section title="Routing">
               <Panel>
-                <Collapsible>
-                  <SettingRow
-                    title="Routing strategy"
-                    detail={
-                      <>
-                        <span className="block font-medium text-foreground">{strategyTitle(s.strategy)}</span>
-                        {strategyDetail(strategySummary)}
-                      </>
-                    }
-                  >
-                    <CollapsibleTrigger render={<Button variant="outline" className="group" />}>
-                      Change strategy
-                      <ChevronDown aria-hidden data-icon="inline-end" className="group-data-panel-open:rotate-180" />
-                    </CollapsibleTrigger>
-                  </SettingRow>
-                  <CollapsibleContent>
-                    <div className="border-t">
-                      <Choices
-                        label="Routing strategy"
-                        value={s.strategy}
-                        onChange={(strategy) => change({ strategy })}
-                        options={view.strategies.map((strategy) => ({
-                          value: strategy.id,
-                          title: strategyTitle(strategy.id),
-                          detail: strategyDetail(strategy.summary),
-                          ...(strategy.id === "fill-first" ? { tag: "default" } : {}),
-                        }))}
-                      />
-                    </div>
-                  </CollapsibleContent>
-                </Collapsible>
+                <StrategySetting view={view} />
                 <ToggleSetting
                   title="Keep sessions on one account"
                   detail={affinityDetail}
@@ -230,17 +313,17 @@ function LiveSections() {
                 />
                 {view.live.some(({ name }) => name === "paidOverflow") && (
                   <ToggleSetting
-                    title="Overflow to API keys"
-                    detail="Use API keys when a subscription pool runs out of quota. These requests can incur charges."
+                    title="Paid API fallback"
+                    detail={`${paidFallbackOn} ${paidFallbackOff}`}
                     checked={s.paidOverflow}
                     onChange={(paidOverflow) => change({ paidOverflow })}
                   />
                 )}
               </Panel>
-              <p className="text-xs text-muted-foreground">Proxy changes apply immediately and save to config.toml.</p>
             </Section>
-            <Section title="Automatic limit resets">
+            <Section title="Limits and reminders">
               <Panel>
+                <h3 className="bg-muted/40 px-4 py-2.5 text-sm font-semibold sm:px-5">Automatic limit resets</h3>
                 <ToggleSetting
                   title="Redeem expiring resets"
                   detail={redeemExpiringDetail}
@@ -248,14 +331,15 @@ function LiveSections() {
                   onChange={(redeemExpiring) => change({ redeemExpiring })}
                 />
                 <ToggleSetting
-                  title="Redeem when all accounts are limited"
+                  title="Redeem when a pool is limited"
                   detail={redeemExhaustedDetail}
                   checked={s.redeemWhenExhausted}
                   onChange={(redeemWhenExhausted) => change({ redeemWhenExhausted })}
                 />
+                <h3 className="border-t bg-muted/40 px-4 py-2.5 text-sm font-semibold sm:px-5">Reminders</h3>
+                <ReminderRows notify={s.notify} />
               </Panel>
             </Section>
-            <NotificationsSection notify={s.notify} />
           </>
         )
       }}
@@ -265,45 +349,56 @@ function LiveSections() {
 
 function AdvancedSection({ view }: { readonly view: SettingsView }) {
   const change = useAtomSet(changeSettings)
+  const summaryId = useId()
   const set = (name: LiveKey, value: boolean | number) => Option.map(livePatch(name, value), change)
   return (
-    <Section title="Advanced">
+    <Collapsible>
       <Panel>
-        <Collapsible>
-          <SettingRow title="Technical settings" detail="Session timeout, polling, sign-ins and transport.">
-            <CollapsibleTrigger render={<Button variant="outline" className="group" />}>
-              View settings
-              <ChevronDown aria-hidden data-icon="inline-end" className="group-data-panel-open:rotate-180" />
-            </CollapsibleTrigger>
-          </SettingRow>
-          <CollapsibleContent>
-            <div className="border-t">
-              <p className="px-4 py-3 text-xs text-muted-foreground">{affinityHeader}</p>
-              {advancedRows(view).map((row) =>
-                row._tag === "Switch" ? (
-                  <ToggleSetting
-                    key={row.name}
-                    title={row.title}
-                    detail={row.detail}
-                    checked={row.on}
-                    onChange={(on) => set(row.name, on)}
+        <h2>
+          <CollapsibleTrigger
+            render={<Button variant="disclosure" size="disclosure" className="group" />}
+            aria-label="Advanced proxy settings"
+            aria-describedby={summaryId}
+          >
+            <span className="flex flex-col gap-1">
+              <span className="font-heading text-base font-semibold">Advanced proxy settings</span>
+              <span id={summaryId} className="text-sm font-normal text-muted-foreground">
+                Session timeout, ChatGPT windows, polling, sign-ins and WebSockets.
+              </span>
+            </span>
+            <ChevronDown aria-hidden className="group-data-panel-open:rotate-180" />
+          </CollapsibleTrigger>
+        </h2>
+        <CollapsibleContent>
+          <div className="border-t">
+            {advancedRows(view).map((row) =>
+              row._tag === "Switch" ? (
+                <ToggleSetting
+                  key={row.name}
+                  title={row.title}
+                  detail={row.detail}
+                  checked={row.on}
+                  onChange={(on) => set(row.name, on)}
+                />
+              ) : (
+                <SettingRow key={row.name} title={row.title} detail={row.detail}>
+                  <Stepper
+                    title={row.name === "pollMinutes" ? "polling interval" : "session timeout"}
+                    value={row.shown}
+                    onLess={row.less === undefined ? undefined : () => set(row.name, row.less ?? row.value)}
+                    onMore={row.more === undefined ? undefined : () => set(row.name, row.more ?? row.value)}
                   />
-                ) : (
-                  <SettingRow key={row.name} title={row.title} detail={row.detail}>
-                    <Stepper
-                      title={row.title}
-                      value={row.shown}
-                      onLess={row.less === undefined ? undefined : () => set(row.name, row.less ?? row.value)}
-                      onMore={row.more === undefined ? undefined : () => set(row.name, row.more ?? row.value)}
-                    />
-                  </SettingRow>
-                ),
-              )}
-            </div>
-          </CollapsibleContent>
-        </Collapsible>
+                </SettingRow>
+              ),
+            )}
+            <p className="border-t px-4 py-3 text-xs text-muted-foreground sm:px-5">
+              To override session affinity for one request, set{" "}
+              <code className="font-mono whitespace-nowrap">{affinityHeader}</code> to on or off.
+            </p>
+          </div>
+        </CollapsibleContent>
       </Panel>
-    </Section>
+    </Collapsible>
   )
 }
 
@@ -315,43 +410,47 @@ export function SettingsPage() {
   const unanswered = useAtomValue(unansweredAtom)
   const waiting = cannotChange(unanswered, readOnly)
   return (
-    <div className="flex w-full max-w-3xl flex-col gap-5 sm:gap-7">
-      {waiting === undefined ? (
-        // Running, or still finding out: the settings show as soon as the proxy answers for them.
-        <LiveSections />
-      ) : (
-        <Section title="Routing">
-          <p className="text-sm text-muted-foreground">
-            {readOnly ? (
-              "Proxy settings are changed on the hub, or from a machine that may manage it."
-            ) : (
-              <>
-                To change proxy settings, run <code className="font-mono">slopmax config</code> on the machine running
-                slopmax.
-              </>
-            )}
-          </p>
-          {report !== undefined && (
-            <Panel>
-              <SettingRow
-                title="Routing strategy"
-                detail={
-                  <>
-                    <span className="block font-medium text-foreground">{strategyTitle(report.strategy)}</span>
-                    {strategyDetail(strategySummaries[report.strategy])}
-                    {(unanswered || !report.live) && (
-                      <span className="mt-1 block text-xs">Last reported {dateTime(report.generatedAt, zone)}</span>
-                    )}
-                  </>
-                }
-              />
-            </Panel>
-          )}
-        </Section>
+    <div className="flex w-full max-w-6xl flex-col gap-4">
+      {waiting === undefined && view !== undefined && (
+        <p className="text-xs text-muted-foreground">
+          Proxy switches and steppers autosave to <code className="font-mono">config.toml</code>. Strategy saves on
+          Apply.
+        </p>
       )}
-      <AppearanceSection />
-      {waiting === undefined && view !== undefined && <AdvancedSection view={view} />}
-      <ProxySection listen={view?.settings.listen} />
+      <div className="grid items-start gap-6 @4xl:settings-columns @4xl:gap-8">
+        <div className="flex min-w-0 flex-col gap-5 sm:gap-7">
+          {waiting === undefined ? (
+            // Running, or still finding out: the settings show as soon as the proxy answers for them.
+            <LiveSections />
+          ) : (
+            <Section title="Routing">
+              {!readOnly && (
+                <p className="text-sm text-muted-foreground">
+                  To change proxy settings, run <code className="font-mono">slopmax config</code> on the machine running
+                  slopmax.
+                </p>
+              )}
+              {report !== undefined && (
+                <Panel>
+                  <StrategySummary
+                    strategy={report.strategy}
+                    summary={strategySummaries[report.strategy]}
+                    reportedAt={unanswered || !report.live ? dateTime(report.generatedAt, zone) : undefined}
+                  />
+                </Panel>
+              )}
+              {readOnly && report === undefined && (
+                <p className="text-sm text-muted-foreground">Waiting for the proxy to report its routing strategy.</p>
+              )}
+            </Section>
+          )}
+          {waiting === undefined && view !== undefined && <AdvancedSection view={view} />}
+        </div>
+        <aside className="flex min-w-0 flex-col gap-5 sm:gap-7" aria-label="Browser preferences and proxy details">
+          <AppearanceSection />
+          <ProxySection listen={view?.settings.listen} />
+        </aside>
+      </div>
     </div>
   )
 }

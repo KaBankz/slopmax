@@ -200,22 +200,32 @@ export function SettingRow({
   title,
   detail,
   detailId,
+  layout = "auto",
   children,
 }: {
   readonly title: string
   readonly detail?: ReactNode
   readonly detailId?: string
+  readonly layout?: "auto" | "inline" | "fullDetail"
   readonly children?: ReactNode
 }) {
+  const fullDetail = layout === "fullDetail"
+  const description =
+    detail === undefined ? undefined : (
+      <ItemDescription id={detailId} className={fullDetail ? "basis-full" : undefined}>
+        {detail}
+      </ItemDescription>
+    )
   return (
     <div className="border-t first:border-t-0">
-      <Item size="row">
+      <Item size="row" variant={fullDetail ? "setting-control" : "default"}>
         {/* At least this wide, so in a narrow window the controls take the next line rather than squeeze the words. */}
-        <ItemContent className="min-w-0 basis-48">
+        <ItemContent className={layout === "auto" ? "min-w-0 basis-48" : "min-w-0 basis-0"}>
           <ItemTitle>{title}</ItemTitle>
-          {detail !== undefined && <ItemDescription id={detailId}>{detail}</ItemDescription>}
+          {!fullDetail && description}
         </ItemContent>
         {children !== undefined && <ItemActions>{children}</ItemActions>}
+        {fullDetail && description}
       </Item>
     </div>
   )

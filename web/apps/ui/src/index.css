@@ -251,6 +251,10 @@
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr) minmax(0, 1.1fr);
 }
 
+@utility settings-columns {
+  grid-template-columns: minmax(0, 2fr) minmax(18rem, 1fr);
+}
+
 @utility pool-columns {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
 }

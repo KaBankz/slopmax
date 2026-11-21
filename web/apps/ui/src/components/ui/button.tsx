@@ -18,6 +18,8 @@ const buttonVariants = cva(
           "bg-secondary text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
         section:
           "justify-start text-muted-foreground hover:bg-muted hover:text-foreground aria-[current]:bg-accent aria-[current]:font-semibold aria-[current]:text-accent-foreground",
+        disclosure:
+          "w-full justify-between rounded-none border-0 bg-card text-left whitespace-normal hover:bg-muted/50 focus-visible:ring-inset",
         metric:
           "relative flex-col items-start justify-start rounded-none border-0 bg-card text-left whitespace-normal hover:bg-muted/50 aria-pressed:bg-accent/65 aria-pressed:after:absolute aria-pressed:after:inset-x-0 aria-pressed:after:bottom-0 aria-pressed:after:h-1 aria-pressed:after:bg-primary aria-pressed:after:measurement-dither focus-visible:z-10 focus-visible:ring-ring focus-visible:ring-inset",
         ghost:
@@ -28,6 +30,7 @@ const buttonVariants = cva(
       },
       size: {
         pageAction: "h-11 gap-2 px-3.5 sm:h-9",
+        disclosure: "h-auto min-h-12 gap-3 px-4 py-3 sm:px-5",
         section: "h-11 px-1.5 text-xs sm:h-9 sm:px-3.5 sm:text-sm",
         metric: "h-full min-w-0 gap-2 p-4 sm:px-6",
         default: "h-9 gap-2 px-3.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
