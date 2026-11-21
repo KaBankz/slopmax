@@ -27,6 +27,8 @@
   --color-quota-track: var(--quota-track);
   --color-quota-fill: var(--quota-fill);
   --color-quota-used: var(--quota-used);
+  --color-allowance-fill: var(--allowance-fill);
+  --color-allowance-used: var(--allowance-used);
   --text-display: clamp(1.875rem, 1.6rem + 1vw, 2.375rem);
   --text-display--line-height: 1.02;
   --text-quota-number: clamp(4.25rem, 2.5rem + 5vw, 7rem);
@@ -115,7 +117,10 @@
   --quota-muted: #e2d8e5;
   --quota-track: #685f71;
   --quota-fill: #f1bd6d;
-  --quota-used: #746780;
+  --quota-used: #83768d;
+  --allowance-fill: #dca65b;
+  --allowance-used: #84758f;
+  --allowance-dither: #564761;
 }
 
 .dark {
@@ -158,7 +163,10 @@
   --quota-muted: #e1d2e6;
   --quota-track: #675970;
   --quota-fill: #f4c37c;
-  --quota-used: #746080;
+  --quota-used: #8b7598;
+  --allowance-fill: #e4ac65;
+  --allowance-used: #837092;
+  --allowance-dither: #453550;
 }
 
 @layer base {
@@ -188,10 +196,31 @@
   }
 }
 
+/* An ordered 2×2 tile for the small surfaces that do not need a chart. */
+@utility ordered-dither {
+  background-image: conic-gradient(var(--dither-ink) 25%, transparent 0 50%, var(--dither-ink) 0 75%, transparent 0);
+  background-size: 4px 4px;
+}
+
 @layer components {
   .quota-indicator {
-    background-image: radial-gradient(circle at 1px 1px, var(--quota) 0.8px, transparent 1px);
-    background-size: 4px 4px;
+    --dither-ink: var(--quota-track);
+  }
+
+  .allowance-indicator {
+    --dither-ink: var(--allowance-dither);
+  }
+
+  [data-slot="sidebar-content"] [data-slot="sidebar-menu-button"][data-active]::after {
+    @apply ordered-dither;
+    --dither-ink: color-mix(in oklch, var(--sidebar-accent-foreground) 42%, transparent);
+    position: absolute;
+    inset-block: 25%;
+    inset-inline-end: 0.5rem;
+    width: 1.5rem;
+    mask-image: linear-gradient(to right, transparent, black);
+    pointer-events: none;
+    content: "";
   }
 }
 

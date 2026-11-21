@@ -45,13 +45,23 @@ function ResetLead({
   return (
     <Card variant="quota">
       <CardHeader>
-        <CardDescription>{current ? "Next reset with quota left" : "Next reset in last report"}</CardDescription>
-        <CardTitle>
-          <h3 className="wrap-anywhere">{next.account}</h3>
-        </CardTitle>
-        <p className="text-sm text-quota-muted">
-          {provider} · {window}
-        </p>
+        <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-5 gap-y-2">
+          <div className="min-w-0">
+            <CardDescription>{current ? "Next reset with quota left" : "Next reset in last report"}</CardDescription>
+            <CardTitle>
+              <h3 className="mt-1 wrap-anywhere">{next.account}</h3>
+            </CardTitle>
+            <p className="mt-0.5 text-sm text-quota-muted">
+              {provider} · {window}
+            </p>
+          </div>
+          <div className="shrink-0 tabular-nums sm:text-right">
+            <p className="text-sm font-semibold text-quota-foreground">Resets in {until(next.resetsAt, now)}</p>
+            <time className="text-xs text-quota-muted" dateTime={DateTime.formatIso(next.resetsAt)}>
+              {clock(next.resetsAt, now, zone)}
+            </time>
+          </div>
+        </div>
       </CardHeader>
       <CardContent className="mt-auto">
         <div className="flex flex-col gap-3 sm:gap-5">
@@ -70,24 +80,15 @@ function ResetLead({
             />
             <div className="mt-2 flex flex-wrap justify-between gap-x-4 gap-y-1 text-sm text-quota-muted">
               <span>{quotaPercent(next.used)} used</span>
-              <span className="font-medium text-quota-foreground tabular-nums">
-                Resets in {until(next.resetsAt, now)}
-              </span>
+              {Option.isSome(comparison) && (
+                <p className="font-medium">
+                  Even pace guide · <span className="text-quota-foreground">{comparison.value.text}</span>
+                </p>
+              )}
             </div>
-            {Option.isSome(comparison) && (
-              <p className="mt-2 text-sm font-medium">
-                <span className="text-quota-muted">Even pace guide</span> · {comparison.value.text}
-              </p>
-            )}
           </div>
           <div className="flex flex-wrap items-end justify-between gap-x-5 gap-y-3 border-t border-quota-track pt-3 sm:pt-4">
             <dl className="flex flex-wrap gap-x-5 gap-y-3">
-              <div>
-                <dt className="text-xs text-quota-muted">Reset time</dt>
-                <dd className="mt-0.5 text-sm font-semibold tabular-nums">
-                  <time dateTime={DateTime.formatIso(next.resetsAt)}>{clock(next.resetsAt, now, zone)}</time>
-                </dd>
-              </div>
               {required !== undefined && (
                 <div>
                   <dt className="text-xs text-quota-muted">Pace to use it all</dt>
@@ -130,16 +131,17 @@ function ResetRow({
         <span className="min-w-0">
           <span className="block font-medium wrap-anywhere">{entry.account}</span>
           <span className="block text-xs text-muted-foreground">
-            {providerTitle(entry.provider)} / {spanTitle(entry.span)}
+            {providerTitle(entry.provider)} · {spanTitle(entry.span)}
           </span>
         </span>
-        <span className="text-right tabular-nums">
+        <div className="text-right tabular-nums">
           <span className="block font-semibold">{quotaPercent(entry.left)} left</span>
-          <span className="block text-xs text-muted-foreground">In {until(entry.resetsAt, now)}</span>
+          <Progress aria-hidden value={entry.used} tone="allowance" className="mt-1 mb-1.5 ms-auto w-24" />
+          <span className="block text-xs text-muted-foreground">Resets in {until(entry.resetsAt, now)}</span>
           {current && entry.estimatedValue !== undefined && (
             <span className="block text-xs text-muted-foreground">Est. {dollars(entry.estimatedValue)} if unused</span>
           )}
-        </span>
+        </div>
       </a>
     </li>
   )

@@ -1,5 +1,5 @@
 // Slopmax's shadcn Progress supports status colors, an even-pace marker,
-// and a patterned gauge for the next account reset.
+// and a patterned gauge for remaining quota on both card surfaces.
 import { Progress as ProgressPrimitive } from "@base-ui/react/progress"
 import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "cn"
@@ -8,7 +8,8 @@ const indicatorVariants = cva("h-full", {
   variants: {
     tone: {
       default: "bg-primary",
-      quota: "quota-indicator bg-quota-used",
+      quota: "ordered-dither quota-indicator bg-quota-used",
+      allowance: "ordered-dither allowance-indicator bg-allowance-used",
       warning: "bg-warning",
       destructive: "bg-destructive",
     },
@@ -56,7 +57,7 @@ function ProgressTrack({ className, ...props }: ProgressPrimitive.Track.Props) {
   return (
     <ProgressPrimitive.Track
       className={cn(
-        "relative flex h-1 w-full items-center overflow-x-hidden rounded-full bg-muted in-data-[tone=quota]:h-3 in-data-[tone=quota]:rounded-sm in-data-[tone=quota]:bg-quota-fill",
+        "relative flex h-1 w-full items-center overflow-x-hidden rounded-full bg-muted in-data-[tone=quota]:h-3 in-data-[tone=quota]:rounded-sm in-data-[tone=quota]:bg-quota-fill in-data-[tone=allowance]:h-1.5 in-data-[tone=allowance]:rounded-sm in-data-[tone=allowance]:bg-allowance-fill",
         className,
       )}
       data-slot="progress-track"

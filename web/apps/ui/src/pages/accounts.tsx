@@ -8,6 +8,7 @@ import { Empty, Label, Section } from "../components/parts.tsx"
 import { ButtonLink } from "../components/ui/button.tsx"
 import { Card, CardDescription, CardHeader, CardTitle } from "../components/ui/card.tsx"
 import { Item, ItemActions, ItemContent, ItemTitle } from "../components/ui/item.tsx"
+import { Progress } from "../components/ui/progress.tsx"
 import { worstTone } from "../view/attention.ts"
 import { type Group, type Row, spanTitle } from "../view/groups.ts"
 import { pageHash, Pages } from "../view/pages.ts"
@@ -55,6 +56,7 @@ function AccountRow({
               <p className="font-medium">
                 {quotaPercent(100 - window.used)} left · {spanTitle(window.span)}
               </p>
+              <Progress aria-hidden value={window.used} tone="allowance" className="mt-1 mb-1.5" />
               <p
                 data-unavailable={window.resetsAt === undefined || undefined}
                 className="text-muted-foreground data-unavailable:max-w-24 @sm:data-unavailable:max-w-none"

@@ -44,7 +44,10 @@ changes focus the destination heading, section, or linked account.
 shadcn's tokens, by shadcn's names: `background`, `foreground`, `card`,
 `popover`, `primary`, `secondary`, `muted`, `accent`, `destructive`, `border`,
 `input`, `ring`, and `chart-1` … `chart-5`, each with its
-`-foreground` where shadcn has one. Warm neutral surfaces frame violet actions. The quota lead reserves amber for remaining allowance and uses dither on the portion already spent.
+`-foreground` where shadcn has one. Warm neutral surfaces frame violet actions.
+The active sidebar link uses a small dither accent alongside its label. Quota
+meters use dither for used allowance and solid amber for remaining allowance.
+The reset queue and account directory use the same encoding as the lead card.
 `--radius` (0.625rem) sets every radius step.
 
 slopmax adds tokens shadcn has no names for: `success` and `warning`, the
@@ -114,7 +117,7 @@ Our customizations, each noted at the top of its file:
 | Component  | Change                                                                                                                                                                                                                                                                                                                      |
 | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `alert`    | a `warning` variant, the destructive variant's shape in the warning color                                                                                                                                                                                                                                                   |
-| `progress` | `tone` colors the fill and supports a patterned quota gauge. `marker` shows the even-spend target                                                                                                                                                                                                                           |
+| `progress` | `quota` and `allowance` tones share a dithered used portion and solid remaining allowance. `marker` shows the even-spend target on the lead gauge.                                                                                                                                                                          |
 | `card`     | a `flush` size for rows, a `quota` variant for the lead window, and a compact content density for narrow tables                                                                                                                                                                                                             |
 | `chart`    | series colors are set in the container's `style`, not an injected `<style>` (the CSP refuses one), so a series takes `color`, not `theme`; `ChartArea` (`texture`: `dither`, `fade`), `ChartLine` and `ChartBar` (`variant`: `dither`, `solid`) draw every series in the house look; `ChartMeter` is a list row's bar in it |
 | `sonner`   | the theme comes from slopmax's Appearance setting, not next-themes                                                                                                                                                                                                                                                          |
