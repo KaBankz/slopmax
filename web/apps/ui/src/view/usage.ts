@@ -1,4 +1,4 @@
-// What the Usage and Performance pages and the overview say about a
+// What the Usage and Performance pages say about a
 // history: the figures across the top with
 // their trend lines, the tables, and the token mix. The history is the
 // ledger's own shape (`GET /history`).
@@ -6,6 +6,7 @@ import {
   agentFacts,
   type History,
   type HistoryBucket,
+  type LeftAccount,
   matchesAny,
   providerFacts,
   type ProviderId,
@@ -133,64 +134,39 @@ const successPercent = (totals: Pick<Totals, "requests" | "failed">): number | u
 const successLabel = (value: number): string =>
   value > 0 && value < 0.05 ? "<0.1%" : value < 100 && value >= 99.95 ? ">99.9%" : `${fixed(value, 1)}%`
 
-/** The four figures under the overview's request chart. */
-export const activityStats = (history: History): ReadonlyArray<Stat> => {
-  const { total, cached, firstByte, rescued } = history
+/** The percentage-point change in success across matched ledger periods. */
+const successChange = (history: History, rate: number | undefined): Change | undefined => {
   const previous = history.previous?.total
-  const rate = successPercent(total)
   const priorRate = previous === undefined ? undefined : successPercent(previous)
-  const points = rate === undefined || priorRate === undefined ? undefined : rate - priorRate
-  const rateChange: Change | undefined =
-    points === undefined || priorRate === undefined || Math.abs(points) < 0.05
-      ? undefined
-      : {
-          text: `${fixed(Math.abs(points), 1)} points`,
-          direction: points > 0 ? "up" : "down",
-          versus: versus(history),
-          tip: `${successLabel(priorRate)} ${before(history)}`,
-        }
-  const value: Stat = {
-    title: apiPriceValue,
-    value: total.requests === 0 ? "—" : priced(total.cost, total.unpriced, total.requests),
-    note: costNote(total),
-  }
-  return [
-    {
-      title: "Success rate",
-      value: rate === undefined ? "—" : successLabel(rate),
-      note: rescued > 0 ? `Share answered (${grouped(rescued)} via failover)` : "Share answered",
-      ...(rateChange === undefined ? {} : { change: rateChange }),
-    },
-    moved(
-      {
-        title: "Tokens processed",
-        value: compact(total.tokens),
-        note: cacheShare(cached),
-      },
-      history,
-      (t) => t.tokens,
-      compact,
-    ),
-    movedPrice(value, history),
-    {
-      title: "Median wait",
-      value: firstByte === undefined ? "—" : `${fixed(firstByte / 1000, 2)} s`,
-      note: firstByte === undefined ? "No response timings" : "Time to first response",
-    },
-  ]
+  if (rate === undefined || priorRate === undefined) return undefined
+  const points = rate - priorRate
+  return Math.abs(points) < 0.05
+    ? undefined
+    : {
+        text: `${fixed(Math.abs(points), 1)} points`,
+        direction: points > 0 ? "up" : "down",
+        versus: versus(history),
+        tip: `${successLabel(priorRate)} ${before(history)}`,
+      }
 }
 
-/** The corresponding request count from the preceding span, when supplied by the ledger. */
+/** The answered requests in the preceding span, when supplied by the ledger. */
 export const previousRequests = (history: History): string | undefined =>
   history.previous === undefined
     ? undefined
-    : `${count(requestTotal(history.previous.total), "request")} ${before(history)}`
+    : `For comparison, ${count(history.previous.total.requests, "answered request")} ${before(history)}`
+
+/** The known fee share for one account, with older ledgers using their range-wide price coverage. */
+export const leftAccountValue = (account: LeftAccount, unpriced: number): string => {
+  const noKnownPrice = account.unpriced === undefined ? unpriced > 0 : account.unpriced === account.windows
+  return account.unused > 0 && account.dollars === 0 && noKnownPrice ? "—" : dollars(account.dollars)
+}
 
 /** The Usage page's figures. */
-export const usageStats = (history: History): ReadonlyArray<Stat> => {
+export const usageStats = (history: History): readonly [Stat, Stat, Stat, Stat] => {
   const total = history.total
   const value = priced(total.cost, total.unpriced, total.requests)
-  const valueNote = history.billed > 0 ? `Billed to API keys ${dollars(history.billed)}` : costNote(total)
+  const valueNote = history.billed > 0 ? `Estimated API-key spend ${dollars(history.billed)}` : costNote(total)
   return [
     moved(
       {
@@ -276,11 +252,13 @@ const monthPace = (history: History): Stat => {
 export const performanceStats = (history: History): ReadonlyArray<Stat> => {
   const total = history.total
   const rate = successPercent(total)
+  const successDelta = successChange(history, rate)
   return [
     {
       title: "Success rate",
       value: rate === undefined ? "—" : successLabel(rate),
       note: total.failed === 0 ? "none failed" : `${grouped(total.failed)} failed`,
+      ...(successDelta === undefined ? {} : { change: successDelta }),
       trend: trend(history.buckets, 4, successPercent, (n) => `${successLabel(n)} answered`),
     },
     {

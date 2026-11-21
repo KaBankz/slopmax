@@ -3,11 +3,11 @@
 // serves, the add-account form's errors, and the keyboard.
 import { useBrowser } from "./support/dom.ts"
 import { afterEach, describe, expect, test } from "bun:test"
-import { Report, UpstreamFailed } from "@slopmax/client"
+import { Report, UpstreamFailed, Window } from "@slopmax/client"
 import { DateTime } from "effect"
 import { act } from "react"
 import { account, emptyReport, ownerKey } from "./support/fixtures.ts"
-import { control, draw, type Drawn, key, press, settle, shows, showsSoon, type } from "./support/render.tsx"
+import { control, draw, type Drawn, press, settle, shows, showsSoon, type } from "./support/render.tsx"
 
 useBrowser()
 
@@ -17,11 +17,12 @@ afterEach(async () => {
   drawn = undefined
 })
 
-/** Whether the sidebar is `expanded` or `collapsed`. */
-const sidebarState = () => document.querySelector("[data-slot=sidebar][data-state]")?.getAttribute("data-state")
-
 const web = async (at?: string) => {
-  drawn = await draw({ stub: { key: ownerKey }, host: { key: ownerKey }, ...(at === undefined ? {} : { at }) })
+  drawn = await draw({
+    stub: { key: ownerKey },
+    host: { key: ownerKey },
+    ...(at === undefined ? {} : { at }),
+  })
   await showsSoon("Running 0.4.0")
   return drawn
 }
@@ -65,14 +66,45 @@ describe("the web dashboard", () => {
     expect(shows("lab@studio.dev needs signing in again")).toBe(true)
     expect(shows("A limit reset on ana@studio.dev expires in")).toBe(true)
     expect(shows("Subscription limits")).toBe(true)
-    expect(shows("New sessions → ben@studio.dev · its quota resets soonest")).toBe(true)
-    // The sidebar has a row per provider with accounts.
-    expect(document.querySelector('[data-page="anthropic"]')?.textContent).toBe("Anthropic API1")
-    await showsSoon("Success rate")
+    expect(shows("New sessions → ben@studio.dev · a weekly or monthly limit resets within a day with quota left")).toBe(
+      true,
+    )
+    expect(control("Quota").getAttribute("aria-current")).toBe("page")
+    expect(control("Accounts").getAttribute("href")).toBe("#/accounts")
   })
 
-  test("the overview opens the selected date range in Requests", async () => {
+  test("the overview shows separate weekly and 5-hour reset opportunities", async () => {
     await web()
+    await showsSoon("Next reset with quota left")
+    expect(shows("45%")).toBe(true)
+    expect(shows("Pace to use it all")).toBe(true)
+    expect(shows("Est. value if unused")).toBe(true)
+    expect(shows("$20.77")).toBe(true)
+    expect(control("5-hour").getAttribute("aria-description")).toMatch(/^Next reset in/)
+    await press("5-hour")
+    await showsSoon("38%")
+    expect(control("5-hour").getAttribute("aria-pressed")).toBe("true")
+  })
+
+  test("usage figures switch a single chart and keep their selection across ranges", async () => {
+    await web("#/usage")
+    await showsSoon("Usage over time")
+    expect(document.getElementById("usage-trend")?.getAttribute("aria-label")).toBe("Tokens")
+    const value = [...document.querySelectorAll<HTMLButtonElement>('button[aria-controls="usage-trend"]')].find(
+      (button) => button.textContent?.startsWith("Value at API prices"),
+    )
+    expect(value).toBeDefined()
+    await act(async () => value?.click())
+    expect(value?.getAttribute("aria-pressed")).toBe("true")
+    expect(document.getElementById("usage-trend")?.getAttribute("aria-label")).toBe("Value at API prices")
+    await press("Today")
+    await showsSoon("yesterday by this hour")
+    expect(document.getElementById("usage-trend")?.getAttribute("aria-label")).toBe("Value at API prices")
+  })
+
+  test("request activity opens the selected date range in Requests", async () => {
+    await web("#/usage")
+    await press("Today")
     await showsSoon("yesterday by this hour")
     await press("7 days")
     await showsSoon("in the previous 7 days")
@@ -83,9 +115,9 @@ describe("the web dashboard", () => {
   })
 
   test("the page scrolls in its own pane, which holds what is positioned in it, so the window never scrolls too", async () => {
-    await web()
-    await showsSoon("Success rate")
-    const pane = document.querySelector("[data-slot=sidebar-inset] > .overflow-y-auto")
+    await web("#/usage")
+    await showsSoon("Monthly pace at API prices")
+    const pane = document.querySelector("[data-slot=dashboard-scroll]")
     if (pane === null) throw new Error("no scrolling pane")
     // An absolute element (sr-only text, say) is placed by its nearest positioned
     // ancestor; one outside the pane would stretch the window past it.
@@ -169,8 +201,8 @@ describe("the web dashboard", () => {
     expect(drawn?.stub.calls.some((call) => call.endpoint === "check")).toBe(true)
   })
 
-  test("the overview shows each account's last day and today's failures, a click from the Requests page", async () => {
-    await web()
+  test("performance shows account health and today's failures, with a drilldown to Requests", async () => {
+    await web("#/performance")
     await showsSoon("Account health", 5_000)
     await showsSoon("Failed today")
     await press("See all")
@@ -182,36 +214,65 @@ describe("the web dashboard", () => {
     await web("#/codex")
     await showsSoon("2 limit resets")
     // A signed-out account offers its sign-in on its own row.
-    expect(() => control("Sign in to lab@studio.dev again")).not.toThrow()
+    expect(() => control("Sign in again to lab@studio.dev")).not.toThrow()
     await press("2 limit resets on ana@studio.dev")
     await showsSoon("Each one resets this account's 5-hour and weekly windows at once.")
     expect(shows("Expires in")).toBe(true)
   })
 
   test("the settings page draws each live setting the API serves, and a switch changes it", async () => {
-    await web("#/settings")
+    drawn = await draw({ stub: { key: ownerKey }, host: { key: ownerKey, permission: "denied" }, at: "#/settings" })
+    await showsSoon("Paid API fallback")
+    const fallbackDetail = document.getElementById(control("Paid API fallback").getAttribute("aria-describedby") ?? "")
+    expect(fallbackDetail?.textContent).toContain("incur charges")
+    expect(fallbackDetail?.textContent).toContain("names its API provider or no subscription matches")
+    expect(shows("Proxy switches and steppers autosave to config.toml. Strategy saves on Apply.")).toBe(true)
+    expect(shows("Expiring resets and unused weekly quota.")).toBe(true)
+    expect(shows("Blocked")).toBe(true)
+    expect(() => control("Notify me")).toThrow()
+    expect(shows("Reset first")).toBe(true)
+    expect(() => control("Increase session timeout")).toThrow()
+    expect(shows("Round robin")).toBe(false)
+    expect(shows("Configure delivery under [notify] in config.toml.")).toBe(true)
+    expect(() => control("Send a test notification")).toThrow()
+    await press("Change strategy")
+    await showsSoon("Round robin")
+    expect(control("Reset first").getAttribute("aria-describedby")).toContain("-current")
+    expect(control("Fill first").getAttribute("aria-describedby")).toContain("-default")
+    await press("Fill first")
+    expect(drawn?.stub.calls.some((call) => call.endpoint === "change")).toBe(false)
+    await press("Cancel")
+    await press("Change strategy")
+    expect(control("Apply strategy").hasAttribute("disabled")).toBe(true)
+    await press("Fill first")
+    await press("Apply strategy")
+    await settle(() => drawn?.stub.calls.some((call) => call.endpoint === "change") === true, "the routing change")
+    expect(drawn?.stub.calls.find((call) => call.endpoint === "change")?.payload).toEqual({ strategy: "fill-first" })
+    await press("Advanced proxy settings")
     await showsSoon("Session timeout")
-    for (const title of [
-      "Warm ChatGPT windows",
-      "Overflow to API keys",
-      "Usage polling",
-      "Refresh sign-ins",
-      "Codex WebSockets",
-    ]) {
+    const interval = control("Increase polling interval").getAttribute("aria-describedby") ?? ""
+    expect(document.getElementById(interval)?.textContent).toBe("Current value 5 min")
+    for (const title of ["Warm ChatGPT windows", "Usage polling", "Refresh sign-ins", "Codex WebSockets"]) {
       expect(shows(title)).toBe(true)
     }
-    expect(shows("Reset first")).toBe(true)
     await press("Warm ChatGPT windows")
     await showsSoon("Idle ChatGPT windows start as they reset.")
-    expect(drawn?.stub.calls.find((call) => call.endpoint === "change")?.payload).toEqual({ warmWindows: true })
-    await press("More Session timeout")
+    expect(drawn?.stub.calls.filter((call) => call.endpoint === "change").at(-1)?.payload).toEqual({
+      warmWindows: true,
+    })
+    await press("Increase session timeout")
     await showsSoon("A session keeps its account through 2 h idle.")
   })
 
   test("a refused key shows why under the form, not as a toast", async () => {
-    await web("#/access")
+    await web("#/accounts/add")
     await showsSoon("Add an account")
-    drawn?.stub.failNext("add", new UpstreamFailed({ message: "the key was refused: 401 invalid x-api-key" }))
+    drawn?.stub.failNext(
+      "add",
+      new UpstreamFailed({
+        message: "the key was refused: 401 invalid x-api-key",
+      }),
+    )
     await type("Paste an API key", "sk-ant-wrong")
     await press("Add key")
     await settle(() => document.querySelector("[role=alert]") !== null, "the refusal")
@@ -232,36 +293,105 @@ describe("the web dashboard", () => {
     await showsSoon("laptop revoked.")
   })
 
-  test("a digit opens the page at that place in the sidebar, and the arrows move through them", async () => {
-    await web()
-    await key("3")
-    await settle(() => location.hash === "#/codex", "the ChatGPT page")
-    await settle(
-      () =>
-        document.querySelector("[aria-current=page]")?.closest("[data-page]")?.getAttribute("data-page") === "codex",
-      "the row",
-    )
-    await key("ArrowDown", document.querySelector("[aria-current=page]") ?? window)
-    await settle(() => location.hash === "#/anthropic", "the next page")
-    await key(",")
-    await settle(() => location.hash === "#/settings", "settings")
+  test("dashboard destinations stay stable and highlight contextual routes", async () => {
+    await web("#/codex?account=codex-00000001")
+    const primary = document.querySelector('nav[aria-label="Dashboard"]')
+    expect([...(primary?.querySelectorAll("a") ?? [])].map((link) => link.textContent)).toEqual([
+      "Quota",
+      "Accounts",
+      "Analytics",
+      "Requests",
+      "Connections",
+      "Settings",
+    ])
+    expect(control("Accounts").getAttribute("aria-current")).toBe("location")
+    expect(control("All accounts").getAttribute("href")).toBe("#/accounts")
+    await act(async () => {
+      location.hash = "#/accounts"
+    })
+    await showsSoon("API keys and endpoints")
+    expect(control("Accounts").getAttribute("aria-current")).toBe("page")
+    expect(control("Manage accounts for Anthropic API").getAttribute("href")).toBe("#/anthropic")
+    expect(document.querySelector('main a[href^="#/anthropic?account="]')?.textContent).toContain("Team API key")
+    expect(control("Add account").getAttribute("href")).toBe("#/accounts/add")
+    const ben = [...document.querySelectorAll("main a")].find((link) => link.textContent?.includes("ben@studio.dev"))
+    expect(ben?.textContent).toContain("19% left · Weekly")
+
+    await act(async () => {
+      location.hash = "#/requests"
+    })
+    await showsSoon("Any outcome")
+    expect(control("Requests").getAttribute("aria-current")).toBe("page")
   })
 
-  test("\\ hides and shows the sidebar as its button does, and the page keeps that for next time", async () => {
-    const { host } = await web()
-    expect(sidebarState()).toBe("expanded")
-    await key("\\")
-    await settle(() => host.recorded.saved.at(-1)?.sidebarHidden === true, "the sidebar hidden")
-    expect(sidebarState()).toBe("collapsed")
-    await press("Toggle Sidebar")
-    await settle(() => host.recorded.saved.at(-1)?.sidebarHidden === false, "the sidebar shown")
-    expect(sidebarState()).toBe("expanded")
+  test("proxy status opens diagnostics and client access points to the provider form", async () => {
+    await web("#/access")
+    await showsSoon("Add a provider account")
+    expect(control("Connections").getAttribute("aria-current")).toBe("location")
+    expect(control("Diagnostics · Running 0.4.0").getAttribute("href")).toBe("#/diagnostics")
+    expect(control("Add a provider account").getAttribute("href")).toBe("#/accounts/add")
+  })
+
+  test("past resets live under quota and share the date range with analytics", async () => {
+    await web("#/quota/history")
+    await showsSoon("Unused subscription quota")
+    expect(control("Quota").getAttribute("aria-current")).toBe("location")
+    expect(control("Past resets").getAttribute("aria-current")).toBe("page")
+    await press("30 days")
+    await act(async () => {
+      location.hash = "#/usage"
+    })
+    await showsSoon("Answered requests")
+    expect(control("Analytics").getAttribute("aria-current")).toBe("page")
+    expect(control("30 days").getAttribute("aria-pressed")).toBe("true")
+    expect(shows("Unused subscription quota")).toBe(false)
+  })
+
+  test("Accounts includes a tight shared limit without a reported reset", async () => {
+    await web("#/accounts")
+    const now = DateTime.nowUnsafe()
+    const resetsAt = DateTime.add(now, { hours: 1 })
+    const claude = account({
+      id: "claude-00000009",
+      name: "work",
+      provider: "claude",
+      windows: [
+        Window.of("5h", 40, resetsAt),
+        Window.of("7d", 95),
+        Window.of("7d", 99, resetsAt, "Opus"),
+        Window.of("30d", 100, DateTime.subtract(now, { hours: 1 })),
+      ],
+    })
+    await act(async () => {
+      drawn?.stub.setReport(new Report({ ...emptyReport(now), accounts: [claude] }))
+    })
+    await showsSoon("5% left · Weekly")
+    expect(shows("Reset time unavailable")).toBe(true)
+  })
+
+  test("a proxy with only API accounts explains where to see activity", async () => {
+    await web()
+    const metered = account({ id: "compat-00000001", provider: "compat", name: "Local models" })
+    await act(async () => {
+      drawn?.stub.setReport(new Report({ ...emptyReport(DateTime.nowUnsafe()), accounts: [metered] }))
+    })
+    await showsSoon("No subscription quota to track")
+    expect(control("View accounts").getAttribute("href")).toBe("#/accounts")
+    expect(control("View usage").getAttribute("href")).toBe("#/usage")
+    await act(async () => {
+      location.hash = "#/accounts"
+    })
+    await showsSoon("Local models")
+    expect(shows("Billed per token")).toBe(false)
   })
 
   test("a slopmax with no accounts says how to add one", async () => {
-    drawn = await draw({ stub: { key: ownerKey, scenario: "empty" }, host: { key: ownerKey } })
+    drawn = await draw({
+      stub: { key: ownerKey, scenario: "empty" },
+      host: { key: ownerKey },
+    })
     await showsSoon("No accounts yet")
-    expect(shows("None yet")).toBe(true)
+    expect(control("Accounts").getAttribute("href")).toBe("#/accounts")
   })
 })
 
@@ -277,7 +407,7 @@ describe("what the dashboard says while waiting, failing or quiet", () => {
     expect(document.querySelector("code")?.textContent).toBe("slopmax dashboard")
   })
 
-  test("while slopmax does not answer, the agents say so rather than pulse, and Settings agrees with the sidebar", async () => {
+  test("while slopmax does not answer, the agents say so rather than pulse, and Settings agrees with the masthead", async () => {
     drawn = await draw({
       stub: { key: ownerKey },
       host: { key: ownerKey },
@@ -290,17 +420,22 @@ describe("what the dashboard says while waiting, failing or quiet", () => {
     })
     await showsSoon("Status")
     expect(shows("Looking for the proxy")).toBe(false)
-    expect(document.querySelectorAll("[title='Reconnecting…']").length).toBeGreaterThan(0)
+    expect(control("Diagnostics · Reconnecting…")).toBeDefined()
+    expect(document.querySelector("main")?.textContent).toContain("Reconnecting…")
     await showsSoon("Running 0.4.0")
   })
 
   test("a new sign-in shows under Subscriptions before its limits are read", async () => {
     await web()
-    const fresh = account({ id: "claude-00000009", provider: "claude", name: "new@studio.dev" })
+    const fresh = account({
+      id: "claude-00000009",
+      provider: "claude",
+      name: "new@studio.dev",
+    })
     await act(async () => {
       drawn?.stub.setReport(new Report({ ...emptyReport(DateTime.nowUnsafe()), accounts: [fresh] }))
     })
-    await showsSoon("Limits not read yet: slopmax reads them on the first request, or press Refresh (R).")
+    await showsSoon("Limits not read yet: slopmax reads them on the first request, or press Refresh.")
     expect(shows("Subscription limits")).toBe(true)
     await act(async () => {
       location.hash = "#/claude"
@@ -309,11 +444,15 @@ describe("what the dashboard says while waiting, failing or quiet", () => {
     expect(shows("Limits not read yet")).toBe(true)
   })
 
-  test("an empty activity page points to the Agents page", async () => {
-    drawn = await draw({ stub: { key: ownerKey, scenario: "empty" }, host: { key: ownerKey }, at: "#/usage" })
-    await showsSoon("Nothing in this range")
+  test("empty analytics links to coding agents inside Connections", async () => {
+    drawn = await draw({
+      stub: { key: ownerKey, scenario: "empty" },
+      host: { key: ownerKey },
+      at: "#/usage",
+    })
+    await showsSoon("No requests recorded in this range")
     await press("Connect an agent")
-    await settle(() => location.hash === "#/agents", "the Agents page")
+    await settle(() => location.hash === "#/connections?section=agents", "coding agents in Connections")
     // Installed agents first; a connected one says so once.
     await showsSoon("Not connected")
     expect(shows("Goes through slopmax")).toBe(false)
@@ -321,24 +460,34 @@ describe("what the dashboard says while waiting, failing or quiet", () => {
   })
 
   test("a refresh spins and cannot be pressed again until it is answered", async () => {
-    drawn = await draw({ stub: { key: ownerKey, latency: "150 millis" }, host: { key: ownerKey } })
+    drawn = await draw({
+      stub: { key: ownerKey, latency: "150 millis" },
+      host: { key: ownerKey },
+    })
     await showsSoon("Running 0.4.0", 5_000)
-    await press("Refresh usage")
-    expect(control("Reading usage again…").hasAttribute("disabled")).toBe(true)
-    await key("r")
+    await press("Refresh")
+    expect(control("Refresh").hasAttribute("disabled")).toBe(true)
+    await press("Refresh")
     await showsSoon("Usage and limit resets read again.")
     expect(drawn.stub.calls.filter((call) => call.endpoint === "refresh")).toHaveLength(1)
   })
 
   test("adding a key says it is being checked, and a taken key name keeps what was typed", async () => {
-    drawn = await draw({ stub: { key: ownerKey, latency: "150 millis" }, host: { key: ownerKey }, at: "#/access" })
-    await showsSoon("laptop", 5_000)
+    drawn = await draw({
+      stub: { key: ownerKey, latency: "150 millis" },
+      host: { key: ownerKey },
+      at: "#/accounts/add",
+    })
     // Changes wait for slopmax to answer on the event stream.
     await showsSoon("Running 0.4.0", 5_000)
     await type("Paste an API key", "sk-ant-good")
     await press("Add key")
     await showsSoon("Checking key…")
     await showsSoon("Anthropic API added.")
+    await act(async () => {
+      location.hash = "#/access"
+    })
+    await showsSoon("Create key", 5_000)
     await type("Name, such as laptop", "laptop")
     await press("Create key")
     await showsSoon("There is already a key named laptop")
@@ -352,7 +501,7 @@ describe("what the dashboard says while waiting, failing or quiet", () => {
     await showsSoon("Across 3 accounts, weighted by plan")
     await press("More for ana@studio.dev")
     await settle(() => document.querySelector("[role=menuitem]") !== null, "the menu")
-    await press("Set priority…")
+    await press("Priority (0)…")
     await showsSoon("Higher tiers are used first")
     await type("Priority", "high")
     await press("Save")

@@ -1,14 +1,15 @@
-// shadcn/ui's Progress, with two additions for quota meters: `tone` colors
-// the fill for a warning or a failure, and `marker` draws a tick where an
-// even spend would have reached.
+// Slopmax's shadcn Progress supports status colors, an even-pace marker,
+// and a patterned gauge for remaining quota on both card surfaces.
 import { Progress as ProgressPrimitive } from "@base-ui/react/progress"
 import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "cn"
 
-const indicatorVariants = cva("h-full transition-all", {
+const indicatorVariants = cva("h-full", {
   variants: {
     tone: {
       default: "bg-primary",
+      quota: "ordered-dither quota-indicator bg-quota-used",
+      allowance: "ordered-dither allowance-indicator bg-allowance-used",
       warning: "bg-warning",
       destructive: "bg-destructive",
     },
@@ -22,9 +23,12 @@ function Progress({
   value,
   tone,
   marker,
+  dither,
   ...props
 }: ProgressPrimitive.Root.Props &
   VariantProps<typeof indicatorVariants> & {
+    /** Texture for a measurement that also uses a status color. */
+    dither?: boolean | undefined
     /** Where the tick sits, 0 to 100. */
     marker?: number | undefined
   }) {
@@ -33,18 +37,20 @@ function Progress({
       value={value}
       data-slot="progress"
       className={cn("relative flex flex-wrap gap-3", className)}
+      data-tone={tone}
+      data-dither={dither || undefined}
       style={marker === undefined ? undefined : { "--marker": `${Math.min(100, Math.max(0, marker))}%` }}
       {...props}
     >
       {children}
       <ProgressTrack>
-        <ProgressIndicator className={indicatorVariants({ tone })} />
+        <ProgressIndicator className={cn(indicatorVariants({ tone }), dither && "measurement-dither")} />
       </ProgressTrack>
       {marker !== undefined && (
         <div
           aria-hidden
           data-slot="progress-marker"
-          className="absolute -bottom-1 left-(--marker) h-3 w-0.5 -translate-x-1/2 rounded-full bg-muted-foreground"
+          className="absolute -bottom-1 left-(--marker) h-3 w-0.5 -translate-x-1/2 rounded-full bg-muted-foreground in-data-[tone=quota]:h-5 in-data-[tone=quota]:bg-quota-foreground in-data-[tone=quota]:ring-1 in-data-[tone=quota]:ring-quota"
         />
       )}
     </ProgressPrimitive.Root>
@@ -54,7 +60,10 @@ function Progress({
 function ProgressTrack({ className, ...props }: ProgressPrimitive.Track.Props) {
   return (
     <ProgressPrimitive.Track
-      className={cn("relative flex h-1 w-full items-center overflow-x-hidden rounded-full bg-muted", className)}
+      className={cn(
+        "relative flex h-1 w-full items-center overflow-x-hidden rounded-full bg-muted in-data-[dither]:h-1.5 in-data-[dither]:rounded-sm in-data-[tone=quota]:h-3 in-data-[tone=quota]:rounded-sm in-data-[tone=quota]:bg-quota-fill in-data-[tone=allowance]:h-1.5 in-data-[tone=allowance]:rounded-sm in-data-[tone=allowance]:bg-allowance-fill",
+        className,
+      )}
       data-slot="progress-track"
       {...props}
     />
@@ -65,7 +74,7 @@ function ProgressIndicator({ className, ...props }: ProgressPrimitive.Indicator.
   return (
     <ProgressPrimitive.Indicator
       data-slot="progress-indicator"
-      className={cn("h-full bg-primary transition-all", className)}
+      className={cn("h-full bg-primary motion-safe:transition-[width]", className)}
       {...props}
     />
   )

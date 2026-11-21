@@ -508,6 +508,9 @@ function DitherBar({
           fill={`url(#${paint}-${band.step})`}
         />
       ))}
+      {!topOfStack && bottom - top >= CELL * 2 && (
+        <line x1={left} x2={right} y1={top + 1} y2={top + 1} stroke="var(--card)" strokeWidth={2} />
+      )}
       {topOfStack && (
         <path
           d={topRounded(left, top - CELL / 2, right - left, 3, 2)}
@@ -534,6 +537,9 @@ function SolidBar({
   return (
     <g opacity={pointer === "elsewhere" ? 0.5 : 1}>
       <path d={topRounded(x, y, width, height, top ? 4 : 0)} fill={fill} />
+      {markThinTop && !top && height >= CELL * 2 && (
+        <line x1={x} x2={x + width} y1={y + 1} y2={y + 1} stroke="var(--card)" strokeWidth={2} />
+      )}
       {markThinTop && top && height < 1 && <line x1={x} x2={x + width} y1={y} y2={y} stroke={fill} strokeWidth={2} />}
     </g>
   )

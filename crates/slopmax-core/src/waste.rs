@@ -191,6 +191,7 @@ pub struct AccountLeft {
     pub windows: u64,
     pub unused: f64,
     pub dollars: f64,
+    pub unpriced: u64,
 }
 
 /// Totals `records`; `names` gives accounts their display names.
@@ -199,9 +200,17 @@ pub fn left(
     plan_prices: &BTreeMap<String, f64>,
     names: &HashMap<String, String>,
 ) -> Left {
+    #[derive(Default)]
+    struct AccountTotals {
+        windows: u64,
+        unused: f64,
+        dollars: f64,
+        unpriced: u64,
+    }
+
     let mut total = Left::default();
     let mut unused_sum = 0.0;
-    let mut by_account: BTreeMap<(String, ProviderId), (u64, f64, f64)> = BTreeMap::new();
+    let mut by_account: BTreeMap<(String, ProviderId), AccountTotals> = BTreeMap::new();
     for record in records {
         let long = record.model.is_none() && matches!(record.span.as_str(), "7d" | "30d");
         if !long {
@@ -227,24 +236,26 @@ pub fn left(
             .cloned()
             .unwrap_or_else(|| record.account.clone());
         let entry = by_account.entry((name, record.provider)).or_default();
-        entry.0 += 1;
-        entry.1 += unused;
-        entry.2 += dollars.unwrap_or(0.0);
+        entry.windows += 1;
+        entry.unused += unused;
+        match dollars {
+            Some(value) => entry.dollars += value,
+            None => entry.unpriced += 1,
+        }
     }
     if total.windows > 0 {
         total.unused = unused_sum / total.windows as f64;
     }
     total.accounts = by_account
         .into_iter()
-        .map(
-            |((name, provider), (windows, unused, dollars))| AccountLeft {
-                name,
-                provider,
-                windows,
-                unused: unused / windows as f64,
-                dollars,
-            },
-        )
+        .map(|((name, provider), totals)| AccountLeft {
+            name,
+            provider,
+            windows: totals.windows,
+            unused: totals.unused / totals.windows as f64,
+            dollars: totals.dollars,
+            unpriced: totals.unpriced,
+        })
         .collect();
     total.accounts.sort_by(|a, b| {
         b.dollars
@@ -376,12 +387,14 @@ mod tests {
             record("a", "max 20x", "5h", 0.0, 3),
             record("b", "pro", "7d", 80.0, 4),
             record("c", "mystery", "7d", 0.0, 5),
+            record("free", "included", "7d", 50.0, 6),
         ];
         let names = HashMap::from([("a".to_owned(), "work@x.dev".to_owned())]);
-        let left = left(&records, &BTreeMap::new(), &names);
-        assert_eq!((left.windows, left.unpriced), (4, 1));
-        // 50, 0, 20, and 100 unused.
-        assert!((left.unused - 42.5).abs() < 1e-9);
+        let prices = BTreeMap::from([("claude/included".to_owned(), 0.0)]);
+        let left = left(&records, &prices, &names);
+        assert_eq!((left.windows, left.unpriced), (5, 1));
+        // 50, 0, 20, 100, and 50 unused.
+        assert!((left.unused - 44.0).abs() < 1e-9);
         let week = |monthly: f64| monthly * 12.0 / 52.0;
         assert!((left.dollars - (week(200.0) * 0.5 + week(20.0) * 0.2)).abs() < 1e-9);
         assert_eq!(left.accounts[0].name, "work@x.dev");
@@ -389,6 +402,9 @@ mod tests {
             (left.accounts[0].windows, left.accounts[0].unused),
             (2, 25.0)
         );
-        assert_eq!(left.accounts.last().unwrap().dollars, 0.0);
+        let unknown = left.accounts.iter().find(|a| a.name == "c").unwrap();
+        let free = left.accounts.iter().find(|a| a.name == "free").unwrap();
+        assert_eq!((unknown.dollars, unknown.unpriced), (0.0, 1));
+        assert_eq!((free.dollars, free.unpriced), (0.0, 0));
     }
 }

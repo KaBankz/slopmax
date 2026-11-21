@@ -141,6 +141,8 @@ export class LeftAccount extends Schema.Class<LeftAccount>("LeftAccount")({
   /** Mean percent unused. */
   unused: Schema.Number,
   dollars: Schema.Number,
+  /** Resets on plans without a known price. Older daemons omit this count. */
+  unpriced: Schema.optionalKey(NonNegativeInt),
 }) {}
 
 /** Weekly and monthly quota that resets threw away, and what that part of each plan cost. */

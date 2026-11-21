@@ -76,9 +76,9 @@ describe("small words", () => {
   })
 
   test("what resets left on the table reads as a line", () => {
-    expect(leftLine(0, 0)).toBe("No weekly window reset in this range")
-    expect(leftLine(1, 37.5)).toBe("1 weekly window · 38% unused")
-    expect(leftLine(3, 22.5)).toBe("3 weekly windows · 22% unused on average across them")
+    expect(leftLine(0, 0)).toBe("No weekly or monthly resets were recorded in this range.")
+    expect(leftLine(1, 37.5)).toBe("1 recorded reset · 38% unused")
+    expect(leftLine(3, 22.5)).toBe("3 recorded resets · 22% unused on average across them")
   })
 
   test("when the report was made reads coarsely", () => {
@@ -111,14 +111,13 @@ describe("settings words", () => {
     expect(settingChanged({ strategy: "least-used" })).toBe("slopmax now routes least used.")
     expect(settingChanged({ sessionAffinity: false })).toBe("The strategy now places every request.")
     expect(settingChanged({ redeemExpiring: true })).toBe("Limit resets are redeemed before they expire.")
-    expect(settingChanged({ redeemWhenExhausted: false })).toBe(
-      "Once every account is spent, the pool waits for a reset.",
-    )
+    expect(settingChanged({ redeemWhenExhausted: false })).toBe("Automatic redemption when a pool is limited is off.")
     expect(settingChanged({ sessionMinutes: 120 })).toBe("A session keeps its account through 2 h idle.")
     expect(settingChanged({ warmWindows: true })).toBe("Idle ChatGPT windows start as they reset.")
     expect(settingChanged({ paidOverflow: false })).toBe(
-      "API keys serve a subscription's models only when asked for by name.",
+      "With fallback off, keys still work when a request names its API provider or no subscription matches.",
     )
+    expect(settingChanged({ paidOverflow: true })).toContain("incur charges")
     expect(settingChanged({ pollMinutes: 0 })).toBe("slopmax no longer polls usage.")
     expect(settingChanged({ pollMinutes: 5 })).toBe("slopmax polls usage every 5 min.")
   })
@@ -127,13 +126,13 @@ describe("settings words", () => {
     const off = { redeemExpiring: false, redeemWhenExhausted: false }
     expect(autoRedeem(off, "ChatGPT")).toBeUndefined()
     expect(autoRedeem({ ...off, redeemExpiring: true }, "ChatGPT")).toBe(
-      "slopmax redeems one by itself 3 hours before it would expire unused, if the account has quota to reset.",
+      "slopmax redeems a reset 3 hours before expiry if the account has usage to reset.",
     )
     expect(autoRedeem({ ...off, redeemWhenExhausted: true }, "ChatGPT")).toBe(
-      "slopmax redeems one by itself when every ChatGPT account is spent.",
+      "slopmax redeems a reset when every ChatGPT account is limited.",
     )
     expect(autoRedeem({ redeemExpiring: true, redeemWhenExhausted: true }, "ChatGPT")).toBe(
-      "slopmax redeems one by itself when every ChatGPT account is spent, and 3 hours before one would expire unused.",
+      "slopmax redeems a reset when every ChatGPT account is limited. It also redeems 3 hours before expiry if the account has usage to reset.",
     )
   })
 
@@ -180,7 +179,10 @@ describe("the pool's bar and failures", () => {
   test("a request that never reached slopmax, or an error it did not explain, says so without the address", () => {
     const request = HttpClientRequest.post("http://127.0.0.1:7567/slopmax/api/accounts/abc/pin")
     const transport = new HttpClientError.HttpClientError({
-      reason: new HttpClientError.TransportError({ request, description: "Failed to fetch" }),
+      reason: new HttpClientError.TransportError({
+        request,
+        description: "Failed to fetch",
+      }),
     })
     expect(failureText(Cause.fail(transport))).toBe(
       "slopmax is not answering. Is it running? Start it with slopmax proxy start.",

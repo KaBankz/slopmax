@@ -111,7 +111,7 @@ export const fixtureAccounts = (now: DateTime.Utc): ReadonlyArray<AccountView> =
     plan: "max 20x",
     condition: Condition.cases.Active.make({ sessions: 2 }),
     sessions: 2,
-    windows: [window("5h", 62, now, 100), window("7d", 48, now, 4_560), window("7d", 71, now, 4_560, "opus")],
+    windows: [window("5h", 62, now, 100), window("7d", 48, now, 4_560), window("7d", 71, now, 4_560, "Opus")],
     notes: [served(1_284, 48_200_000)],
     lastUsed: shift(now, -2),
     served: usage(1_284, 48_200_000),
@@ -123,7 +123,7 @@ export const fixtureAccounts = (now: DateTime.Utc): ReadonlyArray<AccountView> =
     email: "ben@studio.dev",
     plan: "max 5x",
     follows: "Claude Code",
-    windows: [window("5h", 18, now, 230), window("7d", 81, now, 1_560), window("7d", 22, now, 1_560, "opus")],
+    windows: [window("5h", 18, now, 230), window("7d", 81, now, 1_320), window("7d", 22, now, 1_320, "Opus")],
     notes: [Note.cases.Follows.make({ tool: "Claude Code" }), served(342, 9_800_000)],
     lastUsed: shift(now, -47),
     served: usage(342, 9_800_000),
@@ -200,10 +200,14 @@ export const fixturePools = (now: DateTime.Utc): ReadonlyArray<PoolView> => [
   new PoolView({
     provider: "claude",
     accounts: 3,
-    windows: [poolWindow("5h", 54, now, 52, true), poolWindow("7d", 56, now, 1_560, true)],
-    scoped: [window("7d", 52, now, 1_560, "opus")],
+    windows: [poolWindow("5h", 54, now, 52, true), poolWindow("7d", 56, now, 1_320, true)],
+    scoped: [window("7d", 52, now, 1_320, "Opus")],
     shares: { [id("claude-1a2b3c4d")]: 0.66, [id("claude-5e6f7a8b")]: 0.25, [id("claude-9c0d1e2f")]: 0.09 },
-    next: new NextView({ account: id("claude-5e6f7a8b"), reason: "resets-first", why: "its quota resets soonest" }),
+    next: new NextView({
+      account: id("claude-5e6f7a8b"),
+      reason: "week-ending",
+      why: "its week resets within the day with quota to spare",
+    }),
   }),
   new PoolView({
     provider: "codex",
@@ -218,14 +222,14 @@ export const fixturePools = (now: DateTime.Utc): ReadonlyArray<PoolView> => [
 export const fixtureNudges = (now: DateTime.Utc): ReadonlyArray<Notice> => [
   new Notice({
     kind: "quota-unused",
-    key: "quota-unused|codex-3a4b5c6d",
+    key: `unused:codex-3a4b5c6d:7d:${Math.floor(shift(now, 1_190).epochMilliseconds / 1000)}`,
     provider: "codex",
     account: "ana@studio.dev",
     until: shift(now, 1_190),
     message:
       "ana@studio.dev's week resets in 19h50m (19:12) with 45% unused. Point an agent at it with `slopmax run codex`.",
     at: now,
-    worth: 90,
+    worth: 200 * (12 / 52) * 0.45,
   }),
 ]
 

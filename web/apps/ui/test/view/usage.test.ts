@@ -1,12 +1,21 @@
 import { describe, expect, test } from "bun:test"
-import { History, HistoryBucket, NamedTotals, PreviousTotals, Summary, SummaryRow, Totals } from "@slopmax/client"
+import {
+  History,
+  HistoryBucket,
+  LeftAccount,
+  NamedTotals,
+  PreviousTotals,
+  Summary,
+  SummaryRow,
+  Totals,
+} from "@slopmax/client"
 import { DateTime } from "effect"
 import {
   accountRows,
-  activityStats,
   agentProvider,
   change,
   isQuiet,
+  leftAccountValue,
   machineRows,
   modelProvider,
   modelRows,
@@ -39,41 +48,26 @@ const bucket = (label: string, requests: number, failed: number, cached?: number
 const history = (fields: Partial<ConstructorParameters<typeof History>[0]>) =>
   new History({ ...quietHistory("7d"), ...fields })
 
-describe("the figures across the top", () => {
-  test("the overview counts all requests and explains success, cache, estimated cost and response time", () => {
-    const today = history({
-      range: "today",
-      total: totals(908, 34_500_000, 21.7, 0, 12),
-      rescued: 36,
-      cached: 0.86,
-      firstByte: 840,
-    })
-    expect(requestTotal(today.total)).toBe(920)
-    expect(activityStats(today)).toEqual([
-      { title: "Success rate", value: "98.7%", note: "Share answered (36 via failover)" },
-      { title: "Tokens processed", value: "34.5M", note: "86% of input from cache" },
-      { title: "Value at API prices", value: "$21.70", note: "Pay-as-you-go equivalent" },
-      { title: "Median wait", value: "0.84 s", note: "Time to first response" },
-    ])
-    expect(activityStats(quietHistory("today")).map((stat) => stat.value)).toEqual(["—", "0", "—", "—"])
-    const failures = history({ total: totals(0, 0, 0, 0, 4) })
-    expect(activityStats(failures)[0]?.value).toBe("0.0%")
-    expect(activityStats(failures)[2]?.value).toBe("—")
-    expect(activityStats(history({ total: totals(4, 1000, 5, 2) }))[2]).toMatchObject({
-      value: "$5.00+",
-      note: "2 answers missing prices",
-    })
-  })
+test("unused value separates a configured zero price, spent quota, and an unknown price", () => {
+  const row = { name: "work", provider: "claude", windows: 1, unused: 40, dollars: 0 } as const
+  expect(leftAccountValue(new LeftAccount({ ...row, unpriced: 0 }), 1)).toBe("$0.00")
+  expect(leftAccountValue(new LeftAccount({ ...row, unpriced: 1 }), 1)).toBe("—")
+  expect(leftAccountValue(new LeftAccount({ ...row, unused: 0 }), 1)).toBe("$0.00")
+  expect(leftAccountValue(new LeftAccount(row), 1)).toBe("—")
+})
 
-  test("period comparisons convey the direction and retain successes or failures near the rounding limits", () => {
+describe("the figures across the top", () => {
+  test("performance preserves success percentages near the rounding limits and compares matched periods", () => {
     const previous = new PreviousTotals({ total: totals(90, 1000, 8, 0, 10), rescued: 0, sessions: 0 })
-    const [success, tokens, value, wait] = activityStats(history({ total: totals(9_999, 1250, 6, 0, 1), previous }))
-    expect(success).toMatchObject({ value: ">99.9%", change: { direction: "up", text: "10.0 points" } })
-    expect(tokens?.change).toMatchObject({ direction: "up", text: "25.0%" })
-    expect(value?.change).toMatchObject({ direction: "down", text: "25.0%" })
-    expect(wait?.change).toBeUndefined()
+    const high = history({ total: totals(9_999, 1250, 6, 0, 1), previous })
+    expect(requestTotal(high.total)).toBe(10_000)
+    expect(performanceStats(high)[0]).toMatchObject({
+      value: ">99.9%",
+      change: { direction: "up", text: "10.0 points" },
+    })
     expect(performanceStats(history({ total: totals(1, 2, 0, 0, 9_999) }))[0]?.value).toBe("<0.1%")
-    expect(activityStats(history({ total: totals(9, 12, 4, 2), previous }))[2]?.change).toBeUndefined()
+    expect(performanceStats(history({ total: totals(0, 0, 0, 0, 4) }))[0]?.value).toBe("0.0%")
+    expect(performanceStats(quietHistory("today"))[0]?.value).toBe("—")
   })
 
   test("the usage page: conversations, what keys billed, and a month at this pace", () => {
@@ -95,7 +89,7 @@ describe("the figures across the top", () => {
     expect(usageStats(week).map((stat) => [stat.value, stat.note])).toEqual([
       ["240.7M", "No cache data"],
       ["6,334", "in 244 conversations"],
-      ["$152.04", "Billed to API keys $3.49"],
+      ["$152.04", "Estimated API-key spend $3.49"],
       ["$900.00", "30 days at the last 3 full days' rate"],
     ])
     // The same pace on a month's range, which holds the same days.
@@ -136,7 +130,7 @@ describe("the figures across the top", () => {
     const partial = history({ buckets, total: totals(5, 1_000, 30, 3), billed: 3.49, previous })
     expect(usageStats(partial)[2]).toMatchObject({
       value: "$30.00+",
-      note: "Billed to API keys $3.49",
+      note: "Estimated API-key spend $3.49",
     })
     expect(usageStats(partial)[2]?.change).toBeUndefined()
     expect(usageStats(history({ ...partial, billed: 0 }))[2]?.note).toBe("3 answers missing prices")
@@ -239,12 +233,13 @@ describe("tables and parts", () => {
     })
   })
 
-  test("the comparison counts failed requests and identifies the preceding span", () => {
+  test("the comparison matches the answered requests metric for the preceding span", () => {
     const today = fixtureHistory("today", now)
     const yesterday = today.previous?.total ?? Totals.zero
-    expect(previousRequests(today)).toMatch(/requests yesterday by this hour$/)
-    expect(previousRequests(today)).toContain((yesterday.requests + yesterday.failed).toLocaleString("en-US"))
-    expect(previousRequests(fixtureHistory("7d", now))).toMatch(/in the previous 7 days$/)
+    expect(previousRequests(today)).toBe(
+      `For comparison, ${yesterday.requests.toLocaleString("en-US")} answered requests yesterday by this hour`,
+    )
+    expect(previousRequests(fixtureHistory("7d", now))).toMatch(/^For comparison, .* in the previous 7 days$/)
     expect(previousRequests(fixtureHistory("30d", now))).toBeUndefined()
     expect(isQuiet(quietHistory("today"))).toBe(true)
     expect(isQuiet(today)).toBe(false)

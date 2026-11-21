@@ -1,6 +1,6 @@
 // How the accounts stand in a line, and what wants a look: the overview's
 // headline and the "Needs attention" list.
-import { type AccountView, type Notice, type ProviderId, type Report, type Tone, usedAt } from "@slopmax/client"
+import { type AccountView, type Notice, type ProviderId, type Report, type Tone } from "@slopmax/client"
 import { clock, fixed, pace, until } from "@slopmax/client/format"
 import { DateTime, Duration, Option } from "effect"
 import { expiringWithin, resetsLeft, unexpiredResets, windowTitle } from "./groups.ts"
@@ -54,6 +54,7 @@ export interface Attention {
   readonly text: string
   readonly tone: Tone
   readonly remedy: Remedy
+  readonly kind?: "quota-unused"
 }
 
 const item = (account: AccountView, text: string, tone: Tone, remedy: Remedy): Attention => ({
@@ -78,13 +79,6 @@ const firstSentence = (message: string): string =>
 /** Whether a notice is about this account: its name, and its provider when the notice says. */
 const names = (notice: Notice, account: AccountView): boolean =>
   notice.account === account.name && (notice.provider === undefined || notice.provider === account.provider)
-
-/** An account's long window, `week` or `month`, and how much of it is unused, in percent. */
-const unusedAtReset = (account: AccountView, now: DateTime.Utc): { period: string; unused: number } => {
-  const long = account.windows.find((w) => w.model === undefined && (w.span === "7d" || w.span === "30d"))
-  if (long === undefined) return { period: "week", unused: 0 }
-  return { period: long.span === "30d" ? "month" : "week", unused: 100 - Math.min(100, Math.max(0, usedAt(long, now))) }
-}
 
 /**
  * What wants a look, most pressing first: an account signed out, one limited
@@ -132,31 +126,47 @@ export const attention = (report: Report, now: DateTime.Utc, zone: DateTime.Time
     }
   }
   for (const nudge of report.nudges) {
-    const account = report.accounts.find((a) => names(nudge, a))
-    if (account === undefined) continue
+    const parts = nudge.key.split(":")
+    const known = parts[0] === "unused" || parts[0] === "reset" ? parts[1] : undefined
+    const matching = report.accounts.filter(
+      (account) => account.id === known || (known === undefined && names(nudge, account)),
+    )
+    const [account] = matching
+    if (account === undefined || matching.length !== 1) continue
     const at = nudge.until ?? now
     if (nudge.kind === "reset-expiring") {
       if (found.some((f) => f.account === account.id && f.remedy === "redeem")) continue
       found.push(item(account, firstSentence(nudge.message), "warn", "redeem"))
     } else if (nudge.kind === "quota-unused") {
-      const { period, unused } = unusedAtReset(account, now)
+      if (DateTime.isLessThanOrEqualTo(at, now)) continue
+      const long = account.windows.find(
+        (window) =>
+          window.model === undefined &&
+          (window.span === "7d" || window.span === "30d") &&
+          window.resetsAt?.epochMilliseconds === at.epochMilliseconds &&
+          (parts[0] !== "unused" || window.span === parts[2]),
+      )
+      if (long === undefined) continue
+      const period = long.span === "30d" ? "month" : "week"
+      const unused = 100 - long.used
       const worth =
         nudge.worth !== undefined && nudge.worth >= 0.5 ? `, about $${fixed(nudge.worth, 0)} of its plan` : ""
-      found.push(
-        item(
+      found.push({
+        ...item(
           account,
           `${account.name}'s ${period} resets in ${until(at, now)} · ${clock(at, now, zone)} with ${fixed(unused, 0)}% of it unused${worth}`,
           "warn",
           "look",
         ),
-      )
+        kind: "quota-unused",
+      })
     }
   }
   // Stable: what is broken first, everything else in the order found.
   return found.toSorted((a, b) => Number(a.tone !== "bad") - Number(b.tone !== "bad"))
 }
 
-/** The worst tone among a provider's items, for the dot beside it in the sidebar. */
+/** The worst tone among a provider's items, for its account directory row. */
 export const worstTone = (items: ReadonlyArray<Attention>, provider: ProviderId): Tone | undefined => {
   const tones = items.filter((a) => a.provider === provider).map((a) => a.tone)
   return tones.includes("bad") ? "bad" : tones.includes("warn") ? "warn" : undefined

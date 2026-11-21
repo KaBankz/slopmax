@@ -5,11 +5,10 @@
 import { useAtom, useAtomSet, useAtomValue } from "@effect/atom-react"
 import { type HistoryRange, type RequestPage, RequestRow, requestSenders } from "@slopmax/client"
 import { grouped } from "@slopmax/client/format"
-import { cva } from "class-variance-authority"
 import { Option } from "effect"
 import { AsyncResult } from "effect/reactivity"
-import { Activity, ChevronRight, Download, ListFilter } from "lucide-react"
-import { type ReactNode, useState } from "react"
+import { Activity, ChevronRight, Download } from "lucide-react"
+import { useState } from "react"
 import {
   exportRequests,
   feedAtom,
@@ -30,7 +29,7 @@ import { Button } from "../components/ui/button.tsx"
 import { Card, CardContent } from "../components/ui/card.tsx"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "../components/ui/sheet.tsx"
 import { Skeleton } from "../components/ui/skeleton.tsx"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table.tsx"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableNumber, TableRow } from "../components/ui/table.tsx"
 import { feedSize } from "../view/live.ts"
 import {
   allRequests,
@@ -47,15 +46,6 @@ import {
   totalsLine,
 } from "../view/requests.ts"
 import { count } from "../view/words.ts"
-
-const figureVariants = cva("text-right tabular-nums", {
-  variants: { muted: { true: "text-muted-foreground", false: "" } },
-})
-
-/** A figure in a table cell, right-aligned so the column's digits line up. */
-function Figure({ children, muted = false }: { readonly children?: ReactNode; readonly muted?: boolean }) {
-  return <div className={figureVariants({ muted })}>{children}</div>
-}
 
 /** The live feed as rows, filtered as the ledger would be. */
 const liveRows = (filter: RequestFilter, rows: ReadonlyArray<RequestRow>) =>
@@ -89,8 +79,9 @@ function Filters({
   const set = (patch: Parameters<typeof refine>[1]) => onChange(refine(filter, patch))
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Segmented label="Which requests" value={filter.span} options={listings} onChange={(span) => set({ span })} />
-      <ListFilter aria-hidden className="ml-1 size-4 text-muted-foreground" />
+      <div className="w-full sm:w-auto">
+        <Segmented label="Which requests" value={filter.span} options={listings} onChange={(span) => set({ span })} />
+      </div>
       <Pick
         label="Account"
         anyTitle="Any account"
@@ -109,7 +100,10 @@ function Filters({
         label="Agent"
         anyTitle="Any agent"
         value={filter.agent}
-        options={facets.agents.map((agent) => ({ value: agent, title: senderTitle(agent) }))}
+        options={facets.agents.map((agent) => ({
+          value: agent,
+          title: senderTitle(agent),
+        }))}
         onChange={(agent) => set({ agent: facets.agents.find((a) => a === agent) })}
       />
       <Pick
@@ -117,7 +111,11 @@ function Filters({
         anyTitle="Any outcome"
         value={filter.outcome === "all" ? undefined : filter.outcome}
         options={outcomes.filter((o) => o.value !== "all")}
-        onChange={(outcome) => set({ outcome: outcomes.find((o) => o.value === outcome)?.value ?? "all" })}
+        onChange={(outcome) =>
+          set({
+            outcome: outcomes.find((o) => o.value === outcome)?.value ?? "all",
+          })
+        }
       />
       {narrowed(filter) && (
         <Button variant="ghost" size="sm" onClick={() => onChange({ ...allRequests, span: filter.span })}>
@@ -132,77 +130,88 @@ function RequestsTable({
   views,
   onOpen,
 }: {
-  readonly views: ReadonlyArray<{ readonly view: RowView; readonly row: RequestRow }>
+  readonly views: ReadonlyArray<{
+    readonly view: RowView
+    readonly row: RequestRow
+  }>
   readonly onOpen: (row: RequestRow) => void
 }) {
   return (
-    <Card>
-      <CardContent>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-28">Time</TableHead>
-              <TableHead className="w-24">Agent</TableHead>
-              <TableHead className="w-40">Model</TableHead>
-              <TableHead className="w-full">Account</TableHead>
-              <TableHead className="w-12 text-right">Status</TableHead>
-              <TableHead className="w-14 text-right">Tokens</TableHead>
-              <TableHead className="w-16 text-right">Cost</TableHead>
-              <TableHead className="w-28 text-right">First byte · total</TableHead>
-              <TableHead className="w-8">
-                <span className="sr-only">Details</span>
-              </TableHead>
+    <Card size="flush">
+      <Table aria-label="Request log">
+        <TableHeader>
+          <TableRow>
+            <TableHead className="hidden w-24 @sm:table-cell">Time</TableHead>
+            <TableHead className="hidden w-24 @3xl:table-cell">Agent</TableHead>
+            <TableHead className="hidden w-40 @2xl:table-cell">Model</TableHead>
+            <TableHead className="w-full">
+              <span className="@2xl:hidden">Request</span>
+              <span className="hidden @2xl:inline">Account</span>
+            </TableHead>
+            <TableHead className="w-12 text-right">Status</TableHead>
+            <TableHead className="hidden w-14 text-right @lg:table-cell">Tokens</TableHead>
+            <TableHead className="hidden w-16 text-right @3xl:table-cell">Cost</TableHead>
+            <TableHead className="hidden w-28 text-right @2xl:table-cell">First byte · total</TableHead>
+            <TableHead className="w-8">
+              <span className="sr-only">Details</span>
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {views.map(({ view, row }) => (
+            <TableRow key={view.key} onClick={() => onOpen(row)}>
+              <TableCell className="hidden @sm:table-cell">
+                <div className="text-muted-foreground tabular-nums">{view.time}</div>
+              </TableCell>
+              <TableCell className="hidden @3xl:table-cell">
+                <div className="max-w-24 truncate">{view.who}</div>
+              </TableCell>
+              <TableCell className="hidden @2xl:table-cell">
+                <div className="max-w-40 truncate font-mono text-xs">{view.model}</div>
+              </TableCell>
+              <TableCell>
+                <div className="max-w-0 min-w-full whitespace-normal wrap-anywhere">
+                  <p className="font-medium @2xl:hidden">{view.model}</p>
+                  <p className="flex flex-wrap gap-x-2 text-muted-foreground @2xl:font-medium @2xl:text-foreground">
+                    <span className="min-w-0">{view.account}</span>
+                    <span className="text-xs tabular-nums @sm:hidden">{view.time}</span>
+                  </p>
+                  {view.notes.length > 0 && (
+                    <p className="mt-0.5 text-xs text-muted-foreground">{view.notes.join(" · ")}</p>
+                  )}
+                </div>
+              </TableCell>
+              <TableCell>
+                <div className="flex justify-end tabular-nums">
+                  <Label tone={view.failed ? "bad" : "muted"} text={view.status} raw />
+                </div>
+              </TableCell>
+              <TableCell className="hidden @lg:table-cell">
+                <TableNumber>{view.tokens}</TableNumber>
+              </TableCell>
+              <TableCell className="hidden @3xl:table-cell">
+                <TableNumber muted>{view.cost}</TableNumber>
+              </TableCell>
+              <TableCell className="hidden @2xl:table-cell">
+                <TableNumber muted>{view.took}</TableNumber>
+              </TableCell>
+              <TableCell>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={`Details of the request at ${view.time}`}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onOpen(row)
+                  }}
+                >
+                  <ChevronRight />
+                </Button>
+              </TableCell>
             </TableRow>
-          </TableHeader>
-          <TableBody>
-            {views.map(({ view, row }) => (
-              <TableRow key={view.key} onClick={() => onOpen(row)}>
-                <TableCell>
-                  <div className="text-muted-foreground tabular-nums">{view.time}</div>
-                </TableCell>
-                <TableCell>
-                  <div className="max-w-24 truncate">{view.who}</div>
-                </TableCell>
-                <TableCell>
-                  <div className="max-w-40 truncate font-mono text-xs">{view.model}</div>
-                </TableCell>
-                <TableCell>
-                  <div className="max-w-0 min-w-full truncate text-muted-foreground">
-                    {[view.account, ...view.notes].join(" · ")}
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <div className="flex justify-end tabular-nums">
-                    <Label tone={view.failed ? "bad" : "muted"} text={view.status} raw />
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <Figure>{view.tokens}</Figure>
-                </TableCell>
-                <TableCell>
-                  <Figure muted>{view.cost}</Figure>
-                </TableCell>
-                <TableCell>
-                  <Figure muted>{view.took}</Figure>
-                </TableCell>
-                <TableCell>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    aria-label={`Details of the request at ${view.time}`}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      onOpen(row)
-                    }}
-                  >
-                    <ChevronRight />
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </CardContent>
+          ))}
+        </TableBody>
+      </Table>
     </Card>
   )
 }
@@ -301,7 +310,11 @@ function LiveRequests() {
   const feed = useAtomValue(feedAtom)
   const live = useAtomValue(liveAtom)
   const feedRows = feed.map(
-    (entry) => new RequestRow({ record: entry.record, ...(entry.cost === undefined ? {} : { cost: entry.cost }) }),
+    (entry) =>
+      new RequestRow({
+        record: entry.record,
+        ...(entry.cost === undefined ? {} : { cost: entry.cost }),
+      }),
   )
   const shown = views(liveRows(filter, feedRows))
   const facets = {
@@ -357,7 +370,10 @@ function LedgerRequests({ range }: { readonly range: HistoryRange }) {
         <Button
           variant="outline"
           size="sm"
-          disabled={Option.match(page, { onNone: () => true, onSome: (p) => p.matched === 0 })}
+          disabled={Option.match(page, {
+            onNone: () => true,
+            onSome: (p) => p.matched === 0,
+          })}
           onClick={() => save({ filter, range })}
         >
           <Download data-icon="inline-start" />

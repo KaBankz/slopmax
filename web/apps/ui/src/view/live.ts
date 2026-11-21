@@ -139,7 +139,7 @@ export type Live =
   | { readonly _tag: "Running"; readonly version: string }
   | { readonly _tag: "Reconnecting" }
 
-/** The proxy's state as a short label with its tone, the same in the sidebar's foot and in Settings. */
+/** The proxy's state as a short label with its tone, the same in the masthead and in Settings. */
 export const shownProxy = (live: Live): { readonly text: string; readonly tone: Tone } =>
   live._tag === "Running"
     ? { text: `Running ${live.version}`, tone: "good" }

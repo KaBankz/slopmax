@@ -12,7 +12,7 @@ function Table({ className, ...props }: React.ComponentProps<"table">) {
 }
 
 function TableHeader({ className, ...props }: React.ComponentProps<"thead">) {
-  return <thead data-slot="table-header" className={cn("[&_tr]:border-b", className)} {...props} />
+  return <thead data-slot="table-header" className={cn("bg-muted/45 [&_tr]:border-b", className)} {...props} />
 }
 
 function TableBody({ className, ...props }: React.ComponentProps<"tbody">) {
@@ -47,7 +47,7 @@ function TableHead({ className, ...props }: React.ComponentProps<"th">) {
     <th
       data-slot="table-head"
       className={cn(
-        "h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0",
+        "h-10 px-2 text-left align-middle text-xs font-medium whitespace-nowrap text-muted-foreground sm:px-3 [&:has([role=checkbox])]:pr-0",
         className,
       )}
       {...props}
@@ -59,7 +59,18 @@ function TableCell({ className, ...props }: React.ComponentProps<"td">) {
   return (
     <td
       data-slot="table-cell"
-      className={cn("p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0", className)}
+      className={cn("px-2 py-2.5 align-middle whitespace-nowrap sm:px-3 [&:has([role=checkbox])]:pr-0", className)}
+      {...props}
+    />
+  )
+}
+
+/** Align numbers consistently across ledger and request tables. */
+function TableNumber({ className, muted = false, ...props }: React.ComponentProps<"span"> & { muted?: boolean }) {
+  return (
+    <span
+      data-slot="table-number"
+      className={cn("block text-right tabular-nums", muted && "text-muted-foreground", className)}
       {...props}
     />
   )
@@ -71,4 +82,4 @@ function TableCaption({ className, ...props }: React.ComponentProps<"caption">) 
   )
 }
 
-export { Table, TableHeader, TableBody, TableFooter, TableHead, TableRow, TableCell, TableCaption }
+export { Table, TableHeader, TableBody, TableFooter, TableHead, TableRow, TableCell, TableNumber, TableCaption }

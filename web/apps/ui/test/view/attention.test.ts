@@ -47,7 +47,7 @@ describe("what wants a look", () => {
       ["lab@studio.dev needs signing in again", "bad", "sign-in"],
       ["A limit reset on ana@studio.dev expires in 1d6h · Sun 18:00", "warn", "redeem"],
       [
-        "ana@studio.dev's week resets in 19h50m · Sun 07:50 with 45% of it unused, about $90 of its plan",
+        "ana@studio.dev's week resets in 19h50m · Sun 07:50 with 45% of it unused, about $21 of its plan",
         "warn",
         "look",
       ],

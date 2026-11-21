@@ -7,7 +7,7 @@ import { cva } from "class-variance-authority"
 import { Option, Schema } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import { ChevronDown, ChevronRight, Ellipsis, Users } from "lucide-react"
-import { Fragment } from "react"
+import { useEffect, useRef } from "react"
 import {
   attentionAtom,
   canChangeAtom,
@@ -29,7 +29,6 @@ import {
 import { useAsk } from "../components/ask.tsx"
 import { HealthStrip, PoolForecast, ResetLanes, usePoolDetail } from "../components/forecast.tsx"
 import { Dot, Empty, Label, Meter, Panel, Section, SegmentedBar } from "../components/parts.tsx"
-import { Tip } from "../components/tip.tsx"
 import { Badge } from "../components/ui/badge.tsx"
 import { Button } from "../components/ui/button.tsx"
 import { CardFooter } from "../components/ui/card.tsx"
@@ -39,7 +38,6 @@ import {
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu.tsx"
@@ -53,12 +51,9 @@ import { autoRedeem, limitsNotRead, resetsLine, resetsUnlisted } from "../view/w
 function PoolCells({ group }: { readonly group: Group }) {
   return (
     <Panel>
-      <div className="flex flex-wrap">
+      <div className="pool-columns grid gap-px bg-border">
         {group.overview.map((window) => (
-          <div
-            key={window.title}
-            className="flex min-w-48 flex-1 flex-col gap-2 border-l border-border p-4 first:border-l-0"
-          >
+          <div key={window.title} className="flex min-w-0 flex-col gap-2 bg-card p-5">
             <span className="text-xs text-muted-foreground">{window.title}</span>
             <span className="flex items-baseline gap-1.5">
               <span className="text-2xl font-semibold tabular-nums">{window.gauge.percent}</span>
@@ -71,9 +66,9 @@ function PoolCells({ group }: { readonly group: Group }) {
           </div>
         ))}
       </div>
-      <CardFooter>
+      <CardFooter density="compact">
         <div className="flex w-full flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          <span>{across(group)}</span>
+          <span>{across(group)}. Each bar segment shows one account when space allows.</span>
           {group.credits !== undefined && <span>{group.credits}</span>}
         </div>
       </CardFooter>
@@ -82,7 +77,7 @@ function PoolCells({ group }: { readonly group: Group }) {
 }
 
 const cellVariants = cva("flex min-w-30 flex-1 flex-col gap-1.5", {
-  variants: { faded: { true: "opacity-45", false: "" } },
+  variants: { faded: { true: "text-muted-foreground", false: "" } },
 })
 
 /** The window's name over its cell, where the table is too narrow for its header row. */
@@ -112,7 +107,7 @@ function WindowCell({
   return (
     <div className={cellVariants({ faded })}>
       <CellTitle title={title} />
-      <span className="font-medium tabular-nums">{gauge.percent}</span>
+      <span className="font-medium tabular-nums">{gauge.percent} used</span>
       <Meter
         fraction={gauge.fraction}
         tone={gauge.tone}
@@ -123,19 +118,17 @@ function WindowCell({
         {gauge.pace !== undefined && <Label tone={gauge.pace.label.tone} text={gauge.pace.label.text} raw />}
       </span>
       {spend !== undefined && (
-        <Tip content={spend.tip}>
-          <span className="flex w-fit min-w-0 flex-wrap gap-x-2 text-xs text-muted-foreground tabular-nums">
-            <span>{spend.line}</span>
-            {spend.rate !== undefined && <span>{spend.rate}</span>}
-          </span>
-        </Tip>
+        <p className="text-xs text-muted-foreground tabular-nums">
+          {spend.line}
+          {spend.line === "Not priced" ? "" : " at API prices"}
+        </p>
       )}
     </div>
   )
 }
 
 /** Everything that can be done to one account. */
-function AccountMenu({ row }: { readonly row: Row }) {
+function AccountMenu({ row, inlinePin }: { readonly row: Row; readonly inlinePin: boolean }) {
   const change = useAtomSet(changeAccount)
   const check = useAtomSet(checkAccount)
   const openCredits = useAtomSet(openCreditsAtom)
@@ -157,26 +150,23 @@ function AccountMenu({ row }: { readonly row: Row }) {
           {row.pinned ? (
             <DropdownMenuItem onClick={() => change({ _tag: "UnpinAll" })}>Stop pinning</DropdownMenuItem>
           ) : (
-            <DropdownMenuItem disabled={row.disabled} onClick={() => change({ _tag: "Pin", id })}>
-              Use for new sessions
+            !inlinePin && (
+              <DropdownMenuItem disabled={row.disabled} onClick={() => change({ _tag: "Pin", id })}>
+                Use for new sessions
+              </DropdownMenuItem>
+            )
+          )}
+          {row.account.condition._tag !== "Limited" && (
+            <DropdownMenuItem disabled={row.disabled || row.signedOut} onClick={() => check(id)}>
+              Check limits
             </DropdownMenuItem>
           )}
-          <DropdownMenuItem disabled={row.disabled || row.signedOut} onClick={() => check(id)}>
-            Check its limits now
-          </DropdownMenuItem>
           <DropdownMenuItem onClick={() => change({ _tag: "Enable", id, on: row.disabled })}>
             {row.disabled ? "Enable" : "Disable"}
           </DropdownMenuItem>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuGroup>
-          <DropdownMenuLabel>Priority {row.priority}</DropdownMenuLabel>
-          <DropdownMenuItem onClick={() => change({ _tag: "Priority", id, priority: row.priority + 1 })}>
-            Raise priority
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => change({ _tag: "Priority", id, priority: row.priority - 1 })}>
-            Lower priority
-          </DropdownMenuItem>
           <DropdownMenuItem
             onClick={() =>
               void ask(askPriority(account)).then((answer) => {
@@ -185,7 +175,7 @@ function AccountMenu({ row }: { readonly row: Row }) {
               })
             }
           >
-            Set priority…
+            Priority ({row.priority})…
           </DropdownMenuItem>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
@@ -264,7 +254,7 @@ function CreditsWell({ row, provider }: { readonly row: Row; readonly provider: 
               {held !== undefined && <span className="text-xs text-muted-foreground">{held}</span>}
               <Button
                 disabled={held !== undefined}
-                aria-label={`Redeem a limit reset on ${row.name}…`}
+                aria-label={`Redeem reset for ${row.name}`}
                 onClick={() =>
                   void ask(askRedeem(row.account, credits.credits[0]?.id, now, zone)).then((answer) => {
                     if (answer === null) return
@@ -273,7 +263,7 @@ function CreditsWell({ row, provider }: { readonly row: Row; readonly provider: 
                   })
                 }
               >
-                Redeem…
+                Redeem reset
               </Button>
             </>
           )}
@@ -315,10 +305,10 @@ function SignInAgain({ row }: { readonly row: Row }) {
       size="sm"
       className="self-start"
       disabled={!canChange}
-      aria-label={`Sign in to ${row.name} again`}
+      aria-label={`Sign in again to ${row.name}`}
       onClick={() => start({ provider })}
     >
-      Sign in…
+      Sign in again
     </Button>
   )
 }
@@ -366,7 +356,11 @@ function PoolSections({ group, detail }: { readonly group: Group; readonly detai
       {working.length > 1 && (
         <ResetLanes
           lanes={lanes(
-            working.map((row) => ({ id: row.id, name: row.name, windows: row.account.windows })),
+            working.map((row) => ({
+              id: row.id,
+              name: row.name,
+              windows: row.account.windows,
+            })),
             now,
             zone,
           )}
@@ -386,25 +380,49 @@ function AccountRow({
   row,
   group,
   pool,
+  target,
 }: {
   readonly row: Row
   readonly group: Group
   readonly pool: PoolDetail | undefined
+  readonly target: boolean
 }) {
   const detail: AccountDetail | undefined = pool?.accounts.find((account) => account.id === row.id)
   const [open, setOpen] = useAtom(openCreditsAtom)
   const isOpen = Option.isSome(open) && open.value === row.id
   const metered = !group.subscription
+  const canChange = useAtomValue(canChangeAtom)
+  const change = useAtomSet(changeAccount)
+  const inlinePin =
+    target &&
+    !row.pinned &&
+    canChange &&
+    (row.account.condition._tag === "Ready" || row.account.condition._tag === "Active")
+  const anchor = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!target) return
+    const frame = requestAnimationFrame(() => {
+      anchor.current?.focus({ preventScroll: true })
+      anchor.current?.scrollIntoView({ block: "start" })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [target])
   // Wide, the account is a row of the table. Narrow, its name takes a line of
   // its own, its windows wrap beneath with their names, and its menu stays at
   // the top right, in reach at any width.
   return (
-    <div className="border-t first:border-t-0">
+    <div
+      ref={anchor}
+      tabIndex={target ? -1 : undefined}
+      data-highlighted={target || undefined}
+      aria-label={target ? row.name : undefined}
+      className="scroll-mt-2 border-t first:border-t-0 data-highlighted:focus-within:bg-accent/50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
+    >
       <Collapsible open={isOpen} onOpenChange={(next) => setOpen(next ? Option.some(row.id) : Option.none())}>
         <Item className="relative flex-col items-stretch @3xl:flex-row @3xl:flex-nowrap @3xl:items-start">
           <ItemContent className="mr-8 min-w-0 @3xl:mr-0 @3xl:w-60 @3xl:flex-none">
             <ItemTitle className="max-w-full">
-              <span className={row.disabled ? "truncate text-muted-foreground" : "truncate"}>{row.name}</span>
+              <span className={row.disabled ? "text-muted-foreground wrap-anywhere" : "wrap-anywhere"}>{row.name}</span>
             </ItemTitle>
             <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
               <Label tone={row.status.tone} text={row.status.text} wrap />
@@ -413,20 +431,33 @@ function AccountRow({
             </span>
             <SignInAgain row={row} />
             <CheckNow row={row} />
+            {inlinePin && (
+              <div className="mt-1">
+                <Button variant="secondary" size="sm" onClick={() => change({ _tag: "Pin", id: row.id })}>
+                  Use for new sessions
+                </Button>
+              </div>
+            )}
             {row.lastUsed !== undefined && <span className="text-xs text-muted-foreground">{row.lastUsed}</span>}
             {detail !== undefined && pool !== undefined && (
               <HealthStrip health={health(detail, pool.healthSince, pool.cellMinutes, zone)} />
             )}
           </ItemContent>
           {metered ? (
-            <div className="flex min-w-0 flex-1 flex-col gap-1 text-xs">
+            <dl className="flex min-w-0 flex-1 flex-col gap-2 text-xs @3xl:flex-row @3xl:gap-6">
               {row.account.endpoint !== undefined && (
-                <span className="truncate font-mono text-xs text-muted-foreground">{row.account.endpoint}</span>
+                <div className="min-w-0">
+                  <dt className="font-medium">Address</dt>
+                  <dd className="mt-1 font-mono wrap-anywhere text-muted-foreground">{row.account.endpoint}</dd>
+                </div>
               )}
-              <span className="text-muted-foreground">
-                {row.account.models.length === 0 ? "Any model" : row.account.models.join(", ")}
-              </span>
-            </div>
+              <div className="min-w-0">
+                <dt className="font-medium">Models</dt>
+                <dd className="mt-1 wrap-anywhere text-muted-foreground">
+                  {row.account.models.length === 0 ? "Any model" : row.account.models.join(", ")}
+                </dd>
+              </div>
+            </dl>
           ) : group.unread ? (
             <UnreadCell />
           ) : (
@@ -443,7 +474,7 @@ function AccountRow({
             </div>
           )}
           <ItemActions className="absolute top-2 right-2 @3xl:static">
-            <AccountMenu row={row} />
+            <AccountMenu row={row} inlinePin={inlinePin} />
           </ItemActions>
         </Item>
         {(row.notes.length > 0 || row.credits !== undefined) && (
@@ -476,16 +507,31 @@ function AccountRow({
   )
 }
 
-export function ProviderPage({ provider }: { readonly provider: ProviderId }) {
-  return isSubscription(provider) ? <SubscriptionPage provider={provider} /> : <Accounts provider={provider} />
+interface ProviderProps {
+  readonly provider: ProviderId
+  readonly account?: string | undefined
 }
 
-function SubscriptionPage({ provider }: { readonly provider: SubscriptionId }) {
+export function ProviderPage({ provider, account }: ProviderProps) {
+  return isSubscription(provider) ? (
+    <SubscriptionPage key={provider} provider={provider} account={account} />
+  ) : (
+    <Accounts provider={provider} account={account} />
+  )
+}
+
+function SubscriptionPage({
+  provider,
+  account,
+}: {
+  readonly provider: SubscriptionId
+  readonly account?: string | undefined
+}) {
   const detail = usePoolDetail(provider)
-  return <Accounts provider={provider} pool={Option.getOrUndefined(detail)} />
+  return <Accounts provider={provider} account={account} pool={Option.getOrUndefined(detail)} />
 }
 
-function Accounts({ provider, pool }: { readonly provider: ProviderId; readonly pool?: PoolDetail | undefined }) {
+function Accounts({ provider, account, pool }: ProviderProps & { readonly pool?: PoolDetail | undefined }) {
   const shown = useAtomValue(shownReportAtom)
   const all = useAtomValue(groupsAtom)
   const change = useAtomSet(changeAccount)
@@ -503,11 +549,10 @@ function Accounts({ provider, pool }: { readonly provider: ProviderId; readonly 
   return (
     <>
       {g.overview.length > 0 && (
-        <Section title="Pool" trailing={<Label tone={g.next.tone} text={g.next.text} raw />}>
+        <Section title="Pool" trailing={<Label tone={g.next.tone} text={g.next.text} raw wrap />}>
           <PoolCells group={g} />
         </Section>
       )}
-      {pool !== undefined && <PoolSections group={g} detail={pool} />}
       <Section
         title="Accounts"
         trailing={
@@ -524,20 +569,24 @@ function Accounts({ provider, pool }: { readonly provider: ProviderId; readonly 
             <div className="hidden items-center gap-2.5 border-x border-b border-x-transparent px-3 py-2 text-xs text-muted-foreground @3xl:flex">
               <span className="w-60 shrink-0">Account</span>
               {g.columns.map((column) => (
-                <Fragment key={column}>
-                  <Tip content={column}>
-                    <span className="min-w-30 flex-1 truncate">{column}</span>
-                  </Tip>
-                </Fragment>
+                <span key={column} className="min-w-30 flex-1 wrap-anywhere">
+                  {column}
+                </span>
               ))}
               <span className="w-8 shrink-0" />
             </div>
           )}
           {g.rows.map((row) => (
-            <AccountRow key={row.id} row={row} group={g} pool={pool} />
+            <AccountRow key={row.id} row={row} group={g} pool={pool} target={row.id === account} />
           ))}
         </Panel>
       </Section>
+      {g.rows.some((row) => row.gauges.some((gauge) => gauge?.pace !== undefined)) && (
+        <p className="-mt-4 text-xs text-muted-foreground">
+          The tick in each quota bar shows how much of its window has passed.
+        </p>
+      )}
+      {pool !== undefined && <PoolSections group={g} detail={pool} />}
     </>
   )
 }

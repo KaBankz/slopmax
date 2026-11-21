@@ -1,11 +1,11 @@
 // A segmented control: one choice among a few, side by side. shadcn/ui's
-// ToggleGroup, outlined, that always keeps one item pressed.
+// ToggleGroup with one item pressed.
 import { ToggleGroup, ToggleGroupItem } from "./ui/toggle-group.tsx"
 
 export interface SegmentedProps<T extends string> {
   readonly label: string
   readonly value: T
-  readonly options: ReadonlyArray<{ readonly value: T; readonly title: string }>
+  readonly options: ReadonlyArray<{ readonly value: T; readonly title: string; readonly detail?: string }>
   readonly onChange: (value: T) => void
   readonly disabled?: boolean
 }
@@ -14,7 +14,7 @@ export function Segmented<T extends string>({ label, value, options, onChange, d
   return (
     <ToggleGroup
       aria-label={label}
-      variant="outline"
+      variant="segmented"
       size="sm"
       value={[value]}
       disabled={disabled ?? false}
@@ -24,8 +24,14 @@ export function Segmented<T extends string>({ label, value, options, onChange, d
       }}
     >
       {options.map((option) => (
-        <ToggleGroupItem key={option.value} value={option.value} aria-label={option.title}>
+        <ToggleGroupItem
+          key={option.value}
+          value={option.value}
+          aria-label={option.title}
+          aria-description={option.detail === undefined ? undefined : `Next reset in ${option.detail}`}
+        >
           {option.title}
+          {option.detail !== undefined && <span aria-hidden>in {option.detail}</span>}
         </ToggleGroupItem>
       ))}
     </ToggleGroup>

@@ -1,4 +1,4 @@
-// The overview's last day: every subscription account's requests in half
+// The performance page's last day: every subscription account's requests in half
 // hours, and the latest requests that failed, a click from the Requests page
 // filtered to them. Cards of Items, Tooltips and the health strip.
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"

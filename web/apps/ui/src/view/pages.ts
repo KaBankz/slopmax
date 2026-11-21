@@ -1,102 +1,181 @@
-// The app's pages: their order in the sidebar (and for the arrow keys),
-// their titles, and how they live in the address's fragment, so a reload, a
-// link, or the back button lands on the same page.
-import { parseProviderId, providerFacts, providerOrder, type ProviderId, type Report } from "@slopmax/client"
+// The dashboard's destinations and their stable hash routes.
+import { parseProviderId, providerFacts, type ProviderId } from "@slopmax/client"
 import { Result } from "effect"
 
 export type Page =
   | { readonly _tag: "Overview" }
-  | { readonly _tag: "Provider"; readonly provider: ProviderId }
+  | { readonly _tag: "QuotaHistory" }
+  | { readonly _tag: "Accounts" }
+  | { readonly _tag: "AddAccount" }
+  | { readonly _tag: "Provider"; readonly provider: ProviderId; readonly account?: string }
   | { readonly _tag: "Usage" }
   | { readonly _tag: "Performance" }
   | { readonly _tag: "Requests" }
-  | { readonly _tag: "Agents" }
-  | { readonly _tag: "Access" }
+  | { readonly _tag: "Connections"; readonly section?: ConnectionSection }
   | { readonly _tag: "Diagnostics" }
   | { readonly _tag: "Settings" }
 
-type Simple = Exclude<Page["_tag"], "Provider">
+export type ConnectionSection = "agents" | "clients"
 
-const simple = <T extends Simple>(tag: T): { readonly _tag: T } => ({ _tag: tag })
+type Simple = Exclude<Page["_tag"], "Provider" | "Connections">
+
+const simple = <T extends Simple>(tag: T): { readonly _tag: T } => ({
+  _tag: tag,
+})
 
 export const Pages = {
   overview: simple("Overview"),
+  quotaHistory: simple("QuotaHistory"),
+  accounts: simple("Accounts"),
+  addAccount: simple("AddAccount"),
   usage: simple("Usage"),
   performance: simple("Performance"),
   requests: simple("Requests"),
-  agents: simple("Agents"),
-  access: simple("Access"),
+  connections: (section?: ConnectionSection): Extract<Page, { readonly _tag: "Connections" }> => ({
+    _tag: "Connections",
+    ...(section === undefined ? {} : { section }),
+  }),
   diagnostics: simple("Diagnostics"),
   settings: simple("Settings"),
-  provider: (provider: ProviderId): Page => ({ _tag: "Provider", provider }),
+  provider: (provider: ProviderId, account?: string): Page => ({
+    _tag: "Provider",
+    provider,
+    ...(account === undefined ? {} : { account }),
+  }),
 } as const
 
-/** The providers that have accounts, in registry order: one sidebar row each. */
-const providersWithAccounts = (report: Report | undefined): ReadonlyArray<ProviderId> =>
-  report === undefined ? [] : providerOrder.filter((id) => report.accounts.some((a) => a.provider === id))
+export const navigationGroups = [
+  {
+    label: "Workspace",
+    entries: [
+      { id: "quota", label: "Quota", page: Pages.overview },
+      { id: "accounts", label: "Accounts", page: Pages.accounts },
+    ],
+  },
+  {
+    label: "Activity",
+    entries: [
+      { id: "analytics", label: "Analytics", page: Pages.usage },
+      { id: "requests", label: "Requests", page: Pages.requests },
+    ],
+  },
+  {
+    label: "Proxy",
+    entries: [
+      { id: "connections", label: "Connections", page: Pages.connections() },
+      { id: "settings", label: "Settings", page: Pages.settings },
+    ],
+  },
+] as const
 
-/** Every page in sidebar order. */
-export const pageOrder = (report: Report | undefined): ReadonlyArray<Page> => [
-  Pages.overview,
-  ...providersWithAccounts(report).map(Pages.provider),
-  Pages.usage,
-  Pages.performance,
-  Pages.requests,
-  Pages.agents,
-  Pages.access,
-  Pages.diagnostics,
-  Pages.settings,
-]
+export type Destination = (typeof navigationGroups)[number]["entries"][number]["id"] | "diagnostics"
 
-export const samePage = (a: Page, b: Page): boolean =>
-  a._tag === b._tag && (a._tag !== "Provider" || (b._tag === "Provider" && a.provider === b.provider))
-
-/** The page before or after `current`, staying put at either end. */
-export const movePage = (order: ReadonlyArray<Page>, current: Page, by: -1 | 1): Page => {
-  const at = order.findIndex((page) => samePage(page, current))
-  if (at < 0) return order[0] ?? current
-  return order[Math.min(order.length - 1, Math.max(0, at + by))] ?? current
+export const destinationOf = (page: Page): Destination => {
+  switch (page._tag) {
+    case "Overview":
+    case "QuotaHistory":
+      return "quota"
+    case "Accounts":
+    case "AddAccount":
+    case "Provider":
+      return "accounts"
+    case "Usage":
+    case "Performance":
+      return "analytics"
+    case "Requests":
+      return "requests"
+    case "Connections":
+      return "connections"
+    case "Settings":
+      return "settings"
+    case "Diagnostics":
+      return "diagnostics"
+  }
 }
 
-export const pageTitle = (page: Page): string =>
-  page._tag === "Provider" ? providerFacts[page.provider].title : page._tag
+export const pageTitle = (page: Page): string => {
+  switch (page._tag) {
+    case "Overview":
+    case "QuotaHistory":
+      return "Quota"
+    case "Provider":
+      return providerFacts[page.provider].title
+    case "AddAccount":
+      return "Add an account"
+    case "Usage":
+    case "Performance":
+      return "Analytics"
+    default:
+      return page._tag
+  }
+}
+
+/** What users can find here, in the shared page header. */
+export const pageDescription = (page: Page): string => {
+  switch (page._tag) {
+    case "Overview":
+      return "Find quota you can use before it resets."
+    case "QuotaHistory":
+      return "See unused allowance and its estimated share of subscription fees."
+    case "Accounts":
+      return "Compare readiness, last proxy use, and each account’s tightest shared limit."
+    case "AddAccount":
+      return "Connect a subscription, import a login, or add a key or endpoint."
+    case "Provider":
+      return providerFacts[page.provider].billing === "subscription"
+        ? "Account limits, routing, and upcoming resets."
+        : "Manage accounts and the models they serve."
+    case "Usage":
+      return "Track requests, tokens, and estimated costs through your proxy."
+    case "Performance":
+      return "Explore response times, cache use, and reliability."
+    case "Requests":
+      return "Follow live traffic or inspect recorded requests."
+    case "Connections":
+      return "Connect coding agents and manage access from other machines."
+    case "Diagnostics":
+      return "Check the proxy and its connection to your agents."
+    case "Settings":
+      return "Proxy and browser preferences."
+  }
+}
 
 /** The page as the address's fragment: `#/overview`, `#/claude`. */
-export const pageHash = (page: Page): string =>
-  page._tag === "Provider" ? `#/${page.provider}` : `#/${page._tag.toLowerCase()}`
+export const pageHash = (page: Page): string => {
+  switch (page._tag) {
+    case "Provider":
+      return `#/${page.provider}${page.account === undefined ? "" : `?account=${encodeURIComponent(page.account)}`}`
+    case "Connections":
+      return `#/connections${page.section === undefined ? "" : `?section=${page.section}`}`
+    case "AddAccount":
+      return "#/accounts/add"
+    case "QuotaHistory":
+      return "#/quota/history"
+    default:
+      return `#/${page._tag.toLowerCase()}`
+  }
+}
 
 /** The page the address's fragment names; the overview when it names none. */
 export const parsePage = (hash: string): Page => {
-  const name = hash.replace(/^#\/?/, "").split(/[?&]/)[0] ?? ""
+  const [path, query] = hash.replace(/^#\/?/, "").split("?", 2)
+  const name = path?.split("&", 1)[0] ?? ""
+  if (name === "agents") return Pages.connections("agents")
+  if (name === "access") return Pages.connections("clients")
+  if (name === "connections") {
+    const section = new URLSearchParams(query).get("section")
+    return Pages.connections(section === "agents" || section === "clients" ? section : undefined)
+  }
   const provider = parseProviderId(name)
-  if (Result.isSuccess(provider)) return Pages.provider(provider.success)
+  if (Result.isSuccess(provider)) {
+    const account = new URLSearchParams(query).get("account")
+    return Pages.provider(provider.success, account || undefined)
+  }
   const found = Object.values(Pages).find(
-    (page): page is { readonly _tag: Simple } => typeof page !== "function" && page._tag.toLowerCase() === name,
+    (page): page is { readonly _tag: Simple } => typeof page !== "function" && pageHash(page) === `#/${name}`,
   )
   return found ?? Pages.overview
 }
-
-/** Where the sidebar stands: shown or hidden, and how wide. */
-export interface SidebarState {
-  readonly hidden: boolean
-  readonly width: number
-}
-
-export const sidebarWidth = { least: 190, most: 340, initial: 220 } as const
-
-/** Dragging the edge further left than this hides the sidebar. */
-export const sidebarHideBelow = 130
-
-export const clampWidth = (width: number): number =>
-  Math.min(sidebarWidth.most, Math.max(sidebarWidth.least, Number.isFinite(width) ? width : sidebarWidth.initial))
-
-/**
- * Where a drag of the sidebar's edge leaves it: the pointer's x sets the
- * width within its limits; past the hiding point the sidebar hides and keeps
- * the width the drag began with.
- */
-export const dragSidebar = (x: number, startWidth: number): SidebarState =>
-  x < sidebarHideBelow ? { hidden: true, width: startWidth } : { hidden: false, width: clampWidth(x) }
 
 /**
  * The owner key handed to the web dashboard in its address (`#key=sm-…`),
@@ -109,5 +188,8 @@ export const keyFromHash = (hash: string): { readonly key?: string; readonly res
   if (found === undefined) return { rest: hash }
   const others = parts.filter((part) => part !== found)
   const key = decodeURIComponent(found.slice("key=".length)).trim()
-  return { ...(key === "" ? {} : { key }), rest: others.length === 0 ? "" : `#${others.join("&")}` }
+  return {
+    ...(key === "" ? {} : { key }),
+    rest: others.length === 0 ? "" : `#${others.join("&")}`,
+  }
 }

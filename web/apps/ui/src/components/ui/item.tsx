@@ -1,3 +1,4 @@
+// Slopmax's choice rows use the same spacing as settings and account rows.
 import * as React from "react"
 import { mergeProps } from "@base-ui/react/merge-props"
 import { useRender } from "@base-ui/react/use-render"
@@ -32,9 +33,17 @@ const itemVariants = cva(
         default: "border-transparent",
         outline: "border-border",
         muted: "border-transparent bg-muted/50",
+        directory:
+          "min-h-16 flex-nowrap rounded-none border-transparent hover:bg-accent/45 focus-visible:ring-inset data-[variant=directory]:px-(--card-spacing)",
+        choice:
+          "cursor-pointer rounded-none border-transparent hover:bg-muted/55 has-[>[data-checked]]:bg-accent/50 has-[[data-slot=radio-group-item]:focus-visible]:outline-2 has-[[data-slot=radio-group-item]:focus-visible]:-outline-offset-2 has-[[data-slot=radio-group-item]:focus-visible]:outline-ring",
+        "setting-summary":
+          "relative rounded-none border-transparent bg-accent/40 data-[variant=setting-summary]:gap-y-1.5 before:pointer-events-none before:absolute before:inset-y-0 before:inset-s-0 before:w-1 before:bg-primary before:measurement-dither",
+        "setting-control": "border-transparent data-[variant=setting-control]:gap-y-1",
       },
       size: {
         default: "gap-2.5 px-3 py-2.5",
+        row: "gap-3 px-4 py-3 sm:px-5",
         sm: "gap-2.5 px-3 py-2.5",
         xs: "gap-2 px-2.5 py-2 in-data-[slot=dropdown-menu-content]:p-0",
       },
@@ -120,7 +129,7 @@ function ItemTitle({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="item-title"
       className={cn(
-        "line-clamp-1 flex w-fit items-center gap-2 text-sm leading-snug font-medium underline-offset-4",
+        "line-clamp-1 flex w-fit items-center gap-2 text-sm leading-snug font-medium underline-offset-4 group-data-[variant=directory]/item:line-clamp-none group-data-[variant=setting-summary]/item:font-heading group-data-[variant=setting-summary]/item:text-xl group-data-[variant=setting-summary]/item:font-semibold",
         className,
       )}
       {...props}
@@ -145,7 +154,10 @@ function ItemActions({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="item-actions"
-      className={cn("flex max-w-full flex-wrap items-center gap-2", className)}
+      className={cn(
+        "flex max-w-full flex-wrap items-center gap-2 @max-xs:group-data-[variant=directory]/item:gap-1",
+        className,
+      )}
       {...props}
     />
   )

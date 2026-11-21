@@ -20,7 +20,7 @@ afterEach(async () => {
 })
 
 /** What `/healthz` answers a machine on the tailnet that sent the tailnet token. */
-/** A button on the page itself, not the sidebar: the sidebar has a "Claude" of its own. */
+/** A control scoped to the page content. */
 const inPage = (name: string) =>
   [...document.querySelectorAll<HTMLElement>("main button")].find(
     (button) => button.getAttribute("aria-label") === name || button.textContent?.trim() === name,
@@ -66,22 +66,28 @@ describe("opened over the tailnet without a key", () => {
     expect(Option.isNone(Effect.runSync(page.host.host.key))).toBe(true)
     await showsSoon("5 of 7 accounts are ready")
     expect(shows("Read-only from this machine. On the hub: slopmax tailscale admin add laptop")).toBe(true)
-    expect(control("Refresh usage").hasAttribute("disabled")).toBe(true)
+    expect(control("Refresh").hasAttribute("disabled")).toBe(true)
     expect(page.stub.calls.some((call) => adminCalls.includes(call.endpoint))).toBe(false)
   })
 
   test("read-only, the controls that change things are disabled and the pages say why", async () => {
-    const page = await fromTailnet({ health: overTailnet("view"), tailnet: published }, "#/access")
+    const page = await fromTailnet({ health: overTailnet("view"), tailnet: published }, "#/accounts/add")
     await showsSoon("Add an account")
-    for (const name of ["Claude", "ChatGPT with a code", "Import", "Add key", "Create key"]) {
+    for (const name of ["Claude", "ChatGPT with a code", "Import", "Add key"]) {
       expect([name, inPage(name)?.hasAttribute("disabled")]).toEqual([name, true])
     }
     expect(shows("Read-only from this machine.")).toBe(true)
+    location.hash = "#/access"
     await showsSoon("Other machines")
+    expect(inPage("Create key")?.hasAttribute("disabled")).toBe(true)
     location.hash = "#/agents"
     await showsSoon("Agents on this machine use the hub")
     location.hash = "#/settings"
-    await showsSoon("changed on the hub, or from a machine that may manage it")
+    await showsSoon("Routing strategy")
+    expect(inPage("Change strategy")).toBeUndefined()
+    expect(shows("Last reported")).toBe(false)
+    page.stub.endStreams()
+    await showsSoon("Last reported")
     location.hash = "#/diagnostics"
     await showsSoon("Run slopmax doctor on the hub")
     location.hash = "#/claude"
@@ -92,7 +98,7 @@ describe("opened over the tailnet without a key", () => {
 
   test("an admin machine opens it with nothing held back", async () => {
     const page = await fromTailnet({ health: overTailnet("admin") }, "#/settings")
-    await showsSoon("Session timeout")
+    await showsSoon("Paid API fallback")
     expect(shows("Read-only from this machine")).toBe(false)
     expect(shows("Open the slopmax dashboard")).toBe(false)
     expect(page.stub.calls.some((call) => call.endpoint === "settings")).toBe(true)

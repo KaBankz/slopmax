@@ -8,16 +8,9 @@ const view = settingsView(defaultSettings("sm-test"))
 describe("the settings page's live settings", () => {
   test("every live setting the API lists has a place: its own section or Advanced, each with its title", () => {
     const advanced = advancedRows(view).map((row) => row.name)
-    const named = ["strategy", "sessionAffinity", "redeemExpiring", "redeemWhenExhausted"]
+    const named = ["strategy", "sessionAffinity", "paidOverflow", "redeemExpiring", "redeemWhenExhausted"]
     expect([...named, ...advanced].toSorted()).toEqual([...liveKeys].toSorted())
-    expect(advanced).toEqual([
-      "sessionMinutes",
-      "warmWindows",
-      "paidOverflow",
-      "pollMinutes",
-      "refreshTokens",
-      "websockets",
-    ])
+    expect(advanced).toEqual(["sessionMinutes", "warmWindows", "pollMinutes", "refreshTokens", "websockets"])
     for (const row of advancedRows(view)) expect(row.title).not.toBe("")
   })
 

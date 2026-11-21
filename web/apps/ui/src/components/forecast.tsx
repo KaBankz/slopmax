@@ -15,7 +15,8 @@ import type { Group } from "../view/groups.ts"
 import { TrendChart } from "./charts.tsx"
 import { AccountName } from "./parts.tsx"
 import { Segmented } from "./segmented.tsx"
-import { Tip } from "./tip.tsx"
+import { Button } from "./ui/button.tsx"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible.tsx"
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "./ui/card.tsx"
 
 /** The pool's detail once read; nothing while it loads or when the pool has no working account. */
@@ -25,7 +26,13 @@ export function usePoolDetail(provider: SubscriptionId): Option.Option<PoolDetai
 
 const figureValue = cva("truncate text-lg font-semibold tabular-nums", {
   variants: {
-    tone: { good: "", muted: "", accent: "", warn: "text-warning", bad: "text-destructive" },
+    tone: {
+      good: "",
+      muted: "",
+      accent: "",
+      warn: "text-warning",
+      bad: "text-destructive",
+    },
   },
 })
 
@@ -87,7 +94,11 @@ const markVariants = cva(
   "absolute top-1/2 left-(--at) -translate-x-1/2 -translate-y-1/2 rounded-full ring-2 ring-card",
   {
     variants: {
-      span: { "5h": "size-2 bg-muted-foreground", "7d": "size-3 bg-primary", "30d": "size-3 bg-primary" },
+      span: {
+        "5h": "size-2 bg-muted-foreground",
+        "7d": "size-3 bg-primary",
+        "30d": "size-3 bg-primary",
+      },
     },
   },
 )
@@ -98,14 +109,11 @@ export function ResetLanes({ lanes }: { readonly lanes: Lanes }) {
     <Card>
       <CardHeader>
         <CardTitle>Resets ahead</CardTitle>
-        <CardDescription>
-          The next {laneDays} days. Fill-first spends one account at a time, so resets spread apart keep the pool
-          serving.
-        </CardDescription>
+        <CardDescription>Reported account resets over the next {laneDays} days.</CardDescription>
       </CardHeader>
       <CardContent>
         {/* The names' column is as wide in the day row, the lanes and the legend, so the days line up over the lanes. */}
-        <div className="flex flex-col gap-1.5 [--names:6rem] @lg:[--names:10rem]">
+        <div aria-hidden className="hidden flex-col gap-1.5 [--names:6rem] sm:flex @lg:[--names:10rem]">
           <div className="flex items-end gap-3">
             <span className="w-(--names) shrink-0" />
             <div className="relative h-4 flex-1 text-xs text-muted-foreground">
@@ -135,14 +143,11 @@ export function ResetLanes({ lanes }: { readonly lanes: Lanes }) {
                   />
                 ))}
                 {lane.marks.map((mark) => (
-                  <Tip key={`${mark.span}-${mark.at}`} content={mark.tip}>
-                    <span
-                      role="img"
-                      aria-label={mark.tip}
-                      className={markVariants({ span: mark.span })}
-                      style={{ "--at": `${mark.offset * 100}%` }}
-                    />
-                  </Tip>
+                  <span
+                    key={`${mark.span}-${mark.at}`}
+                    className={markVariants({ span: mark.span })}
+                    style={{ "--at": `${mark.offset * 100}%` }}
+                  />
                 ))}
               </div>
             </div>
@@ -152,7 +157,7 @@ export function ResetLanes({ lanes }: { readonly lanes: Lanes }) {
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
               <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
                 <span aria-hidden className="size-2.5 rounded-full bg-primary" />
-                Weekly reset
+                Weekly or monthly reset
               </span>
               <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
                 <span aria-hidden className="size-2 rounded-full bg-muted-foreground" />
@@ -161,6 +166,16 @@ export function ResetLanes({ lanes }: { readonly lanes: Lanes }) {
             </div>
           </div>
         </div>
+        <Collapsible className="sm:mt-4">
+          <CollapsibleTrigger render={<Button variant="outline" size="sm" />}>Show reset times</CollapsibleTrigger>
+          <CollapsibleContent>
+            <ul className="mt-3 space-y-1 text-sm text-muted-foreground">
+              {lanes.lanes.flatMap((lane) =>
+                lane.marks.map((mark) => <li key={`${lane.id}-${mark.span}-${mark.at}`}>{mark.tip}</li>),
+              )}
+            </ul>
+          </CollapsibleContent>
+        </Collapsible>
       </CardContent>
     </Card>
   )
@@ -168,19 +183,27 @@ export function ResetLanes({ lanes }: { readonly lanes: Lanes }) {
 
 const cellVariants = cva("h-3 min-w-0 flex-1 rounded-xs", {
   variants: {
-    tone: { none: "bg-muted", good: "bg-success/70", warn: "bg-warning", bad: "bg-destructive" },
+    tone: {
+      none: "bg-muted",
+      good: "bg-success/70",
+      warn: "bg-warning",
+      bad: "bg-destructive",
+    },
   },
 })
 
 /** An account's last day in half hours: green answered, amber some failed, red mostly failed. */
 export function HealthStrip({ health }: { readonly health: Health }) {
   return (
-    <Tip content={health.summary}>
-      <div role="img" aria-label={health.summary} className="flex w-full max-w-56 gap-px">
+    <span className="flex min-w-0 flex-col gap-1">
+      <span role="img" aria-label={health.summary} className="flex w-full max-w-56 gap-px">
         {health.cells.map((cell, i) => (
           <span key={i} className={cellVariants({ tone: cell.tone })} />
         ))}
-      </div>
-    </Tip>
+      </span>
+      <span aria-hidden className="text-xs text-muted-foreground">
+        {health.summary}
+      </span>
+    </span>
   )
 }

@@ -8,7 +8,7 @@ import { Button } from "../components/ui/button.tsx"
 import { agentLine, agentsInOrder, cannotChange } from "../view/live.ts"
 import { readOnlyShort } from "../view/tailnet.ts"
 
-export function AgentsPage() {
+export function CodingAgents() {
   const agents = useAtomValue(agentsAtom)
   const again = useAtomRefresh(agentsAtom)
   const canChange = useAtomValue(canChangeAtom)
@@ -18,10 +18,6 @@ export function AgentsPage() {
   const disconnect = useAtomSet(disconnectAgent)
   return (
     <>
-      <p className="max-w-prose text-muted-foreground">
-        Connecting points an agent's own settings at slopmax, so its requests share your accounts. Disconnecting puts
-        back what was there.
-      </p>
       {!canChange ? (
         waiting === undefined ? (
           <Skeleton lines={2} />
@@ -48,12 +44,20 @@ export function AgentsPage() {
                     title={agent.title}
                     detail={
                       <span className="flex flex-wrap gap-x-2">
-                        {line.text !== undefined && <span>{line.text}</span>}
-                        <code className="font-mono text-xs text-muted-foreground">{agent.configPath}</code>
+                        {!agent.installed && line.text !== undefined && <span>{line.text}</span>}
+                        <code className="font-mono text-xs text-muted-foreground wrap-anywhere">
+                          {agent.configPath}
+                        </code>
                       </span>
                     }
                   >
-                    {!line.connected && agent.installed && <Label tone="muted" text="Not connected" />}
+                    {!line.connected && agent.installed && (
+                      <Label
+                        tone="muted"
+                        text={line.text === undefined ? "Not connected" : `Not connected · ${line.text}`}
+                        wrap
+                      />
+                    )}
                     {line.connected && <Label tone="good" text="Connected" />}
                     <Button
                       aria-label={`${verb} ${agent.title}`}
