@@ -15,10 +15,12 @@ import { outdir as defaultOutdir } from "./src/index.ts"
 
 const root = import.meta.dir
 const fontAssets = [
-  ["bricolage-grotesque-latin.woff2", "bricolage-grotesque-latin.woff2"],
-  ["OFL.txt", "bricolage-grotesque-OFL.txt"],
-  ["geist-latin.woff2", "geist-latin.woff2"],
-  ["geist-OFL.txt", "geist-OFL.txt"],
+  "instrument-sans-latin.woff2",
+  "instrument-sans-OFL.txt",
+  "newsreader-latin.woff2",
+  "newsreader-OFL.txt",
+  "ibm-plex-mono-latin.woff2",
+  "ibm-plex-mono-OFL.txt",
 ] as const
 
 const tailwind = (minify: boolean): BunPlugin => ({
@@ -68,9 +70,9 @@ export const build = async (options: BuildOptions = {}): Promise<ReadonlyArray<{
     throw new Error("the UI did not build")
   }
   const fonts = await Promise.all(
-    fontAssets.map(async ([source, name]) => {
+    fontAssets.map(async (name) => {
       const destination = path.join(outdir, name)
-      await Bun.write(destination, Bun.file(path.join(root, "src", "fonts", source)))
+      await Bun.write(destination, Bun.file(path.join(root, "src", "fonts", name)))
       return destination
     }),
   )

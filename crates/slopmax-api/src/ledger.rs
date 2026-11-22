@@ -180,6 +180,9 @@ pub struct HistoryBucket {
 #[serde(rename_all = "camelCase")]
 pub struct NamedTotals {
     pub name: String,
+    /// The provider that served a model. Other groups, such as agents, omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<Provider>,
     pub totals: Totals,
 }
 

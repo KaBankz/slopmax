@@ -37,8 +37,7 @@ const itemVariants = cva(
           "min-h-16 flex-nowrap rounded-none border-transparent hover:bg-accent/45 focus-visible:ring-inset data-[variant=directory]:px-(--card-spacing)",
         choice:
           "cursor-pointer rounded-none border-transparent hover:bg-muted/55 has-[>[data-checked]]:bg-accent/50 has-[[data-slot=radio-group-item]:focus-visible]:outline-2 has-[[data-slot=radio-group-item]:focus-visible]:-outline-offset-2 has-[[data-slot=radio-group-item]:focus-visible]:outline-ring",
-        "setting-summary":
-          "relative rounded-none border-transparent bg-accent/40 data-[variant=setting-summary]:gap-y-1.5 before:pointer-events-none before:absolute before:inset-y-0 before:inset-s-0 before:w-1 before:bg-primary before:measurement-dither",
+        "setting-summary": "rounded-none border-transparent bg-accent/40 data-[variant=setting-summary]:gap-y-1.5",
         "setting-control": "border-transparent data-[variant=setting-control]:gap-y-1",
       },
       size: {

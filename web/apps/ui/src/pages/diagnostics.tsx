@@ -12,6 +12,7 @@ import { readOnlyShort } from "../view/tailnet.ts"
 import { failureText, levelTone, sentenceCase } from "../view/words.ts"
 
 const findingLabels = { ok: "Passed", info: "Info", warn: "Warning", fail: "Failed" } as const
+const literal = /(`[^`]+`|https?:\/\/[^\s,)]+|\b(?:\d{1,3}\.){3}\d{1,3}:\d+|\[[a-f\d:]+\]:\d+)/i
 
 function Findings({ sections }: { readonly sections: ReadonlyArray<DoctorSection> }) {
   const copyText = useAtomSet(copy)
@@ -24,10 +25,18 @@ function Findings({ sections }: { readonly sections: ReadonlyArray<DoctorSection
               {section.findings.map((finding, index) => (
                 <li key={`${finding.text}-${index}`}>
                   <Item size="row" className="items-start">
-                    <ItemMedia className="min-w-18">
-                      <Label tone={levelTone(finding.level)} text={findingLabels[finding.level]} raw />
+                    <ItemMedia className="w-18 justify-start">
+                      <Label tone={levelTone(finding.level)} text={findingLabels[finding.level]} raw dot />
                     </ItemMedia>
-                    <ItemContent>{sentenceCase(finding.text.replaceAll("`", ""))}</ItemContent>
+                    <ItemContent className="min-w-0 wrap-anywhere">
+                      <p>
+                        {sentenceCase(finding.text)
+                          .split(literal)
+                          .map((part, position) =>
+                            position % 2 === 0 ? part : <code key={position}>{part.replace(/^`|`$/g, "")}</code>,
+                          )}
+                      </p>
+                    </ItemContent>
                     {finding.fix !== undefined && (
                       <ItemActions className="min-w-0 flex-wrap">
                         <code className="rounded-sm border bg-muted px-1.5 py-0.5 font-mono text-xs wrap-anywhere">

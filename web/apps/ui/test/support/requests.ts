@@ -19,10 +19,11 @@ import { DateTime } from "effect"
 const noise = (n: number): number => Math.abs((Math.sin(n * 78.233) * 43_758.5453) % 1)
 
 const accounts = [
-  { id: "claude-1a2b3c4d", provider: "claude", models: ["claude-opus-5-5", "claude-fable-5-1"], weight: 5 },
-  { id: "claude-5e6f7a8b", provider: "claude", models: ["claude-opus-5-5", "claude-haiku-5-5"], weight: 2 },
-  { id: "claude-9c0d1e2f", provider: "claude", models: ["claude-haiku-5-5"], weight: 1 },
-  { id: "codex-3a4b5c6d", provider: "codex", models: ["gpt-6-sol", "gpt-6-mini"], weight: 3 },
+  { id: "claude-1a2b3c4d", provider: "claude", models: ["claude-opus-5-5", "claude-fable-5-1"] },
+  { id: "claude-5e6f7a8b", provider: "claude", models: ["claude-opus-5-5", "claude-haiku-5-5"] },
+  { id: "claude-9c0d1e2f", provider: "claude", models: ["claude-haiku-5-5"] },
+  { id: "codex-3a4b5c6d", provider: "codex", models: ["gpt-6-sol", "gpt-6-mini"] },
+  { id: "anthropic-1f2e3d4c", provider: "anthropic", models: ["claude-sonnet-4-5"] },
 ] as const
 
 const price: Readonly<Record<string, readonly [number, number, number]>> = {
@@ -31,20 +32,22 @@ const price: Readonly<Record<string, readonly [number, number, number]>> = {
   "claude-haiku-5-5": [1, 5, 0.1],
   "gpt-6-sol": [2.5, 15, 0.25],
   "gpt-6-mini": [0.3, 1.2, 0.03],
+  "claude-sonnet-4-5": [3, 15, 0.3],
 }
 
-interface Kept {
+export interface FixtureRequest {
   readonly row: RequestRow
   readonly failed: boolean
   readonly rescued: boolean
   readonly tokens: number
+  readonly cacheSaved: number
 }
 
 /** About four hundred requests a day, oldest first. */
-export const fixtureRequests = (now: DateTime.Utc): ReadonlyArray<Kept> => {
-  const end = DateTime.toEpochMillis(now)
+const fixtureRequests = (now: DateTime.Utc): ReadonlyArray<FixtureRequest> => {
+  const end = Math.floor(DateTime.toEpochMillis(now) / 60_000) * 60_000
   const every = 3.5 * 60_000
-  const kept: Array<Kept> = []
+  const kept: Array<FixtureRequest> = []
   const total = Math.floor((30 * 86_400_000) / every)
   for (let i = total; i >= 1; i--) {
     const t = end - i * every + Math.round(noise(i) * every * 0.8)
@@ -53,11 +56,17 @@ export const fixtureRequests = (now: DateTime.Utc): ReadonlyArray<Kept> => {
     const model = account.models[Math.floor(noise(i * 5) * account.models.length)] ?? account.models[0]
     // The newest failed, so today holds a failure at any hour, just after midnight too.
     const status = i === 1 || n < 0.02 ? 529 : n < 0.03 ? 429 : 200
-    const attempts = status === 200 && noise(i * 11) < 0.04 ? 2 : status === 200 ? 1 : 3
     const failed = status !== 200
+    const unplaced = failed && i !== 1 && n < 0.004
+    const attempts = unplaced ? 0 : status === 200 && noise(i * 11) < 0.04 ? 2 : status === 200 ? 1 : 3
     const input = failed ? 0 : Math.round(300 + noise(i * 13) * 4_000)
     const output = failed ? 0 : Math.round(80 + noise(i * 17) * 2_400)
-    const cacheRead = failed ? 0 : Math.round(noise(i * 19) * 90_000)
+    const clock = new Date(t)
+    const hour = clock.getHours()
+    const weekday = clock.getDay()
+    const load = (hour >= 8 && hour <= 19 ? 1 : 0.23) * (weekday === 0 || weekday === 6 ? 0.48 : 1)
+    if (i !== 1 && noise(i * 53) > 0.4 + load * 0.6) continue
+    const cacheRead = failed ? 0 : Math.round(noise(i * 19) * 90_000 * load)
     const cacheWrite = failed ? 0 : Math.round(noise(i * 23) * 4_000)
     const [pin, pout, pcache] = price[model] ?? [0, 0, 0]
     const cost = (input * pin + output * pout + cacheRead * pcache + cacheWrite * pin * 1.25) / 1_000_000
@@ -66,7 +75,7 @@ export const fixtureRequests = (now: DateTime.Utc): ReadonlyArray<Kept> => {
     const ms = Math.round(1_500 + noise(i * 31) * 40_000)
     const record = LedgerRecord.cases.Request.make({
       at: DateTime.makeUnsafe(t),
-      account: AccountId.make(account.id),
+      ...(unplaced ? {} : { account: AccountId.make(account.id) }),
       provider: account.provider,
       model,
       status,
@@ -89,12 +98,23 @@ export const fixtureRequests = (now: DateTime.Utc): ReadonlyArray<Kept> => {
       failed,
       rescued: !failed && attempts > 1,
       tokens: input + output + cacheRead + cacheWrite,
+      cacheSaved: (cacheRead * (pin - pcache)) / 1_000_000,
     })
   }
   return kept
 }
 
 const days: { readonly [K in HistoryRange]: number } = { today: 0, "7d": 6, "30d": 29 }
+
+/** The same local ranges that the proxy queries, with one ledger for every view. */
+export const fixtureRange = (now: DateTime.Utc, range: HistoryRange, quiet = false) => {
+  const zone = DateTime.zoneMakeLocal()
+  const since = DateTime.subtract(DateTime.startOf(DateTime.setZone(now, zone), "day"), { days: days[range] })
+  const rows = quiet
+    ? []
+    : fixtureRequests(now).filter(({ row }) => DateTime.isGreaterThanOrEqualTo(row.record.at, since))
+  return { since: DateTime.toUtc(since), rows }
+}
 
 /** `GET /requests` over the fixture ledger. */
 export const fixtureRequestPage = (
@@ -110,12 +130,9 @@ export const fixtureRequestPage = (
     readonly limit?: number
   },
 ): RequestPage => {
-  const zone = DateTime.zoneMakeLocal()
-  const since = DateTime.subtract(DateTime.startOf(DateTime.setZone(now, zone), "day"), { days: days[query.range] })
-  const inRange = (quiet ? [] : fixtureRequests(now))
-    .filter((kept) => DateTime.isGreaterThanOrEqualTo(kept.row.record.at, since))
-    .toReversed()
-  const takes = (kept: Kept) =>
+  const { since, rows } = fixtureRange(now, query.range, quiet)
+  const inRange = rows.toReversed()
+  const takes = (kept: FixtureRequest) =>
     (query.account === undefined || kept.row.record.account === query.account) &&
     (query.model === undefined || kept.row.record.model === query.model) &&
     (query.agent === undefined || kept.row.record.agent === query.agent) &&
@@ -127,7 +144,7 @@ export const fixtureRequestPage = (
   const answered = matched.filter((kept) => !kept.failed)
   return new RequestPage({
     range: query.range,
-    since: DateTime.toUtc(since),
+    since,
     rows: matched.slice(offset, offset + limit).map((kept) => kept.row),
     offset,
     matched: matched.length,

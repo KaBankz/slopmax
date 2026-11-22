@@ -150,11 +150,22 @@ const successChange = (history: History, rate: number | undefined): Change | und
       }
 }
 
-/** The answered requests in the preceding span, when supplied by the ledger. */
-export const previousRequests = (history: History): string | undefined =>
-  history.previous === undefined
-    ? undefined
-    : `For comparison, ${count(history.previous.total.requests, "answered request")} ${before(history)}`
+export const usageMetrics = ["tokens", "requests", "value"] as const
+export type UsageMetric = (typeof usageMetrics)[number]
+
+/** The selected measure in the preceding span, when the ledger can compare it. */
+export const previousMetric = (history: History, metric: UsageMetric): string | undefined => {
+  const total = history.previous?.total
+  if (total === undefined) return undefined
+  if (metric === "value" && (total.unpriced > 0 || history.total.unpriced > 0)) return undefined
+  const value =
+    metric === "tokens"
+      ? `${compact(total.tokens)} tokens`
+      : metric === "requests"
+        ? count(total.requests, "answered request")
+        : `${dollars(total.cost)} at API prices`
+  return `For comparison, ${value} ${before(history)}`
+}
 
 /** The known fee share for one account, with older ledgers using their range-wide price coverage. */
 export const leftAccountValue = (account: LeftAccount, unpriced: number): string => {
@@ -298,6 +309,7 @@ const perDay = (span: ReadonlyArray<HistoryBucket>, pick: (day: HistoryBucket) =
 
 /** One line in a usage breakdown, with its share and the figures beside it. */
 export interface BarRow {
+  readonly key: string
   readonly name: string
   /** Whose it is, for its color, when it is one provider's. */
   readonly provider?: ProviderId
@@ -310,6 +322,7 @@ export interface BarRow {
 
 const bars = (
   rows: ReadonlyArray<{
+    readonly key?: string
     readonly name: string
     readonly provider?: ProviderId | undefined
     readonly detail?: string
@@ -318,6 +331,7 @@ const bars = (
 ): ReadonlyArray<BarRow> => {
   const most = Math.max(1, ...rows.map((row) => row.totals.tokens))
   return rows.map((row) => ({
+    key: row.key ?? `${row.provider ?? ""}:${row.name}`,
     name: row.name,
     ...(row.provider === undefined ? {} : { provider: row.provider }),
     ...(row.detail === undefined ? {} : { detail: row.detail }),
@@ -328,9 +342,12 @@ const bars = (
   }))
 }
 
-/** The provider of the range's that serves a model, first in its order; none for a name no provider claims. */
-export const modelProvider = (providers: ReadonlyArray<ProviderId>, model: string): ProviderId | undefined =>
-  providers.find((id) => matchesAny(providerFacts[id].models, model))
+/** Infer a provider for older reports only when the model matches one provider's patterns. */
+export const modelProvider = (providers: ReadonlyArray<ProviderId>, model: string): ProviderId | undefined => {
+  if (providers.includes("compat")) return undefined
+  const matches = providers.filter((id) => matchesAny(providerFacts[id].models, model))
+  return matches.length === 1 ? matches[0] : undefined
+}
 
 /** The provider an agent is made for, by its title; none for `Other` and `Warmups`. */
 export const agentProvider = (name: string): ProviderId | undefined =>
@@ -341,8 +358,9 @@ export const topModels = 5
 
 /** The models by tokens: the top five by name, then the rest as `Other` when it has tokens. */
 export const modelRows = (history: History): ReadonlyArray<BarRow> => {
-  const named = history.models.slice(0, topModels)
-  const rest = history.models.slice(topModels)
+  const ranked = history.models.toSorted((a, b) => b.totals.tokens - a.totals.tokens)
+  const named = ranked.slice(0, topModels)
+  const rest = ranked.slice(topModels)
   const other = rest.reduce(
     (sum, row) =>
       new Totals({
@@ -358,12 +376,13 @@ export const modelRows = (history: History): ReadonlyArray<BarRow> => {
     Totals.zero,
   )
   return bars([
-    ...named.map((row) => ({
+    ...named.map((row, index) => ({
+      key: row.provider === undefined ? `legacy:${row.name}:${index}` : `model:${row.provider}:${row.name}`,
       name: row.name,
-      provider: modelProvider(history.providers, row.name),
+      provider: row.provider ?? modelProvider(history.providers, row.name),
       totals: row.totals,
     })),
-    ...(other.tokens > 0 ? [{ name: "Other", totals: other }] : []),
+    ...(other.tokens > 0 ? [{ key: "other", name: "Other", totals: other }] : []),
   ])
 }
 

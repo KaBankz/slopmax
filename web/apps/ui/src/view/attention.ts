@@ -40,7 +40,7 @@ export const standing = (report: Report): Standing => {
   return {
     headline,
     ...(parts.length > 0 ? { detail: listed(parts) } : {}),
-    tone: signedOut > 0 ? "bad" : limited > 0 ? "warn" : ready > 0 ? "good" : "muted",
+    tone: ready === 0 && signedOut > 0 ? "bad" : limited + signedOut > 0 ? "warn" : ready > 0 ? "good" : "muted",
   }
 }
 

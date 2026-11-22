@@ -30,14 +30,20 @@ export interface RequestFilter {
 
 export const allRequests: RequestFilter = { span: "live", outcome: "all" }
 
-export const listings: ReadonlyArray<{ readonly value: Listing; readonly title: string }> = [
+export const listings: ReadonlyArray<{
+  readonly value: Listing
+  readonly title: string
+}> = [
   { value: "live", title: "Live" },
   { value: "today", title: "Today" },
   { value: "7d", title: "7 days" },
   { value: "30d", title: "30 days" },
 ]
 
-export const outcomes: ReadonlyArray<{ readonly value: RequestOutcome; readonly title: string }> = [
+export const outcomes: ReadonlyArray<{
+  readonly value: RequestOutcome
+  readonly title: string
+}> = [
   { value: "all", title: "Any outcome" },
   { value: "answered", title: "Answered" },
   { value: "failed", title: "Failed" },
@@ -138,7 +144,7 @@ export const rowView = (
     time: when(record.at, now, zone),
     who: senderTitle(record.agent),
     model: record.model ?? "—",
-    account: record.account === undefined ? "No account free" : name(record.account),
+    account: record.account === undefined ? noAccount : name(record.account),
     status: String(record.status),
     failed: isFailure(record.status) || (row.end !== undefined && row.end !== "client-gone"),
     notes: [
@@ -161,6 +167,7 @@ export interface Fact {
 }
 
 const statusWords = (status: number): string => {
+  if (status < 200) return "no response"
   if (status < 400) return "answered"
   if (status === 401 || status === 403) return "refused the sign-in"
   if (status === 429) return "rate limited"
@@ -169,12 +176,17 @@ const statusWords = (status: number): string => {
   return "refused"
 }
 
+const noAccount = "No account recorded"
+
 /** Everything known of one request, grouped for its sheet. */
 export const facts = (
   row: RequestRow,
   name: (id: string) => string,
   zone: DateTime.TimeZone,
-): ReadonlyArray<{ readonly title: string; readonly facts: ReadonlyArray<Fact> }> => {
+): ReadonlyArray<{
+  readonly title: string
+  readonly facts: ReadonlyArray<Fact>
+}> => {
   const r = row.record
   const at = DateTime.formatIntl(
     r.at,
@@ -192,30 +204,19 @@ export const facts = (
   )
   return [
     {
-      title: "Request",
-      facts: [
-        { title: "When", value: at },
-        { title: "Sent by", value: senderTitle(r.agent) },
-        ...(r.machine === undefined ? [] : [{ title: "From", value: r.machine }]),
-        { title: "Model", value: r.model ?? "—", mono: true },
-        { title: "Provider", value: providerFacts[r.provider].title },
-        { title: "Account", value: r.account === undefined ? "None was free" : name(r.account) },
-        ...(r.session === undefined ? [] : [{ title: "Session", value: r.session, mono: true }]),
-        { title: "Connection", value: r.via === "socket" ? "WebSocket" : "HTTP" },
-      ],
-    },
-    {
       title: "Outcome",
       facts: [
         { title: "Status", value: `${r.status}, ${statusWords(r.status)}` },
         {
           title: "Accounts tried",
           value:
-            r.attempts === 1
-              ? "1"
-              : isFailure(r.status)
-                ? `${r.attempts}, none could answer`
-                : `${r.attempts}, failover saved it`,
+            r.attempts === 0
+              ? "None"
+              : r.attempts === 1
+                ? "1"
+                : isFailure(r.status)
+                  ? `${r.attempts}, none could answer`
+                  : `${r.attempts}, failover saved it`,
         },
         ...(row.end === undefined ? [] : [{ title: "Ended", value: ends[row.end] }]),
         ...(r.firstByteMs === undefined ? [] : [{ title: "First byte", value: secs(r.firstByteMs) }]),
@@ -223,13 +224,39 @@ export const facts = (
       ],
     },
     {
+      title: "Request",
+      facts: [
+        { title: "When", value: at },
+        { title: "Sent by", value: senderTitle(r.agent) },
+        ...(r.machine === undefined ? [] : [{ title: "From", value: r.machine }]),
+        { title: "Model", value: r.model ?? "—", mono: true },
+        { title: "Provider", value: providerFacts[r.provider].title },
+        {
+          title: isFailure(r.status) && r.attempts > 1 && r.account !== undefined ? "Last tried" : "Account",
+          value: r.account === undefined ? noAccount : name(r.account),
+        },
+        ...(r.session === undefined ? [] : [{ title: "Session", value: r.session, mono: true }]),
+        {
+          title: "Connection",
+          value: r.via === "socket" ? "WebSocket" : "HTTP",
+        },
+      ],
+    },
+    {
       title: "Tokens",
       facts: [
-        { title: "Input", value: grouped(r.usage.input) },
-        { title: "Output", value: grouped(r.usage.output) },
-        { title: "Cache read", value: grouped(r.usage.cacheRead) },
-        { title: "Cache write", value: grouped(r.usage.cacheWrite) },
-        { title: "At API prices", value: row.cost === undefined ? "No known price" : dollars(row.cost) },
+        ...(tokensOf(r) === 0
+          ? [{ title: "Usage", value: "No tokens recorded" }]
+          : [
+              { title: "Input", value: grouped(r.usage.input) },
+              { title: "Output", value: grouped(r.usage.output) },
+              { title: "Cache read", value: grouped(r.usage.cacheRead) },
+              { title: "Cache write", value: grouped(r.usage.cacheWrite) },
+            ]),
+        {
+          title: "At API prices",
+          value: row.cost === undefined ? "No known price" : dollars(row.cost),
+        },
       ],
     },
   ]

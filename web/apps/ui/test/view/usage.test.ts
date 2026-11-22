@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  AccountTotals,
   History,
   HistoryBucket,
   LeftAccount,
@@ -21,13 +22,14 @@ import {
   modelRows,
   perRequest,
   performanceStats,
-  previousRequests,
+  previousMetric,
   requestTotal,
   speedRows,
   tokenMix,
   usageStats,
 } from "../../src/view/usage.ts"
 import { fixtureHistory, quietHistory } from "../support/fixtures.ts"
+import { fixtureRequestPage } from "../support/requests.ts"
 
 const now = DateTime.makeUnsafe("2026-10-31T15:30:00Z")
 const totals = (requests: number, tokens: number, cost = 0, unpriced = 0, failed = 0) =>
@@ -169,7 +171,7 @@ describe("tables and parts", () => {
     const models = ["a", "b", "c", "d", "e", "f", "g"].map(
       (name, i) => new NamedTotals({ name, totals: totals(1, (7 - i) * 1_000, 1) }),
     )
-    const rows = modelRows(history({ models }))
+    const rows = modelRows(history({ models: models.toReversed() }))
     expect(rows.map((row) => [row.name, row.tokens])).toEqual([
       ["a", "7.0k"],
       ["b", "6.0k"],
@@ -186,8 +188,36 @@ describe("tables and parts", () => {
     expect(modelProvider(["anthropic", "codex"], "claude-opus-5-5")).toBe("anthropic")
     expect(modelProvider(["claude", "codex"], "gpt-6.1-sol")).toBe("codex")
     expect(modelProvider(["claude", "grok"], "unknown")).toBeUndefined()
+    expect(
+      modelRows(
+        history({
+          providers: ["claude", "anthropic"],
+          models: [new NamedTotals({ name: "claude-opus-5-5", provider: "anthropic", totals: totals(1, 1_000) })],
+        }),
+      )[0]?.provider,
+    ).toBe("anthropic")
     expect(agentProvider("Grok Build")).toBe("grok")
     expect(agentProvider("Other")).toBeUndefined()
+  })
+
+  test("older model totals with an ambiguous provider keep their own neutral rows", () => {
+    const model = "claude-opus-5-5"
+    const rows = modelRows(
+      history({
+        providers: ["claude", "anthropic"],
+        models: [
+          new NamedTotals({ name: model, totals: totals(1, 2_000) }),
+          new NamedTotals({ name: model, totals: totals(1, 1_000) }),
+        ],
+      }),
+    )
+    expect(rows.map(({ name, tokens }) => [name, tokens])).toEqual([
+      [model, "2.0k"],
+      [model, "1.0k"],
+    ])
+    expect(rows.every((row) => row.provider === undefined)).toBe(true)
+    expect(new Set(rows.map((row) => row.key)).size).toBe(2)
+    expect(modelProvider(["claude", "compat"], model)).toBeUndefined()
   })
 
   test("the token mix splits every token four ways, and says what a request carries", () => {
@@ -213,16 +243,27 @@ describe("tables and parts", () => {
   test("the accounts table gives shares, a dash for none failed, and a total", () => {
     const week = fixtureHistory("7d", now)
     const table = accountRows(week)
-    expect(table.rows.map((row) => row.name)).toEqual([
+    expect(table.rows.map((row) => row.name).toSorted()).toEqual([
+      "Team API key",
       "ana@studio.dev",
       "ana@studio.dev",
       "ben@studio.dev",
       "ops@studio.dev",
-      "Team API key",
     ])
-    expect(table.rows[2]?.failed).toBe("—")
-    expect(table.rows[3]?.failed).toBe("4")
-    expect(table.unplaced).toBe(3)
+    expect(
+      accountRows(
+        history({
+          accounts: [new AccountTotals({ name: "Ready", provider: "claude", totals: totals(1, 100) })],
+        }),
+      ).rows[0]?.failed,
+    ).toBe("—")
+    const log = fixtureRequestPage(now, false, { range: "7d", outcome: "all" })
+    expect(requestTotal(week.total)).toBe(log.matched)
+    expect(week.total.failed).toBe(log.failed)
+    expect(week.total.tokens).toBe(log.tokens)
+    expect(week.total.cost).toBeCloseTo(log.cost)
+    expect(week.rescued).toBe(log.rescued)
+    expect(week.accounts.reduce((sum, entry) => sum + entry.totals.failed, table.unplaced)).toBe(week.total.failed)
     expect(table.total.share).toBe("100%")
     expect(speedRows(week)[0]).toEqual({
       model: "gpt-6-mini",
@@ -233,14 +274,20 @@ describe("tables and parts", () => {
     })
   })
 
-  test("the comparison matches the answered requests metric for the preceding span", () => {
+  test("the comparison follows the selected metric and hides incomplete prices", () => {
     const today = fixtureHistory("today", now)
     const yesterday = today.previous?.total ?? Totals.zero
-    expect(previousRequests(today)).toBe(
+    expect(previousMetric(today, "requests")).toBe(
       `For comparison, ${yesterday.requests.toLocaleString("en-US")} answered requests yesterday by this hour`,
     )
-    expect(previousRequests(fixtureHistory("7d", now))).toMatch(/^For comparison, .* in the previous 7 days$/)
-    expect(previousRequests(fixtureHistory("30d", now))).toBeUndefined()
+    expect(previousMetric(fixtureHistory("7d", now), "tokens")).toMatch(
+      /^For comparison, .* tokens in the previous 7 days$/,
+    )
+    expect(previousMetric(today, "value")).toMatch(/^For comparison, \$.* at API prices yesterday by this hour$/)
+    expect(
+      previousMetric(new History({ ...today, total: new Totals({ ...today.total, unpriced: 1 }) }), "value"),
+    ).toBeUndefined()
+    expect(previousMetric(fixtureHistory("30d", now), "tokens")).toBeUndefined()
     expect(isQuiet(quietHistory("today"))).toBe(true)
     expect(isQuiet(today)).toBe(false)
   })

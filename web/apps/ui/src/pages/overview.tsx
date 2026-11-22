@@ -3,7 +3,7 @@ import { useAtomSet, useAtomValue } from "@effect/atom-react"
 import { type Report, SubscriptionId } from "@slopmax/client"
 import { DateTime, Duration, Option, Schema } from "effect"
 import { AsyncResult } from "effect/reactivity"
-import { ArrowUpCircle, ChevronRight, Gauge, Plus, Radio, Users } from "lucide-react"
+import { ArrowDown, ArrowUpCircle, ChevronRight, Gauge, Plus, Radio, Users } from "lucide-react"
 import {
   askNotifications,
   attentionAtom,
@@ -21,7 +21,8 @@ import {
   signIn,
   zone,
 } from "../atoms.ts"
-import { Dot, Empty, Label, Panel, Section, SegmentedBar } from "../components/parts.tsx"
+import { Dot, Empty, Label, Panel, PoolUsageLegend, Section, SegmentedBar } from "../components/parts.tsx"
+import { ProviderMark } from "../components/provider-mark.tsx"
 import { QuotaBoard } from "../components/quota-board.tsx"
 import { Alert, AlertTitle } from "../components/ui/alert.tsx"
 import { Badge } from "../components/ui/badge.tsx"
@@ -31,6 +32,7 @@ import { Item, ItemActions, ItemContent, ItemMedia } from "../components/ui/item
 import { type Attention, standing } from "../view/attention.ts"
 import { type Group, nextAccountBack, resetsLeft } from "../view/groups.ts"
 import { pageHash, Pages } from "../view/pages.ts"
+import { quotaPercent } from "../view/quota.ts"
 import {
   limitsNotRead,
   releaseNotes,
@@ -155,11 +157,11 @@ function AttentionRow({ item }: { readonly item: Attention }) {
   const name = report?.accounts.find((account) => account.id === item.account)?.name
   return (
     <div className="border-t first:border-t-0">
-      <Item className="flex-nowrap">
-        <ItemMedia>
+      <Item className="items-start">
+        <ItemMedia className="mt-2">
           <Dot tone={item.tone} />
         </ItemMedia>
-        <ItemContent className="min-w-0">
+        <ItemContent className="min-w-0 basis-44">
           <p>{item.text}</p>
         </ItemContent>
         <ItemActions>
@@ -205,7 +207,10 @@ function PoolBlock({ group }: { readonly group: Group }) {
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
           <div className="flex flex-wrap items-baseline gap-x-2">
             <CardTitle>
-              <h3>{group.title}</h3>
+              <h3 className="flex items-center gap-2">
+                <ProviderMark provider={group.provider} />
+                {group.title}
+              </h3>
             </CardTitle>
             <span className="text-xs text-muted-foreground">
               {group.enabled === 0 ? "All turned off" : `${group.ready} of ${group.enabled} ready`}
@@ -231,7 +236,9 @@ function PoolBlock({ group }: { readonly group: Group }) {
             <div key={window.title} className="flex flex-col gap-0.5">
               <div className="flex items-baseline justify-between gap-2 text-xs">
                 <span>{window.title}</span>
-                <span className="shrink-0 font-medium tabular-nums">{window.gauge.percent} used across accounts</span>
+                <span className="shrink-0 font-medium tabular-nums">
+                  {quotaPercent((1 - window.gauge.fraction) * 100)} left
+                </span>
               </div>
               <SegmentedBar window={window} weighted={group.weighted} />
               <p className="text-xs text-muted-foreground tabular-nums">
@@ -278,40 +285,62 @@ export function OverviewPage() {
   const pools = all.filter((group) => group.subscription)
   return (
     <>
-      {pools.length > 0 ? (
-        <QuotaBoard report={report} />
-      ) : (
-        <Empty
-          icon={Gauge}
-          title="No subscription quota to track"
-          detail="Quota windows appear when you connect a subscription. API keys and compatible endpoints report their requests in Activity."
-        >
-          <div className="flex flex-wrap justify-center gap-2">
-            <ButtonLink variant="outline" href={pageHash(Pages.accounts)}>
-              View accounts
-            </ButtonLink>
-            <ButtonLink href={pageHash(Pages.usage)}>View usage</ButtonLink>
-          </div>
-        </Empty>
-      )}
       {items.length > 0 && (
-        <Section
-          title="Needs attention"
-          trailing={
-            <span className="flex items-center gap-2">
-              <Badge variant="secondary">{items.length}</Badge>
-              <NotifyMe report={report} />
-            </span>
-          }
-        >
-          <Panel>
-            {items.map((item, i) => (
-              // Its words count down, so the key is what it is about rather than what it says.
-              <AttentionRow key={`${item.account}-${item.remedy}-${i}`} item={item} />
-            ))}
-          </Panel>
-        </Section>
+        <div className="-mb-2 flex @4xl:hidden">
+          <Button
+            variant="link"
+            size="sm"
+            onClick={() => {
+              const heading = document.getElementById("quota-attention")
+              heading?.scrollIntoView({ block: "start" })
+              heading?.focus({ preventScroll: true })
+            }}
+          >
+            {items.length} need attention
+            <ArrowDown aria-hidden data-icon="inline-end" />
+          </Button>
+        </div>
       )}
+      <div className="grid min-w-0 items-start gap-6 @4xl:grid-cols-[minmax(0,2.5fr)_minmax(17rem,1fr)] @4xl:gap-8">
+        {pools.length > 0 ? (
+          <QuotaBoard report={report} />
+        ) : (
+          <Empty
+            icon={Gauge}
+            title="No subscription quota to track"
+            detail="Quota windows appear when you connect a subscription. Usage for API keys and compatible endpoints appears in Analytics."
+          >
+            <div className="flex flex-wrap justify-center gap-2">
+              <ButtonLink variant="outline" href={pageHash(Pages.accounts)}>
+                View accounts
+              </ButtonLink>
+              <ButtonLink href={pageHash(Pages.usage)}>View usage</ButtonLink>
+            </div>
+          </Empty>
+        )}
+        <aside aria-label="Account status" className="flex min-w-0 flex-col gap-6 @4xl:border-s @4xl:ps-6">
+          {items.length > 0 && (
+            <Section
+              title="Needs attention"
+              headingId="quota-attention"
+              trailing={
+                <span className="flex items-center gap-2">
+                  <Badge variant="secondary">{items.length}</Badge>
+                  <NotifyMe report={report} />
+                </span>
+              }
+            >
+              <Panel>
+                {items.map((item, i) => (
+                  // Its words count down, so the key is what it is about rather than what it says.
+                  <AttentionRow key={`${item.account}-${item.remedy}-${i}`} item={item} />
+                ))}
+              </Panel>
+            </Section>
+          )}
+          <Standing report={report} />
+        </aside>
+      </div>
       {pools.length > 0 && (
         <Section title="Subscription limits">
           <div className="grid grid-cols-1 items-start gap-4 @3xl:grid-cols-2">
@@ -319,9 +348,9 @@ export function OverviewPage() {
               <PoolBlock key={group.provider} group={group} />
             ))}
           </div>
+          <PoolUsageLegend windows={pools.flatMap((group) => group.overview)} />
         </Section>
       )}
-      <Standing report={report} />
       <UpdateBanner report={report} />
     </>
   )

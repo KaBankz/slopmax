@@ -419,6 +419,7 @@ pub fn draw_usage(app: &App, flow: &mut Flow<'_>, _now: &Now) {
             .filter(|r| !matches!(r.key.as_str(), "this machine" | "hub"))
             .map(|r| NamedTotals {
                 name: r.key.clone(),
+                provider: None,
                 totals: r.totals,
             })
             .collect();
@@ -522,6 +523,7 @@ fn top(rows: &[NamedTotals], n: usize) -> Vec<NamedTotals> {
     }
     shown.push(NamedTotals {
         name: format!("{} others", rows.len() - n),
+        provider: None,
         totals: rest,
     });
     shown
@@ -549,7 +551,7 @@ fn named_bars(
     let name_w = name_width(flow, rows.iter().map(|r| r.name.as_str()));
     for row in rows {
         let t = &row.totals;
-        let ink = provider_ink(flow, providers, owner(&row.name));
+        let ink = provider_ink(flow, providers, row.provider.or_else(|| owner(&row.name)));
         bar_row(
             flow,
             &row.name,

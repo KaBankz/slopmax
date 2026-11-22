@@ -125,7 +125,7 @@ function ProxySection({ listen }: { readonly listen: string | undefined }) {
         </SettingRow>
         <SettingRow title="Proxy address">
           <InputGroup className="w-72 max-w-full">
-            <InputGroupInput readOnly aria-label="Proxy address" value={address} />
+            <InputGroupInput readOnly aria-label="Proxy address" value={address} variant="literal" />
             <InputGroupAddon align="inline-end">
               <InputGroupButton onClick={() => copyText({ text: address, said: `Copied ${address}` })}>
                 <Copy />
@@ -323,7 +323,9 @@ function LiveSections() {
             </Section>
             <Section title="Limits and reminders">
               <Panel>
-                <h3 className="bg-muted/40 px-4 py-2.5 text-sm font-semibold sm:px-5">Automatic limit resets</h3>
+                <h3 className="bg-muted/40 px-4 py-2.5 text-xs font-medium text-muted-foreground sm:px-5">
+                  Automatic limit resets
+                </h3>
                 <ToggleSetting
                   title="Redeem expiring resets"
                   detail={redeemExpiringDetail}
@@ -336,7 +338,9 @@ function LiveSections() {
                   checked={s.redeemWhenExhausted}
                   onChange={(redeemWhenExhausted) => change({ redeemWhenExhausted })}
                 />
-                <h3 className="border-t bg-muted/40 px-4 py-2.5 text-sm font-semibold sm:px-5">Reminders</h3>
+                <h3 className="border-t bg-muted/40 px-4 py-2.5 text-xs font-medium text-muted-foreground sm:px-5">
+                  Reminders
+                </h3>
                 <ReminderRows notify={s.notify} />
               </Panel>
             </Section>

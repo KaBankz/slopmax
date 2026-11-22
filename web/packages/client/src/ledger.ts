@@ -185,6 +185,8 @@ export class HistoryBucket extends Schema.Class<HistoryBucket>("HistoryBucket")(
 
 export class NamedTotals extends Schema.Class<NamedTotals>("NamedTotals")({
   name: Schema.String,
+  /** Present for model rows when the proxy reports which provider served them. */
+  provider: Schema.optionalKey(ProviderId),
   totals: Totals,
 }) {}
 

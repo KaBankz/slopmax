@@ -8,8 +8,8 @@ const indicatorVariants = cva("h-full", {
   variants: {
     tone: {
       default: "bg-primary",
-      quota: "ordered-dither quota-indicator bg-quota-used",
-      allowance: "ordered-dither allowance-indicator bg-allowance-used",
+      quota: "ordered-dither quota-indicator bg-quota-remaining",
+      allowance: "ordered-dither allowance-indicator bg-allowance-remaining",
       warning: "bg-warning",
       destructive: "bg-destructive",
     },
@@ -50,7 +50,7 @@ function Progress({
         <div
           aria-hidden
           data-slot="progress-marker"
-          className="absolute -bottom-1 left-(--marker) h-3 w-0.5 -translate-x-1/2 rounded-full bg-muted-foreground in-data-[tone=quota]:h-5 in-data-[tone=quota]:bg-quota-foreground in-data-[tone=quota]:ring-1 in-data-[tone=quota]:ring-quota"
+          className="absolute -bottom-1 left-(--marker) h-3 w-0.5 -translate-x-1/2 rounded-full bg-muted-foreground in-data-[tone=quota]:h-5 in-data-[tone=quota]:bg-foreground in-data-[tone=quota]:ring-1 in-data-[tone=quota]:ring-background"
         />
       )}
     </ProgressPrimitive.Root>
@@ -61,7 +61,7 @@ function ProgressTrack({ className, ...props }: ProgressPrimitive.Track.Props) {
   return (
     <ProgressPrimitive.Track
       className={cn(
-        "relative flex h-1 w-full items-center overflow-x-hidden rounded-full bg-muted in-data-[dither]:h-1.5 in-data-[dither]:rounded-sm in-data-[tone=quota]:h-3 in-data-[tone=quota]:rounded-sm in-data-[tone=quota]:bg-quota-fill in-data-[tone=allowance]:h-1.5 in-data-[tone=allowance]:rounded-sm in-data-[tone=allowance]:bg-allowance-fill",
+        "relative flex h-1 w-full items-center overflow-x-hidden rounded-full bg-muted in-data-[dither]:h-1.5 in-data-[dither]:rounded-sm in-data-[tone=quota]:h-3 in-data-[tone=quota]:rounded-sm in-data-[tone=quota]:bg-quota-progress-track in-data-[tone=allowance]:h-1.5 in-data-[tone=allowance]:rounded-sm in-data-[tone=allowance]:bg-allowance-fill in-data-[tone=destructive]:bg-destructive/20",
         className,
       )}
       data-slot="progress-track"

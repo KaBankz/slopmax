@@ -271,14 +271,14 @@ const segmentsTip = (weighted: boolean): string =>
 
 /**
  * The most accounts the pool's bar draws a segment for. Past it the segments
- * would shrink to dots, so the bar reads as the pool's one use instead.
+ * would shrink to dots, so the bar reads as the whole pool's balance.
  */
 export const segmentsShown = 12
 
 /** What the pool's bar shows on hover, when it draws one segment per account or the pool as one. */
 export const poolBarTip = (accounts: number, weighted: boolean): string =>
   accounts > segmentsShown
-    ? `The pool's use across ${accounts} accounts${weighted ? ", weighted by plan" : ""}`
+    ? `Quota remaining across ${accounts} accounts${weighted ? ", weighted by plan" : ""}`
     : segmentsTip(weighted)
 
 const levelTones: { readonly [K in Level]: Tone } = {

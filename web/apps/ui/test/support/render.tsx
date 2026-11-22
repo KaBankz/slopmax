@@ -95,7 +95,10 @@ export const press = async (name: string): Promise<void> => {
 /** Types into a field found by its label or placeholder. */
 export const type = async (label: string, text: string): Promise<void> => {
   const field = [...document.querySelectorAll<HTMLInputElement>("input")].find(
-    (input) => input.getAttribute("aria-label") === label || input.placeholder === label,
+    (input) =>
+      input.getAttribute("aria-label") === label ||
+      input.placeholder === label ||
+      Array.from(input.labels ?? []).some((element) => element.textContent?.trim() === label),
   )
   if (field === undefined) throw new Error(`no field ${JSON.stringify(label)}`)
   await act(async () => {

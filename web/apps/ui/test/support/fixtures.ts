@@ -34,6 +34,7 @@ import {
   Window,
 } from "@slopmax/client"
 import { DateTime } from "effect"
+import { type FixtureRequest, fixtureRange } from "./requests.ts"
 
 export const ownerKey = "sm-dev-owner-key-0000000000000000000000000000"
 export const version = "0.4.0"
@@ -251,100 +252,100 @@ export const emptyReport = (now: DateTime.Utc): Report =>
 
 // --- History --------------------------------------------------------------------
 
-/** A repeatable wobble in 0..1, so the charts look lived in yet never change between runs. */
-const wobble = (n: number): number => (Math.sin(n * 12.9898) * 43_758.5453) % 1
+const monthDay = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" })
+const hourLabel = (hour: number) => `${String(hour).padStart(2, "0")}:00`
+const sum = (rows: ReadonlyArray<FixtureRequest>, value: (row: FixtureRequest) => number) =>
+  rows.reduce((total, row) => total + value(row), 0)
 
-const noise = (n: number): number => Math.abs(wobble(n))
-
-const totals = (fields: Partial<{ [K in keyof Totals]: number }>): Totals =>
+const summarize = (rows: ReadonlyArray<FixtureRequest>): Totals =>
   new Totals({
-    requests: fields.requests ?? 0,
-    input: fields.input ?? 0,
-    output: fields.output ?? 0,
-    cacheRead: fields.cacheRead ?? 0,
-    cacheWrite: fields.cacheWrite ?? 0,
-    cost: fields.cost ?? 0,
-    unpriced: fields.unpriced ?? 0,
-    failed: fields.failed ?? 0,
+    requests: rows.filter((row) => !row.failed).length,
+    failed: rows.filter((row) => row.failed).length,
+    input: sum(rows, ({ row }) => row.record.usage.input),
+    output: sum(rows, ({ row }) => row.record.usage.output),
+    cacheRead: sum(rows, ({ row }) => row.record.usage.cacheRead),
+    cacheWrite: sum(rows, ({ row }) => row.record.usage.cacheWrite),
+    cost: sum(rows, ({ row }) => row.cost ?? 0),
+    unpriced: rows.filter(({ failed, row }) => !failed && row.cost === undefined).length,
   })
 
-const scaled = (t: number, requests: number, cost: number, failed = 0): Totals =>
-  totals({
-    requests,
-    input: Math.round(t * 0.08),
-    output: Math.round(t * 0.04),
-    cacheRead: Math.round(t * 0.82),
-    cacheWrite: Math.round(t * 0.06),
-    cost,
-    failed,
-  })
-
-const monthDay = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" })
-
-const bucketLabels = (range: HistoryRange, now: DateTime.Utc): ReadonlyArray<string> => {
-  if (range === "today") {
-    const hour = DateTime.getPart(DateTime.setZone(now, DateTime.zoneMakeLocal()), "hour")
-    return Array.from({ length: hour + 1 }, (_, h) => `${String(h).padStart(2, "0")}:00`)
-  }
-  const days = range === "7d" ? 7 : 30
-  return Array.from({ length: days }, (_, i) =>
-    DateTime.formatIntl(DateTime.subtract(now, { days: days - 1 - i }), monthDay),
-  )
+const cachedShare = (total: Totals) => {
+  const input = total.input + total.cacheRead + total.cacheWrite
+  return input === 0 ? undefined : total.cacheRead / input
 }
 
-/** A range of history with every chart and table filled in. */
+const sessionsIn = (rows: ReadonlyArray<FixtureRequest>) =>
+  new Set(rows.flatMap(({ row }) => row.record.session ?? [])).size
+
+const waitPercentiles = (rows: ReadonlyArray<FixtureRequest>): readonly [number, number] | undefined => {
+  const waits = rows.flatMap(({ row }) => row.record.firstByteMs ?? []).toSorted((a, b) => a - b)
+  const median = waits[Math.floor(waits.length * 0.5)]
+  const slow = waits[Math.floor(waits.length * 0.95)]
+  return median === undefined || slow === undefined ? undefined : [median, slow]
+}
+
+const namedTotals = (rows: ReadonlyArray<FixtureRequest>, label: (item: FixtureRequest) => string) =>
+  [...Map.groupBy(rows, label)]
+    .map(([name, entries]) => new NamedTotals({ name, totals: summarize(entries) }))
+    .toSorted((a, b) => b.totals.tokens - a.totals.tokens)
+
+/** Every view uses this same fixture ledger. Quota resets are sampled separately. */
 export const fixtureHistory = (range: HistoryRange, now: DateTime.Utc): History => {
-  const labels = bucketLabels(range, now)
-  const scale = range === "today" ? 0.06 : 1
-  const buckets = labels.map((label, i) => {
-    const base = range === "today" ? (i >= 8 && i <= 19 ? 1 : 0.15) : i % 7 >= 5 ? 0.35 : 1
-    const claude = Math.round(base * scale * (2.2e7 + 1.6e7 * noise(i + 1)))
-    const codex = Math.round(base * scale * (0.9e7 + 1.1e7 * noise(i + 50)))
-    const anthropic = i % 3 === 0 ? Math.round(base * scale * 6e5 * noise(i + 90)) : 0
-    const requests = Math.round((claude + codex + anthropic) / 38_000)
-    const failed = noise(i + 7) > 0.8 ? Math.round(1 + 4 * noise(i + 9)) : 0
-    const rescued = noise(i + 3) > 0.55 ? Math.round(1 + 6 * noise(i + 4)) : 0
-    const cost = ((claude + codex) / 1e6) * 0.62 + (anthropic / 1e6) * 3.1
+  const { since, rows } = fixtureRange(now, range)
+  const zone = DateTime.zoneMakeLocal()
+  const local = (at: DateTime.Utc) => DateTime.setZone(at, zone)
+  const hourOf = (at: DateTime.Utc) => DateTime.getPart(local(at), "hour")
+  const bucketLabel = (at: DateTime.Utc) =>
+    range === "today" ? hourLabel(hourOf(at)) : DateTime.formatIntl(at, monthDay)
+  const labels =
+    range === "today"
+      ? Array.from({ length: hourOf(now) + 1 }, (_, hour) => hourLabel(hour))
+      : Array.from({ length: range === "7d" ? 7 : 30 }, (_, index) =>
+          bucketLabel(DateTime.toUtc(DateTime.add(local(since), { days: index }))),
+        )
+  const providers = (["claude", "codex", "anthropic"] as const).filter((provider) =>
+    rows.some(({ row }) => row.record.provider === provider),
+  )
+  const grouped = Map.groupBy(rows, ({ row }) => bucketLabel(row.record.at))
+  const buckets = labels.map((label) => {
+    const entries = grouped.get(label) ?? []
+    const total = summarize(entries)
+    const cached = cachedShare(total)
+    const firstByte = waitPercentiles(entries)
     return new HistoryBucket({
       label,
-      tokens: [claude, codex, anthropic],
-      requests,
-      failed,
-      rescued,
-      sessions: Math.max(1, Math.round(requests / 26)),
-      cost,
-      ...(requests === 0 ? {} : { cached: 0.78 + 0.14 * noise(i + 11) }),
-      ...(requests === 0 ? {} : { firstByte: [620 + 380 * noise(i + 13), 1_900 + 2_100 * noise(i + 17)] as const }),
+      tokens: providers.map((provider) =>
+        sum(entries, (item) => (item.row.record.provider === provider ? item.tokens : 0)),
+      ),
+      requests: total.requests,
+      failed: total.failed,
+      rescued: entries.filter(({ rescued }) => rescued).length,
+      sessions: sessionsIn(entries),
+      cost: total.cost,
+      ...(cached === undefined ? {} : { cached }),
+      ...(firstByte === undefined ? {} : { firstByte }),
     })
   })
-  const sum = (pick: (b: HistoryBucket) => number) => buckets.reduce((s, b) => s + pick(b), 0)
-  const tokens = sum((b) => (b.tokens[0] ?? 0) + (b.tokens[1] ?? 0) + (b.tokens[2] ?? 0))
-  const total = scaled(
-    tokens,
-    sum((b) => b.requests),
-    sum((b) => b.cost),
-    sum((b) => b.failed),
-  )
-  const claudeTokens = sum((b) => b.tokens[0] ?? 0)
-  const codexTokens = sum((b) => b.tokens[1] ?? 0)
-  const keyTokens = sum((b) => b.tokens[2] ?? 0)
-  const share = (part: number) => Math.round((total.requests * part) / Math.max(1, tokens))
-  const activity = Array.from({ length: 7 }, (_row, day) =>
-    Array.from({ length: 24 }, (_hour, hour) => {
-      const working = day < 5 && hour >= 9 && hour <= 18
-      const evening = hour >= 20 && hour <= 23
-      const level = working ? 30 : evening ? 9 : day >= 5 && hour >= 11 && hour <= 16 ? 6 : 0
-      return Math.round(level * noise(day * 24 + hour + 1))
-    }),
-  )
+  const total = summarize(rows)
+  const cached = cachedShare(total)
+  const firstByte = waitPercentiles(rows)?.[0]
+  const accounts = fixtureReport(now).accounts
+  const activity = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0))
+  for (const { failed, row } of rows) {
+    if (failed) continue
+    const at = new Date(row.record.at.epochMilliseconds)
+    const day = activity[(at.getDay() + 6) % 7]
+    const hour = at.getHours()
+    if (day !== undefined) day[hour] = (day[hour] ?? 0) + 1
+  }
   return new History({
     range,
     buckets,
-    providers: ["claude", "codex", "anthropic"],
+    providers,
     total,
-    rescued: sum((b) => b.rescued),
-    unplaced: range === "today" ? 0 : 3,
-    billed: (keyTokens / 1e6) * 3.1,
+    rescued: rows.filter(({ rescued }) => rescued).length,
+    unplaced: rows.filter(({ failed, row }) => failed && row.record.account === undefined).length,
+    billed: sum(rows, ({ row }) => (row.record.provider === "anthropic" ? (row.cost ?? 0) : 0)),
     left:
       range === "today"
         ? LeftOnTheTable.none
@@ -358,10 +359,10 @@ export const fixtureHistory = (range: HistoryRange, now: DateTime.Utc): History 
               new LeftAccount({ name: "ana@studio.dev", provider: "codex", windows: 1, unused: 24, dollars: 17.75 }),
             ],
           }),
-    cacheSaved: total.cost * 2.4,
-    cached: 0.86,
-    sessions: Math.max(1, Math.round(total.requests / 26)),
-    firstByte: 840,
+    cacheSaved: sum(rows, (row) => row.cacheSaved),
+    ...(cached === undefined ? {} : { cached }),
+    sessions: sessionsIn(rows),
+    ...(firstByte === undefined ? {} : { firstByte }),
     ...(range === "7d" ? { monthly: total.cost * (30 / 7) } : {}),
     ...(range === "30d"
       ? {}
@@ -381,76 +382,31 @@ export const fixtureHistory = (range: HistoryRange, now: DateTime.Utc): History 
           }),
         }),
     activity,
-    models: [
-      new NamedTotals({
-        name: "claude-sonnet-5",
-        totals: scaled(claudeTokens * 0.58, share(claudeTokens * 0.58), total.cost * 0.4),
-      }),
-      new NamedTotals({
-        name: "gpt-6-codex",
-        totals: scaled(codexTokens * 0.8, share(codexTokens * 0.8), total.cost * 0.24),
-      }),
-      new NamedTotals({
-        name: "claude-opus-5",
-        totals: scaled(claudeTokens * 0.36, share(claudeTokens * 0.36), total.cost * 0.27),
-      }),
-      new NamedTotals({
-        name: "gpt-6-mini",
-        totals: scaled(codexTokens * 0.2, share(codexTokens * 0.2), total.cost * 0.04),
-      }),
-      new NamedTotals({
-        name: "claude-haiku-5",
-        totals: scaled(claudeTokens * 0.06, share(claudeTokens * 0.06), total.cost * 0.01),
-      }),
-      new NamedTotals({ name: "claude-sonnet-4-5", totals: scaled(keyTokens, share(keyTokens), total.cost * 0.04) }),
-    ],
-    accounts: [
-      new AccountTotals({
-        name: "ana@studio.dev",
-        provider: "claude",
-        totals: scaled(claudeTokens * 0.62, share(claudeTokens * 0.62), total.cost * 0.45, 2),
-      }),
-      new AccountTotals({
-        name: "ana@studio.dev",
-        provider: "codex",
-        totals: scaled(codexTokens, share(codexTokens), total.cost * 0.27, 1),
-      }),
-      new AccountTotals({
-        name: "ben@studio.dev",
-        provider: "claude",
-        totals: scaled(claudeTokens * 0.24, share(claudeTokens * 0.24), total.cost * 0.17),
-      }),
-      new AccountTotals({
-        name: "ops@studio.dev",
-        provider: "claude",
-        totals: scaled(claudeTokens * 0.14, share(claudeTokens * 0.14), total.cost * 0.07, 4),
-      }),
-      new AccountTotals({
-        name: "Team API key",
-        provider: "anthropic",
-        totals: scaled(keyTokens, share(keyTokens), total.cost * 0.04),
-      }),
-    ],
-    agents: [
-      new NamedTotals({
-        name: "Claude Code",
-        totals: scaled(claudeTokens + keyTokens, share(claudeTokens + keyTokens), total.cost * 0.7),
-      }),
-      new NamedTotals({
-        name: "Codex",
-        totals: scaled(codexTokens * 0.97, share(codexTokens * 0.97), total.cost * 0.29),
-      }),
-      new NamedTotals({
-        name: "Warmups",
-        totals: scaled(codexTokens * 0.03, share(codexTokens * 0.03), total.cost * 0.01),
-      }),
-    ],
+    models: providers.flatMap((provider) =>
+      namedTotals(
+        rows.filter(({ failed, row }) => !failed && row.record.provider === provider),
+        ({ row }) => row.record.model ?? "Other",
+      ).map((entry) => new NamedTotals({ ...entry, provider })),
+    ),
+    accounts: accounts
+      .flatMap((entry) => {
+        const entries = rows.filter(({ row }) => row.record.account === entry.id)
+        return entries.length === 0
+          ? []
+          : [new AccountTotals({ name: entry.name, provider: entry.provider, totals: summarize(entries) })]
+      })
+      .toSorted((a, b) => b.totals.tokens - a.totals.tokens),
+    agents: namedTotals(
+      rows.filter(({ failed }) => !failed),
+      ({ row }) =>
+        row.record.agent === "slopmax" ? "Warmups" : row.record.agent === "codex" ? "Codex" : "Claude Code",
+    ),
     speeds: [
       new Speed({ model: "gpt-6-mini", provider: "codex", tokensPerSecond: 182 }),
-      new Speed({ model: "claude-haiku-5", provider: "claude", tokensPerSecond: 141 }),
-      new Speed({ model: "claude-sonnet-5", provider: "claude", tokensPerSecond: 78 }),
-      new Speed({ model: "gpt-6-codex", provider: "codex", tokensPerSecond: 64 }),
-      new Speed({ model: "claude-opus-5", provider: "claude", tokensPerSecond: 41 }),
+      new Speed({ model: "claude-haiku-5-5", provider: "claude", tokensPerSecond: 141 }),
+      new Speed({ model: "claude-fable-5-1", provider: "claude", tokensPerSecond: 78 }),
+      new Speed({ model: "gpt-6-sol", provider: "codex", tokensPerSecond: 64 }),
+      new Speed({ model: "claude-opus-5-5", provider: "claude", tokensPerSecond: 41 }),
     ],
   })
 }

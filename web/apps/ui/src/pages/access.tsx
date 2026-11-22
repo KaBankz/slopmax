@@ -23,7 +23,7 @@ import { Failed, Loaded, Panel, Section, SettingRow, Skeleton } from "../compone
 import { ModelPatternHelp } from "../components/model-pattern-help.tsx"
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert.tsx"
 import { Button, ButtonLink } from "../components/ui/button.tsx"
-import { Field, FieldError } from "../components/ui/field.tsx"
+import { Field, FieldError, FieldLabel } from "../components/ui/field.tsx"
 import { Input } from "../components/ui/input.tsx"
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "../components/ui/input-group.tsx"
 import { Item, ItemContent, ItemDescription } from "../components/ui/item.tsx"
@@ -50,7 +50,7 @@ function NewKeyWell() {
         </AlertDescription>
         <div className="col-start-2 mt-2 flex items-center gap-2">
           <InputGroup>
-            <InputGroupInput readOnly aria-label={`The key ${made.name}`} value={made.key} />
+            <InputGroupInput readOnly aria-label={`The key ${made.name}`} value={made.key} variant="literal" />
             <InputGroupAddon align="inline-end">
               <InputGroupButton onClick={() => copyText({ text: made.key })}>
                 <Copy />
@@ -150,38 +150,42 @@ function ClientKeys() {
             </Loaded>
           )}
           <form onSubmit={submit} className="flex flex-col gap-3 border-t px-4 py-3 sm:px-5">
-            <Field orientation="horizontal" className="flex-wrap">
-              <Input
-                aria-label="Name, such as laptop"
-                placeholder="Name, such as laptop"
-                className="w-50 max-w-full shrink-0"
-                value={name}
-                aria-invalid={refused !== undefined || undefined}
-                aria-describedby={refused === undefined ? undefined : errorId}
-                onChange={(e) => {
-                  setName(e.currentTarget.value)
-                  setRefused(undefined)
-                }}
-              />
-              <Input
-                aria-label="Models it may use"
-                aria-describedby={`${errorId}-models-help`}
-                className="min-w-40 flex-1"
-                placeholder="Any model"
-                value={models}
-                onChange={(e) => setModels(e.currentTarget.value)}
-              />
-              <Button type="submit" disabled={!canChange || busy || name.trim() === ""}>
+            <div className="grid items-end gap-3 @2xl:grid-cols-[minmax(9rem,1fr)_minmax(12rem,1.5fr)_auto]">
+              <Field>
+                <FieldLabel htmlFor={`${errorId}-name`}>Key name</FieldLabel>
+                <Input
+                  id={`${errorId}-name`}
+                  placeholder="e.g. laptop"
+                  value={name}
+                  aria-invalid={refused !== undefined || undefined}
+                  aria-describedby={refused === undefined ? undefined : errorId}
+                  onChange={(e) => {
+                    setName(e.currentTarget.value)
+                    setRefused(undefined)
+                  }}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor={`${errorId}-models`}>Allowed models</FieldLabel>
+                <Input
+                  id={`${errorId}-models`}
+                  aria-describedby={`${errorId}-models-help`}
+                  placeholder="Any model"
+                  value={models}
+                  onChange={(e) => setModels(e.currentTarget.value)}
+                />
+              </Field>
+              <Button type="submit" className="justify-self-start" disabled={!canChange || busy || name.trim() === ""}>
                 {busy ? "Creating…" : "Create key"}
               </Button>
-            </Field>
+            </div>
             <ModelPatternHelp id={`${errorId}-models-help`} />
             {refused !== undefined && <FieldError id={errorId}>{sentenceCase(refused)}</FieldError>}
           </form>
         </Panel>
         <p className="text-xs text-muted-foreground">
-          A tool presents its key as an API key. Revoking one refuses it at once; slopmax's own key, in config.toml,
-          stays as it is.
+          A tool presents its key as an API key. Revoking one refuses it at once; slopmax's own key, in{" "}
+          <code>config.toml</code>, stays as it is.
         </p>
       </div>
     </Section>
@@ -192,10 +196,8 @@ function ClientKeys() {
 function Copyable({ text, label }: { readonly text: string; readonly label: string }) {
   const copyText = useAtomSet(copy)
   return (
-    <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-      <code className="min-w-0 rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs wrap-anywhere select-all">
-        {text}
-      </code>
+    <span className="flex min-w-0 max-w-full flex-wrap items-center gap-1.5">
+      <code className="max-w-full shrink-0 text-xs wrap-anywhere select-all">{text}</code>
       <Button variant="ghost" size="sm" aria-label={label} onClick={() => copyText({ text })}>
         <Copy aria-hidden />
         Copy
@@ -206,28 +208,34 @@ function Copyable({ text, label }: { readonly text: string; readonly label: stri
 
 /**
  * How your other machines reach slopmax over your tailnet, as the hub sees
- * it. An older proxy has no such endpoint (404), and the card is left out.
+ * it. Keep the heading reachable while the proxy answers.
  */
 function OtherMachines() {
   const result = useAtomValue(tailnetAtom)
   const again = useAtomRefresh(tailnetAtom)
   const hide = useAtomValue(prefsAtom).hideEmails
   const shown = (text: string) => (hide ? maskEmails(text) : text)
-  if (AsyncResult.isFailure(result) && Cause.squash(result.cause) instanceof NotFound) return null
   const view = AsyncResult.value(result)
   if (Option.isNone(view)) {
-    if (AsyncResult.isFailure(result)) {
-      return (
-        <Section title="Other machines" layout="split">
-          <Failed title="Could not read the tailnet" detail={failureText(result.cause)} onRetry={again} />
-        </Section>
-      )
-    }
-    return null
+    return (
+      <Section title="Other machines" layout="split" headingId="connection-machines">
+        {AsyncResult.isFailure(result) ? (
+          Cause.squash(result.cause) instanceof NotFound ? (
+            <Panel>
+              <Note>This proxy version does not report connections from other machines.</Note>
+            </Panel>
+          ) : (
+            <Failed title="Could not read the tailnet" detail={failureText(result.cause)} onRetry={again} />
+          )
+        ) : (
+          <Skeleton lines={2} />
+        )}
+      </Section>
+    )
   }
   const card = machinesCard(view.value)
   return (
-    <Section title="Other machines" layout="split">
+    <Section title="Other machines" layout="split" headingId="connection-machines">
       <div className="flex flex-col gap-2">
         {card.problem !== undefined && (
           <Alert variant="destructive">

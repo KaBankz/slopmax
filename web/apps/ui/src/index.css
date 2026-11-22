@@ -3,49 +3,63 @@
 @import "shadcn/tailwind.css";
 @source "./";
 
-/* Slopmax's display face ships with the dashboard for offline and tailnet use. */
+/* Local Latin subsets keep the dashboard usable on isolated and tailnet hosts. */
 @font-face {
-  font-family: "Bricolage Grotesque";
-  src: url("./bricolage-grotesque-latin.woff2") format("woff2");
-  font-weight: 400 800;
+  font-family: "Instrument Sans";
+  src: url("./instrument-sans-latin.woff2") format("woff2");
+  font-weight: 400 650;
   font-display: swap;
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC,
+    U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
-/* A Latin subset for controls, labels and tables. Other scripts use the system font. */
 @font-face {
-  font-family: "Geist";
-  src: url("./geist-latin.woff2") format("woff2");
-  font-weight: 400 700;
+  font-family: "Newsreader";
+  src: url("./newsreader-latin.woff2") format("woff2");
+  font-weight: 400;
   font-display: swap;
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC,
+    U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("./ibm-plex-mono-latin.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC,
+    U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --font-heading: "Bricolage Grotesque", var(--font-sans);
+  --font-heading: var(--font-sans);
+  --font-display: "Newsreader", Georgia, serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-weight-semibold: 550;
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--border);
   --color-sidebar-ring: var(--ring);
-  --color-quota: var(--quota);
-  --color-quota-foreground: var(--quota-foreground);
-  --color-quota-muted: var(--quota-muted);
-  --color-quota-track: var(--quota-track);
-  --color-quota-fill: var(--quota-fill);
-  --color-quota-used: var(--quota-used);
+  --color-quota-remaining: var(--quota-remaining);
+  --color-quota-progress-track: var(--quota-progress-track);
   --color-allowance-fill: var(--allowance-fill);
-  --color-allowance-used: var(--allowance-used);
-  --text-display: clamp(1.75rem, 1.5rem + 0.75vw, 2.125rem);
+  --color-allowance-remaining: var(--allowance-remaining);
+  --text-display: clamp(2rem, 1.65rem + 1vw, 2.5rem);
   --text-display--line-height: 1.1;
-  --text-quota-number: clamp(3.25rem, 2.75rem + 1.5vw, 4rem);
-  --text-quota-number--line-height: 0.9;
+  --text-display-number: clamp(3.5rem, 3rem + 1.5vw, 4.25rem);
+  --text-display-number--line-height: 0.95;
   --text-xs: 0.8125rem;
   --text-xs--line-height: 1.125rem;
   --text-sm--line-height: 1.3125rem;
-  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --color-chart-5: var(--chart-5);
+  --font-sans: "Instrument Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --color-provider-grok: var(--provider-grok);
   --color-chart-4: var(--chart-4);
   --color-chart-3: var(--chart-3);
   --color-chart-2: var(--chart-2);
@@ -75,109 +89,112 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+  --shadow-overlay: var(--overlay-shadow);
 
   /* slopmax's own: the good and warn states (`destructive` is the bad one). */
   --color-success: var(--success);
   --color-warning: var(--warning);
 
-  /* slopmax's own: the figures' trend lines, warmer than the neutral charts. */
-  --color-spark-1: var(--spark-1);
-  --color-spark-2: var(--spark-2);
-  --color-spark-3: var(--spark-3);
-  --color-spark-4: var(--spark-4);
+  /* slopmax's own: provider identity inks and cobalt for activity. */
+  --color-provider-claude: var(--provider-claude);
+  --color-provider-codex: var(--provider-codex);
+  --color-provider-xai: var(--provider-xai);
+  --color-provider-openai: var(--provider-openai);
+  --color-activity: var(--activity);
+  --color-provider-anthropic: var(--provider-anthropic);
 }
 
 :root {
   color-scheme: light;
-  --sidebar: #e0e9f1;
-  --sidebar-foreground: #243c54;
-  --sidebar-accent: #c9deef;
-  --sidebar-accent-foreground: #163e64;
-  --background: #eff3f7;
-  --foreground: #152b3d;
-  --card: #fcfdff;
+  --background: #fdfdfc;
+  --foreground: #171717;
+  --card: var(--background);
   --card-foreground: var(--foreground);
-  --popover: #ffffff;
+  --popover: var(--background);
   --popover-foreground: var(--foreground);
-  --primary: #22517c;
+  --primary: #171717;
   --primary-foreground: #ffffff;
-  --secondary: #d9e8f6;
-  --secondary-foreground: #1b4870;
-  --muted: #e3ebf3;
-  --muted-foreground: #4f6375;
-  --accent: #d6e6f3;
-  --accent-foreground: #1c496d;
-  --destructive: #a52f38;
-  --border: #cedbe6;
-  --input: #76899c;
-  --ring: #3378a0;
-  --chart-1: #71869f;
-  --chart-2: #405e78;
-  --chart-3: #456c68;
-  --chart-4: #725169;
-  --chart-5: #263e52;
-  --radius: 0.625rem;
-  --success: #32704e;
-  --warning: #8c471c;
-  --spark-1: #a55025;
-  --spark-2: #903e68;
-  --spark-3: #285e9e;
-  --spark-4: #147061;
-  --quota: #15344c;
-  --quota-foreground: #f1f8ff;
-  --quota-muted: #c8dce9;
-  --quota-track: #57728a;
-  --quota-fill: #94e2cf;
-  --quota-used: #819fb6;
-  --allowance-fill: #53b6a4;
-  --allowance-used: #7395ae;
-  --allowance-dither: #284c68;
+  --secondary: #f5f5f5;
+  --secondary-foreground: var(--foreground);
+  --muted: #f5f5f5;
+  --muted-foreground: #606060;
+  --accent: #ededed;
+  --accent-foreground: var(--foreground);
+  --border: #e2e2de;
+  --input: #767676;
+  --ring: #525252;
+  --sidebar: #f6f6f4;
+  --sidebar-foreground: var(--foreground);
+  --sidebar-accent: var(--accent);
+  --sidebar-accent-foreground: var(--foreground);
+  --radius: 0.4375rem;
+  --overlay-shadow: 0 8px 20px -6px #00000038, 0 24px 64px -22px #00000052;
+
+  --destructive: #b42336;
+  --success: #16714a;
+  --warning: #805800;
+  --chart-1: #696969;
+  --chart-2: #262626;
+  --chart-3: #909090;
+  --chart-4: #484848;
+  --provider-grok: #643cbd;
+  --provider-claude: #a34c16;
+  --provider-codex: #507000;
+  --provider-xai: #22678a;
+  --provider-openai: #ad1658;
+  --activity: #244ecc;
+  --provider-anthropic: #00776a;
+  --quota-progress-track: #e9e9e6;
+  --quota-remaining: #4c72ef;
+  --allowance-fill: #e1e1e1;
+  --allowance-remaining: #2456cb;
+  --allowance-dither: #163a8a;
 }
 
 .dark {
   color-scheme: dark;
-  --sidebar: #101b27;
-  --sidebar-foreground: #dceaf5;
-  --sidebar-accent: #223c53;
-  --sidebar-accent-foreground: #d7edff;
-  --background: #15212d;
-  --foreground: #e7f1f9;
-  --card: #1c2a39;
+  --background: #080809;
+  --foreground: #f5f5f5;
+  --card: var(--background);
   --card-foreground: var(--foreground);
-  --popover: #223244;
+  --popover: #242424;
   --popover-foreground: var(--foreground);
-  --primary: #a6d5f8;
-  --primary-foreground: #142b43;
-  --secondary: #253d53;
-  --secondary-foreground: #d2e9fb;
-  --muted: #253748;
-  --muted-foreground: #b1c6d7;
-  --accent: #28435e;
-  --accent-foreground: #d7edff;
-  --destructive: #ff9ca2;
-  --border: #374c60;
-  --input: #7b92a8;
-  --ring: #89c4ed;
-  --chart-1: #a8bacb;
-  --chart-2: #87a7c2;
-  --chart-3: #aad4cb;
-  --chart-4: #bea0b9;
-  --chart-5: #dfd2aa;
-  --success: #93dab0;
-  --warning: #eda082;
-  --spark-1: #eeab7f;
-  --spark-2: #e9a2c8;
-  --spark-3: #9dc8ff;
-  --spark-4: #8adac9;
-  --quota: #1d3a50;
-  --quota-foreground: #f0f8ff;
-  --quota-muted: #c6ddea;
-  --quota-track: #59768e;
-  --quota-fill: #9ce7d4;
-  --quota-used: #8ba7bc;
-  --allowance-fill: #6ac9b6;
-  --allowance-used: #6f91aa;
-  --allowance-dither: #2b4a61;
+  --primary: #ededed;
+  --primary-foreground: #171717;
+  --secondary: #282828;
+  --secondary-foreground: var(--foreground);
+  --muted: #282828;
+  --muted-foreground: #adadad;
+  --accent: #303030;
+  --accent-foreground: var(--foreground);
+  --border: #262627;
+  --input: #858585;
+  --ring: #a3a3a3;
+  --sidebar: #0d0d0e;
+  --sidebar-foreground: var(--foreground);
+  --sidebar-accent: #282828;
+  --sidebar-accent-foreground: var(--foreground);
+  --overlay-shadow: 0 8px 24px -6px #00000099, 0 28px 70px -18px #000000cc;
+
+  --destructive: #f87171;
+  --success: #4cc88d;
+  --warning: #f3bd49;
+  --chart-1: #9b9b9b;
+  --chart-2: #f0f0f0;
+  --chart-3: #737373;
+  --chart-4: #c6c6c6;
+  --provider-grok: #a388ff;
+  --provider-claude: #ff845d;
+  --provider-codex: #b7dc59;
+  --provider-xai: #6ac9ee;
+  --provider-openai: #ff5296;
+  --activity: #7199ff;
+  --provider-anthropic: #2dcdb0;
+  --quota-progress-track: #252528;
+  --quota-remaining: #4c7afa;
+  --allowance-fill: #333333;
+  --allowance-remaining: #7199ff;
+  --allowance-dither: #385cb0;
 }
 
 @layer base {
@@ -186,6 +203,9 @@
   }
   body {
     @apply bg-background text-foreground antialiased;
+  }
+  code {
+    @apply font-mono font-normal;
   }
   html {
     @apply font-sans;
@@ -219,17 +239,14 @@
 }
 
 @layer components {
-  .quota-indicator {
-    --dither-ink: var(--quota-track);
-  }
-
+  .quota-indicator,
   .allowance-indicator {
     --dither-ink: var(--allowance-dither);
   }
 
   [data-slot="sidebar-content"] [data-slot="sidebar-menu-button"][data-active]::after {
     @apply ordered-dither;
-    --dither-ink: color-mix(in oklch, var(--sidebar-accent-foreground) 42%, transparent);
+    --dither-ink: color-mix(in oklch, var(--activity) 72%, transparent);
     position: absolute;
     inset-block: 25%;
     inset-inline-end: 0.5rem;

@@ -1,6 +1,6 @@
 // A reset queue for shared account windows, led by the next usable window.
 import { useAtomValue } from "@effect/atom-react"
-import { type Report, Window } from "@slopmax/client"
+import { type Report, toneOfUse, Window } from "@slopmax/client"
 import { clock, pace, providerTitle, until } from "@slopmax/client/format"
 import { DateTime, Option } from "effect"
 import { ChevronRight } from "lucide-react"
@@ -16,6 +16,8 @@ import {
   type ResetOpportunity,
   resetOpportunities,
 } from "../view/quota.ts"
+import { RemainingMeter } from "./parts.tsx"
+import { ProviderMark } from "./provider-mark.tsx"
 import { Segmented } from "./segmented.tsx"
 import { Button, ButtonLink } from "./ui/button.tsx"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card.tsx"
@@ -41,74 +43,78 @@ function ResetLead({
   const provider = providerTitle(next.provider)
   const window = spanTitle(next.span)
   const required = current ? requiredPace(next, now) : undefined
-  const comparison = current ? pace(Window.of(next.span, next.used, next.resetsAt), now, zone) : Option.none()
+  const comparison = current
+    ? Option.map(pace(Window.of(next.span, next.used, next.resetsAt), now, zone), (guide) => ({
+        ...guide,
+        remaining: (1 - guide.elapsed) * 100,
+      }))
+    : Option.none()
   return (
-    <CardContent className="my-5 sm:my-6">
-      <div className="grid gap-x-8 gap-y-4 @3xl:reset-columns @3xl:items-start @3xl:gap-y-0">
-        <div className="min-w-0 @3xl:col-start-1 @3xl:row-start-1">
+    <div className="flex flex-col gap-4 py-5 sm:py-6">
+      <div className="flex flex-wrap items-end justify-between gap-x-5 gap-y-3">
+        <div className="min-w-0">
           <CardDescription>{current ? "Next reset with quota left" : "Next reset in last report"}</CardDescription>
           <CardTitle>
             <h3 className="mt-1 wrap-anywhere">{next.account}</h3>
           </CardTitle>
-          <p className="mt-0.5 text-sm text-quota-muted">
-            {provider} · {window}
+          <p className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
+            <ProviderMark provider={next.provider} />
+            <span>
+              {provider} · {window}
+            </span>
           </p>
         </div>
-        <div className="min-w-0 @3xl:col-start-2 @3xl:row-span-2 @3xl:row-start-1 @3xl:self-center">
-          <div className="mb-3 flex flex-wrap items-baseline gap-x-2 gap-y-1">
-            <p className="font-heading text-quota-number font-semibold text-quota-fill tracking-tight tabular-nums">
-              {quotaPercent(next.left)}
-            </p>
-            <p className="text-sm font-medium">quota left</p>
-          </div>
-          <Progress
-            value={next.used}
-            tone="quota"
-            aria-label={`${window} quota used`}
-            marker={Option.isSome(comparison) ? comparison.value.elapsed * 100 : undefined}
-          />
-          <div className="mt-2 flex flex-wrap justify-between gap-x-4 gap-y-1 text-xs text-quota-muted">
-            <span>{quotaPercent(next.used)} used</span>
-            {Option.isSome(comparison) && (
-              <span>
-                Even pace guide · <span className="font-medium text-quota-foreground">{comparison.value.text}</span>
-              </span>
-            )}
-          </div>
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <strong className="font-display text-display-number font-normal tracking-tight wrap-anywhere lining-nums">
+            {quotaPercent(next.left)}
+          </strong>
+          <span className="text-sm text-muted-foreground">quota left</span>
         </div>
-        <div className="border-t border-quota-track pt-3 @3xl:col-start-3 @3xl:row-span-2 @3xl:row-start-1 @3xl:self-center @3xl:border-t-0 @3xl:border-s @3xl:ps-5 @3xl:pt-0">
-          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 tabular-nums">
-            <p className="font-semibold">Resets in {until(next.resetsAt, now)}</p>
-            <time className="text-xs text-quota-muted" dateTime={DateTime.formatIso(next.resetsAt)}>
-              {clock(next.resetsAt, now, zone)}
-            </time>
+      </div>
+      <div>
+        <Progress
+          value={next.left}
+          tone="quota"
+          aria-label={`${window} quota remaining`}
+          marker={Option.isSome(comparison) ? comparison.value.remaining : undefined}
+        />
+        {Option.isSome(comparison) && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            Even pace marker: {quotaPercent(comparison.value.remaining)} left ·{" "}
+            <span className="font-medium text-foreground">{comparison.value.text}</span>
+          </p>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+        <dl className="flex flex-wrap gap-x-5 gap-y-2 text-xs tabular-nums">
+          <div>
+            <dt className="text-muted-foreground">Next reset</dt>
+            <dd className="flex flex-wrap gap-x-2 font-medium">
+              <span>Resets in {until(next.resetsAt, now)}</span>
+              <time className="font-normal text-muted-foreground" dateTime={DateTime.formatIso(next.resetsAt)}>
+                {clock(next.resetsAt, now, zone)}
+              </time>
+            </dd>
           </div>
-          <dl className="mt-2 flex flex-wrap gap-x-5 gap-y-2 @3xl:gap-x-4">
-            {required !== undefined && (
-              <div>
-                <dt className="text-xs text-quota-muted">Pace to use it all</dt>
-                <dd className="font-medium tabular-nums">{required}% per hour</dd>
-              </div>
-            )}
-            {current && next.estimatedValue !== undefined && (
-              <div>
-                <dt className="text-xs text-quota-muted">Est. value if unused</dt>
-                <dd className="font-medium tabular-nums">{dollars(next.estimatedValue)}</dd>
-              </div>
-            )}
-          </dl>
-        </div>
-        <ButtonLink
-          variant="quota"
-          size="pageAction"
-          className="w-fit @3xl:col-start-1 @3xl:row-start-2 @3xl:mt-3"
-          href={pageHash(Pages.provider(next.provider, next.accountId))}
-        >
+          {required !== undefined && (
+            <div>
+              <dt className="text-muted-foreground">Pace to use it all</dt>
+              <dd className="font-medium">{required}% per hour</dd>
+            </div>
+          )}
+          {current && next.estimatedValue !== undefined && (
+            <div>
+              <dt className="text-muted-foreground">Est. value if unused</dt>
+              <dd className="font-medium">{dollars(next.estimatedValue)}</dd>
+            </div>
+          )}
+        </dl>
+        <ButtonLink variant="outline" size="pageAction" href={pageHash(Pages.provider(next.provider, next.accountId))}>
           View account
           <ChevronRight aria-hidden data-icon="inline-end" />
         </ButtonLink>
       </div>
-    </CardContent>
+    </div>
   )
 }
 
@@ -121,11 +127,12 @@ function ResetRow({
   readonly now: DateTime.Utc
   readonly current: boolean
 }) {
+  const tone = toneOfUse(entry.used)
   return (
     <li className="min-w-0 border-t">
       <a
         href={pageHash(Pages.provider(entry.provider, entry.accountId))}
-        className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1.5 px-5 py-3 text-sm outline-none hover:bg-accent/55 focus-visible:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring sm:px-6 @3xl:reset-columns @3xl:gap-x-8"
+        className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1.5 py-3 text-sm outline-none hover:bg-accent/55 focus-visible:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring @3xl:reset-columns @3xl:gap-x-8"
       >
         <div className="min-w-0">
           <p className="font-medium wrap-anywhere">{entry.account}</p>
@@ -134,13 +141,12 @@ function ResetRow({
           </p>
         </div>
         <div className="min-w-0 text-right tabular-nums @3xl:text-left">
-          <p className="font-semibold">{quotaPercent(entry.left)} left</p>
-          <Progress
-            aria-hidden
-            value={entry.used}
-            tone="allowance"
-            className="mt-1 ms-auto w-24 @3xl:ms-0 @3xl:w-full"
-          />
+          <p data-tone={tone} className="font-semibold data-[tone=warn]:text-warning data-[tone=bad]:text-destructive">
+            {quotaPercent(entry.left)} left
+          </p>
+          <div className="mt-1 ms-auto w-24 @3xl:ms-0 @3xl:w-full">
+            <RemainingMeter used={entry.used / 100} tone={tone} />
+          </div>
         </div>
         <div className="col-span-2 flex items-center justify-between gap-2 text-xs tabular-nums @3xl:col-span-1 @3xl:ps-5">
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-muted-foreground">
@@ -181,7 +187,7 @@ export function QuotaBoard({ report }: { readonly report: Report }) {
       ? report.accounts.find((account) => account.id === nextSession.account)
       : undefined
   return (
-    <section aria-labelledby="quota-heading" className="flex min-w-0 flex-col gap-3">
+    <section aria-labelledby="quota-heading" className="@container flex min-w-0 flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-2">
         <h2 id="quota-heading" className="font-heading text-xl font-semibold tracking-tight">
           Reset opportunities
@@ -206,10 +212,10 @@ export function QuotaBoard({ report }: { readonly report: Report }) {
           </CardContent>
         </Card>
       ) : (
-        <Card size="flush" variant="quota">
+        <Card size="flush">
           <ResetLead next={next} now={now} current={current} />
           {rest.length > 0 && (
-            <div className="border-t bg-card text-card-foreground">
+            <div className="border-t">
               <CardHeader className="my-3">
                 <CardTitle className="text-base">
                   <h3>Later resets</h3>
@@ -229,7 +235,7 @@ export function QuotaBoard({ report }: { readonly report: Report }) {
                       ))}
                     </ol>
                   </CollapsibleContent>
-                  <div className="border-t px-5 py-2 sm:px-6">
+                  <div className="border-t py-2">
                     <CollapsibleTrigger render={<Button variant="outline" size="sm" />}>
                       {rest.length - queueSize} more resets
                     </CollapsibleTrigger>

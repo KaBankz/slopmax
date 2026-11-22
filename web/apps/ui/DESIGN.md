@@ -21,7 +21,9 @@ owns the add-account flow. Analytics shares a date range across Usage and
 Performance. In Usage, tokens, answered requests and value at API prices
 switch the chart from a shared row of figures. The monthly pace stays visible
 as a projection. Connections brings coding agents, client keys, and other machines
-onto one page.
+onto one page with jump links to each section. Requests keeps the date range
+and outcome visible. Account, model, and agent filters open together, and
+the request detail sheet leads with the outcome.
 
 Provider and account bookmarks retain their existing addresses. The older
 Agents and Access links jump to the relevant section in Connections. Route
@@ -45,24 +47,23 @@ changes focus the destination heading, section, or linked account.
 
 shadcn's tokens, by shadcn's names: `background`, `foreground`, `card`,
 `popover`, `primary`, `secondary`, `muted`, `accent`, `destructive`, `border`,
-`input`, `ring`, and `chart-1` … `chart-5`, each with its
-`-foreground` where shadcn has one. Blue-gray surfaces frame navy actions.
-The active sidebar link and Analytics metric use dither accents. Quota meters
-use dither for used allowance and solid mint for remaining allowance on the
-reset schedule and account directory. Provider meters keep their quota
-warning colors and use the same texture on the used portion.
-`--radius` (0.625rem) sets every radius step.
+`input`, `ring`, and `chart-1` … `chart-4`, each with its
+`-foreground` where shadcn has one. The workspace uses white, black, and
+neutral grays in both themes. Cobalt and dither mark remaining quota across
+the reset schedule, account directory and provider meters. Amber marks low
+headroom and red marks critical headroom. The active sidebar link and Analytics
+metric pick up the same texture.
+The main workspace uses open edges and thin rules to group related data.
+Controls have a 7 px base radius. Raised surfaces are reserved for standalone
+flows and overlays.
 
-slopmax adds tokens shadcn has no names for: `success` and `warning`, the
-good and warn states (`destructive` is the bad one), which take Tailwind's
-green and amber, 700 in light and 500 in dark; and `spark-1` … `spark-4`, the
-trend lines under the figures (value at API prices, tokens, requests, the fourth),
-orange, pink, blue and teal, deeper in light. A chart of the same measure
-as a figure takes that figure's color (the Usage page's tokens, requests and
-value at API prices columns, and the weekday activity grid, which counts requests). A
-row that is one provider's (a model, an agent, an account, a speed) takes
-that provider's color from the Tokens chart, grey when no one provider owns
-it; the neutral `chart-*` colors stay for the rest.
+Slopmax adds `success` and `warning` tokens for green and amber status colors.
+Dedicated provider colors give the token series copper, lime, pink, teal,
+cyan, and violet, with deeper shades in light mode. Provider icons and provider-owned
+rows use the same inks across date ranges. The cobalt `activity` token marks
+aggregate traffic. Token types and Performance summary trends use gray. Today shows
+stacked hourly areas and longer ranges show stacked daily bars. The totals
+beside the token chart sum its plotted buckets.
 
 Every chart draws its series with `ChartArea`, `ChartLine` and `ChartBar`
 from `components/ui/chart.tsx`, never Recharts' own `Area`, `Line` and `Bar`
@@ -77,13 +78,18 @@ use a solid fill, with a small cap for a nonzero top segment below one pixel.
 A curve is smooth and 2px over
 its fill. A list row's bar is `ChartMeter`, the same dither on its side over
 a dotted track, fading over the track's length so short bars stay solid. Dither marks historical
-measurements and usage breakdowns, including the token mix and legend
-swatches. Status dots and the activity heatmap use solid fills.
+measurements and usage breakdowns, with matching legend swatches. The token
+mix uses solid gray shades with text shares. Status dots and the activity
+heatmap also use solid fills.
 
-Geist handles controls and body text. Bricolage Grotesque gives headings and
-key figures a distinct shape. Both Latin subsets and their OFL licenses ship
-with the app. Other scripts fall back to the system font. Body text is 14 px,
-secondary text is 13 px, and numeric columns use tabular figures.
+Instrument Sans handles body text, small headings, tables, controls, and
+supporting figures. Use regular Newsreader for page titles and one lead
+figure per view: remaining quota, unused value, the selected usage metric,
+or request success rate. Use regular IBM Plex Mono for literal text
+such as model IDs, commands, addresses, and file paths at every width.
+The Latin subsets and their OFL licenses ship with the app. Other scripts fall
+back to system fonts. Body text is 14 px, supporting text is 13 px, and ledger
+columns use tabular figures.
 
 The header and main pane share the same responsive gutters. Charts and
 ledger tables use the full workspace. Setup, Connections, Settings and
@@ -126,8 +132,8 @@ Our customizations, each noted at the top of its file:
 | Component  | Change                                                                                                                                                                                                                                                                                                                      |
 | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `alert`    | a `warning` variant, the destructive variant's shape in the warning color                                                                                                                                                                                                                                                   |
-| `progress` | `quota` and `allowance` tones share a dithered used portion and solid remaining allowance. `marker` shows the even-spend target on the lead gauge.                                                                                                                                                                          |
-| `card`     | a `flush` size for rows, a `quota` variant for the lead window, and a compact content density for narrow tables                                                                                                                                                                                                             |
+| `progress` | `quota` and `allowance` tones show remaining allowance with a dithered fill. `marker` shows the allowance expected at an even pace.                                                                                                                                                                                         |
+| `card`     | a hairline for sections, a `flush` size for rows, and a `raised` variant for standalone forms                                                                                                                                                                                                                               |
 | `chart`    | series colors are set in the container's `style`, not an injected `<style>` (the CSP refuses one), so a series takes `color`, not `theme`; `ChartArea` (`texture`: `dither`, `fade`), `ChartLine` and `ChartBar` (`variant`: `dither`, `solid`) draw every series in the house look; `ChartMeter` is a list row's bar in it |
 | `sonner`   | the theme comes from slopmax's Appearance setting, not next-themes                                                                                                                                                                                                                                                          |
 
@@ -205,3 +211,19 @@ most), so tests read them as people will. Say what happened and what to do,
 in plain words: "slopmax is not answering. Is it running? Start it with
 slopmax proxy start." Never show a request's method and address. Times give both
 the countdown and the clock time: "Resets in 51m46s · 02:18".
+
+## Provider marks
+
+Provider marks identify the corresponding service. The dashboard bundles the
+original artwork and uses separate colors for chart series:
+
+- Claude Spark and the Anthropic symbol come from the
+  [Anthropic press kit](https://www.anthropic.com/press-kit).
+- The ChatGPT mark comes from [ChatGPT](https://chatgpt.com/).
+  The black and white OpenAI Blossom comes from the [OpenAI logo kit](https://openai.com/brand/).
+- Grok uses the mark from [Grok’s site](https://grok.com/).
+  The xAI API uses the mark in the [provider’s API documentation](https://docs.x.ai/overview).
+  The SVGs preserve the providers’ path geometry. Monochrome marks ship with
+  explicit light and dark variants that follow the dashboard setting.
+
+The marks belong to their respective owners.

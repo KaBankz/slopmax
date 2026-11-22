@@ -332,7 +332,7 @@ const notes = (account: AccountView): ReadonlyArray<Label> =>
     if (note._tag === "Served") {
       return [{ text: `${count(note.requests, "request")}, ${compact(note.tokens)} tokens all time`, tone: "muted" }]
     }
-    return [{ text: noteText(note), tone: noteTone(note) }]
+    return [{ text: noteText(note), tone: note._tag === "LastError" ? "warn" : noteTone(note) }]
   })
 
 /** An account's condition in its tone, noting a pin unless it is turned off. */
@@ -393,7 +393,7 @@ const nextLine = (
         : next.reason === "resets-first"
           ? "selected by Reset first"
           : next.why
-    return { text: `New sessions → ${name} · ${reason}`, tone: "muted" }
+    return { text: `New sessions go to ${name} · ${reason}`, tone: "muted" }
   }
   let back: { readonly until: DateTime.Utc; readonly name: string } | undefined
   for (const account of accounts) {

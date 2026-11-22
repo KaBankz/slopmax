@@ -6,14 +6,16 @@ import { type FormEvent, type ReactNode, useId, useState } from "react"
 import { addAccount, canChangeAtom, importLogins, signIn } from "../atoms.ts"
 import { ModelPatternHelp } from "../components/model-pattern-help.tsx"
 import { Panel, Section, SettingRow } from "../components/parts.tsx"
+import { ProviderMark } from "../components/provider-mark.tsx"
 import { Segmented } from "../components/segmented.tsx"
 import { Button } from "../components/ui/button.tsx"
 import { Field, FieldError, FieldLabel, FieldTitle } from "../components/ui/field.tsx"
 import { Input } from "../components/ui/input.tsx"
 import { Item, ItemContent, ItemDescription, ItemFooter, ItemTitle } from "../components/ui/item.tsx"
+import type { MeteredProvider } from "../view/pages.ts"
 import { failureText, patterns, sentenceCase } from "../view/words.ts"
 
-type KeyProvider = "anthropic" | "openai" | "xai"
+type KeyProvider = Exclude<MeteredProvider, "compat">
 const keyProviders: ReadonlyArray<KeyProvider> = ["anthropic", "openai", "xai"]
 
 const dialects: ReadonlyArray<{
@@ -25,9 +27,10 @@ const dialects: ReadonlyArray<{
   { value: "messages", title: "Messages" },
 ]
 
-function KeyRow({ disabled }: { readonly disabled: boolean }) {
+function KeyRow({ disabled, fixedProvider }: { readonly disabled: boolean; readonly fixedProvider?: KeyProvider }) {
   const add = useAtomSet(addAccount, { mode: "promiseExit" })
-  const [provider, setProvider] = useState<KeyProvider>("anthropic")
+  const [choice, setChoice] = useState<KeyProvider>("anthropic")
+  const provider = fixedProvider ?? choice
   const [key, setKey] = useState("")
   const [refused, setRefused] = useState<string | undefined>(undefined)
   const [busy, setBusy] = useState(false)
@@ -58,15 +61,17 @@ function KeyRow({ disabled }: { readonly disabled: boolean }) {
         </ItemContent>
         <ItemFooter>
           <form onSubmit={submit} className="flex w-full flex-wrap items-center gap-2">
-            <Segmented
-              label="Provider"
-              value={provider}
-              onChange={setProvider}
-              options={keyProviders.map((id) => ({
-                value: id,
-                title: providerFacts[id].title,
-              }))}
-            />
+            {fixedProvider === undefined && (
+              <Segmented
+                label="Provider"
+                value={choice}
+                onChange={setChoice}
+                options={keyProviders.map((id) => ({
+                  value: id,
+                  title: providerFacts[id].title,
+                }))}
+              />
+            )}
             <Input
               type="password"
               aria-label="Paste an API key"
@@ -221,7 +226,7 @@ function EndpointRow({ disabled }: { readonly disabled: boolean }) {
   )
 }
 
-export function AddAccountPage() {
+export function AddAccountPage({ provider }: { readonly provider?: MeteredProvider | undefined }) {
   const canChange = useAtomValue(canChangeAtom)
   const start = useAtomSet(signIn)
   const importAll = useAtomSet(importLogins, { mode: "promiseExit" })
@@ -230,6 +235,19 @@ export function AddAccountPage() {
     if (importing) return
     setImporting(true)
     void importAll().then(() => setImporting(false))
+  }
+  if (provider !== undefined) {
+    return (
+      <Section title={provider === "compat" ? "Endpoint" : "Credentials"} layout="split">
+        <Panel>
+          {provider === "compat" ? (
+            <EndpointRow disabled={!canChange} />
+          ) : (
+            <KeyRow key={provider} fixedProvider={provider} disabled={!canChange} />
+          )}
+        </Panel>
+      </Section>
+    )
   }
   return (
     <>
@@ -240,15 +258,19 @@ export function AddAccountPage() {
             detail="With your browser, as the agent's own sign-in does. Grok signs in with a code."
           >
             <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "claude" })}>
+              <ProviderMark provider="claude" />
               Claude
             </Button>
             <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "codex" })}>
+              <ProviderMark provider="codex" />
               ChatGPT
             </Button>
             <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "codex", device: true })}>
+              <ProviderMark provider="codex" />
               ChatGPT with a code
             </Button>
             <Button variant="outline" disabled={!canChange} onClick={() => start({ provider: "grok", device: true })}>
+              <ProviderMark provider="grok" />
               Grok
             </Button>
           </SettingRow>

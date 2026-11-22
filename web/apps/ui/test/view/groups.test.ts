@@ -192,7 +192,7 @@ describe("where new sessions go", () => {
   test("a pool says which account takes the next session, and why", () => {
     const claude = byProvider("claude")
     expect(claude?.next).toEqual({
-      text: "New sessions → ben@studio.dev · a weekly or monthly limit resets within a day with quota left",
+      text: "New sessions go to ben@studio.dev · a weekly or monthly limit resets within a day with quota left",
       tone: "muted",
     })
     expect(claude?.rows.map((row) => row.next)).toEqual([false, true, false])

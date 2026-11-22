@@ -27,6 +27,19 @@ type SidebarContextProps = {
 
 const SidebarContext = React.createContext<SidebarContextProps | null>(null)
 
+type SidebarFocus = "sidebar-home" | "sidebar-trigger"
+
+function focusedSidebarControl(): SidebarFocus | undefined {
+  const active = document.activeElement
+  if (active?.matches('[data-slot="sidebar-home"]')) return "sidebar-home"
+  if (
+    active?.closest(
+      '[data-slot="sidebar-container"], [data-slot="sidebar"][data-mobile="true"], [data-slot="sidebar-trigger"]',
+    )
+  )
+    return "sidebar-trigger"
+}
+
 function useSidebar() {
   const context = React.useContext(SidebarContext)
   if (!context) {
@@ -49,8 +62,14 @@ function SidebarProvider({
   open?: boolean
   onOpenChange?: (open: boolean) => void
 }) {
-  const isMobile = useIsMobile()
   const [openMobile, setOpenMobile] = React.useState(false)
+  const wrapper = React.useRef<HTMLDivElement>(null)
+  const restoreFocus = React.useRef<SidebarFocus | undefined>(undefined)
+  const beforeViewportChange = React.useCallback((mobile: boolean) => {
+    restoreFocus.current = focusedSidebarControl()
+    if (!mobile) setOpenMobile(false)
+  }, [])
+  const isMobile = useIsMobile(beforeViewportChange)
 
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.
@@ -59,6 +78,7 @@ function SidebarProvider({
   const setOpen = React.useCallback(
     (value: boolean | ((value: boolean) => boolean)) => {
       const openState = typeof value === "function" ? value(open) : value
+      if (openState !== open) restoreFocus.current = focusedSidebarControl()
       if (setOpenProp) {
         setOpenProp(openState)
       } else {
@@ -69,6 +89,17 @@ function SidebarProvider({
     },
     [setOpenProp, open],
   )
+
+  React.useLayoutEffect(() => {
+    const slot = restoreFocus.current
+    if (slot === undefined) return
+    restoreFocus.current = undefined
+    const controls = wrapper.current?.querySelectorAll<HTMLElement>(`[data-slot="${slot}"]`)
+    const visible = Array.from(controls ?? []).find(
+      (control) => control.closest("[inert]") === null && control.getClientRects().length > 0,
+    )
+    visible?.focus({ preventScroll: true })
+  }, [isMobile, open])
 
   // Helper to toggle the sidebar.
   const toggleSidebar = React.useCallback(() => {
@@ -109,6 +140,7 @@ function SidebarProvider({
     <SidebarContext.Provider value={contextValue}>
       <div
         data-slot="sidebar-wrapper"
+        ref={wrapper}
         style={
           {
             "--sidebar-width": SIDEBAR_WIDTH,
@@ -141,6 +173,7 @@ function Sidebar({
   mobileFinalFocus?: React.ComponentProps<typeof SheetContent>["finalFocus"]
 }) {
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
+  const offcanvasHidden = state === "collapsed" && collapsible === "offcanvas"
 
   if (collapsible === "none") {
     return (
@@ -164,6 +197,7 @@ function Sidebar({
           data-mobile="true"
           className="w-(--sidebar-width) max-w-[calc(100vw-2rem)] bg-sidebar p-0 text-sidebar-foreground"
           finalFocus={mobileFinalFocus}
+          showCloseButton={false}
           style={
             {
               "--sidebar-width": SIDEBAR_WIDTH_MOBILE,
@@ -182,7 +216,7 @@ function Sidebar({
 
   return (
     <div
-      className="group peer hidden text-sidebar-foreground md:block"
+      className="group peer block text-sidebar-foreground"
       data-state={state}
       data-collapsible={state === "collapsed" ? collapsible : ""}
       data-variant={variant}
@@ -203,10 +237,11 @@ function Sidebar({
       />
       <div
         data-slot="sidebar-container"
-        inert={state === "collapsed" && collapsible === "offcanvas"}
+        inert={offcanvasHidden}
+        aria-hidden={offcanvasHidden || undefined}
         data-side={side}
         className={cn(
-          "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear group-data-resizing/sidebar-wrapper:transition-none motion-reduce:transition-none data-[side=left]:left-0 data-[side=left]:group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)] data-[side=right]:right-0 data-[side=right]:group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)] md:flex",
+          "fixed inset-y-0 z-10 flex h-svh w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear group-data-resizing/sidebar-wrapper:transition-none motion-reduce:transition-none data-[side=left]:left-0 data-[side=left]:group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)] data-[side=right]:right-0 data-[side=right]:group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
           // Adjust the padding for floating and inset variants.
           variant === "floating" || variant === "inset"
             ? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
@@ -235,7 +270,7 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
       data-sidebar="trigger"
       data-slot="sidebar-trigger"
       aria-expanded={isMobile ? openMobile : open}
-      variant="ghost"
+      variant="sidebar"
       size="icon"
       className={cn(className)}
       onClick={(event) => {
@@ -268,7 +303,7 @@ function SidebarHeader({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="sidebar-header"
       data-sidebar="header"
-      className={cn("flex flex-col gap-2 p-2", className)}
+      className={cn("flex flex-col gap-2 border-b p-2", className)}
       {...props}
     />
   )
@@ -279,7 +314,7 @@ function SidebarFooter({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="sidebar-footer"
       data-sidebar="footer"
-      className={cn("flex flex-col gap-2 p-2", className)}
+      className={cn("flex flex-col gap-2 border-b p-2", className)}
       {...props}
     />
   )

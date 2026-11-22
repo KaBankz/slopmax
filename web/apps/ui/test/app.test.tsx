@@ -3,7 +3,7 @@
 // serves, the add-account form's errors, and the keyboard.
 import { useBrowser } from "./support/dom.ts"
 import { afterEach, describe, expect, test } from "bun:test"
-import { Report, UpstreamFailed, Window } from "@slopmax/client"
+import { Event, LedgerRecord, Report, UpstreamFailed, Usage, Window } from "@slopmax/client"
 import { DateTime } from "effect"
 import { act } from "react"
 import { account, emptyReport, ownerKey } from "./support/fixtures.ts"
@@ -66,9 +66,9 @@ describe("the web dashboard", () => {
     expect(shows("lab@studio.dev needs signing in again")).toBe(true)
     expect(shows("A limit reset on ana@studio.dev expires in")).toBe(true)
     expect(shows("Subscription limits")).toBe(true)
-    expect(shows("New sessions → ben@studio.dev · a weekly or monthly limit resets within a day with quota left")).toBe(
-      true,
-    )
+    expect(
+      shows("New sessions go to ben@studio.dev · a weekly or monthly limit resets within a day with quota left"),
+    ).toBe(true)
     expect(control("Quota").getAttribute("aria-current")).toBe("page")
     expect(control("Accounts").getAttribute("href")).toBe("#/accounts")
   })
@@ -115,8 +115,9 @@ describe("the web dashboard", () => {
   })
 
   test("the page scrolls in its own pane, which holds what is positioned in it, so the window never scrolls too", async () => {
-    await web("#/usage")
-    await showsSoon("Monthly pace at API prices")
+    await web("#/requests")
+    await press("7 days")
+    await showsSoon("Export CSV")
     const pane = document.querySelector("[data-slot=dashboard-scroll]")
     if (pane === null) throw new Error("no scrolling pane")
     // An absolute element (sr-only text, say) is placed by its nearest positioned
@@ -161,6 +162,12 @@ describe("the web dashboard", () => {
     expect(shows("saved by failover")).toBe(true)
     // The live feed's Clear belongs to the live feed.
     expect(() => control("Clear")).toThrow()
+    const filters = control("Filters")
+    expect(filters.getAttribute("aria-expanded")).toBe("false")
+    await press("Filters")
+    expect(filters.getAttribute("aria-expanded")).toBe("true")
+    expect(control("Account")).toBeDefined()
+    await press("Filters")
     const first = document.querySelector<HTMLElement>('button[aria-label^="Details of the request"]')
     await act(async () => first?.click())
     await showsSoon("Accounts tried")
@@ -170,6 +177,43 @@ describe("the web dashboard", () => {
     await settle(() => host.recorded.files.length === 1, "the export")
     expect(host.recorded.files[0]?.name).toMatch(/^slopmax-requests-.*\.csv$/)
     expect(host.recorded.files[0]?.text.split("\n")[0]).toContain("time,agent,machine,provider")
+  })
+
+  test("live arrivals preserve the open request and switching ranges preserves the toolbar", async () => {
+    const { stub } = await web("#/requests")
+    const publish = (model: string) =>
+      stub.publish(
+        Event.cases.Request.make({
+          record: LedgerRecord.cases.Request.make({
+            at: DateTime.nowUnsafe(),
+            provider: "claude",
+            model,
+            status: 200,
+            usage: Usage.zero,
+            ms: 10,
+            attempts: 1,
+            via: "http",
+          }),
+        }),
+      )
+    await act(async () => publish("first-live-request"))
+    await showsSoon("first-live-request")
+    const trigger = document.querySelector<HTMLButtonElement>('tbody button[aria-label^="Details of the request"]')
+    if (trigger === null) throw new Error("the first request has no detail button")
+    await act(async () => trigger.click())
+    await showsSoon("Request details")
+    await act(async () => publish("next-live-request"))
+    await showsSoon("next-live-request")
+    expect(trigger.isConnected).toBe(true)
+    await press("Close")
+
+    const range = control("7 days")
+    const filters = control("Filters")
+    await press("Filters")
+    await press("7 days")
+    expect(control("7 days")).toBe(range)
+    expect(control("Filters")).toBe(filters)
+    expect(filters.getAttribute("aria-expanded")).toBe("true")
   })
 
   test("hiding email addresses masks them on every page until it is turned off", async () => {
@@ -206,7 +250,8 @@ describe("the web dashboard", () => {
     await showsSoon("Account health", 5_000)
     await showsSoon("Failed today")
     await press("See all")
-    await showsSoon("Any agent")
+    await showsSoon("Filters")
+    expect(control("Outcome").querySelector('[data-slot="select-value"]')?.textContent).toBe("Failed")
     expect(location.hash).toBe("#/requests")
   })
 
@@ -221,7 +266,11 @@ describe("the web dashboard", () => {
   })
 
   test("the settings page draws each live setting the API serves, and a switch changes it", async () => {
-    drawn = await draw({ stub: { key: ownerKey }, host: { key: ownerKey, permission: "denied" }, at: "#/settings" })
+    drawn = await draw({
+      stub: { key: ownerKey },
+      host: { key: ownerKey, permission: "denied" },
+      at: "#/settings",
+    })
     await showsSoon("Paid API fallback")
     const fallbackDetail = document.getElementById(control("Paid API fallback").getAttribute("aria-describedby") ?? "")
     expect(fallbackDetail?.textContent).toContain("incur charges")
@@ -264,6 +313,25 @@ describe("the web dashboard", () => {
     await showsSoon("A session keeps its account through 2 h idle.")
   })
 
+  test("an empty API provider opens a form scoped to that provider", async () => {
+    await web("#/openai")
+    await showsSoon("No OpenAI API accounts")
+    expect(control("Add OpenAI API key").getAttribute("href")).toBe("#/accounts/add?provider=openai")
+    await act(async () => {
+      location.hash = "#/accounts/add?provider=openai"
+    })
+    await showsSoon("Make OpenAI API models available through this proxy.")
+    expect(control("Back to OpenAI API").getAttribute("href")).toBe("#/openai")
+    expect(document.querySelector('[role=group][aria-label="Provider"]')).toBeNull()
+    await type("Paste an API key", "sk-openai-test")
+    await press("Add key")
+    await showsSoon("OpenAI API added.")
+    expect(drawn?.stub.calls.find((call) => call.endpoint === "add")?.payload).toMatchObject({
+      _tag: "Key",
+      provider: "openai",
+    })
+  })
+
   test("a refused key shows why under the form, not as a toast", async () => {
     await web("#/accounts/add")
     await showsSoon("Add an account")
@@ -282,7 +350,7 @@ describe("the web dashboard", () => {
   test("a client key is shown once, and revoking one asks first", async () => {
     await web("#/access")
     await showsSoon("laptop")
-    await type("Name, such as laptop", "phone")
+    await type("Key name", "phone")
     await press("Create key")
     await showsSoon("The key phone")
     await press("Done")
@@ -371,9 +439,18 @@ describe("the web dashboard", () => {
 
   test("a proxy with only API accounts explains where to see activity", async () => {
     await web()
-    const metered = account({ id: "compat-00000001", provider: "compat", name: "Local models" })
+    const metered = account({
+      id: "compat-00000001",
+      provider: "compat",
+      name: "Local models",
+    })
     await act(async () => {
-      drawn?.stub.setReport(new Report({ ...emptyReport(DateTime.nowUnsafe()), accounts: [metered] }))
+      drawn?.stub.setReport(
+        new Report({
+          ...emptyReport(DateTime.nowUnsafe()),
+          accounts: [metered],
+        }),
+      )
     })
     await showsSoon("No subscription quota to track")
     expect(control("View accounts").getAttribute("href")).toBe("#/accounts")
@@ -488,10 +565,10 @@ describe("what the dashboard says while waiting, failing or quiet", () => {
       location.hash = "#/access"
     })
     await showsSoon("Create key", 5_000)
-    await type("Name, such as laptop", "laptop")
+    await type("Key name", "laptop")
     await press("Create key")
     await showsSoon("There is already a key named laptop")
-    const name = document.querySelector<HTMLInputElement>("input[aria-label='Name, such as laptop']")
+    const name = document.querySelector<HTMLInputElement>("input[placeholder='e.g. laptop']")
     expect(name?.value).toBe("laptop")
     expect(name?.getAttribute("aria-invalid")).toBe("true")
   })

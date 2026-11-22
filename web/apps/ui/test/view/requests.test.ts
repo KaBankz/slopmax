@@ -67,6 +67,17 @@ describe("a request", () => {
     const outcome = groups.find((g) => g.title === "Outcome")?.facts ?? []
     expect(outcome.find((f) => f.title === "Status")?.value).toBe("529, overloaded")
     expect(outcome.find((f) => f.title === "Accounts tried")?.value).toBe("3, none could answer")
+    expect(groups.find((g) => g.title === "Request")?.facts).toContainEqual({
+      title: "Last tried",
+      value: "ana@studio.dev",
+    })
+    const { account: _account, ...record } = row({ status: 529 }).record
+    const withoutAccount = new RequestRow({ record: LedgerRecord.cases.Request.make(record) })
+    expect(rowView(withoutAccount, 0, name, now, zone).account).toBe("No account recorded")
+    expect(facts(withoutAccount, name, zone).find((g) => g.title === "Request")?.facts).toContainEqual({
+      title: "Account",
+      value: "No account recorded",
+    })
   })
 })
 
@@ -88,8 +99,15 @@ describe("what a range came to", () => {
   test("names the machine that sent it, when another did", () => {
     const sent = row({ machine: "laptop" })
     expect(rowView(sent, 0, name, now, zone).notes).toEqual(["from laptop"])
-    expect(facts(sent, name, zone)[0]?.facts).toContainEqual({ title: "From", value: "laptop" })
-    expect(facts(row(), name, zone)[0]?.facts.some((f) => f.title === "From")).toBe(false)
+    expect(facts(sent, name, zone).find((g) => g.title === "Request")?.facts).toContainEqual({
+      title: "From",
+      value: "laptop",
+    })
+    expect(
+      facts(row(), name, zone)
+        .find((g) => g.title === "Request")
+        ?.facts.some((f) => f.title === "From"),
+    ).toBe(false)
   })
 
   test("names failures and failover only when there are any", () => {

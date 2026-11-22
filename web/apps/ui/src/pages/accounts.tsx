@@ -1,14 +1,15 @@
 // A directory of accounts and the provider pools that route to them.
 import { useAtomValue } from "@effect/atom-react"
+import { toneOfUse } from "@slopmax/client"
 import { until } from "@slopmax/client/format"
 import { type DateTime, Option } from "effect"
 import { ChevronRight, Radio, UsersRound } from "lucide-react"
 import { attentionAtom, groupsAtom, nowAtom, shownReportAtom, unansweredAtom } from "../atoms.ts"
-import { Empty, Label, Section } from "../components/parts.tsx"
+import { Empty, Label, RemainingMeter, Section } from "../components/parts.tsx"
+import { ProviderMark } from "../components/provider-mark.tsx"
 import { ButtonLink } from "../components/ui/button.tsx"
 import { Card, CardDescription, CardHeader, CardTitle } from "../components/ui/card.tsx"
 import { Item, ItemActions, ItemContent, ItemTitle } from "../components/ui/item.tsx"
-import { Progress } from "../components/ui/progress.tsx"
 import { worstTone } from "../view/attention.ts"
 import { type Group, type Row, spanTitle } from "../view/groups.ts"
 import { pageHash, Pages } from "../view/pages.ts"
@@ -39,6 +40,7 @@ function AccountRow({
                 (b.resetsAt?.epochMilliseconds ?? Number.MAX_SAFE_INTEGER),
           )[0]
       : undefined
+  const tone = window === undefined ? undefined : toneOfUse(window.used)
   return (
     <div className="border-t">
       <Item variant="directory" render={<a href={pageHash(Pages.provider(row.account.provider, row.id))} />}>
@@ -51,16 +53,21 @@ function AccountRow({
           </p>
         </ItemContent>
         <ItemActions className="justify-end">
-          {window !== undefined && (
+          {window !== undefined && tone !== undefined && (
             <div className="text-right text-xs tabular-nums @max-xs:max-w-24">
-              <p className="font-medium">
+              <p
+                data-tone={tone}
+                className="font-medium data-[tone=warn]:text-warning data-[tone=bad]:text-destructive"
+              >
                 {quotaPercent(100 - window.used)} left
                 <span className="whitespace-nowrap @max-xs:block">
                   <span className="@max-xs:hidden"> · </span>
                   {spanTitle(window.span)}
                 </span>
               </p>
-              <Progress aria-hidden value={window.used} tone="allowance" className="mt-1 mb-1.5" />
+              <div className="mt-1 mb-1.5">
+                <RemainingMeter used={window.used / 100} tone={tone} />
+              </div>
               <p
                 data-unavailable={window.resetsAt === undefined || undefined}
                 className="text-muted-foreground data-unavailable:max-w-24 @sm:data-unavailable:max-w-none"
@@ -94,7 +101,10 @@ function ProviderCard({
       <CardHeader className="my-4">
         <div className="flex flex-wrap items-start justify-between gap-x-3">
           <CardTitle>
-            <h3>{group.title}</h3>
+            <h3 className="flex items-center gap-2">
+              <ProviderMark provider={group.provider} />
+              {group.title}
+            </h3>
           </CardTitle>
           <ButtonLink
             href={pageHash(Pages.provider(group.provider))}

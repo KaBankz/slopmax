@@ -232,14 +232,10 @@ describe("the Other machines card", () => {
     expect(shows("slopmax setup --hub")).toBe(false)
   })
 
-  test("an older proxy without the endpoint leaves the card out", async () => {
-    const page = await access({})
-    await settle(() => page.stub.calls.some((call) => call.endpoint === "tailnet"), "the tailnet call")
-    await showsSoon("Revoke…")
-    // Long enough for the 404 to be read and drawn.
-    const drawnBy = Date.now() + 100
-    await settle(() => Date.now() > drawnBy, "the answer")
-    expect(shows("Other machines")).toBe(false)
+  test("an older proxy explains why the Other machines section has no details", async () => {
+    await access({})
+    await showsSoon("This proxy version does not report connections from other machines.")
+    expect(shows("Setup command")).toBe(false)
     expect(shows("Could not read the tailnet")).toBe(false)
   })
 

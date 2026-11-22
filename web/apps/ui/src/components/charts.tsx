@@ -43,11 +43,13 @@ export type Ink =
   | "chart-2"
   | "chart-3"
   | "chart-4"
-  | "chart-5"
-  | "spark-1"
-  | "spark-2"
-  | "spark-3"
-  | "spark-4"
+  | "provider-grok"
+  | "provider-claude"
+  | "provider-codex"
+  | "provider-xai"
+  | "provider-openai"
+  | "activity"
+  | "provider-anthropic"
   | "meter"
   | "bad"
   | "warn"
@@ -73,11 +75,13 @@ const fill = cva("", {
       "chart-2": "bg-chart-2",
       "chart-3": "bg-chart-3",
       "chart-4": "bg-chart-4",
-      "chart-5": "bg-chart-5",
-      "spark-1": "bg-spark-1",
-      "spark-2": "bg-spark-2",
-      "spark-3": "bg-spark-3",
-      "spark-4": "bg-spark-4",
+      "provider-grok": "bg-provider-grok",
+      "provider-claude": "bg-provider-claude",
+      "provider-codex": "bg-provider-codex",
+      "provider-xai": "bg-provider-xai",
+      "provider-openai": "bg-provider-openai",
+      activity: "bg-activity",
+      "provider-anthropic": "bg-provider-anthropic",
       meter: "bg-primary",
       bad: "bg-destructive",
       warn: "bg-warning",
@@ -223,7 +227,7 @@ export function Columns({
   )
 }
 
-export const requestInks = { answered: "spark-3", failed: "bad" } as const
+export const requestInks = { answered: "activity", failed: "bad" } as const
 
 /** Requests by outcome, with each stacked column showing the total for its bucket. */
 export function RequestColumns({ history, size }: { readonly history: History; readonly size: "sm" | "lg" }) {
@@ -264,6 +268,7 @@ export function Lines({
   tick,
   every,
   size = "sm",
+  stacked = false,
 }: {
   readonly labels: ReadonlyArray<string>
   readonly series: ReadonlyArray<{
@@ -275,6 +280,7 @@ export function Lines({
   readonly tick: (value: number) => string
   readonly every: number
   readonly size?: "sm" | "md" | "lg"
+  readonly stacked?: boolean
 }) {
   const data: Array<Datum> = labels.map((label, i) => ({
     label,
@@ -291,6 +297,8 @@ export function Lines({
             <ChartArea
               key={k}
               dataKey={`s${k}`}
+              {...(stacked ? { stackId: "total" } : {})}
+              type={stacked ? "linear" : "monotone"}
               connectNulls={false}
               dot={(props: { readonly cx?: number; readonly cy?: number; readonly index?: number }) =>
                 props.index !== undefined && lone(line.values, props.index) ? (
@@ -408,10 +416,10 @@ const cell = cva("rounded-xs", {
   variants: {
     level: {
       0: "bg-foreground/6",
-      1: "bg-spark-3/30",
-      2: "bg-spark-3/55",
-      3: "bg-spark-3/80",
-      4: "bg-spark-3",
+      1: "bg-activity/30",
+      2: "bg-activity/55",
+      3: "bg-activity/80",
+      4: "bg-activity",
     },
   },
 })
@@ -496,7 +504,7 @@ export function SplitBar({
         .map((part) => (
           <div
             key={part.title}
-            className={`measurement-dither min-w-1 grow-(--share) basis-0 ${fill({ ink: part.ink })}`}
+            className={`min-w-1 grow-(--share) basis-0 ${fill({ ink: part.ink })}`}
             style={{ "--share": String(part.share) }}
           />
         ))}
@@ -510,6 +518,11 @@ export function Share({ fraction, ink }: { readonly fraction: number; readonly i
 }
 
 /** A swatch of a series' color and texture. */
-export function Swatch({ ink }: { readonly ink: Ink }) {
-  return <span aria-hidden className={`measurement-dither inline-block size-3 shrink-0 rounded-xs ${fill({ ink })}`} />
+export function Swatch({ ink, solid = false }: { readonly ink: Ink; readonly solid?: boolean }) {
+  return (
+    <span
+      aria-hidden
+      className={`inline-block size-3 shrink-0 rounded-xs ${solid ? "" : "measurement-dither"} ${fill({ ink })}`}
+    />
+  )
 }

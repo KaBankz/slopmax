@@ -1,4 +1,4 @@
-// Slopmax's buttons share a quieter transition and a contrasting action on quota panels.
+// Slopmax’s buttons share a quiet transition and visible keyboard focus.
 import { Button as ButtonPrimitive } from "@base-ui/react/button"
 import { cva, type VariantProps } from "class-variance-authority"
 import { cn } from "cn"
@@ -9,19 +9,19 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        quota:
-          "border-quota-track bg-quota-foreground text-quota hover:bg-quota-muted focus-visible:ring-quota-foreground",
         default: "bg-primary text-primary-foreground hover:bg-primary/80",
         outline:
-          "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-input/30 dark:hover:bg-input/50",
+          "border-border bg-background hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input",
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
         section:
-          "justify-start text-muted-foreground hover:bg-muted hover:text-foreground aria-[current]:bg-accent aria-[current]:font-semibold aria-[current]:text-accent-foreground",
+          "justify-start rounded-none text-muted-foreground hover:text-foreground aria-[current]:border-b-foreground aria-[current]:font-semibold aria-[current]:text-foreground",
+        jump: "text-primary underline-offset-4 underline sm:no-underline sm:hover:underline aria-[current]:font-semibold",
         disclosure:
           "w-full justify-between rounded-none border-0 bg-card text-left whitespace-normal hover:bg-muted/50 focus-visible:ring-inset",
         metric:
-          "relative flex-col items-start justify-start rounded-none border-0 bg-card text-left whitespace-normal hover:bg-muted/50 aria-pressed:bg-accent/65 aria-pressed:after:absolute aria-pressed:after:inset-x-0 aria-pressed:after:bottom-0 aria-pressed:after:h-1 aria-pressed:after:bg-primary aria-pressed:after:measurement-dither focus-visible:z-10 focus-visible:ring-ring focus-visible:ring-inset",
+          "rounded-none text-muted-foreground hover:text-foreground aria-pressed:border-b-foreground aria-pressed:font-semibold aria-pressed:text-foreground",
+        sidebar: "hover:bg-sidebar-accent hover:text-foreground",
         ghost:
           "hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:hover:bg-muted/50",
         destructive:
@@ -31,8 +31,7 @@ const buttonVariants = cva(
       size: {
         pageAction: "h-11 gap-2 px-3.5 sm:h-9",
         disclosure: "h-auto min-h-12 gap-3 px-4 py-3 sm:px-5",
-        section: "h-11 px-1.5 text-xs sm:h-9 sm:px-3.5 sm:text-sm",
-        metric: "h-full min-w-0 gap-2 p-4 sm:px-6",
+        section: "h-9 px-0 text-xs sm:text-sm",
         default: "h-9 gap-2 px-3.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2",
         xs: "h-6 gap-1 rounded-[min(var(--radius-md),10px)] px-2 text-xs in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3",
         sm: "h-8 gap-1.5 rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*='size-'])]:size-3.5",
@@ -44,7 +43,11 @@ const buttonVariants = cva(
         "icon-lg": "size-9",
       },
     },
-    compoundVariants: [{ variant: "link", className: "px-0" }],
+    compoundVariants: [
+      { variant: "link", className: "px-0" },
+      { variant: "metric", className: "px-0" },
+      { variant: "jump", className: "px-0 has-data-[icon=inline-end]:pr-0" },
+    ],
     defaultVariants: {
       variant: "default",
       size: "default",

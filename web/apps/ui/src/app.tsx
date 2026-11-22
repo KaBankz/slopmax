@@ -19,18 +19,25 @@ import {
   readOnlyAtom,
   refresh,
   refreshingAtom,
+  shownReportAtom,
   tailnetProbeAtom,
   tailnetRetryAtom,
   unansweredAtom,
 } from "./atoms.ts"
 import { AskHost } from "./components/ask.tsx"
 import { Segmented } from "./components/segmented.tsx"
-import { DashboardSidebar, focusConnectionSection, SectionNavigation, SidebarFrame } from "./components/navigation.tsx"
+import {
+  DashboardSidebar,
+  focusConnectionSection,
+  SectionNavigation,
+  SidebarBrandBar,
+  SidebarFrame,
+} from "./components/navigation.tsx"
 import { SignInCard } from "./components/sign-in.tsx"
 import { Toasts } from "./components/toasts.tsx"
 import { Alert, AlertDescription, AlertTitle } from "./components/ui/alert.tsx"
 import { Button, ButtonLink } from "./components/ui/button.tsx"
-import { SidebarInset, SidebarTrigger } from "./components/ui/sidebar.tsx"
+import { SidebarInset } from "./components/ui/sidebar.tsx"
 import { TooltipProvider } from "./components/ui/tooltip.tsx"
 import { AccountsPage } from "./pages/accounts.tsx"
 import { AddAccountPage } from "./pages/add-account.tsx"
@@ -86,10 +93,16 @@ function Tools({ page }: { readonly page: Page }) {
   const feed = useAtomValue(feedAtom)
   const clear = useAtomSet(clearFeed)
   const listing = useAtomValue(requestFilterAtom).span
+  const report = useAtomValue(shownReportAtom)
   switch (page._tag) {
     case "Overview":
     case "Accounts":
     case "Provider":
+      if (
+        page._tag === "Provider" &&
+        Option.exists(report, (r) => !r.accounts.some((a) => a.provider === page.provider))
+      )
+        return null
       return (
         <>
           <RefreshButton />
@@ -134,7 +147,7 @@ function PageBody({ page }: { readonly page: Page }) {
     case "Accounts":
       return <AccountsPage />
     case "AddAccount":
-      return <AddAccountPage />
+      return <AddAccountPage provider={page.provider} />
     case "Provider":
       return <ProviderPage provider={page.provider} account={page.account} />
     case "QuotaHistory":
@@ -232,27 +245,25 @@ function Window() {
       </a>
       <DashboardSidebar page={page} />
       <SidebarInset className="min-h-0 min-w-0" aria-labelledby="dashboard-title">
+        <SidebarBrandBar />
         <header className="shrink-0 border-b">
-          <div className="workspace-width flex flex-col gap-3 py-3.5 sm:py-4">
-            <div className="flex flex-wrap items-center justify-between gap-x-5 gap-y-3">
-              <div className="flex min-w-0 items-start gap-2 sm:gap-3">
-                <SidebarTrigger className="-ml-1" />
-                <div className="min-w-0">
-                  <h1
-                    ref={heading}
-                    id="dashboard-title"
-                    tabIndex={-1}
-                    className="w-fit rounded-sm font-heading text-display font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-                  >
-                    {pageTitle(page)}
-                  </h1>
-                  <p
-                    data-compact={page._tag === "Overview" || undefined}
-                    className="mt-1.5 max-w-prose text-sm text-muted-foreground data-compact:hidden sm:data-compact:block"
-                  >
-                    {pageDescription(page)}
-                  </p>
-                </div>
+          <div className="workspace-width flex flex-col gap-3 pt-5 pb-3.5 sm:py-4">
+            <div className="flex flex-wrap items-center justify-between gap-x-2.5 gap-y-3 sm:gap-x-5">
+              <div className="min-w-0">
+                <h1
+                  ref={heading}
+                  id="dashboard-title"
+                  tabIndex={-1}
+                  className="w-fit rounded-sm font-display text-display font-normal tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                >
+                  {pageTitle(page)}
+                </h1>
+                <p
+                  data-compact={page._tag === "Overview" || undefined}
+                  className="mt-1.5 max-w-prose text-sm text-muted-foreground data-compact:hidden sm:data-compact:block"
+                >
+                  {pageDescription(page)}
+                </p>
               </div>
               <div className="flex min-w-0 flex-wrap items-center gap-2 empty:hidden">
                 <Tools page={page} />

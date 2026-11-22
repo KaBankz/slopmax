@@ -68,13 +68,15 @@ export function Label({
   text,
   raw = false,
   wrap = false,
+  dot = false,
 }: {
   readonly tone: Tone
   readonly text: string
   readonly raw?: boolean
   readonly wrap?: boolean
+  readonly dot?: boolean
 }) {
-  const dotted = tone === "good" || tone === "warn" || tone === "bad"
+  const dotted = dot || tone === "good" || tone === "warn" || tone === "bad"
   const words = raw ? text : sentence(text)
   return (
     <span className={labelVariants({ tone })}>
@@ -84,28 +86,27 @@ export function Label({
   )
 }
 
-/** A Progress tone for a state: warnings and failures in their color, the rest the primary color. */
-const meterTone = (tone: Tone): "default" | "warning" | "destructive" =>
-  tone === "warn" ? "warning" : tone === "bad" ? "destructive" : "default"
+/** A Progress tone for current allowance, with low balances in their status color. */
+const meterTone = (tone: Tone): "allowance" | "warning" | "destructive" =>
+  tone === "warn" ? "warning" : tone === "bad" ? "destructive" : "allowance"
 
-/** A thin Progress bar filled to `fraction`, with a tick where an even spend would have reached. */
-export function Meter({
-  fraction,
+/** Current allowance and the balance expected at an even pace. Inputs are used fractions. */
+export function RemainingMeter({
+  used,
   tone,
-  marker,
+  elapsed,
 }: {
-  readonly fraction: number
+  readonly used: number
   readonly tone: Tone
-  /** Where an even spend would have reached, 0 to 1. */
-  readonly marker?: number
+  readonly elapsed?: number
 }) {
   return (
     <Progress
       aria-hidden
-      dither
-      value={Math.min(100, Math.max(0, fraction * 100))}
+      dither={tone === "warn" || tone === "bad"}
+      value={Math.min(100, Math.max(0, (1 - used) * 100))}
       tone={meterTone(tone)}
-      marker={marker === undefined ? undefined : marker * 100}
+      marker={elapsed === undefined ? undefined : (1 - elapsed) * 100}
       className="w-full"
     />
   )
@@ -117,8 +118,7 @@ const segmentVariants = cva("min-w-1 grow-(--weight) basis-0", {
 
 /**
  * The pool's bar: one segment per account, as wide as its share, each filled
- * to its own use. Past {@link segmentsShown} accounts it is one bar filled to
- * the pool's use, which stays readable however many accounts there are.
+ * to its balance. Past {@link segmentsShown} accounts it shows the whole pool's balance.
  */
 export function SegmentedBar({ window, weighted }: { readonly window: Overview; readonly weighted: boolean }) {
   const segments = window.shares
@@ -126,7 +126,7 @@ export function SegmentedBar({ window, weighted }: { readonly window: Overview; 
   if (segments.length > segmentsShown) {
     return (
       <div role="img" aria-label={label} className="w-full py-1">
-        <Meter fraction={window.gauge.fraction} tone={window.gauge.tone} />
+        <RemainingMeter used={window.gauge.fraction} tone={window.gauge.tone} />
       </div>
     )
   }
@@ -141,9 +141,29 @@ export function SegmentedBar({ window, weighted }: { readonly window: Overview; 
             "--weight": String(total > 0 ? Math.max(0.0001, segment.weight / total) : 1),
           }}
         >
-          <Meter fraction={segment.fraction} tone={segment.tone} />
+          <RemainingMeter used={segment.fraction} tone={segment.tone} />
         </div>
       ))}
+    </div>
+  )
+}
+
+/** The meanings of the pool's usage colors, limited to the ones on screen. */
+export function PoolUsageLegend({ windows }: { readonly windows: ReadonlyArray<Overview> }) {
+  const tones = windows.flatMap((window) =>
+    window.shares.length > segmentsShown
+      ? [window.gauge.tone]
+      : window.shares.filter((share) => !share.idle).map((share) => share.tone),
+  )
+  const faded = windows.some(
+    (window) => window.shares.length <= segmentsShown && window.shares.some((share) => share.idle),
+  )
+  if (!tones.includes("warn") && !tones.includes("bad") && !faded) return null
+  return (
+    <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+      {tones.includes("warn") && <Label tone="warn" text="Over 10% to 30% left" raw />}
+      {tones.includes("bad") && <Label tone="bad" text="10% or less left" raw />}
+      {faded && <span>Faded segments are out of rotation</span>}
     </div>
   )
 }
@@ -264,17 +284,20 @@ export function StatChange({ change }: { readonly change: Change }) {
   )
 }
 
-const sparkInks = ["spark-1", "spark-2", "spark-3", "spark-4"] as const
-
 /** A group of comparable figures on a single surface, with their dithered trends. */
 export function Stats({ stats }: { readonly stats: ReadonlyArray<StatView> }) {
   return (
     <Panel>
-      <dl className="grid grid-cols-1 gap-px bg-border @lg:grid-cols-2 @4xl:grid-cols-4">
-        {stats.map(({ title, value, note, change, trend }) => (
-          <div key={title} className="flex min-w-0 flex-col gap-2.5 bg-card p-5 sm:p-6">
-            <dt className="text-sm font-medium text-muted-foreground">{title}</dt>
-            <dd className="font-heading text-3xl leading-none font-semibold tracking-tight tabular-nums">{value}</dd>
+      <dl className="grid grid-cols-2 gap-px bg-border @4xl:grid-cols-4">
+        {stats.map(({ title, value, note, change, trend }, index) => (
+          <div key={title} className="flex min-w-0 flex-col gap-1.5 bg-card p-3.5 @sm:gap-2.5 @sm:p-5 @4xl:p-6">
+            <dt className="text-xs font-medium text-muted-foreground @sm:text-sm">{title}</dt>
+            <dd
+              data-lead={index === 0 || undefined}
+              className="text-2xl leading-none font-normal tracking-tight wrap-anywhere tabular-nums data-lead:font-display data-lead:text-3xl data-lead:lining-nums @sm:text-3xl @sm:data-lead:text-4xl"
+            >
+              {value}
+            </dd>
             <dd className="flex flex-1 flex-col justify-between gap-3 text-xs">
               <div className="space-y-1">
                 {change !== undefined && (
@@ -284,7 +307,7 @@ export function Stats({ stats }: { readonly stats: ReadonlyArray<StatView> }) {
                 )}
                 <p className="text-muted-foreground">{note}</p>
               </div>
-              {trend !== undefined && <Spark points={trend.points} ink={sparkInks[trend.series - 1] ?? "meter"} />}
+              {trend !== undefined && <Spark points={trend.points} ink="meter" />}
             </dd>
           </div>
         ))}

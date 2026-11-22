@@ -3,8 +3,8 @@
 // the table)
 // and the Performance page (reliability, cache, speed, first byte).
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
-import type { History, HistoryRange, ProviderId } from "@slopmax/client"
-import { compact, grouped, providerTitle } from "@slopmax/client/format"
+import type { History, HistoryRange } from "@slopmax/client"
+import { compact, fixed, grouped, providerTitle } from "@slopmax/client/format"
 import { Option } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import { ChevronRight } from "lucide-react"
@@ -24,6 +24,7 @@ import {
 } from "../components/charts.tsx"
 import { HealthCard, RecentFailures } from "../components/health.tsx"
 import { Loaded, Section, Skeleton, StatChange, Stats } from "../components/parts.tsx"
+import { providerInk, ProviderMark } from "../components/provider-mark.tsx"
 import { Quiet } from "../components/quiet.tsx"
 import { Button } from "../components/ui/button.tsx"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.tsx"
@@ -65,27 +66,19 @@ import {
   modelRows,
   perRequest,
   performanceStats,
-  previousRequests,
+  previousMetric,
   speedRows,
   type Stat,
   tokenMix,
+  type UsageMetric,
+  usageMetrics,
   usageStats,
 } from "../view/usage.ts"
 import { dollars, leftLine } from "../view/words.ts"
 
-const mixInks: ReadonlyArray<Ink> = ["chart-1", "chart-2", "chart-3", "chart-4"]
-/**
- * The columns take the colors of the figures above them: tokens in the
- * Tokens figure's pink (then the other trend colors, a provider each),
- * requests in the Requests figure's blue, API value in its orange.
- */
-const tokenInks: ReadonlyArray<Ink> = ["spark-2", "spark-3", "spark-4", "spark-1"]
-/** A row no one provider owns, such as Other: grey. */
-const noInk: Ink = "chart-2"
-/** A provider's color, as the Tokens chart gives it. */
-const providerInk = (providers: ReadonlyArray<ProviderId>, provider: ProviderId | undefined): Ink =>
-  (provider === undefined ? undefined : tokenInks[providers.indexOf(provider)]) ?? noInk
-const valueInk: Ink = "spark-1"
+// Alternate shades so adjacent token segments stay distinguishable.
+const mixInks: ReadonlyArray<Ink> = ["chart-1", "chart-4", "chart-3", "chart-2"]
+const valueInk: Ink = "chart-1"
 
 /** A chart's Card: its title and legend over the plot. */
 function ChartPanel({
@@ -156,32 +149,37 @@ function WithHistory({
 
 function Bars({
   rows,
-  providers,
   mono = false,
   requests = false,
 }: {
   readonly rows: ReadonlyArray<BarRow>
-  /** The range's providers, whose colors the rows take. */
-  readonly providers: ReadonlyArray<ProviderId>
   readonly mono?: boolean
   readonly requests?: boolean
 }) {
+  const hasProviderMarks = rows.some((row) => row.provider !== undefined)
   return (
     <div className="@container flex flex-col gap-2.5">
       {rows.map((row) => (
         // In a narrow card the bar takes a line of its own under the figures, so they stay inside it.
-        <div key={row.name} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs @md:flex-nowrap">
+        <div key={row.key} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs @md:flex-nowrap">
+          {hasProviderMarks &&
+            (row.provider === undefined ? (
+              <span aria-hidden className="size-4 shrink-0" />
+            ) : (
+              <ProviderMark provider={row.provider} />
+            ))}
           <span
             className={
-              mono
-                ? "min-w-0 flex-1 truncate font-mono text-xs @md:w-40 @md:flex-none"
-                : "min-w-0 flex-1 truncate @md:w-28 @md:flex-none"
+              mono ? "min-w-0 flex-1 @md:w-40 @md:flex-none" : "min-w-0 flex-1 truncate @md:w-28 @md:flex-none"
             }
           >
-            {row.name}
+            {mono ? <span className="block truncate font-mono">{row.name}</span> : row.name}
+            {mono && row.provider !== undefined && (
+              <span className="block truncate text-muted-foreground">{providerTitle(row.provider)}</span>
+            )}
           </span>
           <span className="order-last basis-full @md:order-none @md:min-w-0 @md:flex-1 @md:basis-auto">
-            <Share fraction={row.fraction} ink={providerInk(providers, row.provider)} />
+            <Share fraction={row.fraction} ink={providerInk(row.provider)} />
           </span>
           <span className="w-14 shrink-0 text-right tabular-nums">{row.tokens}</span>
           {requests && (
@@ -206,12 +204,15 @@ function TokenMix({ history }: { readonly history: History }) {
           title: part.title,
         }))}
       />
-      <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs @2xl:grid-cols-4">
         {mix.map((part) => (
           <span key={part.title} className="flex items-center gap-2">
-            <Swatch ink={mixInks[part.series - 1] ?? "meter"} />
+            <Swatch ink={mixInks[part.series - 1] ?? "meter"} solid />
             <span className="flex-1 text-muted-foreground">{part.title}</span>
-            <span className="tabular-nums">{compact(part.tokens)}</span>
+            <span className="text-right tabular-nums">
+              {compact(part.tokens)}
+              <span className="block text-muted-foreground">{fixed(part.share * 100, 1)}%</span>
+            </span>
           </span>
         ))}
       </div>
@@ -238,12 +239,12 @@ function AccountsTable({ history }: { readonly history: History }) {
         <Table aria-label="Requests and token use by account">
           <TableHeader>
             <TableRow>
-              <TableHead className="w-full">Account</TableHead>
+              <TableHead className="w-full @2xl:w-2/5">Account</TableHead>
               <TableHead className="text-right">Tokens</TableHead>
               <TableHead className="hidden w-18 text-right @2xl:table-cell">Requests</TableHead>
               <TableHead className="hidden w-14 text-right @2xl:table-cell">Failed</TableHead>
-              <TableHead className="text-right">
-                Value<span className="sr-only @lg:not-sr-only"> at API prices</span>
+              <TableHead className="text-right" aria-label="Value at API prices">
+                API value
               </TableHead>
             </TableRow>
           </TableHeader>
@@ -258,9 +259,9 @@ function AccountsTable({ history }: { readonly history: History }) {
                   </span>
                 </TableCell>
                 <TableCell>
-                  <span className="flex min-w-14 flex-col gap-1 text-right tabular-nums @lg:w-28">
+                  <span className="flex min-w-14 flex-col gap-1 text-right tabular-nums @2xl:w-40">
                     {row.tokens}
-                    <Share fraction={row.fraction} ink={providerInk(history.providers, row.providerId)} />
+                    <Share fraction={row.fraction} ink={providerInk(row.providerId)} />
                     <span className="text-xs text-muted-foreground">{row.share}</span>
                   </span>
                 </TableCell>
@@ -337,10 +338,17 @@ function LeftOnTheTable({ history }: { readonly history: History }) {
     <div className="flex flex-col gap-2">
       <Card>
         <CardHeader>
-          <CardTitle className="text-2xl tabular-nums">
-            {left.unused > 0 && left.unpriced === left.windows
-              ? "Plan prices unavailable"
-              : `${dollars(left.dollars)} estimated unused value`}
+          <CardTitle>
+            {left.unused > 0 && left.unpriced === left.windows ? (
+              "Plan prices unavailable"
+            ) : (
+              <span className="flex flex-col items-start gap-1.5">
+                <span className="font-display text-5xl font-normal tracking-tight wrap-anywhere lining-nums">
+                  {dollars(left.dollars)}
+                </span>
+                <span className="text-sm font-medium text-muted-foreground">Estimated unused value</span>
+              </span>
+            )}
           </CardTitle>
           <CardDescription>{leftLine(left.windows, left.unused)}</CardDescription>
           {left.unused > 0 && left.unpriced > 0 && (
@@ -368,14 +376,14 @@ function LeftOnTheTable({ history }: { readonly history: History }) {
                     <TableCell>
                       <span className="block whitespace-normal wrap-anywhere">{account.name}</span>
                       <span className="block text-xs text-muted-foreground whitespace-normal">
-                        {providerTitle(account.provider)} / {account.windows}{" "}
+                        {providerTitle(account.provider)} · {account.windows}{" "}
                         {account.windows === 1 ? "reset" : "resets"}
                       </span>
                     </TableCell>
                     <TableCell>
                       <span className="flex min-w-12 flex-col gap-1 text-right tabular-nums @lg:w-28">
                         {percentTick(account.unused)}
-                        <Share fraction={account.unused / 100} ink={providerInk(history.providers, account.provider)} />
+                        <Share fraction={account.unused / 100} ink={providerInk(account.provider)} />
                       </span>
                     </TableCell>
                     <TableCell>
@@ -408,22 +416,52 @@ function Machines({ range }: { readonly range: HistoryRange }) {
   if (rows.length === 0) return null
   return (
     <ChartPanel title="Machines">
-      <Bars rows={rows} providers={[]} requests />
+      <Bars rows={rows} requests />
     </ChartPanel>
   )
 }
 
-const usageMetrics = ["tokens", "requests", "value"] as const
-type UsageMetric = (typeof usageMetrics)[number]
-
 function MetricReadout({ stat }: { readonly stat: Stat }) {
   return (
-    <>
-      <span className="text-xs font-medium text-muted-foreground sm:text-sm">{stat.title}</span>
-      <span className="font-heading text-2xl leading-none font-semibold tracking-tight tabular-nums @lg:text-3xl">
-        {stat.value}
-      </span>
-    </>
+    <div className="flex min-w-0 flex-col gap-1.5 bg-card py-3.5 pe-3 ps-3 sm:px-6">
+      <dt className="text-xs font-medium text-muted-foreground sm:text-sm">{stat.title}</dt>
+      <dd className="text-2xl leading-none font-normal tracking-tight tabular-nums @lg:text-3xl">{stat.value}</dd>
+      <dd className="text-xs text-muted-foreground">{stat.note}</dd>
+    </div>
+  )
+}
+
+function ProviderTotals({ history }: { readonly history: History }) {
+  const rows = history.providers
+    .map((provider, index) => ({
+      provider,
+      tokens: history.buckets.reduce((sum, bucket) => sum + (bucket.tokens[index] ?? 0), 0),
+    }))
+    .toSorted((a, b) => b.tokens - a.tokens)
+  const total = rows.reduce((sum, row) => sum + row.tokens, 0)
+  return (
+    <div className="min-w-0 @3xl:col-start-1 @3xl:row-start-2">
+      <h3 className="mb-1 text-sm font-medium">Tokens by provider</h3>
+      <dl>
+        {rows.map(({ provider, tokens }) => (
+          <div key={provider} className="flex items-baseline justify-between gap-2 border-t py-2 first:border-t-0">
+            <dt className="flex min-w-0 items-center gap-2 text-sm">
+              <span className="hidden @3xl:inline-flex">
+                <Swatch ink={providerInk(provider)} />
+              </span>
+              <ProviderMark provider={provider} />
+              <span className="wrap-anywhere">{providerTitle(provider)}</span>
+            </dt>
+            <dd className="shrink-0 text-right text-sm font-medium tabular-nums">
+              {compact(tokens)}
+              <span className="block text-xs font-normal text-muted-foreground">
+                {total === 0 ? "—" : `${fixed((tokens / total) * 100, 1)}%`}
+              </span>
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   )
 }
 
@@ -443,34 +481,39 @@ function UsageTrend({
   const [tokens, requests, value, pace] = usageStats(history)
   const figures = { tokens, requests, value }
   const selected = figures[metric]
-  const comparison = previousRequests(history)
+  const comparison = previousMetric(history, metric)
+  const partialPeriod = range === "today" ? "Current hour in progress" : "Today in progress"
+  const providersShown = metric === "tokens" && history.providers.length > 0
+  const chartTitle =
+    metric === "tokens"
+      ? range === "today"
+        ? "Hourly tokens"
+        : "Daily tokens"
+      : metric === "requests"
+        ? "Request outcomes"
+        : "Value over time"
 
   return (
-    <Card size="flush">
-      <CardHeader className="my-4">
-        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-          <div>
-            <CardTitle>
-              <h2>Usage over time</h2>
-            </CardTitle>
-            {comparison !== undefined && <CardDescription>{comparison}</CardDescription>}
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setFilter({ span: range, outcome: "all" })
-              setLimit(pageSize)
-              go(Pages.requests)
-            }}
-          >
-            View requests
-            <ChevronRight aria-hidden data-icon="inline-end" />
-          </Button>
-        </div>
-      </CardHeader>
+    <section aria-labelledby="usage-heading" className="flex min-w-0 flex-col gap-5 sm:gap-6">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 id="usage-heading" className="font-heading text-xl font-semibold tracking-tight">
+          Usage over time
+        </h2>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            setFilter({ span: range, outcome: "all" })
+            setLimit(pageSize)
+            go(Pages.requests)
+          }}
+        >
+          View requests
+          <ChevronRight aria-hidden data-icon="inline-end" />
+        </Button>
+      </div>
       <div
-        className="grid grid-cols-2 gap-px border-y bg-border @3xl:grid-cols-4"
+        className="flex flex-wrap gap-x-1.5 gap-y-0.5 border-b sm:gap-x-5"
         role="group"
         aria-label="Usage chart metric"
       >
@@ -478,47 +521,66 @@ function UsageTrend({
           <Button
             key={key}
             variant="metric"
-            size="metric"
+            size="sm"
             aria-pressed={key === metric}
             aria-controls="usage-trend"
             onClick={() => select(key)}
           >
-            <MetricReadout stat={figures[key]} />
+            {figures[key].title}
           </Button>
         ))}
-        <div className="flex min-w-0 flex-col gap-2 bg-card p-4 sm:px-6">
-          <MetricReadout stat={pace} />
-          <span className="text-xs text-muted-foreground">{pace.note}</span>
-        </div>
       </div>
-      <CardContent className="my-4 sm:my-5">
-        <section id="usage-trend" aria-label={selected.title} className="flex min-w-0 flex-col gap-3">
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-            <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
-              {selected.change !== undefined && <StatChange change={selected.change} />}
-              <span className="text-muted-foreground">{selected.note}</span>
-            </div>
-            {metric === "tokens" && (
+      <section
+        id="usage-trend"
+        aria-label={selected.title}
+        className="grid min-w-0 gap-4 @3xl:grid-cols-[minmax(12rem,1fr)_minmax(0,2.5fr)] @3xl:gap-x-8"
+      >
+        <div className="flex min-w-0 flex-col items-start gap-2 @3xl:col-start-1 @3xl:row-start-1">
+          <p className="text-sm font-medium text-muted-foreground">{selected.title}</p>
+          <strong className="font-display text-display-number font-normal tracking-tight wrap-anywhere lining-nums">
+            {selected.value}
+          </strong>
+          <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+            {selected.change !== undefined && <StatChange change={selected.change} />}
+            <span className="text-muted-foreground">{selected.note}</span>
+          </div>
+          {comparison !== undefined && <p className="text-xs text-muted-foreground">{comparison}</p>}
+        </div>
+        <figure className="min-w-0 @3xl:col-start-2 @3xl:row-span-2 @3xl:row-start-1">
+          <figcaption className="mb-2 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
+            <span className="text-sm font-medium">{chartTitle}</span>
+            <span className="text-xs text-muted-foreground">{partialPeriod}</span>
+          </figcaption>
+          {providersShown && history.providers.length > 1 && (
+            <div className="mb-2 @3xl:hidden">
               <Legend
-                items={history.providers.map((provider, i) => ({
-                  ink: tokenInks[i] ?? "meter",
+                items={history.providers.map((provider) => ({
+                  ink: providerInk(provider),
                   title: providerTitle(provider),
                 }))}
               />
-            )}
-            {metric === "requests" && (
+            </div>
+          )}
+          {metric === "requests" && (
+            <div className="mb-2">
               <Legend
                 items={[
                   { ink: requestInks.answered, title: "Answered" },
                   { ink: requestInks.failed, title: "Failed" },
                 ]}
               />
-            )}
-          </div>
+            </div>
+          )}
           <UsagePlot history={history} metric={metric} />
-        </section>
-      </CardContent>
-    </Card>
+        </figure>
+        {providersShown && <ProviderTotals history={history} />}
+      </section>
+      <dl className="grid grid-cols-2 gap-px border-y bg-border @2xl:grid-cols-3">
+        {[...usageMetrics.filter((key) => key !== metric).map((key) => figures[key]), pace].map((stat) => (
+          <MetricReadout key={stat.title} stat={stat} />
+        ))}
+      </dl>
+    </section>
   )
 }
 
@@ -541,6 +603,23 @@ function UsagePlot({ history, metric }: { readonly history: History; readonly me
     )
   }
   const most = Math.max(0, ...history.buckets.map((bucket) => bucket.tokens.reduce((sum, n) => sum + n, 0)))
+  if (history.range === "today") {
+    return (
+      <Lines
+        size="lg"
+        stacked
+        labels={history.buckets.map((bucket) => bucket.label)}
+        tips={history.buckets.map((bucket) => tokensTip(history, bucket))}
+        series={history.providers.map((provider, i) => ({
+          ink: providerInk(provider),
+          values: history.buckets.map((bucket) => bucket.tokens[i] ?? 0),
+        }))}
+        scale={zeroAxis(most, 1)}
+        tick={tokensTick}
+        every={labelEvery(history.range)}
+      />
+    )
+  }
   return (
     <Columns
       size="lg"
@@ -550,7 +629,10 @@ function UsagePlot({ history, metric }: { readonly history: History; readonly me
       buckets={history.buckets.map((bucket) => ({
         label: bucket.label,
         tip: tokensTip(history, bucket),
-        parts: bucket.tokens.map((value, i) => ({ value, ink: tokenInks[i] ?? "meter" })),
+        parts: bucket.tokens.map((value, i) => ({
+          value,
+          ink: providerInk(history.providers[i]),
+        })),
       }))}
     />
   )
@@ -570,17 +652,17 @@ function UsageBody({
   return (
     <>
       <UsageTrend history={history} range={range} metric={metric} select={select} />
+      <ChartPanel title="Token mix">
+        <TokenMix history={history} />
+      </ChartPanel>
       <Pair>
         <ChartPanel title="Models">
-          <Bars rows={modelRows(history)} providers={history.providers} mono />
+          <Bars rows={modelRows(history)} mono />
         </ChartPanel>
-        <ChartPanel title="Token mix">
-          <TokenMix history={history} />
+        <ChartPanel title="Agents">
+          <Bars rows={agentRows(history)} requests />
         </ChartPanel>
       </Pair>
-      <ChartPanel title="Agents">
-        <Bars rows={agentRows(history)} providers={history.providers} requests />
-      </ChartPanel>
       <Machines range={range} />
       {range !== "today" && (
         <ChartPanel title="Answered client requests by weekday">
@@ -624,12 +706,15 @@ function PerformanceBody({ history, range }: { readonly history: History; readon
           legend={
             <Legend
               items={[
-                { ink: "meter", title: "Saved by failover" },
+                { ink: "activity", title: "Saved by failover" },
                 { ink: requestInks.failed, title: "Failed" },
               ]}
             />
           }
         >
+          <p className="mb-2 text-right text-xs text-muted-foreground">
+            {range === "today" ? "Current hour in progress" : "Today in progress"}
+          </p>
           <Columns
             size="sm"
             grouped
@@ -640,7 +725,7 @@ function PerformanceBody({ history, range }: { readonly history: History; readon
               label: bucket.label,
               tip: reliabilityTip(bucket),
               parts: [
-                { value: bucket.rescued, ink: "meter" },
+                { value: bucket.rescued, ink: "activity" },
                 { value: bucket.failed, ink: "bad" },
               ],
             }))}
@@ -653,7 +738,7 @@ function PerformanceBody({ history, range }: { readonly history: History; readon
             scale={cacheAxis(cached.flatMap((v) => (v === undefined ? [] : [v])))}
             tick={percentTick}
             tips={history.buckets.map(cacheTip)}
-            series={[{ ink: "meter", values: cached }]}
+            series={[{ ink: "chart-4", values: cached }]}
           />
         </ChartPanel>
       </Pair>
@@ -664,12 +749,15 @@ function PerformanceBody({ history, range }: { readonly history: History; readon
           ) : (
             <div className="@container flex flex-col gap-2.5">
               {speeds.map((row) => (
-                <div key={row.model} className="flex items-center gap-3 text-xs">
-                  <span className="w-24 shrink-0 truncate font-mono text-xs @sm:w-40">{row.model}</span>
-                  <span className="min-w-0 flex-1">
-                    <Share fraction={row.fraction} ink={providerInk(history.providers, row.providerId)} />
+                <div key={`${row.providerId}:${row.model}`} className="flex items-center gap-3 text-xs">
+                  <ProviderMark provider={row.providerId} />
+                  <span className="w-28 shrink-0 @sm:w-40">
+                    <span className="block truncate font-mono">{row.model}</span>
+                    <span className="block truncate text-muted-foreground">{row.provider}</span>
                   </span>
-                  <span className="w-16 shrink-0 text-muted-foreground">{row.provider}</span>
+                  <span className="min-w-0 flex-1">
+                    <Share fraction={row.fraction} ink={providerInk(row.providerId)} />
+                  </span>
                   <span className="w-16 shrink-0 text-right tabular-nums">{row.speed}</span>
                 </div>
               ))}
@@ -682,7 +770,7 @@ function PerformanceBody({ history, range }: { readonly history: History; readon
             <Legend
               items={[
                 { ink: "meter", title: "Median" },
-                { ink: "chart-2", title: "Slowest 5%" },
+                { ink: "chart-3", title: "Slowest 5%" },
               ]}
             />
           }
@@ -695,7 +783,7 @@ function PerformanceBody({ history, range }: { readonly history: History; readon
             tips={history.buckets.map(firstByteTip)}
             series={[
               {
-                ink: "chart-2",
+                ink: "chart-3",
                 values: history.buckets.map((b) => (b.firstByte === undefined ? undefined : b.firstByte[1] / 1000)),
               },
               {

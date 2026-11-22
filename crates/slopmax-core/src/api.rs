@@ -374,6 +374,7 @@ pub fn history(
             .iter()
             .map(|s| NamedTotals {
                 name: s.name.clone(),
+                provider: Some(provider(s.provider)),
                 totals: totals(&s.totals),
             })
             .collect(),
@@ -391,6 +392,7 @@ pub fn history(
             .iter()
             .map(|p| NamedTotals {
                 name: p.name.to_owned(),
+                provider: None,
                 totals: totals(&p.totals),
             })
             .collect(),

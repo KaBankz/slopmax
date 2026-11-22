@@ -35,21 +35,21 @@ export function Gate() {
       else setFailed(failureText(exit.cause))
     })
   }
-  const command = <code className="font-mono">slopmax dashboard</code>
+  const command = <code>slopmax dashboard</code>
   return (
     <main className="flex min-h-full items-center justify-center bg-background p-5">
       <form onSubmit={submit} className="w-full max-w-md">
-        <Card>
+        <Card variant="raised">
           <CardHeader>
             <div className="mb-3 flex items-center gap-2.5">
               <Logo size="lg" />
-              <span className="font-heading text-xl font-bold tracking-tight">slopmax</span>
+              <span className="font-heading text-xl font-semibold tracking-tight">slopmax</span>
             </div>
             <CardTitle>
-              <h1 className="text-2xl tracking-tight">Open the slopmax dashboard</h1>
+              <h1 className="font-display text-3xl font-normal tracking-tight">Open the slopmax dashboard</h1>
             </CardTitle>
             <CardDescription>
-              Run {command} to open it with its key, or enter the owner key from config.toml.
+              Run {command} to open it with its key, or enter the owner key from <code>config.toml</code>.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -74,7 +74,7 @@ export function Gate() {
                 />
                 {refused ? (
                   <FieldError id={errorId}>
-                    slopmax refused that key. Run {command} again, or paste the owner key from config.toml.
+                    slopmax refused that key. Run {command} again, or paste the owner key from <code>config.toml</code>.
                   </FieldError>
                 ) : (
                   failed !== undefined && <FieldError id={errorId}>{sentenceCase(failed)}</FieldError>

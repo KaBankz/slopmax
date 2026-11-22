@@ -1,13 +1,20 @@
 // The dashboard's destinations and their stable hash routes.
-import { parseProviderId, providerFacts, type ProviderId } from "@slopmax/client"
-import { Result } from "effect"
+import { parseProviderId, providerFacts, type ProviderId, SubscriptionId } from "@slopmax/client"
+import { Result, Schema } from "effect"
+
+export type MeteredProvider = Exclude<ProviderId, SubscriptionId>
+const isSubscription = Schema.is(SubscriptionId)
 
 export type Page =
   | { readonly _tag: "Overview" }
   | { readonly _tag: "QuotaHistory" }
   | { readonly _tag: "Accounts" }
-  | { readonly _tag: "AddAccount" }
-  | { readonly _tag: "Provider"; readonly provider: ProviderId; readonly account?: string }
+  | { readonly _tag: "AddAccount"; readonly provider?: MeteredProvider }
+  | {
+      readonly _tag: "Provider"
+      readonly provider: ProviderId
+      readonly account?: string
+    }
   | { readonly _tag: "Usage" }
   | { readonly _tag: "Performance" }
   | { readonly _tag: "Requests" }
@@ -15,7 +22,7 @@ export type Page =
   | { readonly _tag: "Diagnostics" }
   | { readonly _tag: "Settings" }
 
-export type ConnectionSection = "agents" | "clients"
+export type ConnectionSection = "agents" | "clients" | "machines"
 
 type Simple = Exclude<Page["_tag"], "Provider" | "Connections">
 
@@ -28,6 +35,7 @@ export const Pages = {
   quotaHistory: simple("QuotaHistory"),
   accounts: simple("Accounts"),
   addAccount: simple("AddAccount"),
+  addAccountFor: (provider: MeteredProvider): Page => ({ _tag: "AddAccount", provider }),
   usage: simple("Usage"),
   performance: simple("Performance"),
   requests: simple("Requests"),
@@ -101,7 +109,11 @@ export const pageTitle = (page: Page): string => {
     case "Provider":
       return providerFacts[page.provider].title
     case "AddAccount":
-      return "Add an account"
+      return page.provider === undefined
+        ? "Add an account"
+        : page.provider === "compat"
+          ? "Add a compatible endpoint"
+          : `Add ${providerFacts[page.provider].title} key`
     case "Usage":
     case "Performance":
       return "Analytics"
@@ -120,7 +132,11 @@ export const pageDescription = (page: Page): string => {
     case "Accounts":
       return "Compare readiness, last proxy use, and each account’s tightest shared limit."
     case "AddAccount":
-      return "Connect a subscription, import a login, or add a key or endpoint."
+      return page.provider === undefined
+        ? "Connect a subscription, import a login, or add a key or endpoint."
+        : page.provider === "compat"
+          ? "Connect a local or compatible remote model endpoint."
+          : `Make ${providerFacts[page.provider].title} models available through this proxy.`
     case "Provider":
       return providerFacts[page.provider].billing === "subscription"
         ? "Account limits, routing, and upcoming resets."
@@ -148,7 +164,7 @@ export const pageHash = (page: Page): string => {
     case "Connections":
       return `#/connections${page.section === undefined ? "" : `?section=${page.section}`}`
     case "AddAccount":
-      return "#/accounts/add"
+      return `#/accounts/add${page.provider === undefined ? "" : `?provider=${page.provider}`}`
     case "QuotaHistory":
       return "#/quota/history"
     default:
@@ -160,11 +176,19 @@ export const pageHash = (page: Page): string => {
 export const parsePage = (hash: string): Page => {
   const [path, query] = hash.replace(/^#\/?/, "").split("?", 2)
   const name = path?.split("&", 1)[0] ?? ""
+  if (name === "accounts/add") {
+    const target = parseProviderId(new URLSearchParams(query).get("provider") ?? "")
+    return Result.isSuccess(target) && !isSubscription(target.success)
+      ? Pages.addAccountFor(target.success)
+      : Pages.addAccount
+  }
   if (name === "agents") return Pages.connections("agents")
   if (name === "access") return Pages.connections("clients")
   if (name === "connections") {
     const section = new URLSearchParams(query).get("section")
-    return Pages.connections(section === "agents" || section === "clients" ? section : undefined)
+    return Pages.connections(
+      section === "agents" || section === "clients" || section === "machines" ? section : undefined,
+    )
   }
   const provider = parseProviderId(name)
   if (Result.isSuccess(provider)) {

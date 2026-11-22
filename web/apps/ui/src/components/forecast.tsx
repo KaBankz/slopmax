@@ -62,8 +62,8 @@ export function PoolForecast({ group, detail }: { readonly group: Group; readonl
         </CardTitle>
         <CardDescription>
           {view.recorded
-            ? "Recorded every few minutes, then projected at the recent pace as accounts reset."
-            : "slopmax records the pool every few minutes; the line fills in from here."}
+            ? "Quota used over time, projected at the recent pace as accounts reset."
+            : "The quota used trend fills in as slopmax records the pool."}
         </CardDescription>
         {views.length > 1 && (
           <CardAction>

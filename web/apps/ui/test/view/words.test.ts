@@ -157,8 +157,8 @@ describe("settings words", () => {
 describe("the pool's bar and failures", () => {
   test("past a dozen accounts the pool's bar reads as one, and says so", () => {
     expect(poolBarTip(3, true)).toBe("One segment per account, as wide as its plan's share of the pool")
-    expect(poolBarTip(segmentsShown + 19, true)).toBe("The pool's use across 31 accounts, weighted by plan")
-    expect(poolBarTip(segmentsShown + 1, false)).toBe("The pool's use across 13 accounts")
+    expect(poolBarTip(segmentsShown + 19, true)).toBe("Quota remaining across 31 accounts, weighted by plan")
+    expect(poolBarTip(segmentsShown + 1, false)).toBe("Quota remaining across 13 accounts")
   })
 
   test("a failure reads as its own words, without a field's path or a schema's", () => {

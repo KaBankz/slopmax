@@ -16,6 +16,7 @@ const Toaster = ({ theme = "system", ...props }: ToasterProps) => {
         loading: <Loader2Icon className="size-4 animate-spin" />,
       }}
       style={{
+        fontFamily: "var(--font-sans)",
         "--normal-bg": "var(--popover)",
         "--normal-text": "var(--popover-foreground)",
         "--normal-border": "var(--border)",

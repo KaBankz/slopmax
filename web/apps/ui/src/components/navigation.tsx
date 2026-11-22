@@ -1,6 +1,17 @@
 // The dashboard rail and the links local to a workspace.
 import { useAtomSet, useAtomValue } from "@effect/atom-react"
-import { ArrowLeft, ChartNoAxesCombined, ChevronRight, Gauge, List, Plug, Settings, UsersRound } from "lucide-react"
+import { providerTitle } from "@slopmax/client/format"
+import {
+  ArrowDown,
+  ArrowLeft,
+  ChartNoAxesCombined,
+  ChevronRight,
+  Gauge,
+  List,
+  Plug,
+  Settings,
+  UsersRound,
+} from "lucide-react"
 import { createContext, type MouseEvent, type PointerEvent, type ReactNode, useContext, useRef, useState } from "react"
 import { prefsAtom, proxyStatusAtom, savePrefs } from "../atoms.ts"
 import { type ConnectionSection, destinationOf, navigationGroups, type Page, pageHash, Pages } from "../view/pages.ts"
@@ -18,6 +29,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
+  SidebarTrigger,
   useSidebar,
 } from "./ui/sidebar.tsx"
 
@@ -45,7 +57,10 @@ export function focusConnectionSection(section: ConnectionSection): boolean {
 }
 
 const clampWidth = (width: number) => Math.max(sidebarBounds.min, Math.min(sidebarBounds.max, width))
-const WidthContext = createContext({ width: 224, previewWidth: (_width: number | undefined) => {} })
+const WidthContext = createContext({
+  width: 224,
+  previewWidth: (_width: number | undefined) => {},
+})
 
 export function SidebarFrame({ children }: { readonly children: ReactNode }) {
   const prefs = useAtomValue(prefsAtom)
@@ -56,12 +71,7 @@ export function SidebarFrame({ children }: { readonly children: ReactNode }) {
     <SidebarProvider
       open={!prefs.sidebarHidden}
       data-resizing={dragged !== undefined || undefined}
-      onOpenChange={(open) => {
-        if (!open && document.activeElement?.closest('[data-slot="sidebar-container"]')) {
-          document.querySelector<HTMLElement>('[data-slot="sidebar-trigger"]')?.focus()
-        }
-        save({ sidebarHidden: !open })
-      }}
+      onOpenChange={(open) => save({ sidebarHidden: !open })}
       style={{ "--sidebar-width": `${width}px` }}
       className="h-full min-h-0"
     >
@@ -103,10 +113,44 @@ function ResizeHandle() {
       onKeyDown={(event) => {
         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
         event.preventDefault()
-        save({ sidebarWidth: clampWidth(width + (event.key === "ArrowLeft" ? -8 : 8)) })
+        save({
+          sidebarWidth: clampWidth(width + (event.key === "ArrowLeft" ? -8 : 8)),
+        })
       }}
       className="absolute inset-y-0 -right-1 z-20 hidden w-2 cursor-col-resize touch-none focus-visible:outline-2 focus-visible:outline-ring md:block"
     />
+  )
+}
+
+function SidebarBrand({ onHome }: { readonly onHome?: (event: MouseEvent<HTMLElement>) => void }) {
+  const { isMobile } = useSidebar()
+  return (
+    <div data-slot="sidebar-brand" className="flex min-w-0 items-center justify-between gap-2">
+      <a
+        data-slot="sidebar-home"
+        href={pageHash(Pages.overview)}
+        onClick={onHome}
+        className="flex h-10 min-w-0 items-center gap-2.5 rounded-md px-2 text-lg font-semibold tracking-tight focus-visible:outline-2 focus-visible:outline-ring"
+        aria-label="slopmax home"
+      >
+        <Logo />
+        slopmax
+      </a>
+      <SidebarTrigger size={isMobile ? "icon-lg" : "icon"} />
+    </div>
+  )
+}
+
+/** The brand row used on phones and when the desktop sidebar is collapsed. */
+export function SidebarBrandBar() {
+  const { open, isMobile } = useSidebar()
+  if (open && !isMobile) return null
+  return (
+    <div data-sidebar-reveal className="shrink-0 border-b bg-sidebar py-0.5">
+      <div className="workspace-width">
+        <SidebarBrand />
+      </div>
+    </div>
   )
 }
 
@@ -123,21 +167,15 @@ export function DashboardSidebar({ page }: { readonly page: Page }) {
   return (
     <Sidebar
       mobileFinalFocus={() => {
-        const selector = closingForNavigation.current ? "#dashboard-title" : '[data-slot="sidebar-trigger"]'
+        const selector = closingForNavigation.current
+          ? "#dashboard-title"
+          : '[data-sidebar-reveal] [data-slot="sidebar-trigger"]'
         closingForNavigation.current = false
         return document.querySelector<HTMLElement>(selector) ?? false
       }}
     >
       <SidebarHeader>
-        <a
-          href={pageHash(Pages.overview)}
-          onClick={follow}
-          className="mx-1 flex h-12 w-fit items-center gap-2.5 rounded-md px-2 font-heading text-xl font-bold tracking-tight focus-visible:outline-2 focus-visible:outline-ring"
-          aria-label="slopmax home"
-        >
-          <Logo />
-          slopmax
-        </a>
+        <SidebarBrand onHome={follow} />
       </SidebarHeader>
       <SidebarContent aria-label="Dashboard">
         {navigationGroups.map(({ label, entries }) => (
@@ -199,10 +237,16 @@ export function DashboardSidebar({ page }: { readonly page: Page }) {
 
 export function SectionNavigation({ page }: { readonly page: Page }) {
   if (page._tag === "Provider" || page._tag === "AddAccount") {
+    const provider = page._tag === "AddAccount" ? page.provider : undefined
     return (
-      <ButtonLink href={pageHash(Pages.accounts)} variant="link" size="sm" className="w-fit">
+      <ButtonLink
+        href={pageHash(provider === undefined ? Pages.accounts : Pages.provider(provider))}
+        variant="link"
+        size="sm"
+        className="w-fit"
+      >
         <ArrowLeft aria-hidden />
-        All accounts
+        {provider === undefined ? "All accounts" : `Back to ${providerTitle(provider)}`}
       </ButtonLink>
     )
   }
@@ -222,6 +266,7 @@ export function SectionNavigation({ page }: { readonly page: Page }) {
         : [
             { page: Pages.connections("agents"), label: "Coding agents" },
             { page: Pages.connections("clients"), label: "Client keys" },
+            { page: Pages.connections("machines"), label: "Other machines" },
           ]
   const current = page._tag === "Connections" ? pageHash(Pages.connections(page.section ?? "agents")) : pageHash(page)
   return (
@@ -231,7 +276,11 @@ export function SectionNavigation({ page }: { readonly page: Page }) {
           ? "Connections sections"
           : `${destination === "quota" ? "Quota" : "Analytics"} views`
       }
-      className="flex flex-wrap gap-x-1 gap-y-0.5"
+      className={
+        destination === "connections"
+          ? "flex flex-wrap gap-x-2.5 gap-y-0.5 sm:gap-x-4"
+          : "flex flex-wrap gap-x-5 gap-y-0.5"
+      }
     >
       {links.map(({ page: target, label }) => {
         const href = pageHash(target)
@@ -251,10 +300,13 @@ export function SectionNavigation({ page }: { readonly page: Page }) {
               }
             }}
             aria-current={href === current ? (destination === "connections" ? "location" : "page") : undefined}
-            variant="section"
-            size="section"
+            variant={destination === "connections" ? "jump" : "section"}
+            size={destination === "connections" ? "sm" : "section"}
           >
             {label}
+            {destination === "connections" && (
+              <ArrowDown aria-hidden data-icon="inline-end" className="hidden sm:block" />
+            )}
           </ButtonLink>
         )
       })}

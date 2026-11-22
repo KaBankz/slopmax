@@ -6,7 +6,7 @@ import { type AccountDetail, type PoolDetail, type ProviderId, providerFacts, Su
 import { cva } from "class-variance-authority"
 import { Option, Schema } from "effect"
 import { AsyncResult } from "effect/reactivity"
-import { ChevronDown, ChevronRight, Ellipsis, Users } from "lucide-react"
+import { ChevronDown, ChevronRight, Ellipsis } from "lucide-react"
 import { useEffect, useRef } from "react"
 import {
   attentionAtom,
@@ -28,10 +28,20 @@ import {
 } from "../atoms.ts"
 import { useAsk } from "../components/ask.tsx"
 import { HealthStrip, PoolForecast, ResetLanes, usePoolDetail } from "../components/forecast.tsx"
-import { Dot, Empty, Label, Meter, Panel, Section, SegmentedBar } from "../components/parts.tsx"
+import {
+  Dot,
+  Empty,
+  Label,
+  Panel,
+  PoolUsageLegend,
+  RemainingMeter,
+  Section,
+  SegmentedBar,
+} from "../components/parts.tsx"
+import { ProviderMark } from "../components/provider-mark.tsx"
 import { Badge } from "../components/ui/badge.tsx"
-import { Button } from "../components/ui/button.tsx"
-import { CardFooter } from "../components/ui/card.tsx"
+import { Button, ButtonLink } from "../components/ui/button.tsx"
+import { Card, CardDescription, CardFooter, CardHeader, CardTitle } from "../components/ui/card.tsx"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible.tsx"
 import {
   DropdownMenu,
@@ -46,6 +56,8 @@ import { askOwn, askPriority, askRedeem, askRemove, askRename, readPriority } fr
 import { health, lanes, type SpendView, spendView } from "../view/forecast.ts"
 import { across, type Gauge, type Group, type Row } from "../view/groups.ts"
 import { cannotChange } from "../view/live.ts"
+import { pageHash, Pages } from "../view/pages.ts"
+import { quotaPercent } from "../view/quota.ts"
 import { autoRedeem, limitsNotRead, resetsLine, resetsUnlisted } from "../view/words.ts"
 
 function PoolCells({ group }: { readonly group: Group }) {
@@ -56,8 +68,8 @@ function PoolCells({ group }: { readonly group: Group }) {
           <div key={window.title} className="flex min-w-0 flex-col gap-2 bg-card p-5">
             <span className="text-xs text-muted-foreground">{window.title}</span>
             <span className="flex items-baseline gap-1.5">
-              <span className="text-2xl font-semibold tabular-nums">{window.gauge.percent}</span>
-              <span className="text-xs text-muted-foreground">used</span>
+              <span className="text-2xl tabular-nums">{quotaPercent((1 - window.gauge.fraction) * 100)}</span>
+              <span className="text-xs text-muted-foreground">left</span>
             </span>
             <SegmentedBar window={window} weighted={group.weighted} />
             <span className="text-xs text-muted-foreground tabular-nums">
@@ -67,9 +79,12 @@ function PoolCells({ group }: { readonly group: Group }) {
         ))}
       </div>
       <CardFooter density="compact">
-        <div className="flex w-full flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        <div className="flex w-full flex-wrap items-center justify-between gap-x-4 gap-y-2 text-xs text-muted-foreground">
           <span>{across(group)}. Each bar segment shows one account when space allows.</span>
           {group.credits !== undefined && <span>{group.credits}</span>}
+          <div className="basis-full empty:hidden">
+            <PoolUsageLegend windows={group.overview} />
+          </div>
         </div>
       </CardFooter>
     </Panel>
@@ -107,11 +122,16 @@ function WindowCell({
   return (
     <div className={cellVariants({ faded })}>
       <CellTitle title={title} />
-      <span className="font-medium tabular-nums">{gauge.percent} used</span>
-      <Meter
-        fraction={gauge.fraction}
+      <span
+        data-tone={gauge.tone}
+        className="font-medium tabular-nums data-[tone=bad]:text-destructive data-[tone=warn]:text-warning"
+      >
+        {quotaPercent((1 - gauge.fraction) * 100)} left
+      </span>
+      <RemainingMeter
+        used={gauge.fraction}
         tone={gauge.tone}
-        {...(gauge.pace === undefined ? {} : { marker: gauge.pace.elapsed })}
+        {...(gauge.pace === undefined ? {} : { elapsed: gauge.pace.elapsed })}
       />
       <span className="flex min-w-0 flex-wrap gap-x-2 text-xs">
         <span className="text-muted-foreground tabular-nums">{resetsLine(gauge.resetsIn, gauge.resetsAt)}</span>
@@ -391,6 +411,8 @@ function AccountRow({
   const [open, setOpen] = useAtom(openCreditsAtom)
   const isOpen = Option.isSome(open) && open.value === row.id
   const metered = !group.subscription
+  const warnings = row.notes.filter((note) => note.tone === "warn" || note.tone === "bad")
+  const details = row.notes.filter((note) => note.tone !== "warn" && note.tone !== "bad")
   const canChange = useAtomValue(canChangeAtom)
   const change = useAtomSet(changeAccount)
   const inlinePin =
@@ -429,6 +451,9 @@ function AccountRow({
               {row.plan !== "" && <span className="text-muted-foreground">{row.plan}</span>}
               {row.next && <Badge>Next</Badge>}
             </span>
+            {warnings.map((note) => (
+              <Label key={note.text} tone={note.tone} text={note.text} wrap />
+            ))}
             <SignInAgain row={row} />
             <CheckNow row={row} />
             {inlinePin && (
@@ -439,9 +464,6 @@ function AccountRow({
               </div>
             )}
             {row.lastUsed !== undefined && <span className="text-xs text-muted-foreground">{row.lastUsed}</span>}
-            {detail !== undefined && pool !== undefined && (
-              <HealthStrip health={health(detail, pool.healthSince, pool.cellMinutes, zone)} />
-            )}
           </ItemContent>
           {metered ? (
             <dl className="flex min-w-0 flex-1 flex-col gap-2 text-xs @3xl:flex-row @3xl:gap-6">
@@ -477,8 +499,8 @@ function AccountRow({
             <AccountMenu row={row} inlinePin={inlinePin} />
           </ItemActions>
         </Item>
-        {(row.notes.length > 0 || row.credits !== undefined) && (
-          <div className="-mt-1 flex min-w-0 items-center gap-3 px-3 pb-2.5 text-xs">
+        {(detail !== undefined || details.length > 0 || row.credits !== undefined) && (
+          <div className="-mt-1 flex min-w-0 flex-wrap items-start gap-x-3 gap-y-1 px-3 pb-2.5 text-xs">
             {row.credits !== undefined && (
               <CollapsibleTrigger
                 render={<Button variant="ghost" size="xs" className="-ml-2" />}
@@ -492,11 +514,21 @@ function AccountRow({
                 )}
               </CollapsibleTrigger>
             )}
-            {row.notes.map((note, i) => (
-              <span key={note.text} className={i === row.notes.length - 1 ? "min-w-0 truncate" : "shrink-0"}>
-                <Label tone={note.tone} text={note.text} />
-              </span>
-            ))}
+            {(detail !== undefined || details.length > 0) && (
+              <details className="min-w-0">
+                <summary className="w-fit cursor-pointer rounded-sm py-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
+                  Account details
+                </summary>
+                <div className="flex flex-col gap-1.5 py-2">
+                  {detail !== undefined && pool !== undefined && (
+                    <HealthStrip health={health(detail, pool.healthSince, pool.cellMinutes, zone)} />
+                  )}
+                  {details.map((note) => (
+                    <Label key={note.text} tone={note.tone} text={note.text} wrap />
+                  ))}
+                </div>
+              </details>
+            )}
           </div>
         )}
         <CollapsibleContent>
@@ -536,13 +568,45 @@ function Accounts({ provider, account, pool }: ProviderProps & { readonly pool?:
   const all = useAtomValue(groupsAtom)
   const change = useAtomSet(changeAccount)
   const canChange = useAtomValue(canChangeAtom)
+  const start = useAtomSet(signIn)
+  const readOnly = useAtomValue(readOnlyAtom)
   const title = providerFacts[provider].title
   const group = Option.fromUndefinedOr(all.find((g) => g.provider === provider))
   if (Option.isNone(shown)) {
     return <Empty title="Looking for the proxy…" detail="slopmax shows your accounts as soon as it answers." />
   }
   if (Option.isNone(group)) {
-    return <Empty icon={Users} title={`No ${title} accounts`} detail="Add one with Add account, above." />
+    const subscription = isSubscription(provider)
+    const action = readOnly ? undefined : subscription ? (
+      <Button variant="outline" disabled={!canChange} onClick={() => start({ provider, device: provider === "grok" })}>
+        <ProviderMark provider={provider} /> Sign in to {title}
+      </Button>
+    ) : (
+      <ButtonLink variant="outline" href={pageHash(Pages.addAccountFor(provider))}>
+        <ProviderMark provider={provider} />
+        {provider === "compat" ? "Add endpoint" : `Add ${title} key`}
+      </ButtonLink>
+    )
+    return (
+      <Section title="Accounts" trailing={action}>
+        <Card size="sm">
+          <CardHeader>
+            <CardTitle>
+              <h3>No {title} accounts</h3>
+            </CardTitle>
+            <CardDescription>
+              {readOnly
+                ? "Add accounts from a dashboard that can manage this proxy."
+                : subscription
+                  ? "Sign in to make this subscription available to the proxy."
+                  : provider === "compat"
+                    ? "Add a local or compatible remote model endpoint."
+                    : "Add an API key to make this provider’s models available to the proxy."}
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      </Section>
+    )
   }
   const g = group.value
   const pinned = g.rows.some((row) => row.pinned)
@@ -583,7 +647,7 @@ function Accounts({ provider, account, pool }: ProviderProps & { readonly pool?:
       </Section>
       {g.rows.some((row) => row.gauges.some((gauge) => gauge?.pace !== undefined)) && (
         <p className="-mt-4 text-xs text-muted-foreground">
-          The tick in each quota bar shows how much of its window has passed.
+          The tick marks how much quota would be left at an even pace.
         </p>
       )}
       {pool !== undefined && <PoolSections group={g} detail={pool} />}
