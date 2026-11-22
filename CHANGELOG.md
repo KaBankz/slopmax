@@ -4,6 +4,21 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-11-22
+
+### Added
+
+- The dashboard opens on Quota. See the next accounts with quota left, when their windows reset, and the pace needed to use the allowance. Past resets estimates the unused value of subscriptions.
+- Accounts compares readiness, recent activity, and the tightest shared limit for each subscription. API keys and compatible endpoints have their own group, and each row links directly to its account.
+
+### Changed
+
+- The sidebar groups Quota and Accounts, Analytics and Requests, and Connections and Settings. It remembers its desktop width and opens as a drawer on phones. Hairline dividers, lighter typography, and provider marks carry through both themes.
+- Analytics brings usage and performance together. Switch the main chart between tokens, answered requests, and value at API prices. Token charts match their colors to providers, and a model served by multiple providers is attributed to the one that handled it.
+- Requests keeps range and outcome controls visible, collects secondary filters in a panel, and shows the outcome first in request details. Connections brings coding agents, client keys, and instructions for other machines onto one page.
+- Settings shows the active routing strategy and its effect before you change it. Compare strategies before applying a change, and open Advanced proxy settings for polling, session timeouts, and transport controls.
+- The macOS crash check reports requests interrupted by a crash separately from errors on new connections.
+
 ### Fixed
 
 - `slopmax update` installs a release made today when mise installed slopmax. mise held a release back for a day by default (its minimum release age) and could read the list of versions from a cache up to an hour old, so `slopmax update` said a new version was out and then failed to install it. It now has mise fetch the list fresh and take the newest release whatever its age; mise's settings are left as they are.
@@ -598,7 +613,8 @@ The first version.
 - `slopmax run`, `env`, and `setup` (with `--undo`) connect Claude Code and Codex.
 - Adapted Claude requests to the serving account (`metadata.user_id` and the billing-header checksum). 0.2.0 removed this.
 
-[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/KaBankz/slopmax/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/KaBankz/slopmax/compare/v0.18.4...v0.19.0
 [0.9.0]: https://github.com/KaBankz/slopmax/compare/v0.8.1...v0.9.0
 [0.8.1]: https://github.com/KaBankz/slopmax/compare/v0.8.0...v0.8.1
