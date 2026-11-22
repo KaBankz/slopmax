@@ -58,7 +58,21 @@ export const startCommand = "slopmax tailscale on"
 export const machinesCard = (view: TailnetView): MachinesCard => {
   const rows: Array<MachineRow> = []
   if (view.url !== undefined) {
-    rows.push({ title: "Address", value: view.url, detail: "Where your other machines reach slopmax.", copy: true })
+    rows.push({
+      title: "Address",
+      value: view.url,
+      detail: "Where your other machines reach slopmax.",
+      copy: true,
+    })
+    const target = hubTarget(view)
+    if (target !== undefined) {
+      rows.push({
+        title: "Setup command",
+        value: `slopmax setup --hub ${target}`,
+        detail: "Run on the other machine to connect Claude Code and Codex.",
+        copy: true,
+      })
+    }
   }
   if (view.transport !== undefined) {
     rows.push(
@@ -89,7 +103,11 @@ export const machinesCard = (view: TailnetView): MachinesCard => {
             value: view.users.join(", "),
             detail: "Machines signed in as these logins use slopmax and see its status.",
           }
-        : { title: "No key needed for", value: "No one", detail: "Every machine needs a key: slopmax key add <name>." },
+        : {
+            title: "No key needed for",
+            value: "No one",
+            detail: "Every machine needs a key: slopmax key add <name>.",
+          },
     )
     rows.push(
       view.admins.length > 0
@@ -104,15 +122,6 @@ export const machinesCard = (view: TailnetView): MachinesCard => {
             detail: `To let a machine manage slopmax: ${adminCommand(Option.none())}.`,
           },
     )
-    const target = hubTarget(view)
-    if (target !== undefined) {
-      rows.push({
-        title: "On another machine",
-        value: `slopmax setup --hub ${target}`,
-        detail: "Points its Claude Code and Codex at this slopmax.",
-        copy: true,
-      })
-    }
   }
   const unpublished = view.tailscale === "missing" || view.url === undefined
   return {

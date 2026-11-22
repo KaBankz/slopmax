@@ -29,7 +29,7 @@ export function SignInCard() {
     setAddress("")
   }
   return (
-    <Card aria-label={view.title}>
+    <Card variant="raised" aria-label={view.title}>
       <CardHeader>
         <CardTitle>{view.title}</CardTitle>
         <CardDescription>{view.detail}</CardDescription>
@@ -61,7 +61,7 @@ export function SignInCard() {
           {view.link !== undefined && (
             <>
               <InputGroup>
-                <InputGroupInput readOnly aria-label="Sign-in address" value={view.link} />
+                <InputGroupInput readOnly aria-label="Sign-in address" value={view.link} variant="literal" />
                 <InputGroupAddon align="inline-end">
                   <InputGroupButton onClick={() => open(view.link ?? "")}>
                     <ExternalLink />

@@ -1,18 +1,37 @@
 # Design
 
 The slopmax UI is built on [shadcn/ui](https://ui.shadcn.com): its design
-system, its components, and its conventions, with as little of our own as we
-can manage. It is the web dashboard, served by the daemon at `/slopmax/`;
+system, its components, and its conventions, with shared Slopmax variants for quota, chart texture, spacing, and focus. It is the web dashboard, served by the daemon at `/slopmax/`;
 `src/host.ts` holds what it needs from the browser.
 
 The stack is React 19, Tailwind CSS 4 and shadcn/ui's `base-nova` style, whose
 components sit on [Base UI](https://base-ui.com). Run `mise run check` from
 `web/` before you call a UI change done.
 
+## Navigation
+
+The sidebar shows Quota and Accounts under Workspace, Analytics and Requests
+under Activity, and Connections and Settings under Proxy. It opens as a drawer
+on small screens. Desktop width and visibility are saved in UI preferences.
+The live status in the footer opens Diagnostics.
+
+Quota has upcoming and past resets. Past resets shows the estimated unused
+share of subscription fees. Accounts groups providers by billing type and
+owns the add-account flow. Analytics shares a date range across Usage and
+Performance. In Usage, tokens, answered requests and value at API prices
+switch the chart from a shared row of figures. The monthly pace stays visible
+as a projection. Connections brings coding agents, client keys, and other machines
+onto one page with jump links to each section. Requests keeps the date range
+and outcome visible. Account, model, and agent filters open together, and
+the request detail sheet leads with the outcome.
+
+Provider and account bookmarks retain their existing addresses. The older
+Agents and Access links jump to the relevant section in Connections. Route
+changes focus the destination heading, section, or linked account.
+
 ## The layers
 
-1. **The theme**, `src/index.css`: shadcn's own, as `shadcn init -b base -p nova`
-   writes it. Tokens in `:root` and `.dark`, mapped to colors in
+1. **The theme**, `src/index.css`: built on shadcn's `base-nova` tokens. Tokens in `:root` and `.dark`, mapped to colors in
    `@theme inline`, on Tailwind's default type, spacing and radius scales, with
    `tw-animate-css` and `shadcn/tailwind.css` imported.
 2. **shadcn's components**, `src/components/ui/`: added with the CLI and kept
@@ -28,20 +47,23 @@ components sit on [Base UI](https://base-ui.com). Run `mise run check` from
 
 shadcn's tokens, by shadcn's names: `background`, `foreground`, `card`,
 `popover`, `primary`, `secondary`, `muted`, `accent`, `destructive`, `border`,
-`input`, `ring`, `chart-1` … `chart-5`, and the `sidebar-*` set, each with its
-`-foreground` where shadcn has one. The surfaces and action colors use a cool slate palette in light and dark themes.
-`--radius` (0.625rem) sets every radius step.
+`input`, `ring`, and `chart-1` … `chart-4`, each with its
+`-foreground` where shadcn has one. The workspace uses white, black, and
+neutral grays in both themes. Cobalt and dither mark remaining quota across
+the reset schedule, account directory and provider meters. Amber marks low
+headroom and red marks critical headroom. The active sidebar link and Analytics
+metric pick up the same texture.
+The main workspace uses open edges and thin rules to group related data.
+Controls have a 7 px base radius. Raised surfaces are reserved for standalone
+flows and overlays.
 
-slopmax adds tokens shadcn has no names for: `success` and `warning`, the
-good and warn states (`destructive` is the bad one), which take Tailwind's
-green and amber, 700 in light and 500 in dark; and `spark-1` … `spark-4`, the
-trend lines under the figures (value at API prices, tokens, requests, the fourth),
-orange, pink, blue and teal, deeper in light. A chart of the same measure
-as a figure takes that figure's color (the Usage page's tokens, requests and
-value at API prices columns, and the weekday activity grid, which counts requests). A
-row that is one provider's (a model, an agent, an account, a speed) takes
-that provider's color from the Tokens chart, grey when no one provider owns
-it; the neutral `chart-*` colors stay for the rest.
+Slopmax adds `success` and `warning` tokens for green and amber status colors.
+Dedicated provider colors give the token series copper, lime, pink, teal,
+cyan, and violet, with deeper shades in light mode. Provider icons and provider-owned
+rows use the same inks across date ranges. The cobalt `activity` token marks
+aggregate traffic. Token types and Performance summary trends use gray. Today shows
+stacked hourly areas and longer ranges show stacked daily bars. The totals
+beside the token chart sum its plotted buckets.
 
 Every chart draws its series with `ChartArea`, `ChartLine` and `ChartBar`
 from `components/ui/chart.tsx`, never Recharts' own `Area`, `Line` and `Bar`
@@ -56,18 +78,38 @@ use a solid fill, with a small cap for a nonzero top segment below one pixel.
 A curve is smooth and 2px over
 its fill. A list row's bar is `ChartMeter`, the same dither on its side over
 a dotted track, fading over the track's length so short bars stay solid. Dither marks historical
-measurements and usage breakdowns. Current quota and its warning or failure
-tones use solid `Meter` fills, and categorical status grids use solid cells.
+measurements and usage breakdowns, with matching legend swatches. The token
+mix uses solid gray shades with text shares. Status dots and the activity
+heatmap also use solid fills.
 
-Type, spacing, radius, shadows and motion are Tailwind's and shadcn's: `text-sm`
-is body text, `text-xs` secondary text, `text-base` and up for headings;
-spacing on Tailwind's 4px steps; enter and exit motion from `tw-animate-css`
-(`animate-in fade-in slide-in-from-top-1`). The font is the system's sans, so
-the page ships no font files.
+Instrument Sans handles body text, small headings, tables, controls, and
+supporting figures. Use regular Newsreader for page titles and one lead
+figure per view: remaining quota, unused value, the selected usage metric,
+or request success rate. Use regular IBM Plex Mono for literal text
+such as model IDs, commands, addresses, and file paths at every width.
+The Latin subsets and their OFL licenses ship with the app. Other scripts fall
+back to system fonts. Body text is 14 px, supporting text is 13 px, and ledger
+columns use tabular figures.
 
-To change the look, change the theme's values, never the components. A theme
-from shadcn's theme pages pastes straight over `:root` and `.dark`; keep
-`success` and `warning` and check they still read against its background.
+The header and main pane share the same responsive gutters. Charts and
+ledger tables use the full workspace. Setup, Connections, Settings and
+Diagnostics place section headings beside their controls on wide screens
+and stack them on narrow ones.
+
+Change shared colors in the theme and component behavior in the relevant shadcn primitive.
+Check both themes for contrast and focus when changing a token.
+
+### Quota
+
+Overview presents the next eligible shared window and later resets in a
+single schedule. On wide screens the account, quota and reset columns align
+across the schedule. Keep
+weekly and monthly windows together in the long-window selection and show 5-hour
+windows separately. The pace to finish is the remaining percentage points
+divided by the hours until the reported reset. The gauge marks even pace,
+and matched reset reminders supply estimates of the unused plan fee. Usage shows historical subscription
+value from completed resets alongside its price basis. Provider pages show
+pool forecasts, model caps, account controls, and short-window constraints.
 
 ### State
 
@@ -90,11 +132,10 @@ Our customizations, each noted at the top of its file:
 | Component  | Change                                                                                                                                                                                                                                                                                                                      |
 | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `alert`    | a `warning` variant, the destructive variant's shape in the warning color                                                                                                                                                                                                                                                   |
-| `progress` | `tone` (`default`, `warning`, `destructive`) colors the fill; `marker` draws a tick where an even spend would have reached                                                                                                                                                                                                  |
-| `card`     | a `flush` size, no padding or gap, for a panel of rows edge to edge                                                                                                                                                                                                                                                         |
+| `progress` | `quota` and `allowance` tones show remaining allowance with a dithered fill. `marker` shows the allowance expected at an even pace.                                                                                                                                                                                         |
+| `card`     | a hairline for sections, a `flush` size for rows, and a `raised` variant for standalone forms                                                                                                                                                                                                                               |
 | `chart`    | series colors are set in the container's `style`, not an injected `<style>` (the CSP refuses one), so a series takes `color`, not `theme`; `ChartArea` (`texture`: `dither`, `fade`), `ChartLine` and `ChartBar` (`variant`: `dither`, `solid`) draw every series in the house look; `ChartMeter` is a list row's bar in it |
 | `sonner`   | the theme comes from slopmax's Appearance setting, not next-themes                                                                                                                                                                                                                                                          |
-| `sidebar`  | no cookie: whether it is open lives in slopmax's preferences                                                                                                                                                                                                                                                                |
 
 ### Adding one
 
@@ -114,21 +155,21 @@ and carry the change over.
 
 In `src/components/`, each built from shadcn's components:
 
-| File            | What                                                                                                                                                                                                                                      |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `parts.tsx`     | `Panel` (Card, flush), `Section`, `Row`, `SettingRow` (Item), `Stat`/`Stats` (Card, a `Spark`; `lg` for headlines), `Empty`, `Skeleton`, `Failed` (Alert), `Loaded`, `Meter` and `SegmentedBar` (Progress), `Label`, `Dot`, `Logo`, `Kbd` |
-| `charts.tsx`    | `Columns`, `Lines`, `Hours`, `TrendChart`, `Spark`, `Share` (Chart over Recharts); `Heatmap` (a contribution graph) and `SplitBar`, which Recharts has no shape for; `Legend`, `Swatch`                                                   |
-| `forecast.tsx`  | `PoolForecast` (Card, Segmented, TrendChart, figures in the CardFooter), `ResetLanes` (Card, Tooltip marks on a lane per account), `HealthStrip` (a Tooltip over an account's half hours)                                                 |
-| `sidebar.tsx`   | the window's Sidebar: SidebarProvider sized from the preferences, a draggable edge, the pages, the proxy's state at its foot                                                                                                              |
-| `tip.tsx`       | `Tip`, a Tooltip on one control in a line                                                                                                                                                                                                 |
-| `health.tsx`    | the overview's `HealthCard` (Card, a HealthStrip per account) and `RecentFailures` (Card, CardAction to the Requests page)                                                                                                                |
-| `pick.tsx`      | `Pick`, a small Select of a few choices or "any", for filters                                                                                                                                                                             |
-| `segmented.tsx` | `Segmented`, a ToggleGroup that always keeps one choice                                                                                                                                                                                   |
-| `choices.tsx`   | `Choices`, a RadioGroup of choice cards (FieldLabel around a Field)                                                                                                                                                                       |
-| `stepper.tsx`   | `Stepper`, less and more around a value (ButtonGroup)                                                                                                                                                                                     |
-| `ask.tsx`       | the app's one confirm-or-prompt Dialog, opened with `ask(…)`                                                                                                                                                                              |
-| `toasts.tsx`    | hands the toasts atom's entries to Sonner                                                                                                                                                                                                 |
-| `sign-in.tsx`   | the sign-in Card above every page while a sign-in is under way                                                                                                                                                                            |
+| File             | What                                                                                                                                                                                                                        |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `parts.tsx`      | `Panel` (Card, flush), `Section`, `Row`, `SettingRow` (Item), `Stats` (one Card with `Spark` trends), `Empty`, `Skeleton`, `Failed` (Alert), `Loaded`, `Meter` and `SegmentedBar` (Progress), `Label`, `Dot`, `Logo`, `Kbd` |
+| `charts.tsx`     | `Columns`, `Lines`, `Hours`, `TrendChart`, `Spark`, `Share` (Chart over Recharts); `Heatmap` (a contribution graph) and `SplitBar`, which Recharts has no shape for; `Legend`, `Swatch`                                     |
+| `forecast.tsx`   | `PoolForecast` (Card, Segmented, TrendChart, figures in the CardFooter), `ResetLanes` (Card, account timeline and expandable reset times), `HealthStrip` (a status strip with a visible summary)                            |
+| `navigation.tsx` | Masthead, contextual page links, and proxy diagnostics. Uses shadcn ButtonLink variants.                                                                                                                                    |
+| `tip.tsx`        | `Tip`, a Tooltip on one control in a line                                                                                                                                                                                   |
+| `health.tsx`     | the overview's `HealthCard` (Card, a HealthStrip per account) and `RecentFailures` (Card, CardAction to the Requests page)                                                                                                  |
+| `pick.tsx`       | `Pick`, a small Select of a few choices or "any", for filters                                                                                                                                                               |
+| `segmented.tsx`  | `Segmented`, a ToggleGroup that always keeps one choice                                                                                                                                                                     |
+| `choices.tsx`    | `Choices`, a RadioGroup of choice cards (FieldLabel around a Field)                                                                                                                                                         |
+| `stepper.tsx`    | `Stepper`, less and more around a value (ButtonGroup)                                                                                                                                                                       |
+| `ask.tsx`        | the app's one confirm-or-prompt Dialog, opened with `ask(…)`                                                                                                                                                                |
+| `toasts.tsx`     | hands the toasts atom's entries to Sonner                                                                                                                                                                                   |
+| `sign-in.tsx`    | the sign-in Card above every page while a sign-in is under way                                                                                                                                                              |
 
 A new pattern that two pages share becomes a composition here, built the same
 way. Every file opens with a comment saying what it is.
@@ -170,3 +211,19 @@ most), so tests read them as people will. Say what happened and what to do,
 in plain words: "slopmax is not answering. Is it running? Start it with
 slopmax proxy start." Never show a request's method and address. Times give both
 the countdown and the clock time: "Resets in 51m46s · 02:18".
+
+## Provider marks
+
+Provider marks identify the corresponding service. The dashboard bundles the
+original artwork and uses separate colors for chart series:
+
+- Claude Spark and the Anthropic symbol come from the
+  [Anthropic press kit](https://www.anthropic.com/press-kit).
+- The ChatGPT mark comes from [ChatGPT](https://chatgpt.com/).
+  The black and white OpenAI Blossom comes from the [OpenAI logo kit](https://openai.com/brand/).
+- Grok uses the mark from [Grok’s site](https://grok.com/).
+  The xAI API uses the mark in the [provider’s API documentation](https://docs.x.ai/overview).
+  The SVGs preserve the providers’ path geometry. Monochrome marks ship with
+  explicit light and dark variants that follow the dashboard setting.
+
+The marks belong to their respective owners.

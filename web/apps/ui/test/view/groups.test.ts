@@ -44,7 +44,7 @@ describe("groups", () => {
           id: "codex-1",
           name: "team",
           provider: "codex",
-          windows: [Window.of("5h", 15, at(-1)), Window.of("7d", 0, at(5)), Window.of("7d", 90, at(45), "opus")],
+          windows: [Window.of("5h", 15, at(-1)), Window.of("7d", 0, at(5)), Window.of("7d", 90, at(45), "Opus")],
         }),
         account({
           id: "claude-3",
@@ -57,7 +57,7 @@ describe("groups", () => {
     expect(nextQuotaReset(candidates, now, zone)).toEqual({
       provider: "codex",
       account: "team",
-      window: "Weekly · opus",
+      window: "Weekly · Opus",
       countdown: "45m00s",
       at: "12:45",
     })
@@ -111,7 +111,7 @@ describe("groups", () => {
     expect(claude?.overview.map((w) => [w.title, w.gauge.percent])).toEqual([
       ["5-hour", "54%"],
       ["Weekly", "56%"],
-      ["Weekly · opus", "52%"],
+      ["Weekly · Opus", "52%"],
     ])
     const ana = claude?.rows[0]
     expect(ana?.gauges[0]).toMatchObject({ percent: "62%", resetsIn: "1h40m", resetsAt: "13:40", tone: "good" })
@@ -120,15 +120,15 @@ describe("groups", () => {
     const metered = byProvider("anthropic")
     expect(metered?.subscription).toBe(false)
     expect(metered?.columns).toEqual([])
-    expect(metered?.rows[0]?.plan).toBe("per token")
+    expect(metered?.rows[0]?.plan).toBe("Billed per token")
   })
 
   test("give a window for one model a column after the shared ones", () => {
     const accounts = [
-      account({ id: "claude-1", provider: "claude", name: "a", windows: [Window.of("7d", 1, undefined, "opus")] }),
+      account({ id: "claude-1", provider: "claude", name: "a", windows: [Window.of("7d", 1, undefined, "Opus")] }),
       account({ id: "claude-2", provider: "claude", name: "b", windows: [Window.of("7d", 2), Window.of("5h", 3)] }),
     ]
-    expect(slots(accounts).map(windowTitle)).toEqual(["5-hour", "Weekly", "Weekly · opus"])
+    expect(slots(accounts).map(windowTitle)).toEqual(["5-hour", "Weekly", "Weekly · Opus"])
   })
 
   test("size a weighted pool's segments by plan, and an unweighted one evenly", () => {
@@ -191,7 +191,10 @@ const limited = (id: string, name: string, minutes: number) =>
 describe("where new sessions go", () => {
   test("a pool says which account takes the next session, and why", () => {
     const claude = byProvider("claude")
-    expect(claude?.next).toEqual({ text: "New sessions → ben@studio.dev · its quota resets soonest", tone: "muted" })
+    expect(claude?.next).toEqual({
+      text: "New sessions go to ben@studio.dev · a weekly or monthly limit resets within a day with quota left",
+      tone: "muted",
+    })
     expect(claude?.rows.map((row) => row.next)).toEqual([false, true, false])
   })
 

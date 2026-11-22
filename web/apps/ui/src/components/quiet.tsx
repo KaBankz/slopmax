@@ -4,14 +4,14 @@ import { useAtomValue } from "@effect/atom-react"
 import { Option } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import { ChartColumn, type LucideIcon } from "lucide-react"
-import { agentsAtom, go } from "../atoms.ts"
+import { agentsAtom } from "../atoms.ts"
 import { anyWired } from "../view/live.ts"
-import { Pages } from "../view/pages.ts"
+import { pageHash, Pages } from "../view/pages.ts"
 import { unwiredLine } from "../view/words.ts"
 import { Empty } from "./parts.tsx"
-import { Button } from "./ui/button.tsx"
+import { ButtonLink } from "./ui/button.tsx"
 
-/** An activity page with nothing to show, saying so when no agent is wired yet, with a button to the Agents page. */
+/** An activity page with nothing to show, saying so when no agent is wired yet, with a link to Coding agents. */
 export function Quiet({
   title,
   detail = "Requests show here once an agent sends them through slopmax.",
@@ -25,9 +25,9 @@ export function Quiet({
   const unwired = Option.exists(AsyncResult.value(agents), (list) => !anyWired(list))
   return (
     <Empty icon={icon} title={title} detail={unwired ? `${unwiredLine} ${detail}` : detail}>
-      <Button variant={unwired ? "default" : "outline"} onClick={() => go(Pages.agents)}>
+      <ButtonLink variant={unwired ? "default" : "outline"} href={pageHash(Pages.connections("agents"))}>
         Connect an agent
-      </Button>
+      </ButtonLink>
     </Empty>
   )
 }

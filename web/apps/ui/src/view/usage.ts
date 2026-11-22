@@ -1,4 +1,4 @@
-// What the Usage and Performance pages and the overview say about a
+// What the Usage and Performance pages say about a
 // history: the figures across the top with
 // their trend lines, the tables, and the token mix. The history is the
 // ledger's own shape (`GET /history`).
@@ -6,6 +6,7 @@ import {
   agentFacts,
   type History,
   type HistoryBucket,
+  type LeftAccount,
   matchesAny,
   providerFacts,
   type ProviderId,
@@ -133,64 +134,50 @@ const successPercent = (totals: Pick<Totals, "requests" | "failed">): number | u
 const successLabel = (value: number): string =>
   value > 0 && value < 0.05 ? "<0.1%" : value < 100 && value >= 99.95 ? ">99.9%" : `${fixed(value, 1)}%`
 
-/** The four figures under the overview's request chart. */
-export const activityStats = (history: History): ReadonlyArray<Stat> => {
-  const { total, cached, firstByte, rescued } = history
+/** The percentage-point change in success across matched ledger periods. */
+const successChange = (history: History, rate: number | undefined): Change | undefined => {
   const previous = history.previous?.total
-  const rate = successPercent(total)
   const priorRate = previous === undefined ? undefined : successPercent(previous)
-  const points = rate === undefined || priorRate === undefined ? undefined : rate - priorRate
-  const rateChange: Change | undefined =
-    points === undefined || priorRate === undefined || Math.abs(points) < 0.05
-      ? undefined
-      : {
-          text: `${fixed(Math.abs(points), 1)} points`,
-          direction: points > 0 ? "up" : "down",
-          versus: versus(history),
-          tip: `${successLabel(priorRate)} ${before(history)}`,
-        }
-  const value: Stat = {
-    title: apiPriceValue,
-    value: total.requests === 0 ? "—" : priced(total.cost, total.unpriced, total.requests),
-    note: costNote(total),
-  }
-  return [
-    {
-      title: "Success rate",
-      value: rate === undefined ? "—" : successLabel(rate),
-      note: rescued > 0 ? `Share answered (${grouped(rescued)} via failover)` : "Share answered",
-      ...(rateChange === undefined ? {} : { change: rateChange }),
-    },
-    moved(
-      {
-        title: "Tokens processed",
-        value: compact(total.tokens),
-        note: cacheShare(cached),
-      },
-      history,
-      (t) => t.tokens,
-      compact,
-    ),
-    movedPrice(value, history),
-    {
-      title: "Median wait",
-      value: firstByte === undefined ? "—" : `${fixed(firstByte / 1000, 2)} s`,
-      note: firstByte === undefined ? "No response timings" : "Time to first response",
-    },
-  ]
+  if (rate === undefined || priorRate === undefined) return undefined
+  const points = rate - priorRate
+  return Math.abs(points) < 0.05
+    ? undefined
+    : {
+        text: `${fixed(Math.abs(points), 1)} points`,
+        direction: points > 0 ? "up" : "down",
+        versus: versus(history),
+        tip: `${successLabel(priorRate)} ${before(history)}`,
+      }
 }
 
-/** The corresponding request count from the preceding span, when supplied by the ledger. */
-export const previousRequests = (history: History): string | undefined =>
-  history.previous === undefined
-    ? undefined
-    : `${count(requestTotal(history.previous.total), "request")} ${before(history)}`
+export const usageMetrics = ["tokens", "requests", "value"] as const
+export type UsageMetric = (typeof usageMetrics)[number]
+
+/** The selected measure in the preceding span, when the ledger can compare it. */
+export const previousMetric = (history: History, metric: UsageMetric): string | undefined => {
+  const total = history.previous?.total
+  if (total === undefined) return undefined
+  if (metric === "value" && (total.unpriced > 0 || history.total.unpriced > 0)) return undefined
+  const value =
+    metric === "tokens"
+      ? `${compact(total.tokens)} tokens`
+      : metric === "requests"
+        ? count(total.requests, "answered request")
+        : `${dollars(total.cost)} at API prices`
+  return `For comparison, ${value} ${before(history)}`
+}
+
+/** The known fee share for one account, with older ledgers using their range-wide price coverage. */
+export const leftAccountValue = (account: LeftAccount, unpriced: number): string => {
+  const noKnownPrice = account.unpriced === undefined ? unpriced > 0 : account.unpriced === account.windows
+  return account.unused > 0 && account.dollars === 0 && noKnownPrice ? "—" : dollars(account.dollars)
+}
 
 /** The Usage page's figures. */
-export const usageStats = (history: History): ReadonlyArray<Stat> => {
+export const usageStats = (history: History): readonly [Stat, Stat, Stat, Stat] => {
   const total = history.total
   const value = priced(total.cost, total.unpriced, total.requests)
-  const valueNote = history.billed > 0 ? `Billed to API keys ${dollars(history.billed)}` : costNote(total)
+  const valueNote = history.billed > 0 ? `Estimated API-key spend ${dollars(history.billed)}` : costNote(total)
   return [
     moved(
       {
@@ -276,11 +263,13 @@ const monthPace = (history: History): Stat => {
 export const performanceStats = (history: History): ReadonlyArray<Stat> => {
   const total = history.total
   const rate = successPercent(total)
+  const successDelta = successChange(history, rate)
   return [
     {
       title: "Success rate",
       value: rate === undefined ? "—" : successLabel(rate),
       note: total.failed === 0 ? "none failed" : `${grouped(total.failed)} failed`,
+      ...(successDelta === undefined ? {} : { change: successDelta }),
       trend: trend(history.buckets, 4, successPercent, (n) => `${successLabel(n)} answered`),
     },
     {
@@ -320,6 +309,7 @@ const perDay = (span: ReadonlyArray<HistoryBucket>, pick: (day: HistoryBucket) =
 
 /** One line in a usage breakdown, with its share and the figures beside it. */
 export interface BarRow {
+  readonly key: string
   readonly name: string
   /** Whose it is, for its color, when it is one provider's. */
   readonly provider?: ProviderId
@@ -332,6 +322,7 @@ export interface BarRow {
 
 const bars = (
   rows: ReadonlyArray<{
+    readonly key?: string
     readonly name: string
     readonly provider?: ProviderId | undefined
     readonly detail?: string
@@ -340,6 +331,7 @@ const bars = (
 ): ReadonlyArray<BarRow> => {
   const most = Math.max(1, ...rows.map((row) => row.totals.tokens))
   return rows.map((row) => ({
+    key: row.key ?? `${row.provider ?? ""}:${row.name}`,
     name: row.name,
     ...(row.provider === undefined ? {} : { provider: row.provider }),
     ...(row.detail === undefined ? {} : { detail: row.detail }),
@@ -350,9 +342,12 @@ const bars = (
   }))
 }
 
-/** The provider of the range's that serves a model, first in its order; none for a name no provider claims. */
-export const modelProvider = (providers: ReadonlyArray<ProviderId>, model: string): ProviderId | undefined =>
-  providers.find((id) => matchesAny(providerFacts[id].models, model))
+/** Infer a provider for older reports only when the model matches one provider's patterns. */
+export const modelProvider = (providers: ReadonlyArray<ProviderId>, model: string): ProviderId | undefined => {
+  if (providers.includes("compat")) return undefined
+  const matches = providers.filter((id) => matchesAny(providerFacts[id].models, model))
+  return matches.length === 1 ? matches[0] : undefined
+}
 
 /** The provider an agent is made for, by its title; none for `Other` and `Warmups`. */
 export const agentProvider = (name: string): ProviderId | undefined =>
@@ -363,8 +358,9 @@ export const topModels = 5
 
 /** The models by tokens: the top five by name, then the rest as `Other` when it has tokens. */
 export const modelRows = (history: History): ReadonlyArray<BarRow> => {
-  const named = history.models.slice(0, topModels)
-  const rest = history.models.slice(topModels)
+  const ranked = history.models.toSorted((a, b) => b.totals.tokens - a.totals.tokens)
+  const named = ranked.slice(0, topModels)
+  const rest = ranked.slice(topModels)
   const other = rest.reduce(
     (sum, row) =>
       new Totals({
@@ -380,12 +376,13 @@ export const modelRows = (history: History): ReadonlyArray<BarRow> => {
     Totals.zero,
   )
   return bars([
-    ...named.map((row) => ({
+    ...named.map((row, index) => ({
+      key: row.provider === undefined ? `legacy:${row.name}:${index}` : `model:${row.provider}:${row.name}`,
       name: row.name,
-      provider: modelProvider(history.providers, row.name),
+      provider: row.provider ?? modelProvider(history.providers, row.name),
       totals: row.totals,
     })),
-    ...(other.tokens > 0 ? [{ name: "Other", totals: other }] : []),
+    ...(other.tokens > 0 ? [{ key: "other", name: "Other", totals: other }] : []),
   ])
 }
 

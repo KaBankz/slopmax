@@ -13,11 +13,11 @@ const withAccounts = (accounts: Report["accounts"], nudges: Report["nudges"] = [
   new Report({ ...emptyReport(now), accounts, nudges })
 
 describe("how the accounts stand", () => {
-  test("a headline, what keeps the rest, and the worst tone", () => {
+  test("partial readiness stays a warning when some accounts can serve", () => {
     expect(standing(report)).toEqual({
       headline: "5 of 7 accounts are ready",
       detail: "1 limited and 1 needs signing in",
-      tone: "bad",
+      tone: "warn",
     })
     expect(standing(emptyReport(now)).headline).toBe("No accounts yet")
     const one = withAccounts([account({ id: "claude-1", provider: "claude", name: "a" })])
@@ -47,7 +47,7 @@ describe("what wants a look", () => {
       ["lab@studio.dev needs signing in again", "bad", "sign-in"],
       ["A limit reset on ana@studio.dev expires in 1d6h · Sun 18:00", "warn", "redeem"],
       [
-        "ana@studio.dev's week resets in 19h50m · Sun 07:50 with 45% of it unused, about $90 of its plan",
+        "ana@studio.dev's week resets in 19h50m · Sun 07:50 with 45% of it unused, about $21 of its plan",
         "warn",
         "look",
       ],

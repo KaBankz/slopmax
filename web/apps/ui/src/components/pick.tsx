@@ -18,10 +18,11 @@ export interface PickProps {
   readonly anyTitle: string
   readonly value: string | undefined
   readonly options: ReadonlyArray<{ readonly value: string; readonly title: string }>
+  readonly literal?: boolean
   readonly onChange: (value: string | undefined) => void
 }
 
-export function Pick({ label, anyTitle, value, options, onChange }: PickProps) {
+export function Pick({ label, anyTitle, value, options, literal = false, onChange }: PickProps) {
   const items = [{ value: any, label: anyTitle }, ...options.map((o) => ({ value: o.value, label: o.title }))]
   return (
     <Select
@@ -29,8 +30,12 @@ export function Pick({ label, anyTitle, value, options, onChange }: PickProps) {
       value={value ?? any}
       onValueChange={(next: unknown) => onChange(typeof next !== "string" || next === any ? undefined : next)}
     >
-      <SelectTrigger size="sm" aria-label={label}>
-        <SelectValue />
+      <SelectTrigger aria-label={label}>
+        <SelectValue>
+          {literal && value !== undefined ? (
+            <code>{options.find((option) => option.value === value)?.title ?? value}</code>
+          ) : undefined}
+        </SelectValue>
       </SelectTrigger>
       <SelectContent>
         <SelectGroup>
@@ -40,7 +45,7 @@ export function Pick({ label, anyTitle, value, options, onChange }: PickProps) {
         <SelectGroup>
           {options.map((option) => (
             <SelectItem key={option.value} value={option.value}>
-              {option.title}
+              {literal ? <code>{option.title}</code> : option.title}
             </SelectItem>
           ))}
         </SelectGroup>

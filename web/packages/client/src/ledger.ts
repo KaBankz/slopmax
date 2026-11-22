@@ -141,6 +141,8 @@ export class LeftAccount extends Schema.Class<LeftAccount>("LeftAccount")({
   /** Mean percent unused. */
   unused: Schema.Number,
   dollars: Schema.Number,
+  /** Resets on plans without a known price. Older daemons omit this count. */
+  unpriced: Schema.optionalKey(NonNegativeInt),
 }) {}
 
 /** Weekly and monthly quota that resets threw away, and what that part of each plan cost. */
@@ -183,6 +185,8 @@ export class HistoryBucket extends Schema.Class<HistoryBucket>("HistoryBucket")(
 
 export class NamedTotals extends Schema.Class<NamedTotals>("NamedTotals")({
   name: Schema.String,
+  /** Present for model rows when the proxy reports which provider served them. */
+  provider: Schema.optionalKey(ProviderId),
   totals: Totals,
 }) {}
 

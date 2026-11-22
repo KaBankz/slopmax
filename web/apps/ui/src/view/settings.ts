@@ -6,17 +6,9 @@ import { isLiveKey, LivePatch } from "@slopmax/client"
 import { Option, Schema } from "effect"
 import { liveDetail, minutes, pollSteps, sessionSteps, step } from "./words.ts"
 
-/** The live settings shown in their own sections, not under Advanced. */
-const namedElsewhere: ReadonlyArray<LiveKey> = ["strategy", "sessionAffinity", "redeemExpiring", "redeemWhenExhausted"]
-
-const titles: { readonly [K in LiveKey]: string } = {
-  strategy: "Strategy",
-  sessionAffinity: "Session affinity",
+const titles: Readonly<Partial<Record<LiveKey, string>>> = {
   sessionMinutes: "Session timeout",
-  redeemExpiring: "When one would expire unused",
-  redeemWhenExhausted: "When every account is spent",
   warmWindows: "Warm ChatGPT windows",
-  paidOverflow: "Overflow to API keys",
   pollMinutes: "Usage polling",
   refreshTokens: "Refresh sign-ins",
   websockets: "Codex WebSockets",
@@ -49,10 +41,12 @@ const stepsOf = (name: "sessionMinutes" | "pollMinutes") => (name === "sessionMi
 export const advancedRows = (view: SettingsView): ReadonlyArray<AdvancedRow> =>
   view.live.flatMap((row): ReadonlyArray<AdvancedRow> => {
     const name = row.name
-    if (!isLiveKey(name) || namedElsewhere.includes(name)) return []
+    if (!isLiveKey(name)) return []
+    const title = titles[name]
+    if (title === undefined) return []
     const value = view.settings[name]
     const detail = liveDetail(name, view.live)
-    if (typeof value === "boolean") return [{ _tag: "Switch", name, title: titles[name], detail, on: value }]
+    if (typeof value === "boolean") return [{ _tag: "Switch", name, title, detail, on: value }]
     if (typeof value === "number" && (name === "sessionMinutes" || name === "pollMinutes")) {
       const steps = stepsOf(name)
       const less = step(steps, value, false)
@@ -61,7 +55,7 @@ export const advancedRows = (view: SettingsView): ReadonlyArray<AdvancedRow> =>
         {
           _tag: "Minutes",
           name,
-          title: titles[name],
+          title,
           detail,
           value,
           shown: name === "pollMinutes" && value === 0 ? "Off" : minutes(value),

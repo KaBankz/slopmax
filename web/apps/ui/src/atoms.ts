@@ -354,7 +354,7 @@ export const eventsAtom = appRuntime.atom((get) =>
 
 // --- The proxy --------------------------------------------------------------------------
 
-/** The proxy's state in a label, the same in the sidebar's foot and in Settings. */
+/** The proxy's state in a label, the same in the masthead and in Settings. */
 export const proxyStatusAtom = Atom.make((get) => shownProxy(get(liveAtom)))
 
 /** Whether the dashboard lost slopmax and is trying to reach it again. */
@@ -381,7 +381,10 @@ export const groupsAtom = Atom.make((get): ReadonlyArray<Group> =>
 
 /** What wants a look in the shown report, likewise once a second. */
 export const attentionAtom = Atom.make((get): ReadonlyArray<Attention> =>
-  Option.match(get(shownReportAtom), { onNone: () => [], onSome: (report) => attention(report, get(nowAtom), zone) }),
+  Option.match(get(shownReportAtom), {
+    onNone: () => [],
+    onSome: (report) => attention(report, get(nowAtom), zone).filter((item) => item.kind !== "quota-unused"),
+  }),
 )
 
 // --- Queries ------------------------------------------------------------------------------
@@ -988,7 +991,7 @@ export const askNotifications = task((store) =>
   }),
 )
 
-/** How the page looks and where its sidebar stands; loaded from the host at startup. */
+/** How the page looks; loaded from the host at startup. */
 export const prefsAtom = Atom.make<UiPrefs>(UiPrefs.defaults).pipe(Atom.keepAlive)
 
 /**
@@ -1058,20 +1061,6 @@ export const checkKey = keyCheckRuntime.fn<string>()((key) =>
 
 /** Whether a failure is slopmax refusing the key. */
 export const refusedKey = isUnauthorized
-
-/** Shows or hides the sidebar, and keeps that for next time. */
-export const toggleSidebar = appRuntime.fn<void>()(
-  () =>
-    Effect.gen(function* () {
-      const store = yield* actionStore
-      const host = yield* Host
-      const prefs = store.read(prefsAtom)
-      const next = new UiPrefs({ ...prefs, sidebarHidden: !prefs.sidebarHidden })
-      store.set(prefsAtom, next)
-      yield* host.savePrefs(next)
-    }),
-  concurrent,
-)
 
 /** Changes the preferences now and keeps them for next time. */
 export const savePrefs = appRuntime.fn<Partial<UiPrefs>>()(

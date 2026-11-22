@@ -323,6 +323,7 @@
     "models": [
       {
         "name": "claude-fable-5-1",
+        "provider": "claude",
         "totals": {
           "requests": 1,
           "input": 1200,
@@ -336,6 +337,7 @@
       },
       {
         "name": "claude-opus-5-5",
+        "provider": "claude",
         "totals": {
           "requests": 1,
           "input": 1200,
@@ -349,6 +351,7 @@
       },
       {
         "name": "gpt-6-sol",
+        "provider": "codex",
         "totals": {
           "requests": 1,
           "input": 1200,

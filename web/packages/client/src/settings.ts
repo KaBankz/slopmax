@@ -367,7 +367,7 @@ export const parseLive = (name: string, text: string): Result.Result<LivePatch, 
   isLiveKey(name) ? parseAs(name, kindOf(name), text) : Result.fail(notLive(name))
 
 /** The summaries the strategy choices are offered with. */
-const strategySummaries: { readonly [K in Strategy]: string } = {
+export const strategySummaries: { readonly [K in Strategy]: string } = {
   "reset-first": "Spend the quota that resets soonest, so none is lost",
   "fill-first": "Use accounts in order; fail over when one is limited",
   "least-used": "Balance load toward the least used account",

@@ -142,6 +142,9 @@ pub struct LeftAccount {
     pub windows: u64,
     pub unused: f64,
     pub dollars: f64,
+    /// Resets on plans without a known price. Absent in older reports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unpriced: Option<u64>,
 }
 
 /// Quota that reset unused, valued at the plans' prices.
@@ -177,6 +180,9 @@ pub struct HistoryBucket {
 #[serde(rename_all = "camelCase")]
 pub struct NamedTotals {
     pub name: String,
+    /// The provider that served a model. Other groups, such as agents, omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<Provider>,
     pub totals: Totals,
 }
 

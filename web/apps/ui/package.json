@@ -22,7 +22,7 @@
     "happy-dom": "A light DOM for component tests.",
     "shadcn": "The shadcn/ui CLI (bunx shadcn add …, see components.json) and its shadcn/tailwind.css, which src/index.css imports at build time.",
     "tailwindcss": "Styling, on shadcn/ui's design system (DESIGN.md).",
-    "size": "Measured 2026-11-16 (bun build.ts), as the daemon embeds it: app.js 1,382 KB minified, 435 KB gzip (recharts is most of the 473 KB added since 2026-10-31); CSS 124 KB, 18 KB gzip (shadcn/tailwind.css and tw-animate-css); no font files, as the page uses the system's font. About 455 KB crosses the wire."
+    "size": "Measured 2026-11-20 (bun build.ts): app.js about 1.41 MB minified, 445 KB gzip. CSS about 135 KB, 21 KB gzip. The self-hosted Bricolage Grotesque Latin subset is 41 KB. JavaScript, CSS and font total about 507 KB across the wire."
   },
   "exports": {
     ".": "./src/index.ts"

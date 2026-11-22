@@ -178,6 +178,9 @@ async fn start() -> (Arc<App>, String, Vec<String>, TempHome) {
         }],
         now,
     );
+    let today = summary::since("today", now).unwrap();
+    // Keep every request in today's buckets. Write oldest first so requests
+    // that tie at midnight still appear newest first on the Requests page.
     for (i, (account, model)) in [
         (&ids[0], "claude-opus-5-5"),
         (&ids[2], "gpt-6-sol"),
@@ -185,10 +188,8 @@ async fn start() -> (Arc<App>, String, Vec<String>, TempHome) {
     ]
     .into_iter()
     .enumerate()
+    .rev()
     {
-        // Half an hour apart, but all today: in the day's first hour the
-        // last would fall on yesterday, and the week's buckets would differ.
-        let today = summary::since("today", now).unwrap();
         app.record(&Entry {
             at: (now - SignedDuration::from_mins(30 * i as i64)).max(today),
             account: account.clone(),

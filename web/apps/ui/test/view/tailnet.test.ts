@@ -49,10 +49,10 @@ describe("the Other machines card", () => {
     const card = machinesCard(published)
     expect(card.rows.map((row) => [row.title, row.value])).toEqual([
       ["Address", "https://hub.example.ts.net:7567"],
+      ["Setup command", "slopmax setup --hub hub"],
       ["Reached through", "slopmax's socket"],
       ["No key needed for", "you@github"],
       ["Admins", "desk"],
-      ["On another machine", "slopmax setup --hub hub"],
     ])
     expect(card.problem).toBeUndefined()
     expect(card.start).toBeUndefined()
@@ -66,7 +66,12 @@ describe("the Other machines card", () => {
 
   test("over loopback, or with no logins, every machine needs a key", () => {
     const loopback = machinesCard(
-      new TailnetView({ ...published, transport: "loopback", identity: false, admins: [] }),
+      new TailnetView({
+        ...published,
+        transport: "loopback",
+        identity: false,
+        admins: [],
+      }),
     ).rows
     expect(loopback.find((row) => row.title === "Reached through")?.value).toBe("127.0.0.1")
     expect(loopback.find((row) => row.title === "No key needed for")?.value).toBe("No one")
@@ -87,10 +92,19 @@ describe("the Other machines card", () => {
       }),
     )
     expect(off.rows).toEqual([])
-    expect(off.problem).toEqual({ text: "Tailscale here is signed out", fix: "tailscale up" })
+    expect(off.problem).toEqual({
+      text: "Tailscale here is signed out",
+      fix: "tailscale up",
+    })
     expect(off.start).toBe("On the hub: slopmax tailscale on")
     const missing = machinesCard(
-      new TailnetView({ tailscale: "missing", identity: false, users: [], admins: [], funnel: false }),
+      new TailnetView({
+        tailscale: "missing",
+        identity: false,
+        users: [],
+        admins: [],
+        funnel: false,
+      }),
     )
     expect(missing.start).toBe("On the hub: slopmax tailscale on")
     expect(missing.problem).toBeUndefined()

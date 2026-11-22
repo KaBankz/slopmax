@@ -11,13 +11,14 @@ describe("preferences", () => {
   test("missing settings take their defaults", () => {
     expect(Schema.decodeUnknownSync(UiPrefs)({})).toEqual(
       new UiPrefs({
-        appearance: "system",
-        sidebarWidth: 220,
+        sidebarWidth: 224,
         sidebarHidden: false,
+        appearance: "system",
         hideEmails: false,
       }),
     )
-    expect(Schema.decodeUnknownSync(UiPrefs)({ sidebarHidden: true }).sidebarWidth).toBe(220)
+    const oldPrefs = { appearance: "dark", hideEmails: true, sidebarWidth: 235, sidebarHidden: true } as const
+    expect(Schema.decodeUnknownSync(UiPrefs)(oldPrefs)).toEqual(new UiPrefs(oldPrefs))
   })
 })
 

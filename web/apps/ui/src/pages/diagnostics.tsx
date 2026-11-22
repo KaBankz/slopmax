@@ -4,51 +4,63 @@ import type { Section as DoctorSection } from "@slopmax/client"
 import { Option } from "effect"
 import { AsyncResult } from "effect/reactivity"
 import { Copy, RefreshCw } from "lucide-react"
-import { Fragment } from "react"
 import { copy, doctorAtom, readOnlyAtom } from "../atoms.ts"
-import { Dot, Empty, Failed, Panel } from "../components/parts.tsx"
-import { Tip } from "../components/tip.tsx"
+import { Empty, Failed, Label, Panel, Section } from "../components/parts.tsx"
 import { Button } from "../components/ui/button.tsx"
 import { Item, ItemActions, ItemContent, ItemMedia } from "../components/ui/item.tsx"
-import { Separator } from "../components/ui/separator.tsx"
 import { readOnlyShort } from "../view/tailnet.ts"
 import { failureText, levelTone, sentenceCase } from "../view/words.ts"
 
+const findingLabels = { ok: "Passed", info: "Info", warn: "Warning", fail: "Failed" } as const
+const literal = /(`[^`]+`|https?:\/\/[^\s,)]+|\b(?:\d{1,3}\.){3}\d{1,3}:\d+|\[[a-f\d:]+\]:\d+)/i
+
 function Findings({ sections }: { readonly sections: ReadonlyArray<DoctorSection> }) {
   const copyText = useAtomSet(copy)
-  const rows = sections.flatMap((section) =>
-    section.findings.map((finding, i) => ({ section: i === 0 ? section.title : "", key: section.title, finding })),
-  )
   return (
-    <Panel>
-      {rows.map(({ section, key, finding }, n) => (
-        <Fragment key={`${key}-${finding.text}`}>
-          {n > 0 && <Separator />}
-          <Item className="items-start">
-            <span className="w-30 shrink-0 text-xs/5 text-muted-foreground">{section}</span>
-            <ItemMedia className="h-5">
-              <Dot tone={levelTone(finding.level)} />
-            </ItemMedia>
-            <ItemContent>{sentenceCase(finding.text.replaceAll("`", ""))}</ItemContent>
-            {finding.fix !== undefined && (
-              <ItemActions className="shrink-0">
-                <code className="rounded-sm border bg-muted px-1.5 py-0.5 font-mono text-xs">{finding.fix}</code>
-                <Tip content="Copy the command">
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Copy the command"
-                    onClick={() => copyText({ text: finding.fix ?? "" })}
-                  >
-                    <Copy />
-                  </Button>
-                </Tip>
-              </ItemActions>
-            )}
-          </Item>
-        </Fragment>
+    <>
+      {sections.map((section) => (
+        <Section title={section.title} key={section.title} layout="split">
+          <Panel>
+            <ul role="list" className="divide-y">
+              {section.findings.map((finding, index) => (
+                <li key={`${finding.text}-${index}`}>
+                  <Item size="row" className="items-start">
+                    <ItemMedia className="w-18 justify-start">
+                      <Label tone={levelTone(finding.level)} text={findingLabels[finding.level]} raw dot />
+                    </ItemMedia>
+                    <ItemContent className="min-w-0 wrap-anywhere">
+                      <p>
+                        {sentenceCase(finding.text)
+                          .split(literal)
+                          .map((part, position) =>
+                            position % 2 === 0 ? part : <code key={position}>{part.replace(/^`|`$/g, "")}</code>,
+                          )}
+                      </p>
+                    </ItemContent>
+                    {finding.fix !== undefined && (
+                      <ItemActions className="min-w-0 flex-wrap">
+                        <code className="rounded-sm border bg-muted px-1.5 py-0.5 font-mono text-xs wrap-anywhere">
+                          {finding.fix}
+                        </code>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label="Copy the command"
+                          onClick={() => copyText({ text: finding.fix ?? "" })}
+                        >
+                          <Copy aria-hidden />
+                          Copy
+                        </Button>
+                      </ItemActions>
+                    )}
+                  </Item>
+                </li>
+              ))}
+            </ul>
+          </Panel>
+        </Section>
       ))}
-    </Panel>
+    </>
   )
 }
 
@@ -68,12 +80,7 @@ export function DiagnosticsPage() {
   ) : (
     checking
   )
-  return (
-    <>
-      <p className="max-w-prose text-muted-foreground">The checks slopmax doctor runs, with what to do about each.</p>
-      {body}
-    </>
-  )
+  return body
 }
 
 export function DiagnosticsTools() {

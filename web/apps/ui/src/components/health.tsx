@@ -1,4 +1,4 @@
-// The overview's last day: every subscription account's requests in half
+// The performance page's last day: every subscription account's requests in half
 // hours, and the latest requests that failed, a click from the Requests page
 // filtered to them. Cards of Items, Tooltips and the health strip.
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react"
@@ -39,16 +39,13 @@ function ProviderHealth({ group }: { readonly group: Group }) {
         const row = group.rows.find((r) => r.id === account.id)
         const day = health(account, pool.healthSince, pool.cellMinutes, zone)
         return (
-          <div key={account.id} className="grid grid-cols-2 items-center gap-x-2 gap-y-1 @sm/health:grid-cols-3">
+          <div key={account.id} className="grid items-center gap-x-3 gap-y-1 @sm/health:grid-cols-[2fr_3fr]">
             <span className="flex min-w-0 text-sm">
               <AccountName name={row?.name ?? account.id} />
             </span>
-            <div className="order-last col-span-2 min-w-0 @sm/health:order-none @sm/health:col-span-1">
+            <div className="min-w-0">
               <HealthStrip health={day} />
             </div>
-            <span className="text-right text-xs text-muted-foreground tabular-nums">
-              {day.failed > 0 ? `${day.failed} failed` : "none failed"}
-            </span>
           </div>
         )
       })}
@@ -156,7 +153,10 @@ export function RecentFailures() {
                         <span className="w-16 shrink-0 text-muted-foreground tabular-nums">{view.time}</span>
                         <span className="min-w-0 flex-1 truncate">
                           {view.account}
-                          <span className="text-muted-foreground"> · {view.model}</span>
+                          <span className="text-muted-foreground">
+                            {" "}
+                            · <code>{view.model}</code>
+                          </span>
                         </span>
                         <Label tone="bad" text={view.status} raw />
                       </div>
