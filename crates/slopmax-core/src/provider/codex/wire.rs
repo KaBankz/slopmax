@@ -82,8 +82,10 @@ fn insert(headers: &mut HeaderMap, name: &'static str, value: &str) {
 }
 
 /// Removes state bound to another account: `encrypted_content` on
-/// reasoning items and any `previous_response_id`. Returns `None` when the
-/// body carries none.
+/// reasoning items and on replayed output (Codex's output token replay seals
+/// messages and tool calls too, beside their readable content), and any
+/// `previous_response_id`. A compaction item is nothing but its sealed
+/// summary, so it is left as it is. Returns `None` when the body carries none.
 pub fn strip_account_state(body: &[u8]) -> Option<Vec<u8>> {
     let mut json: Value = serde_json::from_slice(body).ok()?;
     let mut changed = json
@@ -92,8 +94,11 @@ pub fn strip_account_state(body: &[u8]) -> Option<Vec<u8>> {
         .is_some();
     if let Some(items) = json.get_mut("input").and_then(Value::as_array_mut) {
         for item in items {
-            let is_reasoning = item.get("type").and_then(Value::as_str) == Some("reasoning");
-            if let Some(fields) = item.as_object_mut().filter(|_| is_reasoning) {
+            let summary = matches!(
+                item.get("type").and_then(Value::as_str),
+                Some("compaction" | "context_compaction")
+            );
+            if let Some(fields) = item.as_object_mut().filter(|_| !summary) {
                 changed |= fields.remove("encrypted_content").is_some();
             }
         }
@@ -203,6 +208,17 @@ mod tests {
             .collect();
         assert_eq!(keys, ["model", "input", "stream"]);
         assert!(strip_account_state(br#"{"input":[]}"#).is_none());
+    }
+
+    #[test]
+    fn strips_replayed_output_but_keeps_compactions() {
+        let body = br#"{"input":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}],"encrypted_content":"gAAA"},{"type":"function_call","name":"shell","arguments":"{}","call_id":"c1","encrypted_content":"gBBB"},{"type":"compaction","encrypted_content":"gCCC"}]}"#;
+        let out: Value = serde_json::from_slice(&strip_account_state(body).unwrap()).unwrap();
+        assert!(out["input"][0].get("encrypted_content").is_none());
+        assert_eq!(out["input"][0]["content"][0]["text"], "hi");
+        assert!(out["input"][1].get("encrypted_content").is_none());
+        assert_eq!(out["input"][1]["call_id"], "c1");
+        assert_eq!(out["input"][2]["encrypted_content"], "gCCC");
     }
 
     #[test]

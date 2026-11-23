@@ -4,6 +4,10 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Fixed
+
+- Codex sessions with output token replay turned on (`--enable output_token_replay`) keep going when slopmax moves them to another ChatGPT account. With replay on, Codex sends back each earlier message and tool call with an encrypted copy sealed to the account that wrote it. slopmax dropped only the sealed reasoning on a move, so the new account could reject the turn. It now drops the sealed copies of messages and tool calls too, and Codex's readable history goes on as it was. Compaction summaries are left as they are.
+
 ## [0.20.0] - 2026-11-22
 
 ### Added
