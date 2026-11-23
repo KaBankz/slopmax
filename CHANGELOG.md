@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-11-23
+
 ### Fixed
 
 - Codex sessions with output token replay turned on (`--enable output_token_replay`) keep going when slopmax moves them to another ChatGPT account. With replay on, Codex sends back each earlier message and tool call with an encrypted copy sealed to the account that wrote it. slopmax dropped only the sealed reasoning on a move, so the new account could reject the turn. It now drops the sealed copies of messages and tool calls too, and Codex's readable history goes on as it was. Compaction summaries are left as they are.
@@ -617,7 +619,8 @@ The first version.
 - `slopmax run`, `env`, and `setup` (with `--undo`) connect Claude Code and Codex.
 - Adapted Claude requests to the serving account (`metadata.user_id` and the billing-header checksum). 0.2.0 removed this.
 
-[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.20.1...HEAD
+[0.20.1]: https://github.com/KaBankz/slopmax/compare/v0.20.0...v0.20.1
 [0.20.0]: https://github.com/KaBankz/slopmax/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/KaBankz/slopmax/compare/v0.18.4...v0.19.0
 [0.9.0]: https://github.com/KaBankz/slopmax/compare/v0.8.1...v0.9.0
