@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.20.2] - 2026-11-25
+
 ### Fixed
 
 - Claude and ChatGPT accounts on a Windows laptop with Modern Standby no longer need a new sign-in after the laptop sleeps. Such a laptop wakes by itself for a few seconds at a time with the display off, and a token refresh sent then could be cut off before the new refresh token came back, which spent the old one. slopmax now holds refreshes until someone wakes the laptop, and on any Windows machine for 15 seconds after a resume while the network comes back, as it already did for a Mac's maintenance wakes.
