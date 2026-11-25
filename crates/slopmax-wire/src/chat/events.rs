@@ -164,10 +164,16 @@ impl Events {
                 kind: ToolKind::Freeform,
             };
         }
+        // A call to a tool without parameters may stream no arguments.
+        let input = if partial.arguments.trim().is_empty() {
+            "{}".to_owned()
+        } else {
+            partial.arguments
+        };
         Call {
             id,
             name: partial.name,
-            input: partial.arguments,
+            input,
             kind: ToolKind::Function,
         }
     }
@@ -287,6 +293,36 @@ mod tests {
         let whole = json!({"choices": [{"message": {"role": "assistant", "content": null, "refusal": "No."}, "finish_reason": "stop"}]});
         events.feed(&whole, &mut out);
         assert_eq!(out, [Event::Text("No.".into())]);
+    }
+
+    /// Some servers stream a call to a tool without parameters with no
+    /// argument text at all; Codex parses what it gets as JSON.
+    #[test]
+    fn a_call_without_arguments_reads_as_an_empty_object() {
+        let mut events = Events::new(HashSet::new());
+        let mut out = Vec::new();
+        for c in [
+            chunk(
+                json!({"tool_calls": [{"index": 0, "id": "call_a", "function": {"name": "list_mcp_resources"}}]}),
+                None,
+            ),
+            chunk(
+                json!({"tool_calls": [{"index": 1, "id": "call_b", "function": {"name": "list_mcp_resources", "arguments": ""}}]}),
+                None,
+            ),
+            chunk(json!({}), Some("tool_calls")),
+        ] {
+            events.feed(&c, &mut out);
+        }
+        events.finish(&mut out);
+        let inputs: Vec<&str> = out
+            .iter()
+            .filter_map(|e| match e {
+                Event::Call(call) => Some(call.input.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(inputs, ["{}", "{}"]);
     }
 
     #[test]

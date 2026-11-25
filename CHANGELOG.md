@@ -8,6 +8,7 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 - Claude and ChatGPT accounts on a Windows laptop with Modern Standby no longer need a new sign-in after the laptop sleeps. Such a laptop wakes by itself for a few seconds at a time with the display off, and a token refresh sent then could be cut off before the new refresh token came back, which spent the old one. slopmax now holds refreshes until someone wakes the laptop, and on any Windows machine for 15 seconds after a resume while the network comes back, as it already did for a Mac's maintenance wakes.
 - Codex driven through the Agent Client Protocol adapter (`codex-acp`, as Zed runs it) gets the models ChatGPT keeps for recent Codex versions. slopmax reads Codex's version from its user agent, but the adapter's name has a slash in it (`@agentclientprotocol/codex-acp/0.166.0`), so slopmax read no version and sent ChatGPT none. It now reads the version after the adapter's name.
+- Codex on a compatible endpoint that speaks Chat Completions keeps going after the model calls a tool with no arguments. Some servers send such a call with no argument text at all. slopmax passed that on as is, and sent it back in the next request, which strict servers refuse. It now sends `{}` both ways.
 
 ## [0.20.1] - 2026-11-23
 

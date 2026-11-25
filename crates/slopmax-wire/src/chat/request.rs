@@ -269,6 +269,8 @@ fn messages(request: &Request) -> Vec<Value> {
                     })
                     .map(|call| {
                         let arguments = match call.kind {
+                            // Strict Chat APIs refuse empty arguments.
+                            ToolKind::Function if call.input.trim().is_empty() => "{}".to_owned(),
                             ToolKind::Function => call.input.clone(),
                             ToolKind::Freeform => json!({"input": call.input}).to_string(),
                         };
@@ -457,6 +459,27 @@ mod tests {
             serde_json::from_str::<Value>(arguments).unwrap()["input"],
             "*** Begin Patch"
         );
+    }
+
+    /// A call to a tool without parameters can come back with no arguments
+    /// at all, and Codex replays it so; strict Chat APIs 400 on `""`.
+    #[test]
+    fn a_call_without_arguments_goes_back_as_an_empty_object() {
+        let body = json!({
+            "model": "m",
+            "input": [
+                {"type": "message", "role": "user", "content": "list them"},
+                {"type": "function_call", "call_id": "c1", "name": "list_mcp_resources"},
+                {"type": "function_call", "call_id": "c2", "name": "list_mcp_resources", "arguments": ""},
+                {"type": "function_call_output", "call_id": "c1", "output": "none"},
+                {"type": "function_call_output", "call_id": "c2", "output": "none"}
+            ]
+        });
+        let request = crate::responses::request::decode(&body).unwrap();
+        let out = encode(&request);
+        let calls = &out["messages"][1]["tool_calls"];
+        assert_eq!(calls[0]["function"]["arguments"], "{}");
+        assert_eq!(calls[1]["function"]["arguments"], "{}");
     }
 
     /// DeepSeek's thinking models refuse a tool loop whose earlier turns
