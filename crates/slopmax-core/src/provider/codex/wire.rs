@@ -45,20 +45,35 @@ pub fn upstream_headers(
 }
 
 /// Whether a request comes from Codex. Codex names itself in its user
-/// agent (`codex_exec/…`, `codex_cli_rs/…`, `Codex Desktop/…`) unless the
-/// app driving it renames it: T3 Code starts it as `T3 Code/…`. Every
-/// model request it makes, over HTTP or a socket, carries its window id
-/// either way.
+/// agent (`codex_exec/…`, `codex_cli_rs/…`, `Codex Desktop/…`,
+/// `@agentclientprotocol/codex-acp/…`) unless the app driving it renames
+/// it: T3 Code starts it as `T3 Code/…`. Every model request it makes, over
+/// HTTP or a socket, carries its window id either way.
 pub fn from_codex(headers: &HeaderMap) -> bool {
     headers.contains_key("x-codex-window-id")
         || headers.contains_key("x-codex-turn-metadata")
-        || user_agent(headers)
-            .and_then(|agent| agent.split_once('/'))
-            .is_some_and(|(product, _)| product.to_ascii_lowercase().starts_with("codex"))
+        || product(headers).is_some_and(|(name, _)| {
+            // An npm package's name keeps its scope: `@scope/codex-acp`.
+            let name = name.rsplit('/').next().unwrap_or(name);
+            name.to_ascii_lowercase().starts_with("codex")
+        })
 }
 
 fn user_agent(headers: &HeaderMap) -> Option<&str> {
     headers.get("user-agent")?.to_str().ok()
+}
+
+/// The user agent's product name and what follows it, split at the slash
+/// before the version: the name may hold one too
+/// (`@agentclientprotocol/codex-acp/0.166.0`).
+fn product(headers: &HeaderMap) -> Option<(&str, &str)> {
+    let agent = user_agent(headers)?;
+    let at = agent
+        .match_indices('/')
+        .map(|(at, _)| at)
+        .find(|&at| agent[at + 1..].starts_with(|c: char| c.is_ascii_digit()))
+        .or_else(|| agent.find('/'))?;
+    Some((&agent[..at], &agent[at + 1..]))
 }
 
 /// `0.159.3` from Codex's user agent, `codex_exec/0.159.3 (Linux; x86_64) …`
@@ -67,7 +82,7 @@ pub fn client_version(headers: &HeaderMap) -> Option<String> {
     if !from_codex(headers) {
         return None;
     }
-    let (_, rest) = user_agent(headers)?.split_once('/')?;
+    let (_, rest) = product(headers)?;
     let version: String = rest
         .chars()
         .take_while(|c| c.is_ascii_digit() || *c == '.')
@@ -158,6 +173,16 @@ mod tests {
         ]);
         assert!(from_codex(&t3));
         assert_eq!(client_version(&t3).as_deref(), Some("0.169.0"));
+        // Zed's ACP adapter runs Codex under its npm package's name.
+        let acp = headers(&[(
+            "user-agent",
+            "@agentclientprotocol/codex-acp/0.166.0 (Mac OS 27.2.0; arm64) unknown (@agentclientprotocol/codex-acp; 2.6.0)",
+        )]);
+        assert!(from_codex(&acp));
+        assert_eq!(client_version(&acp).as_deref(), Some("0.166.0"));
+        let bare = headers(&[("user-agent", "codex_exec/0.169.0 wrapper/2.0")]);
+        assert!(from_codex(&bare));
+        assert_eq!(client_version(&bare).as_deref(), Some("0.169.0"));
         // Another client's version is not taken for Codex's.
         let other = headers(&[("user-agent", "OpenAI/Python 2.4.0")]);
         assert!(!from_codex(&other));
