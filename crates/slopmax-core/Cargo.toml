@@ -29,6 +29,10 @@ tokio.workspace = true
 tokio-util.workspace = true
 toml_edit.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+# Sleep, wake and display reports, so refreshes skip Modern Standby wakes.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Power", "Win32_System_SystemServices", "Win32_UI_WindowsAndMessaging"] }
+
 [lints]
 workspace = true
 

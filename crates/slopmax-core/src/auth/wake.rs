@@ -5,11 +5,19 @@
 //! rotates the single-use refresh token, but the Mac may be asleep again
 //! before the reply arrives: the new token is lost, the old one is spent,
 //! and the account needs a new sign-in. So a refresh waits for a full wake.
+//! Windows laptops with Modern Standby wake the same way ([`standby`]).
+
+#[cfg(any(windows, test))]
+mod standby;
 
 /// Why a refresh should wait, or `None` when it may go ahead. A state that
 /// can't be read never holds a refresh back: a token that is never
 /// refreshed signs the account out too.
 pub async fn deferral() -> Option<String> {
+    #[cfg(windows)]
+    if let Some(why) = standby::deferral() {
+        return Some(why);
+    }
     held(&system_state().await?)
 }
 
@@ -35,7 +43,7 @@ async fn system_state() -> Option<String> {
         .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// Other systems wake whole.
+/// Other systems have no pmset; Windows reports by callback instead.
 #[cfg(not(target_os = "macos"))]
 async fn system_state() -> Option<String> {
     None
