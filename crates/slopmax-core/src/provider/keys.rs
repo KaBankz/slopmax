@@ -317,6 +317,7 @@ pub fn metered_verdict(
     let text = String::from_utf8_lossy(&body[..body.len().min(4096)]);
     let out_of_funds = [
         "insufficient_quota",
+        "credit_balance_exhausted",
         "credit balance",
         "exceeded your current quota",
     ]
@@ -396,6 +397,10 @@ mod tests {
         );
         assert_eq!(
             verdict(400, "Your credit balance is too low to access the API"),
+            broke
+        );
+        assert_eq!(
+            verdict(429, r#"{"error":{"code":"credit_balance_exhausted"}}"#),
             broke
         );
         assert_eq!(verdict(401, ""), Verdict::Unauthorized);

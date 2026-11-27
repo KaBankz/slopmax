@@ -38,23 +38,39 @@ pub fn limit_reached(
 pub fn opening(event: &Value) -> Opening {
     match event.get("type").and_then(Value::as_str) {
         Some("response.created" | "response.in_progress" | "response.queued") => Opening::Wait,
-        Some("response.failed" | "error") => match failure_code(event) {
-            Some(
-                "usage_limit_reached"
-                | "usage_limit_exceeded"
-                | "usage_not_included"
-                | "insufficient_quota",
-            ) => Opening::Refused { exhausted: true },
-            Some(
-                "turn_rate_limit_exceeded"
-                | "server_is_overloaded"
-                | "slow_down"
-                | "rate_limit_exceeded",
-            ) => Opening::Refused { exhausted: false },
-            _ => Opening::Content,
-        },
+        Some("response.failed" | "error") => {
+            if failure_codes(event).any(spent) {
+                Opening::Refused { exhausted: true }
+            } else if failure_codes(event).any(throttled) {
+                Opening::Refused { exhausted: false }
+            } else {
+                Opening::Content
+            }
+        }
         _ => Opening::Content,
     }
+}
+
+/// A failure code or type that means the account's quota or credit is
+/// spent.
+pub fn spent(code: &str) -> bool {
+    matches!(
+        code,
+        "usage_limit_reached"
+            | "usage_limit_exceeded"
+            | "usage_not_included"
+            | "insufficient_quota"
+            | "credit_balance_exhausted"
+    )
+}
+
+/// A failure code that throttles the account for a while: "Codex is at
+/// capacity", overload, rate limits.
+pub fn throttled(code: &str) -> bool {
+    matches!(
+        code,
+        "turn_rate_limit_exceeded" | "server_is_overloaded" | "slow_down" | "rate_limit_exceeded"
+    )
 }
 
 fn count(usage: &Value, outcome: &mut Outcome) {
@@ -67,14 +83,15 @@ fn count(usage: &Value, outcome: &mut Outcome) {
     total.output_tokens = number("/output_tokens");
 }
 
-fn failure_code(event: &Value) -> Option<&str> {
+/// A failure's `code` and `type`. Both count: OpenAI sends a spent
+/// credit balance as `{"type":"insufficient_quota","code":"credit_balance_exhausted"}`.
+fn failure_codes(event: &Value) -> impl Iterator<Item = &str> {
     let error = event
         .pointer("/response/error")
-        .or_else(|| event.get("error"))?;
-    error
-        .get("code")
-        .or_else(|| error.get("type"))
-        .and_then(Value::as_str)
+        .or_else(|| event.get("error"));
+    ["code", "type"]
+        .into_iter()
+        .filter_map(move |key| error?.get(key)?.as_str())
 }
 
 /// The fields of a stream event [`observe`] reads, borrowed.
@@ -137,11 +154,8 @@ pub fn observe_raw(data: &[u8], outcome: &mut Outcome) -> bool {
         }
         "response.failed" | "error" => {
             let failure = event.response.and_then(|r| r.error).or(event.error);
-            let code = failure.and_then(|f| f.code.or(f.kind));
-            outcome.exhausted |= matches!(
-                code.as_deref(),
-                Some("usage_limit_reached" | "usage_limit_exceeded")
-            );
+            outcome.exhausted |=
+                failure.is_some_and(|f| [f.code, f.kind].iter().flatten().any(|code| spent(code)));
         }
         _ => {}
     }
@@ -149,8 +163,8 @@ pub fn observe_raw(data: &[u8], outcome: &mut Outcome) -> bool {
 }
 
 /// The final `response.*` event carries usage (as does a whole `response`
-/// object from a non-streaming request); a failure coded
-/// `usage_limit_reached` means the quota ran out mid-stream.
+/// object from a non-streaming request); a failure coded as a spent quota
+/// means it ran out mid-stream.
 pub fn observe(event: &Value, outcome: &mut Outcome) {
     if event.get("object").and_then(Value::as_str) == Some("response") {
         if let Some(usage) = event.get("usage") {
@@ -165,10 +179,7 @@ pub fn observe(event: &Value, outcome: &mut Outcome) {
             }
         }
         Some("response.failed" | "error") => {
-            outcome.exhausted |= matches!(
-                failure_code(event),
-                Some("usage_limit_reached" | "usage_limit_exceeded")
-            );
+            outcome.exhausted |= failure_codes(event).any(spent);
         }
         _ => {}
     }

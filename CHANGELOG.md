@@ -4,6 +4,10 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+### Fixed
+
+- A request moves to the next account when an OpenAI API key runs out of credit partway into opening its answer. OpenAI can start the stream and then send `{"type":"insufficient_quota","code":"credit_balance_exhausted"}`. slopmax read only the error's code, did not know that one, and passed the error to the agent while other accounts sat ready. It now reads the code and the type, holds the spent key out, and answers from the next account. A ChatGPT account that refuses the same way, over HTTP or Codex's WebSocket, is moved past too.
+
 ## [0.20.2] - 2026-11-25
 
 ### Fixed

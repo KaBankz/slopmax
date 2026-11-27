@@ -166,19 +166,11 @@ pub fn from_usage(body: &Value, now: Timestamp) -> (Limits, Option<String>) {
 pub fn refusal(status: u16, headers: &HeaderMap, body: &[u8], now: Timestamp) -> Refusal {
     let json: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
     let error = json.get("error").unwrap_or(&json);
-    let kind = ["type", "code"]
-        .iter()
-        .find_map(|k| error.get(*k).and_then(Value::as_str))
-        .unwrap_or_default();
-
     let exhausted = status == 402
-        || matches!(
-            kind,
-            "usage_limit_reached"
-                | "usage_limit_exceeded"
-                | "usage_not_included"
-                | "insufficient_quota"
-        );
+        || ["type", "code"]
+            .iter()
+            .filter_map(|k| error.get(*k).and_then(Value::as_str))
+            .any(crate::wire::responses::spent);
     if !exhausted {
         return Refusal::Throttled {
             until: retry_after(headers, now),
@@ -339,6 +331,19 @@ mod tests {
                 model: None
             }
         );
+    }
+
+    #[test]
+    fn a_spent_credit_balance_is_exhaustion_by_type_or_code() {
+        for body in [
+            &br#"{"error":{"type":"insufficient_quota","code":"credit_balance_exhausted"}}"#[..],
+            br#"{"error":{"type":"billing_error","code":"credit_balance_exhausted"}}"#,
+        ] {
+            assert!(matches!(
+                refusal(429, &HeaderMap::new(), body, ts(0)),
+                Refusal::Exhausted { .. }
+            ));
+        }
     }
 
     #[test]

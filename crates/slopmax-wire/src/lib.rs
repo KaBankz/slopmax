@@ -210,6 +210,36 @@ mod tests {
     }
 
     #[test]
+    fn a_spent_credit_balance_refuses_by_type_or_code() {
+        // OpenAI's code names the reason and its type the kind; either
+        // one marks the account spent, here and once output has begun.
+        let credit = json!({"type": "error", "sequence_number": 2, "error": {
+            "type": "insufficient_quota", "code": "credit_balance_exhausted",
+            "message": "Your credit balance is too low to access the API.", "param": null}});
+        let coded = json!({"type": "response.failed", "response": {"error": {
+            "type": "billing_error", "code": "credit_balance_exhausted"}}});
+        for event in [&credit, &coded] {
+            assert_eq!(
+                Dialect::Responses.opening(event),
+                Opening::Refused { exhausted: true },
+                "{event}"
+            );
+            let mut outcome = Outcome::default();
+            Dialect::Responses.observe(event, &mut outcome);
+            assert!(outcome.exhausted, "{event}");
+            let mut typed = Outcome::default();
+            assert!(responses::observe_raw(
+                event.to_string().as_bytes(),
+                &mut typed
+            ));
+            assert!(typed.exhausted, "{event}");
+        }
+        let request = json!({"type": "error", "error": {
+            "type": "invalid_request_error", "code": "context_length_exceeded"}});
+        assert_eq!(Dialect::Responses.opening(&request), Opening::Content);
+    }
+
+    #[test]
     fn usage_is_read_from_each_formats_events() {
         let mut outcome = Outcome::default();
         Dialect::Chat.observe(

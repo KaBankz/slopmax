@@ -123,6 +123,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_spent_credit_balance_is_caught_before_the_agent_sees_it() {
+        let stream = concat!(
+            "data: {\"type\":\"response.created\",\"sequence_number\":0,\"response\":{\"id\":\"resp_paid\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
+            "data: {\"type\":\"response.in_progress\",\"sequence_number\":1,\"response\":{\"id\":\"resp_paid\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
+            "data: {\"type\":\"error\",\"sequence_number\":2,\"error\":{\"type\":\"insufficient_quota\",\"code\":\"credit_balance_exhausted\",\"message\":\"Your credit balance is too low to access the API.\",\"param\":null}}\n\n",
+        );
+        match hold(full(stream), Dialect::Responses).await {
+            Start::Refused {
+                exhausted, held, ..
+            } => {
+                assert!(exhausted);
+                assert_eq!(held, stream);
+            }
+            Start::Streaming { .. } => panic!("should be refused"),
+        }
+    }
+
+    #[tokio::test]
     async fn request_failures_go_to_the_agent() {
         let stream = "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"context_length_exceeded\"}}}\n\n";
         assert_eq!(

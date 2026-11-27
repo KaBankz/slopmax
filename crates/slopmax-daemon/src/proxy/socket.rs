@@ -623,29 +623,25 @@ async fn forward(ends: &mut Ends, message: &Message) -> Next {
 
 /// A failure event that is the account's rather than the request's.
 fn refusal(event: &Value, now: Timestamp) -> Option<Refusal> {
+    use crate::wire::responses::{spent, throttled};
     let error = crate::limits::event_error(event)?;
-    let code = ["code", "type"]
-        .iter()
-        .find_map(|k| error.get(*k).and_then(Value::as_str))
-        .unwrap_or_default();
+    let codes = || {
+        ["code", "type"]
+            .into_iter()
+            .filter_map(|key| error.get(key).and_then(Value::as_str))
+    };
     let headers = crate::limits::event_headers(event);
-    match code {
-        "usage_limit_reached"
-        | "usage_limit_exceeded"
-        | "usage_not_included"
-        | "insufficient_quota" => {
-            let body = serde_json::to_vec(&serde_json::json!({ "error": error })).ok()?;
-            Some(limits::refusal(429, &headers, &body, now))
-        }
+    if codes().any(spent) {
+        let body = serde_json::to_vec(&serde_json::json!({ "error": error })).ok()?;
+        Some(limits::refusal(429, &headers, &body, now))
+    } else if codes().any(throttled) {
         // "Codex is at capacity": a turn refused for a few minutes, with
         // the account's allowance untouched.
-        "turn_rate_limit_exceeded"
-        | "server_is_overloaded"
-        | "slow_down"
-        | "rate_limit_exceeded" => Some(Refusal::Throttled {
+        Some(Refusal::Throttled {
             until: crate::limits::retry_after(&headers, now),
-        }),
-        _ => None,
+        })
+    } else {
+        None
     }
 }
 
@@ -764,6 +760,15 @@ mod tests {
         );
         let request = json!({"type": "response.failed", "response": {"error": {"code": "context_length_exceeded"}}});
         assert_eq!(refusal(&request, now), None);
+        let credit = json!({"type": "error", "error": {"type": "insufficient_quota",
+            "code": "credit_balance_exhausted", "message": "Your credit balance is too low to access the API."}});
+        assert_eq!(
+            refusal(&credit, now),
+            Some(Refusal::Exhausted {
+                until: None,
+                model: None
+            })
+        );
     }
 
     #[test]
