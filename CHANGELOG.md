@@ -4,6 +4,8 @@ Every version has a signed tag and a GitHub release, whose notes come from this 
 
 ## [Unreleased]
 
+## [0.20.3] - 2026-11-27
+
 ### Fixed
 
 - A request moves to the next account when an OpenAI API key runs out of credit partway into opening its answer. OpenAI can start the stream and then send `{"type":"insufficient_quota","code":"credit_balance_exhausted"}`. slopmax read only the error's code, did not know that one, and passed the error to the agent while other accounts sat ready. It now reads the code and the type, holds the spent key out, and answers from the next account. A ChatGPT account that refuses the same way, over HTTP or Codex's WebSocket, is moved past too.
@@ -631,7 +633,9 @@ The first version.
 - `slopmax run`, `env`, and `setup` (with `--undo`) connect Claude Code and Codex.
 - Adapted Claude requests to the serving account (`metadata.user_id` and the billing-header checksum). 0.2.0 removed this.
 
-[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.20.1...HEAD
+[Unreleased]: https://github.com/KaBankz/slopmax/compare/v0.20.3...HEAD
+[0.20.3]: https://github.com/KaBankz/slopmax/compare/v0.20.2...v0.20.3
+[0.20.2]: https://github.com/KaBankz/slopmax/compare/v0.20.1...v0.20.2
 [0.20.1]: https://github.com/KaBankz/slopmax/compare/v0.20.0...v0.20.1
 [0.20.0]: https://github.com/KaBankz/slopmax/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/KaBankz/slopmax/compare/v0.18.4...v0.19.0
